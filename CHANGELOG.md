@@ -10,12 +10,16 @@
 
 ### Changed
 
+- BREAKING: renamed the project, repository, checkout, and new render identity to Ply (2.0.0). Environment overrides are now `PLY_LIBRARY_ROOT` and `PLY_MODEL_DIR`; existing command scripts remain supported.
+- Recorded the project-scoped composer destination and superseding content-policy/matting decisions; runtime gates remain unchanged.
 - Breaking: bumped to 1.0.0 after removing the deprecated command and identity catalog.
 - Creator References now reach providers in caller order, matching Plate and Object Jobs. New Creator Job records use schema version 5; a v3 rerun preserves its legacy identity-first/pose-last provider order once, normalizes the recorded request to that exact order, and upgrades atomically so later reruns cannot drift. Thumby records, verifies, and forwards arbitrary caller-supplied reference files without discovering them.
 - Reframed the README, glossary, and agent guidance around the general Scene, Asset, Generation Job, and caller-supplied Reference workflow.
 
 ### Added
 
+- Added the `ply` executable over the existing scene, library, and jobs commands.
+- Added the `visual-authoring` skill before gate removal, preserving prompting, text, safe-region, and likeness-review knowledge.
 - The Scene author session saves explicitly (#62): a Save control POSTs the token-scoped `/save` route through the same arrival-order queue as geometry, re-validates the complete candidate through the ordinary gate, and atomically replaces the Scene with exactly the raw authored document — refusing a stale on-disk edit and leaving the previous Scene usable and unchanged on any failure.
 - Scene author sessions resize selected positioned Layers from measured corner handles and edit exact position/size values through one synchronized session state, rejecting invalid or unavailable geometry without replacing the last valid preview (#61).
 - The Scene author session moves a selected positioned Layer by dragging: each movement previews through the canonical renderer from unsaved session state while the Scene file stays untouched (#60).

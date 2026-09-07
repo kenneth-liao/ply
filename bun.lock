@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "thumby",
+      "name": "ply",
       "dependencies": {
         "ai": "^7.0.82",
         "ajv": "^8.20.0",

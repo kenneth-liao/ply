@@ -24,7 +24,7 @@ let fix: Fix;
 let page: Page;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-connector-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-connector-"));
   const projectRoot = path.join(root, "project");
   await mkdir(projectRoot, { recursive: true });
   await writeFile(path.join(projectRoot, "red.svg"), RED_SVG);

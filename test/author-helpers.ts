@@ -42,7 +42,7 @@ export async function makeFixture(
   name: string,
   override?: (scene: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<Fixture> {
-  const root = await mkdtemp(path.join(tmpdir(), `thumby-author-${name}-`));
+  const root = await mkdtemp(path.join(tmpdir(), `ply-author-${name}-`));
   await writeFile(path.join(root, "bg.svg"), SVG);
   await writeFile(path.join(root, "photo.svg"), PHOTO_SVG);
   const referencePath = path.join(root, "ref.png");

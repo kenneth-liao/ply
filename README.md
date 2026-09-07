@@ -1,12 +1,20 @@
-# thumby
+# Ply
 
-Thumby is an agent-friendly visual asset composer for 1280×720 images. A
+Ply is becoming a general-purpose layered image composer.
+[ISA.md](ISA.md) defines the destination; [CONTEXT.md](CONTEXT.md) defines its
+accepted vocabulary. Project-scoped sharing and the new edit/compose/generate
+modules are **not implemented yet**.
+
+## Current implementation
+
+Ply currently provides an agent-friendly visual asset composer for 1280×720 images. A
 versioned **Scene** is the editable source: an ordered list of image, text,
 shape, connector, and group Layers. Rendering is local and deterministic.
 
 Models are optional source-asset producers. **Generation Jobs** can create
 background Plates, isolated Objects, and Creator candidates. Final text and
-final composition always stay local (ADR-0001, ADR-0004).
+final composition currently stay local. ADR-0014 supersedes the text/content
+policy for the target design; this rename does not remove existing gates.
 
 The normal workflow is:
 
@@ -16,8 +24,8 @@ The normal workflow is:
 4. Validate and render locally.
 5. Iterate with Scene edits or Variants, without another model call.
 
-Canonical terms are in [CONTEXT.md](CONTEXT.md). Architectural decisions are
-in [docs/adr/](docs/adr/).
+The legacy terms and commands below describe what runs today, not the target
+glossary. Architectural decisions are in [docs/adr/](docs/adr/).
 
 ## Setup
 
@@ -26,6 +34,17 @@ bun install
 bunx playwright install chromium
 cp .env.local.example .env.local
 ```
+
+Run `bun run ply --help`, or use `bun link` to install the `ply` executable.
+For example, `ply scene schema` delegates to the existing Scene command.
+The existing `bun run scene`, `bun run library`, and `bun run jobs` scripts
+remain supported. The repository is `kenneth-liao/ply`; the local checkout is
+`/Users/kennethliao/projects/tools/ply`.
+
+`PLY_LIBRARY_ROOT` relocates the current asset library; `PLY_MODEL_DIR`
+relocates cached matting weights. Update existing environment configuration
+to these names. No global Project database or new Project directory layout
+is introduced by the rename.
 
 Add a Vercel AI Gateway key to `.env.local` only if you use Generation Jobs.
 Scene, library, review, and render operations work offline.
@@ -172,7 +191,7 @@ overwrites an existing one.
 
 ### Arbitrary reference files
 
-Callers pass references directly. Thumby does not discover, index, rank, or
+Callers pass references directly. Ply does not discover, index, rank, or
 choose reference images.
 
 ```bash
@@ -181,7 +200,7 @@ bun run jobs plates "simplify this interface into a bold background" \
   --ref style:./references/palette.jpg
 ```
 
-Each `--ref` value is `<role>:<path>`. Thumby:
+Each `--ref` value is `<role>:<path>`. Ply:
 
 - preserves command-line order;
 - reads and hashes the file when the Job request is created;
@@ -194,7 +213,7 @@ Each `--ref` value is `<role>:<path>`. Thumby:
 A reference-capable model is required when references are present. An
 incompatible model is rejected before spend.
 
-Reference URLs are not fetched by thumby. Download or authenticate outside the
+Reference URLs are not fetched by Ply. Download or authenticate outside the
 tool, then pass a local file. This keeps fetching, credentials, caching, and
 mutable remote content outside the composition boundary.
 

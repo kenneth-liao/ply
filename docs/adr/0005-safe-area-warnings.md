@@ -1,6 +1,6 @@
 # ADR-0005: Safe-area violations are warnings, never render failures
 
-- Status: Accepted (from ticket #6, `REQ-012` of #7)
+- Status: Partially superseded by [ADR-0015](0015-caller-invoked-local-matting-and-regions.md): caller-supplied region scope replaces hardcoded YouTube geometry in the target design; warning-only disposition remains accepted. Runtime migration pending. (from ticket #6, `REQ-012` of #7)
 - Context: YouTube overlays its own UI on every thumbnail — the duration badge pinned to the bottom-right corner and the watched-progress bar across the bottom edge. REQ-012 asks thumby to prevent accepted thumbnails from unintentionally hiding important visible layers under that UI. Detection is straightforward geometry over an already-gated Scene, but the *disposition* of a detected intersection is a real decision: the most common layer in any thumbnail, the full-canvas background plate, legitimately intersects both regions on every render. A hard gate would reject every full-bleed thumbnail; an exemption list ("ignore plates") would need a semantic notion of "background" the generic layer model deliberately does not have (DEC-005/ADR-0004: no privileged layer roles) — and content can also sit under a region *deliberately* (a darkened corner vignette is designed to). Separately, the guideline view (an inspectable rendering of the protected regions) must never leak into a final Render: ADR-0001/DEC-005 make the final render a deterministic, locally drawn artifact, and an overlay drawn into it would silently change accepted output.
 
 ## Decision

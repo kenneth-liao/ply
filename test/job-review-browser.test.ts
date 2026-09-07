@@ -24,7 +24,7 @@ let page: Page;
 let sheetPath: string;
 
 beforeAll(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-job-review-browser-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-job-review-browser-"));
   jobRoot = path.join(root, "jobs");
   // A wide candidate: at a 1000px viewport it overflows its column, so only a
   // natural-width overflow container can keep it 1:1.

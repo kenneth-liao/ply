@@ -1,6 +1,6 @@
 # ADR-0006: Isolation is a local matting pass in the Job lifecycle
 
-- Status: Accepted (from ticket #16, `REQ-017`); amended from ticket #20 — object candidates run the same pass
+- Status: Superseded by [ADR-0015](0015-caller-invoked-local-matting-and-regions.md) for the accepted target design; current runtime migration pending (originally ticket #16, `REQ-017`, amended by #20)
 - Context: Creator candidates must reach the library as isolated Cutout Assets with a verified true-alpha matte, but the tested likeness recipe cannot produce one. Ticket #20 measured the same for object candidates: `gpt-image-2` paints even a checkerboard backdrop rather than returning alpha, so an opaque object could never be adopted
 
 ## Decision

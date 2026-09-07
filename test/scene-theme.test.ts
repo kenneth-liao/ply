@@ -19,7 +19,7 @@ const SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><r
 let projectRoot: string;
 
 beforeAll(async () => {
-  projectRoot = await mkdtemp(path.join(tmpdir(), "thumby-theme-"));
+  projectRoot = await mkdtemp(path.join(tmpdir(), "ply-theme-"));
   await writeFile(path.join(projectRoot, "bg.svg"), SVG);
 });
 

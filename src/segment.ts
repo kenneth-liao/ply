@@ -26,7 +26,7 @@ import { composeMatte, type MatteEngine } from "./matte.js";
  * mattes at the cost of a larger 2048×2048 input, which the occasional,
  * low-volume matting pass can afford.
  *
- * No ONNX export of this checkpoint exists upstream, so thumby produces its
+ * No ONNX export of this checkpoint exists upstream, so Ply produces its
  * own: `scripts/export-birefnet-hr.py` downloads the official
  * `ZhengPeng7/BiRefNet_HR` weights, traces the graph at the checkpoint's
  * high-resolution input size (decomposing deformable convolutions into
@@ -52,9 +52,9 @@ export const SUBJECT_SEGMENTER = {
   std: [0.229, 0.224, 0.225],
 } as const;
 
-/** Where weights are cached. Gitignored; `THUMBY_MODEL_DIR` overrides it. */
+/** Where weights are cached. Gitignored; `PLY_MODEL_DIR` overrides it. */
 export function modelDir(): string {
-  return process.env.THUMBY_MODEL_DIR ?? path.resolve("models");
+  return process.env.PLY_MODEL_DIR ?? path.resolve("models");
 }
 
 export function weightsPath(): string {

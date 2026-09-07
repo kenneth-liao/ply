@@ -357,7 +357,7 @@ describe("scene render finalization", () => {
   let root = "";
 
   const withProject = async (fn: (dir: string) => Promise<void>) => {
-    root = await mkdtemp(path.join(tmpdir(), "thumby-finalize-"));
+    root = await mkdtemp(path.join(tmpdir(), "ply-finalize-"));
     try {
       await fn(root);
     } finally {

@@ -512,7 +512,7 @@ describe("scene author — explicit save (#62)", () => {
 
       // Copies live outside the bundle: a directory must never be copied into
       // itself. The session keeps running — it holds no handle on the file.
-      const workDir = await mkdtemp(path.join(tmpdir(), "thumby-save-render-"));
+      const workDir = await mkdtemp(path.join(tmpdir(), "ply-save-render-"));
       try {
         const bundle = path.join(workDir, "bundle");
         await cp(fix.root, bundle, { recursive: true });

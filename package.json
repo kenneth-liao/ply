@@ -1,9 +1,11 @@
 {
-  "name": "thumby",
-  "version": "1.0.0",
+  "name": "ply",
+  "version": "2.0.0",
+  "bin": { "ply": "src/cli.ts" },
   "private": true,
   "type": "module",
   "scripts": {
+    "ply": "bun run src/cli.ts",
     "test": "for f in $(find test -name '*.test.ts'); do bun test --isolate \"$f\" || exit 1; done",
     "scene": "bun run src/scene-cli.ts",
     "library": "bun run src/library-cli.ts",

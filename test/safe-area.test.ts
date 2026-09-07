@@ -24,7 +24,7 @@ let fix: Fix;
 let page: Page;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-safe-area-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-safe-area-"));
   const projectRoot = path.join(root, "project");
   await mkdir(projectRoot, { recursive: true });
   fix = { root, projectRoot, sceneFile: path.join(projectRoot, "scene.json") };

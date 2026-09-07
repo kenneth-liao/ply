@@ -1,6 +1,6 @@
 # ADR-0008: Outfit and style changes are Creator generation, not masked recolor
 
-- Status: Accepted (from ticket #22, `REQ-017`/`REQ-019` boundary of #7; product call after #21 human qualification — AC3, the masked shirt recolor, failed production quality)
+- Status: Superseded by [ADR-0014](0014-uniform-layers-and-caller-content-policy.md) for the accepted target design; current runtime migration pending (originally ticket #22 after #21 human qualification)
 - Context: REQ-019 shipped `adjust: { mask, color }` (ADR-0007) as the masked recolor tool. Human qualification (#21) accepted the Creator workflow but rejected the masked shirt recolor at production quality, forcing an explicit boundary between the two edit paths
 
 ## Decision

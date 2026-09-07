@@ -95,7 +95,7 @@ let page: Page;
 let resolved: Extract<LoadResult, { ok: true }>["resolved"];
 
 beforeAll(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-inspect-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-inspect-"));
   await writeFile(path.join(root, "bg.svg"), BG_SVG);
   await writeFile(path.join(root, "photo.svg"), PHOTO_SVG);
   const result = await loadScene(root, async () => {

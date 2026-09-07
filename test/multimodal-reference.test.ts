@@ -43,7 +43,7 @@ let stylePath: string;
 let styleBytes: Buffer;
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-multimodal-ref-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-multimodal-ref-"));
   editPath = path.join(root, "vscode-screenshot.png");
   editBytes = Buffer.from("multimodal-edit-reference-bytes");
   await writeFile(editPath, editBytes);

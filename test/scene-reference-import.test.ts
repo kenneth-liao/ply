@@ -74,7 +74,7 @@ const quadrants = (w: number, h: number): Buffer => {
 };
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-ref-import-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-ref-import-"));
   const projectRoot = path.join(root, "project");
   await mkdir(projectRoot, { recursive: true });
   const sceneFile = path.join(projectRoot, "scene.json");

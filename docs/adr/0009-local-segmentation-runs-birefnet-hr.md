@@ -20,7 +20,7 @@ benchmark evidence and visual comparisons live in ticket #44.
   ORT's CoreML execution provider is materially slower than MPS for this
   transformer, and that gap is the real price of the upgrade on this stack.
 - **The checkpoint ships as PyTorch weights only.** No ONNX export of
-  BiRefNet_HR exists upstream (checked 2026-08-31), so thumby produces its own
+  BiRefNet_HR exists upstream (checked 2026-08-31), so Ply produces its own
   with `uv run --locked --script scripts/export-birefnet-hr.py`. The script
   downloads **one immutable Hugging Face revision**
   (`a7a562f6fd16021180f2f4348f4de003a2d3d1e1` — never `main`), verifies the

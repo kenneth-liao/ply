@@ -60,7 +60,7 @@ const imageLayer = (over: Record<string, unknown> = {}): SceneLayer =>
   }) as SceneLayer;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-compare-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-compare-"));
   const projectRoot = path.join(root, "project");
   const libRoot = path.join(root, "library");
   await mkdir(path.join(projectRoot, "out"), { recursive: true });

@@ -25,7 +25,7 @@ interface Fix {
 let fix: Fix;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-variant-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-variant-"));
   const projectRoot = path.join(root, "project");
   const libRoot = path.join(root, "library");
   await mkdir(path.join(libRoot, "plates", "demo-plate"), { recursive: true });

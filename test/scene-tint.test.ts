@@ -58,7 +58,7 @@ interface Fix {
 let fix: Fix;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-tint-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-tint-"));
   const projectRoot = path.join(root, "project");
   await mkdir(projectRoot, { recursive: true });
   await writeFile(path.join(projectRoot, "tint-fixture.png"), rasterPng);

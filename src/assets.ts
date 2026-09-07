@@ -6,13 +6,13 @@ import { fileURLToPath } from "node:url";
 
 /**
  * The single canonical location of the asset library: `<repo>/assets`.
- * THUMBY_LIBRARY_ROOT relocates it — test fixtures and portable checkouts
+ * PLY_LIBRARY_ROOT relocates it — test fixtures and portable checkouts
  * point the one resolution contract at their own root.
  */
 export const LIBRARY_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
-  process.env.THUMBY_LIBRARY_ROOT ?? "assets",
+  process.env.PLY_LIBRARY_ROOT ?? "assets",
 );
 
 /**

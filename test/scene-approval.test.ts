@@ -32,7 +32,7 @@ interface Fix {
 let fix: Fix;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-approval-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-approval-"));
   const libRoot = path.join(root, "library");
   const projectRoot = path.join(root, "project");
   await mkdir(projectRoot, { recursive: true });

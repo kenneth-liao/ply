@@ -50,7 +50,7 @@ import { outsideDir } from "./paths.js";
 import { closeBrowser } from "./browser.js";
 
 const HELP = `
-thumby scene — versioned, locally rendered thumbnail compositions
+ply scene — versioned, locally rendered thumbnail compositions
 
   bun run scene schema                  Print the Scene JSON Schema document
   bun run scene themes                  List bundled themes (name, description, revision)

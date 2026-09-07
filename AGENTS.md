@@ -1,4 +1,18 @@
-# AGENTS.md
+# Ply — agent instructions
+
+## Documentation and migration boundary
+
+- `ISA.md` owns the accepted destination, claims, fog, and progress; it is not
+  an implementation spec. Do not duplicate its backlog in other documents.
+- `CONTEXT.md` defines the target composer vocabulary. The current runtime
+  still uses the legacy Scene/Job surface documented in `README.md`.
+- ADR-0013 through ADR-0015 record accepted target decisions, not shipped
+  functionality. Do not remove existing gates as part of a rename or docs pass.
+- `.agents/skills/visual-authoring/SKILL.md` owns relocated authoring knowledge.
+  It must be committed before any gate deletion (ISC-27).
+- This repository's instructions take precedence over stale generated profile
+  context under `.agent-profile-kit/`; do not hand-edit generated profiles to
+  encode repository documentation policy.
 
 ## Agent skills
 
@@ -38,9 +52,9 @@ Single-context repo: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/
   sha-256 in `src/segment.ts`, and never loaded by the unit suite — tests
   inject a fake `MatteEngine`, and the live check in `test/segment.test.ts`
   skips when the weights are absent.
-- Core design decision (models produce source Assets, while text and final
-  composition render locally — ADR-0001/0004): do not move final text or the
-  final composite onto the model.
+- Final composition stays local. ADR-0014 allows caller-chosen text pixels in
+  the target design; today's text/content gates remain until their separately
+  scoped migration. Do not present the accepted destination as already shipped.
 
 ## Rendering gotchas
 
@@ -65,6 +79,7 @@ can be invisible in logs:
 - Generation references are arbitrary local image files supplied by the
   caller. Preserve their order, derive their sha-256 identities once at Job
   creation, and verify/read their bytes once at generation.
-- Creator generation requires at least one caller-supplied `identity`
-  reference; never generate a likeness from text alone.
+- Current Creator generation requires a caller-supplied `identity` reference.
+  ADR-0014 supersedes that target policy; changing the runtime gate requires a
+  separate implementation after the authoring skill lands.
 - Design decisions and their rationale: `docs/adr/`.

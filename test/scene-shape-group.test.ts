@@ -29,7 +29,7 @@ let fix: Fix;
 let page: Page;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-shape-group-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-shape-group-"));
   const projectRoot = path.join(root, "project");
   const libRoot = path.join(root, "library");
   await mkdir(path.join(libRoot, "plates", "demo-plate"), { recursive: true });

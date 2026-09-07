@@ -15,9 +15,9 @@
 #   "huggingface-hub==1.29.0",
 # ]
 # ///
-"""Export the official ZhengPeng7/BiRefNet_HR checkpoint to the ONNX file thumby pins.
+"""Export the official ZhengPeng7/BiRefNet_HR checkpoint to the ONNX file Ply pins.
 
-thumby's local matting pass (ADR-0006, src/segment.ts) runs a pinned ONNX
+Ply's local matting pass (ADR-0006, src/segment.ts) runs a pinned ONNX
 segmenter through onnxruntime-node. For BiRefNet (general, 1024) an
 onnx-community export exists to download. For BiRefNet_HR (2048) no ONNX
 export exists anywhere (checked 2026-09), so this script produces it:

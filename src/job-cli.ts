@@ -45,7 +45,7 @@ import { LIBRARY_ROOT } from "./assets.js";
 import { reviewJob } from "./review.js";
 
 const HELP = `
-thumby jobs — the Generation Job lifecycle (request → candidates → adoption)
+ply jobs — the Generation Job lifecycle (request → candidates → adoption)
 
   bun run jobs plates <subject> [options]   Start a plate Generation Job
   bun run jobs objects <subject> [options]  Start an object Generation Job —

@@ -14,15 +14,15 @@ import {
 import { verifyTrueAlpha } from "../src/alpha.js";
 import { encodePng, decodePng } from "./png.js";
 
-const originalModelDir = process.env.THUMBY_MODEL_DIR;
+const originalModelDir = process.env.PLY_MODEL_DIR;
 
 let root: string;
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-segment-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-segment-"));
 });
 afterEach(async () => {
-  if (originalModelDir === undefined) delete process.env.THUMBY_MODEL_DIR;
-  else process.env.THUMBY_MODEL_DIR = originalModelDir;
+  if (originalModelDir === undefined) delete process.env.PLY_MODEL_DIR;
+  else process.env.PLY_MODEL_DIR = originalModelDir;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -85,7 +85,7 @@ describe("weights are pinned and failures are loud", () => {
   });
 
   test("missing weights name the file, the pin, and the fetch command", async () => {
-    process.env.THUMBY_MODEL_DIR = root;
+    process.env.PLY_MODEL_DIR = root;
     const err = await localSegmentationMatteEngine()({ bytes: OPAQUE, label: "cand.png" }).catch(
       (e) => e as Error,
     );
@@ -98,7 +98,7 @@ describe("weights are pinned and failures are loud", () => {
   });
 
   test("weights whose bytes do not match the pin are refused, with the actual hash", async () => {
-    process.env.THUMBY_MODEL_DIR = root;
+    process.env.PLY_MODEL_DIR = root;
     await writeFile(path.join(root, SUBJECT_SEGMENTER.file), "not the model");
     const err = await localSegmentationMatteEngine()({ bytes: OPAQUE, label: "cand.png" }).catch(
       (e) => e as Error,
@@ -109,7 +109,7 @@ describe("weights are pinned and failures are loud", () => {
   test("preflight refuses before any candidate is generated, with the same message", async () => {
     // This is what stops a creator job while it is still free (RE-3): the
     // lifecycle calls it ahead of the paid generation call.
-    process.env.THUMBY_MODEL_DIR = root;
+    process.env.PLY_MODEL_DIR = root;
     const engine = localSegmentationMatteEngine();
     expect(engine.preflight).toBe(ensureSegmenterReady);
     const err = await engine.preflight!().catch((e) => e as Error);
@@ -119,7 +119,7 @@ describe("weights are pinned and failures are loud", () => {
   });
 
   test("the fix-it message is one text, whatever raised it", () => {
-    process.env.THUMBY_MODEL_DIR = root;
+    process.env.PLY_MODEL_DIR = root;
     expect(missingWeightsMessage("because")).toContain(weightsPath());
   });
 

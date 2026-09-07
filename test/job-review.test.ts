@@ -25,7 +25,7 @@ let root: string;
 let jobRoot: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-job-review-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-job-review-"));
   jobRoot = path.join(root, "jobs");
 });
 

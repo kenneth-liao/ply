@@ -1,6 +1,6 @@
 # ADR-0011: A Plate is a full-canvas generated background whose contents are intentionally flattened
 
-- Status: Accepted (from ticket #51, `DEC-010`–`DEC-013` of spec #50)
+- Status: Superseded by [ADR-0014](0014-uniform-layers-and-caller-content-policy.md) for the accepted target design; current runtime migration pending (originally ticket #51, `DEC-010`–`DEC-013` of spec #50)
 - Context: `REQ-014`'s narrow Plate contract made every Plate Job a "bare backdrop by definition" — no person, product, device, or independently editable foreground object baked in — and the plate prompt appended that ban (plus a ban on UI elements) to every job's effective prompt
 
 ## Decision

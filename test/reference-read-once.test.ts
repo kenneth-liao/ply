@@ -41,7 +41,7 @@ import { generatePlates, type TypedRefInput } from "../src/generate.js";
 
 describe("Reference load-once contract (CRAFT-1)", () => {
   test("count=3 resolves the Reference path once and every provider call gets the original verified bytes", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "thumby-ref-read-once-"));
+    const root = await mkdtemp(path.join(tmpdir(), "ply-ref-read-once-"));
     try {
       const originalPath = path.join(root, "original.png");
       const decoyPath = path.join(root, "decoy.png");

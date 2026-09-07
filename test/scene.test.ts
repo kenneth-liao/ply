@@ -35,7 +35,7 @@ interface Fix {
 let fix: Fix;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-scene-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-scene-"));
   const projectRoot = path.join(root, "project");
   const libRoot = path.join(root, "library");
   await mkdir(path.join(libRoot, "plates", "demo-plate"), { recursive: true });
@@ -355,7 +355,7 @@ describe("scene validation", () => {
   });
 
   it("publishes the whole text contract in the schema document itself", () => {
-    // The machine-readable contract must reject what thumby rejects —
+    // The machine-readable contract must reject what Ply rejects —
     // independent of the semantic pass.
     const validate = new Ajv().compile({
       ...(SCENE_SCHEMA.definitions as Record<string, any>).textLayer,

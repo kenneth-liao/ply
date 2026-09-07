@@ -24,7 +24,7 @@ async function put(rel: string, content: string) {
 }
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-assets-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-assets-"));
 });
 
 afterEach(async () => {

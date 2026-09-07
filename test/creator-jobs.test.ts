@@ -24,7 +24,7 @@ let jobRoot: string;
 let libraryRoot: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-creator-jobs-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-creator-jobs-"));
   jobRoot = path.join(root, "jobs");
   libraryRoot = path.join(root, "library");
 });
@@ -536,7 +536,7 @@ let cliJobsRoot: string;
 let cliLibraryRoot: string;
 
 async function cliSetup(): Promise<void> {
-  cliRoot = await mkdtemp(path.join(tmpdir(), "thumby-creator-cli-"));
+  cliRoot = await mkdtemp(path.join(tmpdir(), "ply-creator-cli-"));
   cliJobsRoot = path.join(cliRoot, "jobs");
   cliLibraryRoot = path.join(cliRoot, "library");
 }

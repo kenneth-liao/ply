@@ -66,7 +66,7 @@ describe("buildCreatorPrompt", () => {
 describe("loadVerifiedRefs", () => {
   let root: string;
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), "thumby-creator-refs-"));
+    root = await mkdtemp(path.join(tmpdir(), "ply-creator-refs-"));
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });

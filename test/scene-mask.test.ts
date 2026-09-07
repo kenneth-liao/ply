@@ -46,7 +46,7 @@ interface Fix {
 let fix: Fix;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-mask-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-mask-"));
   const projectRoot = path.join(root, "project");
   const libRoot = path.join(root, "library");
   await mkdir(path.join(libRoot, "cutouts", "ken"), { recursive: true });

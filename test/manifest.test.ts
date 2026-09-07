@@ -26,7 +26,7 @@ interface Fix {
 let fix: Fix;
 
 beforeAll(async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "thumby-manifest-"));
+  const root = await mkdtemp(path.join(tmpdir(), "ply-manifest-"));
   const projectRoot = path.join(root, "project");
   const libRoot = path.join(root, "library");
   // Provenance fields a manifest must never copy.
@@ -133,7 +133,7 @@ describe("manifest shape — build and strict read", () => {
       ],
     });
     expect(manifest.manifestVersion).toBe(MANIFEST_VERSION);
-    expect(manifest.tool.name).toBe("thumby");
+    expect(manifest.tool.name).toBe("ply");
     expect(manifest.tool.version).toBe(
       (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version,
     );

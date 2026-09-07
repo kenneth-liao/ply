@@ -1,6 +1,6 @@
 # ADR-0004: The model produces isolated non-text Assets — never final text or the final composite
 
-- Status: Accepted (from ticket #14, `REQ-024` of #7)
+- Status: Superseded by [ADR-0014](0014-uniform-layers-and-caller-content-policy.md) for the accepted target design; current runtime migration pending (originally ticket #14, `REQ-024` of #7)
 - Context: Object generation (`REQ-015`) made the model paint things that are not background plates, which reads as a conflict with ADR-0001's "the model paints only the background" (`DEC-005`)
 
 ## Decision

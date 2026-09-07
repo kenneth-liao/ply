@@ -19,7 +19,7 @@
  */
 export const SCENE_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
-  title: "thumby Scene",
+  title: "Ply Scene",
   description:
     "A versioned, locally rendered 1280×720 YouTube thumbnail composition. " +
     "Layers composite in array order (later on top). Render is offline: all " +
@@ -359,7 +359,7 @@ export const SCENE_SCHEMA = {
       additionalProperties: false,
       // The text contract is enforced here so the published schema document
       // is self-sufficient — a schema-only consumer rejects exactly what
-      // thumby rejects. src/scene.ts maps violations to friendly messages.
+      // Ply rejects. src/scene.ts maps violations to friendly messages.
       // Content and sizing are exactly-one (oneOf); fill is at-most-one,
       // since a layer with neither falls back to the default color.
       allOf: [

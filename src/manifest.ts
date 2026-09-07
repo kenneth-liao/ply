@@ -133,15 +133,16 @@ export async function renderOutputConflict(
   return undefined;
 }
 
-/**
- * The tool version — read once from the one canonical home (package.json),
- * so the manifest and the CLI never disagree about what produced a render.
- */
-export function toolVersion(): string {
+/** Tool identity comes from its canonical home, package.json. */
+function toolIdentity(): { name: string; version: string } {
   const pkg = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-  ) as { version: string };
-  return pkg.version;
+  ) as { name: string; version: string };
+  return { name: pkg.name, version: pkg.version };
+}
+
+export function toolVersion(): string {
+  return toolIdentity().version;
 }
 
 /** One resolved asset's identity — identity fields only, never provenance. */
@@ -249,7 +250,7 @@ export function buildManifest(opts: {
 }): RenderManifest {
   return {
     manifestVersion: MANIFEST_VERSION,
-    tool: { name: "thumby", version: toolVersion() },
+    tool: toolIdentity(),
     schemaVersion: opts.outputs[0]!.resolved.scene.schemaVersion,
     scene: {
       path: relPath(opts.manifestDir, opts.sceneFile),

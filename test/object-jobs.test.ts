@@ -26,7 +26,7 @@ let jobRoot: string;
 let libraryRoot: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "thumby-object-jobs-"));
+  root = await mkdtemp(path.join(tmpdir(), "ply-object-jobs-"));
   jobRoot = path.join(root, "jobs");
   libraryRoot = path.join(root, "library");
   await mkdir(libraryRoot, { recursive: true });

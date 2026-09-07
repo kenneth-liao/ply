@@ -1,6 +1,6 @@
 # ADR-0001: The model paints only the background — all text is rendered locally
 
-- Status: Accepted (from the first build session, 2026-08-26)
+- Status: Superseded by [ADR-0014](0014-uniform-layers-and-caller-content-policy.md) for the accepted target design; current runtime migration pending (originally accepted 2026-08-26)
 - Context: thumbnail generation cost and iteration speed
 
 ## Decision
