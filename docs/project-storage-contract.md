@@ -43,6 +43,8 @@ A Ply Project directory has the following canonical structure:
     └── <render-id>.png
 ```
 
+Since #80, caller exports via `ply composition render --out` may create a fresh PNG anywhere in the Project that is not reserved storage and has an existing parent directory; reserved inputs and every existing Project path are protected (see §6, Render output).
+
 ### Manifest & Schema Specifications
 
 #### `ply.json` Manifest Format
@@ -130,6 +132,7 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
 - The revision document is a canonical, self-consistent revision of that Layer (schema, `layerId`, `kind`, sha-256 `contentHash`, finite placement, `opacity` in `[0, 1]`), and its contents re-hash to exactly the revision hash the identity's current pointer names.
 - The retained content blob re-hashes to its `contentHash`; any drift is rejected as corrupted rather than resolved to substitute bytes.
 - Composition documents are parsed through one shared validated parser (name↔file match, positive-integer canvas, ordered unique `{ name, layerId }` uses); mutations refuse a composition whose existing references no longer resolve.
+- Composition resolution has one canonical site: `readCompositionInternalFull` (`src/composition.ts`) parses the document once and resolves every Layer exactly once through the canonical Layer resolver (`readLayerInternalFull`, `src/layer.ts`), returning reference names, revision metadata, and the hash-verified retained bytes. Metadata-only readers project from that result — no reader resolves or verifies the same Layer twice.
 
 ---
 
@@ -181,7 +184,28 @@ Atomic helpers do not `fsync` files or directories. Atomic visibility does not g
 
 ---
 
-## 6. CLI Commands & Output Contract (US-008)
+## 6. Render Snapshot & Output Contract (#80, US-006)
+
+### Snapshot
+
+- `ply composition render` resolves under the Project lock in exactly one pass: the Composition document, its ordered Layer references, each Layer's current revision metadata (position, opacity, format, intrinsic size), and the hash-verified retained content bytes, all through `readCompositionInternalFull`. The lock is then released; painting never re-reads Project state.
+- The snapshot's exact bytes are painted through the shared render page with awaited image decode. Paint contract: later Layers paint over earlier ones at each revision's stored position and opacity, at intrinsic size, clipped to the canvas; uncovered canvas stays transparent. Foundation Layer effects are position and opacity only. Text Layers, Render-history capture/replay, and advanced effects are separately scoped (#81, #87).
+- Canvas limits are enforced at the render boundary: 8192 px per axis and 16,777,216 pixels total. Invalid dimensions, dangling Layer references, and corrupted or missing retained content fail with an actionable diagnostic and nonzero status. A failed Render publishes no output.
+
+### Output
+
+- **Default**: a fresh, never-colliding `renders/<composition>-<unique>.png`, created with `O_EXCL` so repeated renders never collide or overwrite.
+- **`--out <path>` destination policy**:
+  - Every **existing** in-Project path is protected state and refused — render history in `renders/`, the manifest, `compositions/`, `layers/`, `content/`, and any symlink alias onto them (judged by the path's realpath, so an in-project alias cannot dodge the guard).
+  - A **fresh** path with an existing parent directory is permitted anywhere in the Project except reserved storage: the manifest (`ply.json`), the lock (`.ply.lock`), and the canonical `compositions/`, `layers/`, and `content/` directories. The parent must already exist; missing parents are refused, never created.
+  - Fresh in-Project targets publish with `O_EXCL` (`atomicCreate`): a concurrent render racing the same fresh path loses loudly with a nonzero status and publishes nothing, instead of silently replacing the winner (RE-1).
+  - Outside the Project, the parent directory must exist, and an existing regular file is the documented overwrite case.
+  - External destinations are written by **destination-entry atomic replacement**: a temp file in the destination directory, renamed over the target. The rename swaps the directory entry and never writes through the target's inode, so an external hardlink alias onto Project state (e.g. a hardlink to `ply.json`) keeps its original bytes; the temp file is cleaned up on failure.
+  - The reported output path is the caller-chosen path verbatim; realpaths are only containment guards.
+
+---
+
+## 7. CLI Commands & Output Contract (US-008)
 
 All commands support `--project <path>` (or `-p <path>`) and `--json`.
 
@@ -190,11 +214,12 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply composition create <name> --width <w> --height <h> [options] [--json]`
 - `ply composition add <comp> <local-name> --image <path> [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
 - `ply composition inspect <name> [options] [--json]`
+- `ply composition render <name> [--out <path>] [options] [--json]`
 - `ply composition list [options] [--json]`
 - `ply layer inspect <layer-id> [options] [--json]`
 - `ply layer list [options] [--json]`
 
 ### Status & Error Codes:
 - **0**: Success.
-- **1**: Runtime error (missing project, invalid image, duplicate name, etc.). Structured error JSON in `--json` mode. Browser teardown failure also exits with status 1: the already-emitted command result remains unchanged on stdout (including valid JSON in `--json` mode), while stderr reports the separate lifecycle failure and recovery guidance. For a successful mutation the diagnostic explicitly says it is already committed and must not be retried; teardown failure does not trigger rollback or mutation retry. Consumers must check exit status and stderr as well as the command-result JSON's `ok` field.
+- **1**: Runtime error (missing project, invalid image, duplicate name, etc.). Structured error JSON in `--json` mode. `composition render` emits its JSON — success and failure — on stdout, so callers can parse it regardless of exit status. Browser teardown failure also exits with status 1: the already-emitted command result remains unchanged on stdout (including valid JSON in `--json` mode), while stderr reports the separate lifecycle failure and recovery guidance, including the render's exact published outcome (output already written to the reported path, or no output published). For a successful mutation the diagnostic explicitly says it is already committed and must not be retried; teardown failure does not trigger rollback or mutation retry. Consumers must check exit status and stderr as well as the command-result JSON's `ok` field.
 - **2**: Usage error / malformed flags / missing required options. Structured error JSON in `--json` mode.

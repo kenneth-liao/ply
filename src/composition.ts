@@ -17,6 +17,7 @@ import {
   validateAndIngestImage,
   storeContentBlob,
   readLayerInternal,
+  readLayerInternalFull,
 } from "./layer.js";
 
 export const COMPOSITION_SCHEMA_VERSION = 1;
@@ -294,11 +295,27 @@ export async function addLayerToComposition(
   });
 }
 
-/** Unlocked internal reader for Composition. Callers must hold the Project lock. */
-export async function readCompositionInternal(
+export interface ResolvedCompositionLayerFull extends ResolvedCompositionLayer {
+  /** The Layer's verified retained content bytes. Internal projection — never serialized. */
+  contentBytes: Buffer;
+}
+
+export interface ResolvedCompositionFull extends Omit<ResolvedComposition, "layers"> {
+  layers: ResolvedCompositionLayerFull[];
+}
+
+/**
+ * Unlocked internal reader that also returns each Layer's verified retained
+ * content bytes. Callers must hold the Project lock. This is the canonical
+ * Composition resolution site: the document is parsed once and every Layer is
+ * resolved exactly once through the canonical Layer resolver; metadata-only
+ * readers project from this result without a second read or a second
+ * verification.
+ */
+export async function readCompositionInternalFull(
   projectPath: string,
   compName: string,
-): Promise<ResolvedComposition> {
+): Promise<ResolvedCompositionFull> {
   const sanitized = sanitizeName(compName);
   const resolvedRoot = path.resolve(projectPath);
   const compFile = path.join(resolvedRoot, "compositions", `${sanitized}.json`);
@@ -317,14 +334,15 @@ export async function readCompositionInternal(
 
   const comp = parseCompositionDocument(compRaw, sanitized);
 
-  const resolvedLayers: ResolvedCompositionLayer[] = [];
+  const resolvedLayers: ResolvedCompositionLayerFull[] = [];
   for (const use of comp.layers) {
-    const layer = await readLayerInternal(projectPath, use.layerId);
+    const layer = await readLayerInternalFull(projectPath, use.layerId);
     resolvedLayers.push({
       name: use.name,
       layerId: use.layerId,
       kind: layer.currentRevision.kind,
       revision: layer.currentRevision,
+      contentBytes: layer.contentBytes,
     });
   }
 
@@ -332,6 +350,19 @@ export async function readCompositionInternal(
     name: comp.name,
     canvas: comp.canvas,
     layers: resolvedLayers,
+  };
+}
+
+/** Unlocked internal reader for Composition. Callers must hold the Project lock. */
+export async function readCompositionInternal(
+  projectPath: string,
+  compName: string,
+): Promise<ResolvedComposition> {
+  const full = await readCompositionInternalFull(projectPath, compName);
+  return {
+    name: full.name,
+    canvas: full.canvas,
+    layers: full.layers.map(({ name, layerId, kind, revision }) => ({ name, layerId, kind, revision })),
   };
 }
 

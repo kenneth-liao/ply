@@ -1,6 +1,6 @@
 {
   "name": "ply",
-  "version": "2.2.1",
+  "version": "2.3.3",
   "bin": { "ply": "src/cli.ts" },
   "private": true,
   "type": "module",
