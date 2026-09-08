@@ -11,6 +11,8 @@ layer — Layer management and inspection within a Project
   bun run ply layer edit <layer-id> [options]
       Edit a Layer's content or placement, advancing its current revision.
       Requires --in-place when referenced by multiple Compositions.
+      With --fork, publish a new Layer identity and retarget only the
+      selected use in --composition; other Compositions are unaffected.
 
   bun run ply layer inspect <layer-id> [options]
       Inspect a Layer's identity, current revision, and content details
@@ -22,6 +24,13 @@ Options:
   --project, -p <dir>   Path to Project root (default: current working directory)
   --in-place            Explicitly advance Layer revision in-place across all
                         referring Compositions (required when referrers > 1)
+  --fork                Fork instead: publish a new Layer identity with the
+                        edited revision and retarget only the selected use.
+                        Mutually exclusive with --in-place; --composition and
+                        --use are required. A fork always creates a new
+                        identity, even when no edit option changes content.
+  --composition <name>  Target Composition for --fork (required with --fork)
+  --use <local-name>    Target use local name for --fork (required with --fork)
   --image <path>        New source image file for an image Layer
   --text <str>          New text content for a text Layer
   --font <family>       Bundled font family name for a text Layer
@@ -65,6 +74,9 @@ let values: {
   json?: boolean;
   help?: boolean;
   "in-place"?: boolean;
+  fork?: boolean;
+  composition?: string;
+  use?: string;
   image?: string;
   text?: string;
   font?: string;
@@ -85,6 +97,9 @@ try {
       json: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       "in-place": { type: "boolean", default: false },
+      fork: { type: "boolean", default: false },
+      composition: { type: "string" },
+      use: { type: "string" },
       image: { type: "string" },
       text: { type: "string" },
       font: { type: "string" },
@@ -130,13 +145,50 @@ async function run() {
         values.y !== undefined ||
         values.opacity !== undefined;
 
-      if (!hasEditOption) {
+      if (!hasEditOption && !values.fork) {
         output(
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --text, --font, --font-size, --color, --x, --y, --opacity.",
+              "No edit options provided: specify at least one of --image, --text, --font, --font-size, --color, --x, --y, --opacity, or --fork.",
           },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+
+      // Fork intent usage contract (#85): --fork and --in-place are mutually
+      // exclusive; fork requires an explicit --composition/--use target;
+      // those flags are meaningless without --fork.
+      if (values.fork && values["in-place"]) {
+        output(
+          { ok: false, error: "--fork and --in-place are mutually exclusive edit intents." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      if (values.fork) {
+        if (!values.composition || values.composition.trim() === "") {
+          output(
+            { ok: false, error: "--composition <comp> is required with --fork: name the Composition whose use is retargeted." },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+        if (!values.use || values.use.trim() === "") {
+          output(
+            { ok: false, error: "--use <local-name> is required with --fork: name the use in the target Composition to retarget." },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+      } else if (values.composition !== undefined || values.use !== undefined) {
+        output(
+          { ok: false, error: "--composition and --use are only valid together with --fork." },
           isJson,
         );
         process.exitCode = 2;
@@ -190,6 +242,9 @@ async function run() {
       try {
         const res = await editLayer(targetProj, layerId, {
           inPlace: values["in-place"],
+          fork: values.fork,
+          composition: values.composition,
+          use: values.use,
           image: values.image,
           text: values.text,
           font: values.font,
@@ -200,20 +255,32 @@ async function run() {
           opacity,
         });
 
+        const resultBody: { ok: true; [key: string]: unknown } = {
+          ok: true,
+          layer: res.layer,
+          referringCompositions: res.referringCompositions,
+          referrersCount: res.referrersCount,
+        };
+        if (res.fork) {
+          resultBody.fork = res.fork;
+        }
+
         output(
-          {
-            ok: true,
-            layer: res.layer,
-            referringCompositions: res.referringCompositions,
-            referrersCount: res.referrersCount,
-          },
+          resultBody,
           isJson,
           () => {
             const refMsg =
               res.referrersCount === 0
                 ? "not referenced by any Composition"
                 : `referenced by ${res.referrersCount} Composition${res.referrersCount === 1 ? "" : "s"} (${res.referringCompositions.map((n) => `"${n}"`).join(", ")})`;
-            console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})`);
+            if (res.fork) {
+              console.log(
+                `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})`,
+              );
+            } else {
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})`);
+            }
           },
         );
       } catch (err) {

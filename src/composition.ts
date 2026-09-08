@@ -163,16 +163,21 @@ async function readCompositionDocument(
 }
 
 /**
- * Read the target Composition document under the lock for a live mutation:
- * verifies Project boundary containment, parses the stored document through
+ * Unlocked internal reader for a to-be-mutated Composition document.
+ * Verifies Project boundary containment, parses the stored document through
  * the canonical parser, and confirms that every existing Layer reference
  * still resolves — never mutate a composition whose existing references no
  * longer resolve.
  *
+ * This is the ONE canonical pre-mutation reading boundary: in-Project
+ * mutations in this module and fork-target validation in `src/layer.ts` (#85,
+ * local review CRAFT-1) all reuse it — there is no second boundary.
+ * Callers must hold the Project lock.
+ *
  * If `checkUniqueLocalName` is provided, additionally enforces that the local
  * name is not already in use within the Composition.
  */
-async function readMutableComposition(
+export async function readMutableComposition(
   resolvedRoot: string,
   compName: string,
   checkUniqueLocalName?: string,

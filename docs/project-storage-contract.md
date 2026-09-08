@@ -198,6 +198,23 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
     - Historical revision documents and content blobs are never overwritten or deleted; all prior revisions remain available for reproduction (#87).
     - The Project lock coordinates cooperating Ply processes; it does not claim coordination with arbitrary external filesystem writers.
 
+### Explicit Fork Editing (#85, US-004)
+
+`ply layer edit <layer-id> --fork --composition <comp> --use <local-name> [edit options]` publishes a new Layer identity and retargets exactly one use. The CLI command is the sole fork entry point.
+
+1. **Intent Normalization (#85, DEC-003)**: External intent is normalized once into a canonical discriminated shape — in-place, or fork with an explicit `composition`/`use` target. `--fork` and `--in-place` are mutually exclusive; fork requires `--composition <comp>` and `--use <local-name>`; those flags are forbidden without `--fork`. Flag misuse is a usage error (exit 2). A fork with no edit options is valid (documented below).
+2. **Acquire Project Lock**: Referrer discovery, target validation, revision construction, staging, and the live commit all execute under `.ply.lock` — the same boundary as in-place editing (#82) and Composition mutations (#83, #84).
+3. **Authoritative Referrer Discovery**: The same fail-closed `compositions/*.json` scan as in-place editing runs before any fork work. A fork never needs the blast-radius flag (it changes exactly one use in one Composition), but the scan still fails closed on malformed or unreadable documents, and the reported `referrersCount`/`referringCompositions` describe the original Layer's pre-fork referrers.
+4. **Target Validation (canonical use→original-id rule)**: The target Composition document must exist and parse canonically; the selected use must exist in it by local name; and that use must reference the Layer being forked. Mismatches fail closed (exit 1) before any content work. Every existing reference in the target Composition is re-verified to resolve — never mutate a composition whose existing references no longer resolve.
+5. **Shared Edited-Revision Construction**: The edited revision builds through the same canonical construction as in-place editing: kind stability (`--text`/`--font`/`--font-size`/`--color` on an image Layer and `--image` on a text Layer fail), placement/opacity preservation when omitted, and font-preserving reuse of retained bytes (only `--font` re-resolves a bundled face). The revision document binds the new identity and a fresh `createdAt`.
+6. **No-Content-Change Fork**: An explicit fork ALWAYS publishes a new Layer identity, even when the edited revision is field-identical to the current one. This is documented behavior, not an accident: the caller asked for an isolated copy, and the in-place no-op shortcut does not apply.
+7. **Atomic Publication & Rollback**:
+   - Stages the new revision (`layers/<new-id>.revisions/<revision-hash>.json`, `atomicCreate`), stages the new identity (`layers/<new-id>.json`, `atomicCreate`), then fully resolves the staged Layer before the live commit.
+   - **Live Commit Point**: Replaces `compositions/<comp>.json` via `atomicReplace` with ONLY the selected use retargeted to the new identity; every other document field and use (including other uses of the same Layer identity in the same Composition) is preserved verbatim.
+   - **Caught-error cleanup**: If an error reaches the staging catch before the Composition replacement completes, the newly staged identity and revision (and the now-empty revision directory) are deleted. The original Layer's identity, revisions, and content are never touched; deduplicated content blobs already present before the fork are retained. Content newly ingested by the failed fork (e.g. a `--image` blob staged before the replacement failed) is honestly NOT deleted: like every publication path, immutable content is retained for deduplication and may remain unreferenced after a failure or interruption.
+   - On failure the live references and current revisions are unchanged (exit 1) and the operation can be retried. The interrupted-operation recovery notes in “Interrupted operations and operator recovery” apply unchanged (a crash can leave an unreferenced staged identity).
+8. **Original-State Guarantee**: The original identity document, every historical revision document, and all content blobs remain byte-identical across a fork; other Compositions (including the fork's source) render byte-identically.
+
 ### Composition Reference Removal & Reordering (#83, US-002, US-008)
 
 1. **Acquire Project Lock**: Entire document discovery, reference verification, and replacement execute under `.ply.lock` to coordinate with other Composition mutations, in-place Layer edits (#82), and reader snapshots.
@@ -295,7 +312,7 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply composition render <name> [--out <path>] [options] [--json]`
 - `ply composition list [options] [--json]`
 - `ply layer inspect <layer-id> [options] [--json]`
-- `ply layer edit <layer-id> [--in-place] [--image <path> | --text <str> [--font <family>] [--font-size <px>] [--color <hex>]] [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+- `ply layer edit <layer-id> [--in-place | --fork --composition <comp> --use <local-name>] [--image <path> | --text <str> [--font <family>] [--font-size <px>] [--color <hex>]] [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
 - `ply layer list [options] [--json]`
 
 ### Status & Error Codes:
