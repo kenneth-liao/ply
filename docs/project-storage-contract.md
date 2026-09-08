@@ -85,6 +85,8 @@ Since #80, caller exports via `ply composition render --out` may create a fresh 
   - `name` (string): Composition-local unique name addressing this use.
   - `layerId` (string): Stable Project Layer identity pointer (`layers/<layer-id>.json`).
   - No per-use placement overrides, variant sets, or nested compositions.
+  - `ply composition reorder` permutes existing uses to alter painting order (#83).
+  - `ply composition remove` removes a use from this list without modifying or deleting the underlying Layer, its revisions, content blobs, or other Compositions' uses of that Layer (#83). Removing the last use yields an empty `layers: []` array.
 
 #### `layers/<layer-id>.json` (Owned by #79, #82, #85)
 ```json
@@ -192,8 +194,24 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
    - Stages new revision document in `layers/<layer-id>.revisions/<revision-hash>.json` (`atomicCreate`).
    - **Live Commit Point**: Updates `layers/<layer-id>.json` with `{ ...identity, currentRevision: revHash }` via `atomicReplace`.
    - Caught-error cleanup: attempts to unlink staged revision file if identity replacement fails.
-   - Historical revision documents and content blobs are never overwritten or deleted; all prior revisions remain available for reproduction (#87).
-   - The Project lock coordinates cooperating Ply processes; it does not claim coordination with arbitrary external filesystem writers.
+    - Historical revision documents and content blobs are never overwritten or deleted; all prior revisions remain available for reproduction (#87).
+    - The Project lock coordinates cooperating Ply processes; it does not claim coordination with arbitrary external filesystem writers.
+
+### Composition Reference Removal & Reordering (#83, US-002, US-008)
+
+1. **Acquire Project Lock**: Entire document discovery, reference verification, and replacement execute under `.ply.lock` to coordinate with other Composition mutations, in-place Layer edits (#82), and reader snapshots.
+2. **Document Parsing & Resolution**: Scans the target Composition document using `parseCompositionDocument` and re-verifies that every referenced Layer resolves via `readLayerInternal`. Fails closed immediately on missing or malformed documents or dangling references.
+3. **Removal Protocol (`remove`)**:
+   - Locates the use by its unique local name (`<use-name>`).
+   - Fails with exit 1 if the use name is not found in the Composition.
+   - Updates `compositions/<name>.json` via `atomicReplace` with the target use removed. Removing the last use is permitted and yields an empty `layers: []` array.
+   - **Layer Preservation Guarantee**: Removal does NOT delete or mutate the Layer identity document (`layers/<layer-id>.json`), any historical revision documents, or any content blobs in `content/`. Other Compositions referencing the same Layer remain completely unaffected and resolvable.
+4. **Reordering Protocol (`reorder`)**:
+   - Requires an exact full-order permutation of all existing local use names via `--order <name1,name2,...>`.
+   - Rejects duplicate names, missing names, unknown names, empty segments, or count mismatches with exit 1 and actionable diagnostics, leaving the stored Composition document completely unchanged.
+   - For an empty Composition (0 layers), an explicit empty order (`--order ""`) succeeds as a no-op; passing non-empty names fails with exit 1.
+   - If the requested permutation matches the existing order (no-op reorder), it returns cleanly without storage churn.
+   - Valid permutations commit the updated `layers` array to `compositions/<name>.json` via `atomicReplace`.
 
 ### Interrupted operations and operator recovery
 
@@ -239,6 +257,8 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply project inspect [options] [--json]`
 - `ply composition create <name> --width <w> --height <h> [options] [--json]`
 - `ply composition add <comp> <local-name> (--image <path> | --text <str> --font <family> [--font-size <px>] [--color <hex>]) [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+- `ply composition remove <comp> <use-name> [options] [--json]`
+- `ply composition reorder <comp> --order <name1,name2,...> [options] [--json]`
 - `ply composition inspect <name> [options] [--json]`
 - `ply composition render <name> [--out <path>] [options] [--json]`
 - `ply composition list [options] [--json]`
@@ -248,5 +268,5 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 
 ### Status & Error Codes:
 - **0**: Success.
-- **1**: Runtime error (missing project, invalid image, duplicate name, etc.). Structured error JSON in `--json` mode. `composition render` emits its JSON — success and failure — on stdout, so callers can parse it regardless of exit status. Browser teardown failure also exits with status 1: the already-emitted command result remains unchanged on stdout (including valid JSON in `--json` mode), while stderr reports the separate lifecycle failure and recovery guidance, including the render's exact published outcome (output already written to the reported path, or no output published). For a successful mutation the diagnostic explicitly says it is already committed and must not be retried; teardown failure does not trigger rollback or mutation retry. Consumers must check exit status and stderr as well as the command-result JSON's `ok` field.
+- **1**: Runtime error (missing project, invalid image, duplicate name, unknown use name, invalid reorder permutation, etc.). Structured error JSON in `--json` mode. `composition render` emits its JSON — success and failure — on stdout, so callers can parse it regardless of exit status. Browser teardown failure also exits with status 1: the already-emitted command result remains unchanged on stdout (including valid JSON in `--json` mode), while stderr reports the separate lifecycle failure and recovery guidance, including the render's exact published outcome (output already written to the reported path, or no output published). For a successful mutation the diagnostic explicitly says it is already committed and must not be retried; teardown failure does not trigger rollback or mutation retry. Consumers must check exit status and stderr as well as the command-result JSON's `ok` field.
 - **2**: Usage error / malformed flags / missing required options. Structured error JSON in `--json` mode.

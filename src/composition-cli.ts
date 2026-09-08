@@ -6,6 +6,8 @@ import {
   createComposition,
   addLayerToComposition,
   addTextLayerToComposition,
+  removeLayerFromComposition,
+  reorderCompositionLayers,
   inspectComposition,
   listCompositions,
   type ResolvedComposition,
@@ -27,6 +29,14 @@ composition — Composition authoring and inspection
       Add a locally rendered text Layer. The bundled font family's bytes are
       retained into the Project, so rendering never needs the original font
       files. Mutually exclusive with --image.
+
+  bun run ply composition remove <comp> <name> [options]
+      Remove a Layer use from a Composition without deleting the Layer,
+      retained revisions, or other Compositions' uses
+
+  bun run ply composition reorder <comp> --order <name1,name2,...> [options]
+      Reorder Layer uses within a Composition to change painting order
+      (exact full-order permutation of all existing local use names)
 
   bun run ply composition inspect <name> [options]
       Inspect a Composition's canvas and ordered Layers
@@ -51,6 +61,7 @@ Options:
                         e.g. Anton, "Source Sans 3", "Archivo Black")
   --font-size <num>     Font size in px for text Layers (default: 48)
   --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
+  --order <names>       Comma-separated permutation of use names (required for reorder)
   --out <path>          Export path for render; fresh in-Project paths with an
                         existing parent (except reserved storage) or any path
                         outside the Project (existing Project state is never
@@ -92,6 +103,7 @@ let values: {
   font?: string;
   "font-size"?: string;
   color?: string;
+  order?: string;
   out?: string;
   x?: string;
   y?: string;
@@ -114,6 +126,7 @@ try {
       font: { type: "string" },
       "font-size": { type: "string" },
       color: { type: "string" },
+      order: { type: "string" },
       out: { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
@@ -272,6 +285,59 @@ async function run() {
         output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
+    } else if (command === "remove") {
+      const compName = positionals[1];
+      const localName = positionals[2];
+      if (!compName || !localName) {
+        output({ ok: false, error: "Usage: ply composition remove <composition> <use-name>" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+
+      try {
+        const res = await removeLayerFromComposition(targetProj, compName, localName);
+        mutationCommitted = true;
+        output(
+          { ok: true, composition: res.composition, removedUse: res.removedUse, layers: res.layers },
+          isJson,
+          () => {
+            console.log(
+              `Removed Layer use "${res.removedUse.name}" (${res.removedUse.layerId}) from Composition "${res.composition}" (remaining: ${res.layers.length})`,
+            );
+          },
+        );
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
+    } else if (command === "reorder") {
+      const compName = positionals[1];
+      if (!compName) {
+        output({ ok: false, error: "Usage: ply composition reorder <composition> --order <name1,name2,...>" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.order === undefined) {
+        output({ ok: false, error: "Missing required option: --order <name1,name2,...>" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+
+      try {
+        const res = await reorderCompositionLayers(targetProj, compName, values.order);
+        mutationCommitted = true;
+        output(
+          { ok: true, composition: res.composition, layers: res.layers },
+          isJson,
+          () => {
+            const names = res.layers.length === 0 ? "(empty)" : res.layers.map((l) => l.name).join(", ");
+            console.log(`Reordered Composition "${res.composition}" (order: ${names})`);
+          },
+        );
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
     } else if (command === "inspect") {
       const name = positionals[1];
       if (!name) {
@@ -347,7 +413,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, inspect, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: create, add, remove, reorder, inspect, render, list. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }
