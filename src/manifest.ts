@@ -134,7 +134,7 @@ export async function renderOutputConflict(
 }
 
 /** Tool identity comes from its canonical home, package.json. */
-function toolIdentity(): { name: string; version: string } {
+export function toolIdentity(): { name: string; version: string } {
   const pkg = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   ) as { name: string; version: string };

@@ -439,7 +439,7 @@ async function run() {
           { ok: true, render },
           isJson,
           () => {
-            console.log(`Rendered Composition "${render.name}" at ${render.width}\u00d7${render.height} \u2192 ${render.output}`);
+            console.log(`Rendered Composition "${render.name}" at ${render.width}\u00d7${render.height} \u2192 ${render.output} (manifest: ${render.manifest})`);
           },
         );
       } catch (err) {
