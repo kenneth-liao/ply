@@ -34,9 +34,20 @@ function output(info: { ok: true; project: ProjectInfo } | { ok: false; error: s
   }
 }
 
-const parse = () =>
-  parseArgs({
-    args: process.argv.slice(2),
+const rawArgs = process.argv.slice(2);
+const isJson = rawArgs.includes("--json");
+
+let values: {
+  project?: string;
+  name?: string;
+  json?: boolean;
+  help?: boolean;
+};
+let positionals: string[];
+
+try {
+  const parsed = parseArgs({
+    args: rawArgs,
     allowPositionals: true,
     options: {
       project: { type: "string", short: "p" },
@@ -45,8 +56,12 @@ const parse = () =>
       help: { type: "boolean", short: "h", default: false },
     },
   });
-
-const { values, positionals } = parse();
+  values = parsed.values;
+  positionals = parsed.positionals;
+} catch (err) {
+  output({ ok: false, error: (err as Error).message }, isJson);
+  process.exit(2);
+}
 
 if (values.help || positionals.length === 0) {
   console.log(HELP);
@@ -54,7 +69,6 @@ if (values.help || positionals.length === 0) {
 }
 
 const command = positionals[0]!;
-const isJson = values.json ?? false;
 
 async function run() {
   if (command === "init") {

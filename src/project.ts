@@ -4,7 +4,7 @@
  */
 import path from "node:path";
 import { mkdir, readFile, writeFile, readdir, stat, lstat } from "node:fs/promises";
-import { outsideDir } from "./paths.js";
+import { outsideDir, escapesDirReal } from "./paths.js";
 
 export const PROJECT_MANIFEST_FILENAME = "ply.json";
 export const CURRENT_SCHEMA_VERSION = 1;
@@ -142,6 +142,10 @@ export async function inspectProject(targetPath: string): Promise<ProjectInfo> {
     throw new Error(`Not a valid Ply project: missing ${PROJECT_MANIFEST_FILENAME} in "${targetPath}"`);
   }
 
+  if (await escapesDirReal(resolvedPath, manifestPath)) {
+    throw new Error(`Security error: project manifest in "${targetPath}" escapes project boundary.`);
+  }
+
   let manifest: ProjectManifest;
   try {
     const raw = await readFile(manifestPath, "utf8");
@@ -164,6 +168,19 @@ export async function inspectProject(targetPath: string): Promise<ProjectInfo> {
 
   if (typeof manifest.name !== "string" || !manifest.name.trim()) {
     throw new Error(`Invalid project manifest in "${targetPath}": missing or empty "name".`);
+  }
+
+  // Validate containment for all owned project subdirectories
+  for (const subdir of PROJECT_SUBDIRS) {
+    const subdirPath = path.join(resolvedPath, subdir);
+    if (await pathExists(subdirPath)) {
+      if (await escapesDirReal(resolvedPath, subdirPath)) {
+        throw new Error(`Security error: project subdirectory "${subdir}" in "${targetPath}" escapes project boundary.`);
+      }
+      if (!(await isDirectory(subdirPath))) {
+        throw new Error(`Project subdirectory "${subdir}" in "${targetPath}" is not a directory.`);
+      }
+    }
   }
 
   // Count Compositions and Layers

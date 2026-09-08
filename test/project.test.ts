@@ -176,3 +176,72 @@ test("project CLI handles invalid command and help gracefully", async () => {
   expect(resUnknown.code).toBe(2);
   expect(JSON.parse(resUnknown.stdout).ok).toBe(false);
 });
+
+test("INT-1: CLI argument-parser failures emit valid JSON and usage status 2", async () => {
+  // Missing value for --project in JSON mode
+  const resMissingValJson = await invoke(["project", "inspect", "--json", "--project"]);
+  expect(resMissingValJson.code).toBe(2);
+  const parsed1 = JSON.parse(resMissingValJson.stdout);
+  expect(parsed1.ok).toBe(false);
+  expect(parsed1.error).toContain("argument missing");
+
+  // Missing value for --project in text mode
+  const resMissingValText = await invoke(["project", "inspect", "--project"]);
+  expect(resMissingValText.code).toBe(2);
+  expect(resMissingValText.stderr).toContain("Error:");
+
+  // Unknown option in JSON mode
+  const resUnknownOptJson = await invoke(["project", "inspect", "--json", "--unknown-flag"]);
+  expect(resUnknownOptJson.code).toBe(2);
+  const parsed2 = JSON.parse(resUnknownOptJson.stdout);
+  expect(parsed2.ok).toBe(false);
+  expect(parsed2.error).toContain("Unknown option");
+});
+
+test("PROD-1: project inspection rejects escaping manifest or state directory symlinks", async () => {
+  // 1. Escaping ply.json manifest
+  const extProjDir = path.join(tempDir, "external-project");
+  await invoke(["project", "init", extProjDir, "--name", "external-proj", "--json"]);
+
+  const symlinkManifestDir = path.join(tempDir, "symlink-manifest-dir");
+  await mkdir(symlinkManifestDir);
+  await symlink(path.join(extProjDir, "ply.json"), path.join(symlinkManifestDir, "ply.json"));
+
+  const resManifestSymlink = await invoke(["project", "inspect", "--project", symlinkManifestDir, "--json"]);
+  expect(resManifestSymlink.code).toBe(1);
+  const jsonManifest = JSON.parse(resManifestSymlink.stdout);
+  expect(jsonManifest.ok).toBe(false);
+  expect(jsonManifest.error).toContain("escapes project boundary");
+
+  // 2. Escaping state directory symlinks (compositions, layers, content, renders)
+  for (const subdir of ["compositions", "layers", "content", "renders"] as const) {
+    const projDir = path.join(tempDir, `esc-subdir-${subdir}`);
+    await invoke(["project", "init", projDir, "--name", `esc-${subdir}`, "--json"]);
+
+    // Replace subdir with symlink to an external folder
+    const extSubdir = path.join(tempDir, `external-${subdir}`);
+    await mkdir(extSubdir, { recursive: true });
+    await rm(path.join(projDir, subdir), { recursive: true, force: true });
+    await symlink(extSubdir, path.join(projDir, subdir));
+
+    const resSubdirSymlink = await invoke(["project", "inspect", "--project", projDir, "--json"]);
+    expect(resSubdirSymlink.code).toBe(1);
+    const jsonSubdir = JSON.parse(resSubdirSymlink.stdout);
+    expect(jsonSubdir.ok).toBe(false);
+    expect(jsonSubdir.error).toContain(`project subdirectory "${subdir}"`);
+    expect(jsonSubdir.error).toContain("escapes project boundary");
+  }
+
+  // 3. Legitimate root alias is preserved
+  const realProjDir = path.join(tempDir, "real-proj");
+  await invoke(["project", "init", realProjDir, "--name", "real-proj", "--json"]);
+
+  const aliasProjDir = path.join(tempDir, "alias-proj");
+  await symlink(realProjDir, aliasProjDir);
+
+  const resAlias = await invoke(["project", "inspect", "--project", aliasProjDir, "--json"]);
+  expect(resAlias.code).toBe(0);
+  const jsonAlias = JSON.parse(resAlias.stdout);
+  expect(jsonAlias.ok).toBe(true);
+  expect(jsonAlias.project.name).toBe("real-proj");
+});
