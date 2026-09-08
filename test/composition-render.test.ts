@@ -7,7 +7,7 @@
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
-import { mkdtemp, rm, readFile, readdir, writeFile, symlink, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, readdir, writeFile, symlink, mkdir, link } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { encodePngRgba, readPngHeader, decodePng } from "../src/png.js";
 
@@ -341,4 +341,65 @@ test("the default render output never collides across repeated renders", async (
   const outputs = (await readdir(path.join(projDir, "renders"))).filter((f) => f.endsWith(".png"));
   expect(outputs).toHaveLength(2);
   expect(JSON.parse(first.stdout).render.output).not.toBe(JSON.parse(second.stdout).render.output);
+});
+
+test("--out may export a brand-new file directly under the Project's renders/", async () => {
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(32, 32, RED));
+  await makeComposition("inproj", 32, 32, [{ local: "bg", file: img }]);
+  const out = path.join(projDir, "renders", "poster.png");
+  const res = await invoke(["composition", "render", "inproj", "--project", projDir, "--out", out, "--json"]);
+  expect(res.code).toBe(0);
+  const json = JSON.parse(res.stdout);
+  expect(json.render.output).toBe(out);
+  expect(readPngHeader(await readFile(out)).width).toBe(32);
+  // An in-Project export must never overwrite an existing render.
+  const again = await invoke(["composition", "render", "inproj", "--project", projDir, "--out", out, "--json"]);
+  expect(again.code).toBe(1);
+  expect(JSON.parse(again.stdout).ok).toBe(false);
+});
+
+test("--out protects the Project root and canonical storage directories from new writes", async () => {
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(32, 32, RED));
+  await makeComposition("guarded2", 32, 32, [{ local: "bg", file: img }]);
+  const manifestBefore = await readFile(path.join(projDir, "ply.json"), "utf8");
+
+  for (const out of [
+    path.join(projDir, "evil.png"),
+    path.join(projDir, "compositions", "guarded2.json"),
+    path.join(projDir, "layers", "evil.json"),
+  ]) {
+    const res = await invoke(["composition", "render", "guarded2", "--project", projDir, "--out", out, "--json"]);
+    expect(res.code).toBe(1);
+    expect(JSON.parse(res.stdout).ok).toBe(false);
+  }
+  // An --out naming a directory is refused.
+  const dirRes = await invoke([
+    "composition", "render", "guarded2", "--project", projDir, "--out", path.join(projDir, "renders"), "--json",
+  ]);
+  expect(dirRes.code).toBe(1);
+  expect(await readFile(path.join(projDir, "ply.json"), "utf8")).toBe(manifestBefore);
+});
+
+test("--out replaces the destination entry and never writes through an external hardlink to Project state", async () => {
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(32, 32, RED));
+  await makeComposition("hardlink", 32, 32, [{ local: "bg", file: img }]);
+  const manifestBefore = await readFile(path.join(projDir, "ply.json"), "utf8");
+
+  const exportDir = path.join(tempDir, "export-dir");
+  await mkdir(exportDir, { recursive: true });
+  const linked = path.join(exportDir, "linked.png");
+  await link(path.join(projDir, "ply.json"), linked);
+
+  const res = await invoke(["composition", "render", "hardlink", "--project", projDir, "--out", linked, "--json"]);
+  expect(res.code).toBe(0);
+
+  // The manifest's other hardlink keeps its exact original bytes: the export
+  // replaced the destination entry, it did not write through the shared inode.
+  expect(await readFile(path.join(projDir, "ply.json"), "utf8")).toBe(manifestBefore);
+  // The caller-chosen entry now holds the rendered PNG.
+  const exported = await readFile(linked);
+  expect(readPngHeader(exported).width).toBe(32);
 });

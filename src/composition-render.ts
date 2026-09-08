@@ -14,24 +14,27 @@
  * - Supported Layer effects in this foundation are position and opacity
  *   only. Text Layers, Render-history capture/replay, and advanced effects
  *   are separately scoped (#81, #87).
- * - The Project lock covers the snapshot: Composition references, current
- *   revisions, and verified retained bytes are read together, then the lock
- *   is released and those exact bytes are painted. Retained bytes were
- *   hash-verified by the canonical Layer resolver; corrupted or missing
- *   content fails loudly and publishes no output.
+ * - The Project lock covers the snapshot: the Composition document, its
+ *   current revisions, and verified retained bytes are resolved exactly once
+ *   through the canonical full resolver, then the lock is released and those
+ *   exact bytes are painted. Retained bytes were hash-verified by that
+ *   resolver; corrupted or missing content fails loudly and publishes no
+ *   output.
  * - Default output is a fresh, never-colliding file under the Project's
- *   renders/ directory; an explicit --out must resolve (through symlinks)
- *   outside the Project so no Project state or retained input can be
- *   clobbered. A failed Render publishes no output.
+ *   renders/ directory. An explicit --out may resolve outside the Project or
+ *   be a brand-new file directly under renders/; every existing in-Project
+ *   path is protected state. External destinations are replaced by
+ *   destination-entry atomic rename (temp file in the destination directory),
+ *   so a hardlink alias onto Project state is never written through. A
+ *   failed Render publishes no output.
  */
-import { lstat, mkdir, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, realpath } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { MAX_DIMENSION, MAX_PIXELS } from "./png.js";
-import { readLayerInternalFull } from "./layer.js";
-import { readCompositionInternal } from "./composition.js";
+import { readCompositionInternalFull } from "./composition.js";
 import { resolveProjectRoot } from "./project.js";
-import { atomicCreate, withProjectLock } from "./project-lock.js";
+import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { withRenderPage } from "./browser.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
@@ -64,7 +67,9 @@ export async function renderComposition(
   // the output path as one consistent read, then release the lock before
   // painting. Painting never re-reads Project state.
   const snapshot = await withProjectLock(resolvedRoot, async () => {
-    const comp = await readCompositionInternal(resolvedRoot, compName);
+    // One canonical pass: the document, every Layer's revision metadata, and
+    // the verified retained bytes are resolved exactly once.
+    const comp = await readCompositionInternalFull(resolvedRoot, compName);
 
     const { width, height } = comp.canvas;
     if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
@@ -88,12 +93,11 @@ export async function renderComposition(
             `which this foundation cannot render.`,
         );
       }
-      const full = await readLayerInternalFull(resolvedRoot, use.layerId);
       layers.push({
         name: use.name,
         layerId: use.layerId,
         revision: use.revision,
-        contentBytes: full.contentBytes,
+        contentBytes: use.contentBytes,
       });
     }
 
@@ -107,10 +111,12 @@ export async function renderComposition(
   const png = await paintComposition(snapshot.comp.canvas, snapshot.layers);
 
   if (options.out) {
-    // An export target already existed only as an external regular file
-    // (resolveExportTarget refused everything else); overwriting it is the
-    // documented export semantics.
-    await writeFile(snapshot.output, png);
+    // Destination-entry atomic replacement: write a temp file in the
+    // destination directory and rename it over the target. The rename swaps
+    // the directory entry — it never writes through the target's inode, so an
+    // external hardlink alias onto Project state (e.g. ply.json) keeps its
+    // original bytes. atomicReplace cleans up the temp file on failure.
+    await atomicReplace(snapshot.output, png);
   } else {
     // Project-owned default output is always a brand-new file; O_EXCL keeps
     // a collision from silently replacing an earlier Render.
@@ -149,11 +155,19 @@ async function defaultRenderOutput(resolvedRoot: string, compName: string): Prom
  * Resolve an --out export target and refuse every path that could damage
  * Project state or retained inputs. The target is judged by where it really
  * lands: an existing path (including a symlink alias) by its own realpath,
- * an absent path by its parent's realpath joined with its basename. Anything
- * resolving inside the Project — the manifest, the content store, an alias
- * pointing at a retained input — is refused, and the parent directory must
- * exist. Outside the Project, an existing regular file is the documented
- * overwrite case.
+ * an absent path by its parent's realpath joined with its basename.
+ *
+ * - Every existing in-Project path is protected Project state and refused —
+ *   the manifest, canonical storage directories, retained inputs, render
+ *   outputs, and any symlink alias onto them. The realpath check cannot be
+ *   fooled by an alias, but it also cannot see hardlinks; hardlink safety is
+ *   provided by writing through destination-entry atomic replacement (see
+ *   the render write site), never by writing through the target's inode.
+ * - A brand-new file directly under the Project's renders/ is a safe
+ *   in-Project export and is permitted; any other absent in-Project location
+ *   (root, compositions/, layers/, content/) is refused.
+ * - Outside the Project, the parent directory must exist; an existing
+ *   regular file (or symlink onto one) is the documented overwrite case.
  */
 async function resolveExportTarget(resolvedRoot: string, outPath: string): Promise<string> {
   const target = path.resolve(outPath);
@@ -175,7 +189,7 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
     } catch {
       throw new Error(`--out path "${outPath}" cannot be resolved (broken symlink?).`);
     }
-    refuseInsideProject(realRoot, real, outPath);
+    refuseExistingInsideProject(realRoot, real, outPath);
     if (st.isDirectory()) {
       throw new Error(`--out path "${outPath}" is a directory; it must name a PNG file.`);
     }
@@ -195,18 +209,39 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
     throw new Error(`--out parent directory does not exist: "${parent}"`);
   }
   const candidate = path.join(parentReal, path.basename(target));
-  refuseInsideProject(realRoot, candidate, outPath);
+
+  if (isInsideDir(realRoot, candidate)) {
+    // In-Project export: only a brand-new file directly in renders/ is safe.
+    // content/, compositions/, layers/, and the Project root are protected
+    // storage; nothing else in the Project gains caller files.
+    const rendersReal = await realpath(path.join(realRoot, "renders"));
+    const rel = path.relative(rendersReal, candidate);
+    if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes("/")) {
+      throw new Error(
+        `--out path "${outPath}" would create a file inside the Project at a protected location. ` +
+          `A new export inside the Project must go directly into renders/; ` +
+          `everything else in the Project is protected state.`,
+      );
+    }
+    return target;
+  }
+
   // Same caller-chosen-path rule: the realpath only proves the parent's real
   // location is outside the Project.
   return target;
 }
 
-function refuseInsideProject(realRoot: string, realTarget: string, outPath: string): void {
+function isInsideDir(realRoot: string, realTarget: string): boolean {
+  const rel = path.relative(realRoot, realTarget);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function refuseExistingInsideProject(realRoot: string, realTarget: string, outPath: string): void {
   const rel = path.relative(realRoot, realTarget);
   if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
     throw new Error(
       `--out path "${outPath}" resolves inside the Project ` +
-        `(${path.join(realRoot, rel)}); Project state and retained inputs cannot be exported over. ` +
+        `(${path.join(realRoot, rel)}); existing Project state and retained inputs cannot be exported over. ` +
         `Use the default renders/ output or a path outside the Project.`,
     );
   }

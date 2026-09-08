@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `composition render --out` replaces the destination by same-directory temp-file rename instead of writing through the target's inode, so an external hardlink alias onto Project state (e.g. `ply.json`) keeps its original bytes; regression test included (#80, local review CRAFT-1).
+- Render export now permits a brand-new file directly under the Project's `renders/` while continuing to refuse every existing in-Project path, canonical storage directories, and symlink aliases (#80, local review SPEC-1).
+- The render snapshot resolves each Layer exactly once through a canonical full resolver (`readCompositionInternalFull`); metadata readers project from it without a second resolution/verification pass (#80, local review CRAFT-2).
+
 ### Added
 
+- Extended `docs/project-storage-contract.md` with the render snapshot, output/`--out` policy, and render CLI contract (#80, local review SPEC-2).
 - Added `ply composition render`, painting a resolved local image Composition to a PNG at its exact canvas dimensions with reference-list paint order, position, opacity, and clipping; the Project lock covers the snapshot of verified retained bytes, the default output is a fresh file under `renders/`, `--out` exports outside the Project with symlink-resolving protection of Project state, and invalid dimensions or unresolved content fail before any output is published (#80, #77).
 
 ### Fixed
