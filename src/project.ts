@@ -1,3 +1,4 @@
+import { isStoredTimestamp } from "./stored-schema.js";
 /**
  * Project containment and lifecycle — the authoritative boundary for Compositions,
  * Layers, immutable content, and Render history (ADR-0013, DEC-001–006).
@@ -5,6 +6,7 @@
 import path from "node:path";
 import { mkdir, readFile, writeFile, readdir, stat, lstat } from "node:fs/promises";
 import { outsideDir, escapesDirReal } from "./paths.js";
+import { withProjectLock } from "./project-lock.js";
 
 export const PROJECT_MANIFEST_FILENAME = "ply.json";
 export const CURRENT_SCHEMA_VERSION = 1;
@@ -123,66 +125,71 @@ export async function initProject(
 }
 
 /**
- * Inspect an existing Project.
- * Validates manifest integrity and reports project state.
+ * Resolve and validate a Project root: the single ingestion gate for every
+ * command that reads or mutates Project state. Verifies an existing directory
+ * with a parseable, current `ply.json` manifest, and that every canonical
+ * subdirectory stays inside the Project once symlinks are resolved.
+ * Returns the resolved root path; callers pass it to the lock and readers.
  */
-export async function inspectProject(targetPath: string): Promise<ProjectInfo> {
-  const resolvedPath = path.resolve(targetPath);
+export async function resolveProjectRoot(projectPath: string): Promise<string> {
+  const resolvedPath = path.resolve(projectPath);
 
   if (!(await pathExists(resolvedPath))) {
-    throw new Error(`Project directory not found: "${targetPath}"`);
+    throw new Error(`Project directory not found: "${projectPath}"`);
   }
-
   if (!(await isDirectory(resolvedPath))) {
-    throw new Error(`Target path is not a directory: "${targetPath}"`);
+    throw new Error(`Target path is not a directory: "${projectPath}"`);
   }
 
+  await readProjectManifest(resolvedPath);
+  return resolvedPath;
+}
+
+/** Complete stored Project validator, shared by selection and inspection. */
+async function readProjectManifest(resolvedPath: string): Promise<ProjectManifest> {
   const manifestPath = path.join(resolvedPath, PROJECT_MANIFEST_FILENAME);
-  if (!(await pathExists(manifestPath))) {
-    throw new Error(`Not a valid Ply project: missing ${PROJECT_MANIFEST_FILENAME} in "${targetPath}"`);
+  try {
+    await lstat(manifestPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    throw new Error(`Not a valid Ply project: missing ply.json in "${resolvedPath}".`);
   }
-
   if (await escapesDirReal(resolvedPath, manifestPath)) {
-    throw new Error(`Security error: project manifest in "${targetPath}" escapes project boundary.`);
+    throw new Error("Security error: project manifest escapes project boundary.");
   }
-
   let manifest: ProjectManifest;
   try {
-    const raw = await readFile(manifestPath, "utf8");
-    manifest = JSON.parse(raw);
+    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   } catch (err) {
-    throw new Error(`Malformed project manifest in "${targetPath}": ${(err as Error).message}`);
+    throw new Error(`Malformed project manifest ply.json: ${(err as Error).message}`);
   }
-
-  if (typeof manifest !== "object" || manifest === null) {
-    throw new Error(`Invalid project manifest in "${targetPath}": root must be an object.`);
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("Invalid project manifest: root must be an object.");
   }
-
-  if (typeof manifest.schemaVersion !== "number") {
-    throw new Error(`Invalid project manifest in "${targetPath}": missing or invalid "schemaVersion".`);
-  }
-
   if (manifest.schemaVersion !== CURRENT_SCHEMA_VERSION) {
-    throw new Error(`Unsupported project schemaVersion ${manifest.schemaVersion} (current supported version is ${CURRENT_SCHEMA_VERSION}).`);
+    throw new Error(`Unsupported project schemaVersion ${manifest.schemaVersion}.`);
   }
-
   if (typeof manifest.name !== "string" || !manifest.name.trim()) {
-    throw new Error(`Invalid project manifest in "${targetPath}": missing or empty "name".`);
+    throw new Error('Invalid project manifest: missing or empty "name".');
   }
-
-  // Validate containment for all owned project subdirectories
+  if (!isStoredTimestamp(manifest.createdAt)) {
+    throw new Error('Invalid project manifest: missing or invalid "createdAt".');
+  }
   for (const subdir of PROJECT_SUBDIRS) {
     const subdirPath = path.join(resolvedPath, subdir);
-    if (await pathExists(subdirPath)) {
-      if (await escapesDirReal(resolvedPath, subdirPath)) {
-        throw new Error(`Security error: project subdirectory "${subdir}" in "${targetPath}" escapes project boundary.`);
-      }
-      if (!(await isDirectory(subdirPath))) {
-        throw new Error(`Project subdirectory "${subdir}" in "${targetPath}" is not a directory.`);
-      }
+    if (await escapesDirReal(resolvedPath, subdirPath)) {
+      throw new Error(`Security error: project subdirectory "${subdir}" escapes project boundary.`);
+    }
+    if (!(await isDirectory(subdirPath))) {
+      throw new Error(`Not a valid Ply project: missing "${subdir}" directory.`);
     }
   }
+  return manifest;
+}
 
+/** Internal unlocked reader for project inspection. */
+async function inspectProjectInternal(resolvedPath: string): Promise<ProjectInfo> {
+  const manifest = await readProjectManifest(resolvedPath);
   // Count Compositions and Layers
   let compositionsCount = 0;
   const compDir = path.join(resolvedPath, "compositions");
@@ -202,8 +209,26 @@ export async function inspectProject(targetPath: string): Promise<ProjectInfo> {
     name: manifest.name,
     schemaVersion: manifest.schemaVersion,
     path: resolvedPath,
-    createdAt: manifest.createdAt ?? "",
+    createdAt: manifest.createdAt,
     compositionsCount,
     layersCount,
   };
+}
+
+/**
+ * Inspect an existing Project.
+ * Validates manifest integrity and reports project state under Project lock.
+ */
+export async function inspectProject(targetPath: string): Promise<ProjectInfo> {
+  const resolvedPath = path.resolve(targetPath);
+
+  if (!(await pathExists(resolvedPath))) {
+    throw new Error(`Project directory not found: "${targetPath}"`);
+  }
+
+  if (!(await isDirectory(resolvedPath))) {
+    throw new Error(`Target path is not a directory: "${targetPath}"`);
+  }
+
+  return withProjectLock(resolvedPath, () => inspectProjectInternal(resolvedPath));
 }
