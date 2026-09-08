@@ -101,19 +101,9 @@ export async function renderComposition(
     // the verified retained bytes are resolved exactly once.
     const comp = await readCompositionInternalFull(resolvedRoot, compName);
 
-    const { width, height } = comp.canvas;
-    if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-      throw new Error(
-        `Invalid canvas dimensions ${width}×${height} for Composition "${comp.name}": ` +
-          `the render limit is ${MAX_DIMENSION}px per axis.`,
-      );
-    }
-    if (width * height > MAX_PIXELS) {
-      throw new Error(
-        `Invalid canvas dimensions ${width}×${height} for Composition "${comp.name}": ` +
-          `the render limit is ${MAX_PIXELS.toLocaleString("en-US")} pixels.`,
-      );
-    }
+    // One canonical cap check, shared with replay (INT-1): invalid dimensions
+    // fail before any Layer resolution or output destination is staged.
+    assertRenderableCanvas(comp.canvas, comp.name);
 
     const layers: SnapshotLayer[] = [];
     for (const use of comp.layers) {
@@ -125,8 +115,6 @@ export async function renderComposition(
       }
       layers.push(toSnapshotLayer(use));
     }
-
-    assertRenderableCanvas(comp.canvas, comp.name);
 
     const destination = options.out
       ? await resolveExportTarget(resolvedRoot, options.out)
