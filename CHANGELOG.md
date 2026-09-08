@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Removed `renderComposition`'s inline canvas-cap checks in favor of the canonical `assertRenderableCanvas` shared with replay; the check now runs at the same earlier position (before Layer resolution and destination staging) with behavior and diagnostics unchanged (#87, #99 review INT-1).
+
 ### Added
 
 - Added Render history capture and replay (#87, #77): every successful `ply composition render` retains a Project-owned manifest under `renders/` — whatever PNG destination the caller chose — pinning the exact ordered Layer revisions (identity + content-derived revision id), canvas, and the rendering environment captured inside the same paint pass (tool version, runtime, platform, browser). The manifest records identities only (revision facts stay in the immutable revision documents; content identity in their `contentHash`), so it is relocation-proof by construction and replay never requires the original PNG or any absolute external path. `ply composition replay <manifest-path> [--out <path>]` regenerates the Render byte-identically from those pinned inputs through a revision-only reader factored from the canonical Layer resolver — never consulting current Layer pointers or Composition documents — and refuses missing, corrupted, or malformed history (missing revision/content, hash mismatches, invalid pinned identifiers checked before path construction, unsupported schema versions) and an exact-match environment mismatch before any output. Replay honors `--out`, retains its own manifest under the render publication discipline, and works after Project relocation, external source deletion, and original-PNG deletion.
