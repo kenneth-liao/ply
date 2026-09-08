@@ -4,15 +4,17 @@ import { isStoredTimestamp } from "./stored-schema.js";
  * ingestion (ADR-0013, ADR-0014, DEC-001–006, #81).
  */
 import { createHash } from "node:crypto";
-import { open as fsOpen, readFile, readdir, lstat } from "node:fs/promises";
+import { open as fsOpen, readFile, readdir, lstat, mkdir, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { MAX_DIMENSION, MAX_ENCODED_BYTES, MAX_PIXELS, decodePng } from "./png.js";
 import { readRasterMeta, type RasterMeta } from "./raster-meta.js";
 import { escapesDirReal, outsideDir } from "./paths.js";
-import { atomicCreate, withProjectLock } from "./project-lock.js";
+import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
+import { parseCompositionDocument } from "./composition.js";
+import { resolveFace, fontAssetBytes } from "./fonts.js";
 
 export const LAYER_SCHEMA_VERSION = 1;
 
@@ -521,3 +523,274 @@ export async function listLayers(projectPath: string): Promise<ResolvedLayer[]> 
     return layers;
   });
 }
+
+export interface EditLayerOptions {
+  inPlace?: boolean;
+  image?: string;
+  text?: string;
+  font?: string;
+  fontSize?: number;
+  color?: string;
+  x?: number;
+  y?: number;
+  opacity?: number;
+}
+
+export interface EditLayerResult {
+  layer: ResolvedLayer;
+  referringCompositions: string[];
+  referrersCount: number;
+}
+
+/**
+ * Unlocked internal scanner that discovers all Compositions in the Project
+ * referencing a given Layer identity. Callers must hold the Project lock.
+ *
+ * Scans every composition JSON file in compositions/ using the canonical
+ * parseCompositionDocument. Fails closed immediately if any Composition
+ * document in the Project is unreadable or malformed, ensuring sharing is
+ * never falsely assumed absent. Returns a sorted list of unique Composition
+ * names.
+ */
+export async function findLayerReferrersInternal(
+  projectPath: string,
+  layerId: string,
+): Promise<string[]> {
+  const resolvedRoot = path.resolve(projectPath);
+  const compDir = path.join(resolvedRoot, "compositions");
+
+  if (outsideDir(resolvedRoot, compDir) || (await escapesDirReal(resolvedRoot, compDir))) {
+    throw new Error("Security error: compositions directory escapes project boundary.");
+  }
+
+  let entries: string[];
+  try {
+    entries = await readdir(compDir);
+  } catch (err) {
+    throw new Error(`Cannot read compositions directory: ${(err as Error).message}`);
+  }
+
+  const compFiles = entries.filter((f) => f.endsWith(".json")).sort();
+  const referringCompositions: string[] = [];
+
+  for (const file of compFiles) {
+    const compName = path.basename(file, ".json");
+    const compFile = path.join(compDir, file);
+
+    if (outsideDir(resolvedRoot, compFile) || (await escapesDirReal(resolvedRoot, compFile))) {
+      throw new Error(`Security error: composition "${compName}" escapes project boundary.`);
+    }
+
+    let raw: string;
+    try {
+      raw = await readFile(compFile, "utf8");
+    } catch (err) {
+      throw new Error(`Cannot read composition document "${compName}": ${(err as Error).message}`);
+    }
+
+    // Fail closed: if ANY composition is malformed, reject immediately
+    const comp = parseCompositionDocument(raw, compName);
+
+    if (comp.layers.some((use) => use.layerId === layerId)) {
+      referringCompositions.push(compName);
+    }
+  }
+
+  return referringCompositions;
+}
+
+/**
+ * Discover all Compositions referencing a Layer (acquires Project lock for consistent snapshot).
+ */
+export async function findLayerReferrers(projectPath: string, layerId: string): Promise<string[]> {
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, () => findLayerReferrersInternal(resolvedRoot, layerId));
+}
+
+/**
+ * Unlocked internal editor for Layer identity and revision advancement.
+ * Callers must hold the Project lock.
+ */
+export async function editLayerInternal(
+  projectPath: string,
+  layerId: string,
+  options: EditLayerOptions,
+): Promise<EditLayerResult> {
+  const resolvedRoot = path.resolve(projectPath);
+  const current = await readLayerInternalFull(resolvedRoot, layerId);
+  const prevRev = current.currentRevision;
+
+  // 1. Authoritative referrer discovery under the Project lock
+  const referringCompositions = await findLayerReferrersInternal(resolvedRoot, layerId);
+  const referrersCount = referringCompositions.length;
+
+  // 2. Blast-radius guard: require --in-place when referenced by multiple Compositions
+  if (referrersCount > 1 && !options.inPlace) {
+    const namesList = referringCompositions.map((n) => `"${n}"`).join(", ");
+    const err = new Error(
+      `Layer "${layerId}" is referenced by ${referrersCount} Compositions (${namesList}). ` +
+        `Editing it in-place will affect all of them. Pass --in-place to confirm, or fork into an independent Layer.`,
+    );
+    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referringCompositions =
+      referringCompositions;
+    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referrersCount =
+      referrersCount;
+    throw err;
+  }
+
+  // 3. Placement options: preserve existing values if omitted
+  const x = options.x !== undefined ? options.x : prevRev.x;
+  const y = options.y !== undefined ? options.y : prevRev.y;
+  const opacity = options.opacity !== undefined ? options.opacity : prevRev.opacity;
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error(`Invalid placement (${options.x}, ${options.y}): x and y must be finite numbers.`);
+  }
+  if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+    throw new Error(`Invalid opacity ${options.opacity}: must be a finite number between 0 and 1.`);
+  }
+
+  // 4. Kind stability and kind-specific option handling
+  let newRevision: LayerRevision;
+
+  if (prevRev.kind === "image") {
+    // Incompatible text options passed to image layer
+    if (
+      options.text !== undefined ||
+      options.font !== undefined ||
+      options.fontSize !== undefined ||
+      options.color !== undefined
+    ) {
+      throw new Error(`Cannot edit text attributes on an image Layer. Layer "${layerId}" is an image Layer.`);
+    }
+
+    let contentHash = prevRev.contentHash;
+    if (options.image !== undefined) {
+      const ingested = await validateAndIngestImage(options.image);
+      await storeContentBlob(resolvedRoot, ingested.contentHash, ingested.bytes);
+      contentHash = ingested.contentHash;
+    }
+
+    // No-op check: if all fields are identical to previous revision, avoid storage churn
+    if (
+      contentHash === prevRev.contentHash &&
+      x === prevRev.x &&
+      y === prevRev.y &&
+      opacity === prevRev.opacity
+    ) {
+      const resolved = await readLayerInternal(resolvedRoot, layerId);
+      return { layer: resolved, referringCompositions, referrersCount };
+    }
+
+    newRevision = {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      layerId,
+      createdAt: new Date().toISOString(),
+      kind: "image",
+      contentHash,
+      x,
+      y,
+      opacity,
+    };
+  } else if (prevRev.kind === "text") {
+    // Incompatible image option passed to text layer
+    if (options.image !== undefined) {
+      throw new Error(`Cannot edit image source on a text Layer. Layer "${layerId}" is a text Layer.`);
+    }
+
+    let contentHash = prevRev.contentHash;
+    if (options.font !== undefined) {
+      const face = resolveFace(options.font);
+      const bytes = fontAssetBytes(face);
+      const fontHash = createHash("sha256").update(bytes).digest("hex");
+      await storeContentBlob(resolvedRoot, fontHash, bytes);
+      contentHash = fontHash;
+    }
+
+    const text = options.text !== undefined ? options.text : prevRev.text;
+    const fontSize = options.fontSize !== undefined ? options.fontSize : prevRev.fontSize;
+    const color = options.color !== undefined ? options.color : prevRev.color;
+
+    // Canonical text validation
+    validateTextContent(text, fontSize, color);
+
+    // No-op check: if all fields are identical to previous revision, avoid storage churn
+    if (
+      contentHash === prevRev.contentHash &&
+      text === prevRev.text &&
+      fontSize === prevRev.fontSize &&
+      color === prevRev.color &&
+      x === prevRev.x &&
+      y === prevRev.y &&
+      opacity === prevRev.opacity
+    ) {
+      const resolved = await readLayerInternal(resolvedRoot, layerId);
+      return { layer: resolved, referringCompositions, referrersCount };
+    }
+
+    newRevision = {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      layerId,
+      createdAt: new Date().toISOString(),
+      kind: "text",
+      contentHash,
+      text,
+      fontSize,
+      color,
+      x,
+      y,
+      opacity,
+    };
+  } else {
+    throw new Error(`Unsupported Layer kind on layer "${layerId}".`);
+  }
+
+  // 5. Compute new revision hash and stage revision document
+  const revHash = computeRevisionHash(newRevision);
+  const revDir = path.join(resolvedRoot, "layers", `${layerId}.revisions`);
+  const revFile = path.join(revDir, `${revHash}.json`);
+  const identityFile = path.join(resolvedRoot, "layers", `${layerId}.json`);
+
+  await mkdir(revDir, { recursive: true });
+
+  let stagedRevision = false;
+  try {
+    await atomicCreate(revFile, JSON.stringify(newRevision, null, 2) + "\n");
+    stagedRevision = true;
+
+    const identity: LayerIdentity = {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      id: layerId,
+      createdAt: current.createdAt,
+      currentRevision: revHash,
+    };
+
+    // 6. Live commit point: update Layer identity currentRevision
+    await atomicReplace(identityFile, JSON.stringify(identity, null, 2) + "\n");
+  } catch (err) {
+    if (stagedRevision) {
+      await unlink(revFile).catch(() => {});
+    }
+    throw err;
+  }
+
+  const updatedLayer = await readLayerInternal(resolvedRoot, layerId);
+  return {
+    layer: updatedLayer,
+    referringCompositions,
+    referrersCount,
+  };
+}
+
+/**
+ * Edit a Layer in a Project (acquires Project lock for consistent discovery and atomic publication).
+ */
+export async function editLayer(
+  projectPath: string,
+  layerId: string,
+  options: EditLayerOptions,
+): Promise<EditLayerResult> {
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, () => editLayerInternal(resolvedRoot, layerId, options));
+}
+

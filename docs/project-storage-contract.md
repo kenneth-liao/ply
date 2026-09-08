@@ -173,6 +173,28 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
 7. **Caught-error cleanup**: If an error reaches the staging catch before step 6 completes, attempt to delete the staged identity and revision and remove the empty revision directory. This cleanup is best-effort: deletion errors are ignored, so artifacts may remain. The Composition reference is not published when replacement fails; immutable content is retained for deduplication.
 8. Release Project Lock in the normal `finally` path. Release is also best-effort; it is not guaranteed after abrupt termination.
 
+### In-Place Layer Editing & Authoritative Referrer Discovery (#82, US-004, US-002)
+
+1. **Acquire Project Lock**: Entire referrer discovery, content validation, revision staging, and identity pointer update execute under `.ply.lock`.
+2. **Authoritative Referrer Discovery**:
+   - Scans all `compositions/*.json` documents using the canonical parser `parseCompositionDocument`.
+   - Counts distinct referring Compositions (not use occurrences).
+   - **Fail-Closed Guarantee**: Any malformed, unreadable, or escaping Composition document in `compositions/` immediately aborts the operation with a runtime error (exit 1); unreadable reference state is never treated as proof that sharing is absent.
+3. **Intent Enforcement (Blast-Radius Guard)**:
+   - If referrers count $\le 1$ (including unreferenced/retained Layers with 0 referrers): editing succeeds without `--in-place` flag or warning.
+   - If referrers count $> 1$: editing without `--in-place` fails with exit status 1, reporting all affected Compositions and their count in text and `--json` mode (`referringCompositions`, `referrersCount`). Passing `--in-place` advances the Layer's current revision, propagating to all referring Compositions upon subsequent resolution.
+4. **Kind Stability & Field Preservation**:
+   - A Layer's kind (`"image"` or `"text"`) is stable across revisions; kind-incompatible options (e.g. `--text` on an image Layer or `--image` on a text Layer) fail validation before staging.
+   - Placement (`--x`, `--y`, `--opacity`) and text fields (`--text`, `--font-size`, `--color`) preserve current values when omitted.
+   - Font-preserving text edits reuse the Layer's retained font blob without re-reading `assets/fonts/`; supplying `--font` resolves and ingests the bundled face bytes locally into `content/`.
+   - If all target revision fields match the current revision (no-op edit), the existing revision is returned without creating duplicate revision files or storage churn.
+5. **Atomic Publication & Rollback**:
+   - Stages new revision document in `layers/<layer-id>.revisions/<revision-hash>.json` (`atomicCreate`).
+   - **Live Commit Point**: Updates `layers/<layer-id>.json` with `{ ...identity, currentRevision: revHash }` via `atomicReplace`.
+   - Caught-error cleanup: attempts to unlink staged revision file if identity replacement fails.
+   - Historical revision documents and content blobs are never overwritten or deleted; all prior revisions remain available for reproduction (#87).
+   - The Project lock coordinates cooperating Ply processes; it does not claim coordination with arbitrary external filesystem writers.
+
 ### Interrupted operations and operator recovery
 
 This protocol provides atomic Composition replacement and serialization among cooperating Ply processes, not crash rollback. Abrupt termination (for example, SIGKILL or process/host failure) bypasses catch/finally cleanup. An interruption after identity staging and before replacement can leave an unreferenced identity, its revision, retained content, temporary files, and a stale `.ply.lock`. Once the lock is manually removed, Layer listing and Project counts can expose that unreferenced identity. An interruption after replacement may instead leave a committed use; a missing success response does not establish failure. The controlled staging test proves reader serialization under normal completion, not recovery after a crash.
@@ -221,6 +243,7 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply composition render <name> [--out <path>] [options] [--json]`
 - `ply composition list [options] [--json]`
 - `ply layer inspect <layer-id> [options] [--json]`
+- `ply layer edit <layer-id> [--in-place] [--image <path> | --text <str> [--font <family>] [--font-size <px>] [--color <hex>]] [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
 - `ply layer list [options] [--json]`
 
 ### Status & Error Codes:
