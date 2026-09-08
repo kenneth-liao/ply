@@ -99,7 +99,7 @@ Since #80, caller exports via `ply composition render --out` may create a fresh 
 - `currentRevision` (string): Points to the current active revision document in `layers/<layer-id>.revisions/<revision-hash>.json`.
 - Contains only stable identity facts and the current pointer (no mutable array of revisions).
 
-#### `layers/<layer-id>.revisions/<revision-hash>.json` (Owned by #79, #82, #85)
+#### `layers/<layer-id>.revisions/<revision-hash>.json` (Owned by #79, #81, #82, #85)
 ```json
 {
   "schemaVersion": 1,
@@ -113,11 +113,15 @@ Since #80, caller exports via `ply composition render --out` may create a fresh 
 }
 ```
 - Immutable document identified by content-derived revision hash.
-- `kind` (string): `"image"` (or `"text"` in #81).
+- `kind` (string): Discriminated content contract — `"image"` or `"text"` (#81). Both kinds share the identity/revision/use lifecycle, publication protocol, and storage layout; there is no second lifecycle for text.
 - `contentHash` (string): Content-addressed SHA-256 hash pointing to `content/<contentHash>`.
 - `x`, `y` (number): Layer placement on the canvas.
 - `opacity` (number): Layer opacity in `[0, 1]`.
-- Intrinsic width, height, and format are derived from the verified content blob, not duplicated in the revision.
+- Image revisions derive intrinsic width, height, and format from the verified content blob; nothing raster-specific is duplicated in the revision.
+
+**Text revision contract (#81).** A `"text"` revision additionally carries `text` (nonempty string, ≤ 2000 characters), `fontSize` (finite number in `(0, 8192]`), and `color` (strict hex `#RGB`/`#RRGGBB`) as immutable revision facts covered by the revision hash:
+
+**Content/font identity semantics.** For both kinds, `contentHash` is the one content identity: it pins the revision's exact retained bytes in `content/<sha256>` — decoded raster bytes for `"image"`, the bundled font face's raw TTF bytes for `"text"`. The face is resolved once at ingestion through the bundled-face registry (`resolveFace` in `src/fonts.ts`); its bytes are then retained into the Project, and the family/weight selection facts live only in that registry. They are deliberately **not** persisted: the renderer declares the retained bytes under an internal `@font-face` family derived from the content hash, so rendering after retention never consults `assets/fonts/` and no family/weight fact is stored in a second storage source. A text revision's retained font blob is required Project state for rendering and future replay/relocation (#87), exactly like image content.
 
 #### `content/<sha256>` (Owned by #79, #86, #87)
 - Content-addressed raw binary blob.
@@ -129,7 +133,7 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
 - Every stored manifest, Composition, identity, revision, content blob, and lock payload is checked for real filesystem containment before reading its bytes. A Project-root symlink alias remains valid; an owned path escaping that root is rejected.
 - Project selection and inspection use the same complete manifest validator: object, supported schema version, nonempty name, required UTC ISO creation timestamp, and all canonical directories.
 - The Layer identity document's `id` matches the requested Layer, its `currentRevision` is a revision identifier, and both identity and revision have required UTC ISO creation timestamps.
-- The revision document is a canonical, self-consistent revision of that Layer (schema, `layerId`, `kind`, sha-256 `contentHash`, finite placement, `opacity` in `[0, 1]`), and its contents re-hash to exactly the revision hash the identity's current pointer names.
+- The revision document is a canonical, self-consistent revision of that Layer (schema, `layerId`, discriminated `kind` (`"image"` or `"text"`), sha-256 `contentHash`, finite placement, `opacity` in `[0, 1]`; for `"text"`: nonempty ≤ 2000-character `text`, finite `fontSize` in `(0, 8192]`, and strict hex `color` — validated by the one shared text validator used at ingestion), and its contents re-hash to exactly the revision hash the identity's current pointer names.
 - The retained content blob re-hashes to its `contentHash`; any drift is rejected as corrupted rather than resolved to substitute bytes.
 - Composition documents are parsed through one shared validated parser (name↔file match, positive-integer canvas, ordered unique `{ name, layerId }` uses); mutations refuse a composition whose existing references no longer resolve.
 - Composition resolution has one canonical site: `readCompositionInternalFull` (`src/composition.ts`) parses the document once and resolves every Layer exactly once through the canonical Layer resolver (`readLayerInternalFull`, `src/layer.ts`), returning reference names, revision metadata, and the hash-verified retained bytes. Metadata-only readers project from that result — no reader resolves or verifies the same Layer twice.
@@ -161,8 +165,8 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
 
 ### Atomic Publication & Rollback
 1. Acquire Project Lock.
-2. Ingest and decode input image; compute SHA-256.
-3. Stage immutable content blob in `content/<sha256>` (atomic create if not already present).
+2. Ingest and validate content: for `--image`, decode the input image and compute SHA-256; for `--text`, resolve the bundled font family once and read its bundled bytes (unknown families and missing bundled bytes fail loudly, naming the bundled families).
+3. Stage immutable content blob in `content/<sha256>` (atomic create if not already present) — the image bytes or the retained font bytes.
 4. Stage immutable revision in `layers/<layer-id>.revisions/<revision-hash>.json` (atomic create).
 5. Stage Layer identity in `layers/<layer-id>.json` (atomic create), then fully resolve the staged Layer before the live commit. Resolution failure follows the same rollback path.
 6. **Live Commit Point**: Update `compositions/<name>.json` with `{ name: localName, layerId }` via `atomicReplace`.
@@ -189,7 +193,7 @@ Atomic helpers do not `fsync` files or directories. Atomic visibility does not g
 ### Snapshot
 
 - `ply composition render` resolves under the Project lock in exactly one pass: the Composition document, its ordered Layer references, each Layer's current revision metadata (position, opacity, format, intrinsic size), and the hash-verified retained content bytes, all through `readCompositionInternalFull`. The lock is then released; painting never re-reads Project state.
-- The snapshot's exact bytes are painted through the shared render page with awaited image decode. Paint contract: later Layers paint over earlier ones at each revision's stored position and opacity, at intrinsic size, clipped to the canvas; uncovered canvas stays transparent. Foundation Layer effects are position and opacity only. Text Layers, Render-history capture/replay, and advanced effects are separately scoped (#81, #87).
+- The snapshot's exact bytes are painted through the shared render page with awaited image decode. Paint contract: later Layers paint over earlier ones at each revision's stored position and opacity, at intrinsic size, clipped to the canvas; uncovered canvas stays transparent. Foundation Layer effects are position and opacity only. Text Layers (#81) paint as DOM text — never pre-rasterized into image content — with each text revision's retained font bytes declared under an internal `@font-face` family; after page load, every text family is probed for actual load/resolution, and an unresolved face (invalid or undecodable retained font bytes, unavailable font) fails the Render with a nonzero status and no published output instead of accepting browser/system fallback. Rendering a text Layer after retention never consults `assets/fonts/` or any global font store. Render-history capture/replay and advanced effects are separately scoped (#87).
 - Canvas limits are enforced at the render boundary: 8192 px per axis and 16,777,216 pixels total. Invalid dimensions, dangling Layer references, and corrupted or missing retained content fail with an actionable diagnostic and nonzero status. A failed Render publishes no output.
 
 ### Output
@@ -212,7 +216,7 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply project init [dir] [--name <str>] [--json]`
 - `ply project inspect [options] [--json]`
 - `ply composition create <name> --width <w> --height <h> [options] [--json]`
-- `ply composition add <comp> <local-name> --image <path> [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+- `ply composition add <comp> <local-name> (--image <path> | --text <str> --font <family> [--font-size <px>] [--color <hex>]) [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
 - `ply composition inspect <name> [options] [--json]`
 - `ply composition render <name> [--out <path>] [options] [--json]`
 - `ply composition list [options] [--json]`

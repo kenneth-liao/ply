@@ -92,6 +92,16 @@ export function readFontAsset(face: FontFace): { family: string; weight: number;
   };
 }
 
+/**
+ * Reads the bundled face's raw bytes through the same requireFontAsset gate
+ * (#81): callers that retain font bytes into a Project ingest from here, so
+ * the bundled directory stays the single font-fact home and retained bytes
+ * are exactly the shipped face bytes.
+ */
+export function fontAssetBytes(face: FontFace): Buffer {
+  return readFileSync(requireFontAsset(face));
+}
+
 /** @font-face rules for the given faces, each from its bundled bytes. */
 export function fontFaceCss(...faces: FontFace[]): string {
   return faces

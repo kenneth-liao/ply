@@ -1,6 +1,7 @@
 import { isStoredTimestamp } from "./stored-schema.js";
 /**
- * Layer identity, immutable revisions, and content-addressed image ingestion (ADR-0013, ADR-0014, DEC-001–006).
+ * Layer identity, immutable revisions, and content-addressed image/text
+ * ingestion (ADR-0013, ADR-0014, DEC-001–006, #81).
  */
 import { createHash } from "node:crypto";
 import { open as fsOpen, readFile, readdir, lstat } from "node:fs/promises";
@@ -15,6 +16,13 @@ import { withRenderPage } from "./browser.js";
 
 export const LAYER_SCHEMA_VERSION = 1;
 
+/**
+ * Maximum stored text content length for a text Layer revision (#81). A
+ * bound, not a typographic feature: pathological inputs are rejected at the
+ * ingestion boundary instead of reaching the renderer.
+ */
+export const MAX_TEXT_LENGTH = 2000;
+
 export interface LayerIdentity {
   schemaVersion: number;
   id: string;
@@ -22,24 +30,49 @@ export interface LayerIdentity {
   currentRevision: string;
 }
 
-export interface LayerRevision {
+/** Shared revision header: identity, immutability facts, and placement. */
+interface LayerRevisionBase {
   schemaVersion: number;
   layerId: string;
   createdAt: string;
-  kind: "image";
-  contentHash: string;
   x: number;
   y: number;
   opacity: number;
 }
 
-export interface ResolvedLayerRevision extends LayerRevision {
-  revisionId: string;
-  format: "png" | "jpeg" | "webp";
-  width: number;
-  height: number;
-  bytes: number;
+/**
+ * Discriminated Layer revision content (#81, DEC-003): `kind` selects the
+ * content contract. Both kinds share the identity/revision/use lifecycle,
+ * publication protocol, and storage layout — there is no second lifecycle
+ * for text.
+ *
+ * Content identity semantics: `contentHash` pins the revision's retained
+ * bytes in `content/<sha256>` — decoded raster bytes for `"image"`, the
+ * exact bundled font face bytes for `"text"`. For a text revision the
+ * rendered string, size, and color are immutable revision facts covered by
+ * the revision hash; the face's family/weight are add-time bundled-face
+ * selection facts (via `resolveFace`) and are deliberately NOT persisted —
+ * the retained bytes are the only font identity, so the renderer declares
+ * them under an internal family name and never needs `assets/fonts/`.
+ */
+export interface LayerImageRevision extends LayerRevisionBase {
+  kind: "image";
+  contentHash: string;
 }
+
+export interface LayerTextRevision extends LayerRevisionBase {
+  kind: "text";
+  contentHash: string;
+  text: string;
+  fontSize: number;
+  color: string;
+}
+
+export type LayerRevision = LayerImageRevision | LayerTextRevision;
+
+export type ResolvedLayerRevision =
+  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number })
+  | (LayerTextRevision & { revisionId: string; fontBytes: number });
 
 export interface ResolvedLayer {
   id: string;
@@ -179,9 +212,33 @@ export async function validateAndIngestImage(
   }
 }
 
-/** Compute content-derived revision hash for immutable revision record. */
+/**
+ * Canonical text content validation (#81): one home for the text facts every
+ * writer and reader must agree on. Ingestion and the stored-revision parser
+ * both call this, so no alternate representation can drift.
+ */
+export function validateTextContent(text: unknown, fontSize: unknown, color: unknown): void {
+  if (typeof text !== "string" || text.length === 0 || text.trim().length === 0) {
+    throw new Error(`Invalid text content: must be a nonempty string.`);
+  }
+  if (text.length > MAX_TEXT_LENGTH) {
+    throw new Error(`Invalid text content: ${text.length} characters exceeds the ${MAX_TEXT_LENGTH}-character limit.`);
+  }
+  if (typeof fontSize !== "number" || !Number.isFinite(fontSize) || fontSize <= 0 || fontSize > MAX_DIMENSION) {
+    throw new Error(
+      `Invalid font size ${fontSize}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+    );
+  }
+  if (typeof color !== "string" || !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) {
+    throw new Error(`Invalid color "${color}": must be a hex color like #ffffff or #fff.`);
+  }
+}
+
+/** Compute content-derived revision hash for an immutable revision record. */
 export function computeRevisionHash(rev: LayerRevision): string {
-  const payload = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
+  const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
+  const payload =
+    rev.kind === "text" ? `${base}:${rev.text}:${rev.fontSize}:${rev.color}` : base;
   return `rev_${createHash("sha256").update(payload).digest("hex").slice(0, 16)}`;
 }
 
@@ -318,15 +375,21 @@ export async function readLayerInternalFull(
       `Malformed revision document "${revHash}" for layer "${layerId}": layerId "${revision.layerId}" does not match.`,
     );
   }
-  if (revision.kind !== "image") {
+  const storedKind = (revision as { kind?: unknown }).kind;
+  if (storedKind !== "image" && storedKind !== "text") {
     throw new Error(
-      `Malformed revision document "${revHash}" for layer "${layerId}": unsupported kind "${revision.kind}".`,
+      `Malformed revision document "${revHash}" for layer "${layerId}": unsupported kind "${String(storedKind)}".`,
     );
   }
   if (typeof revision.contentHash !== "string" || !/^[0-9a-f]{64}$/.test(revision.contentHash)) {
     throw new Error(
       `Malformed revision document "${revHash}" for layer "${layerId}": contentHash is not a sha-256 digest.`,
     );
+  }
+  if (revision.kind === "text") {
+    // Canonical text content: validated here and at ingestion through the
+    // same validator — no alternate representation exists.
+    validateTextContent(revision.text, revision.fontSize, revision.color);
   }
   if (!Number.isFinite(revision.x) || !Number.isFinite(revision.y)) {
     throw new Error(
@@ -372,30 +435,54 @@ export async function readLayerInternalFull(
     );
   }
 
-  const meta = readRasterMeta(contentBytes, contentBlob);
-  if (typeof meta === "string") {
-    throw new Error(`Invalid content blob "${revision.contentHash}" for layer "${layerId}": ${meta}`);
-  }
+  // Discriminated content resolution (#81): one resolver, one verification
+  // pass, kind-specific projection. Image revisions derive intrinsic raster
+  // facts from the verified bytes; text revisions carry their facts in the
+  // hash-covered revision document and pin the retained font bytes.
+  const currentRevision: ResolvedLayerRevision =
+    revision.kind === "image"
+      ? (() => {
+          const meta = readRasterMeta(contentBytes, contentBlob);
+          if (typeof meta === "string") {
+            throw new Error(`Invalid content blob "${revision.contentHash}" for layer "${layerId}": ${meta}`);
+          }
+          return {
+            schemaVersion: revision.schemaVersion,
+            revisionId: revHash,
+            layerId: revision.layerId,
+            createdAt: revision.createdAt,
+            kind: revision.kind,
+            contentHash: revision.contentHash,
+            x: revision.x,
+            y: revision.y,
+            opacity: revision.opacity,
+            format: meta.format,
+            width: meta.width,
+            height: meta.height,
+            bytes: contentBytes.length,
+          };
+        })()
+      : {
+          schemaVersion: revision.schemaVersion,
+          revisionId: revHash,
+          layerId: revision.layerId,
+          createdAt: revision.createdAt,
+          kind: revision.kind,
+          contentHash: revision.contentHash,
+          x: revision.x,
+          y: revision.y,
+          opacity: revision.opacity,
+          text: revision.text,
+          fontSize: revision.fontSize,
+          color: revision.color,
+          fontBytes: contentBytes.length,
+        };
 
   return {
     id: identity.id,
     createdAt: identity.createdAt,
     currentRevisionId: revHash,
-    currentRevision: {
-      schemaVersion: revision.schemaVersion,
-      revisionId: revHash,
-      layerId: revision.layerId,
-      createdAt: revision.createdAt,
-      kind: revision.kind,
-      contentHash: revision.contentHash,
-      x: revision.x,
-      y: revision.y,
-      opacity: revision.opacity,
-      format: meta.format,
-      width: meta.width,
-      height: meta.height,
-      bytes: contentBytes.length,
-    },
+    currentRevision,
     contentBytes,
   };
 }

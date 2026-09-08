@@ -15,7 +15,8 @@
 
 ### Added
 
-- Extended `docs/project-storage-contract.md` with the render snapshot, output/`--out` policy, and render CLI contract (#80, local review SPEC-2).
+- Added locally rendered text Layers through the uniform Layer contract (#81, #77): `ply composition add --text <str> --font <family>` publishes text through the same identity/immutable-revision/Composition-use protocol as image Layers, retaining the bundled font face's exact bytes into the Project as the revision's content identity (family/weight stay bundled-registry facts and are not persisted), so mixed Compositions render after relocation without `assets/fonts/`. Rendering probes each text family for actual load and rejects an unresolved face or unavailable font instead of accepting browser/system fallback; text paints as DOM text, never rasterized. Malformed text/font/color input, corrupted or missing retained font bytes, and invalid faces fail with nonzero status, JSON diagnostics, and no published output.
+- Extended `docs/project-storage-contract.md` with the discriminated text/image revision schema, content/font identity semantics, text ingestion, and the text render/fallback-rejection contract (#81).
 - Added `ply composition render`, painting a resolved local image Composition to a PNG at its exact canvas dimensions with reference-list paint order, position, opacity, and clipping; the Project lock covers the snapshot of verified retained bytes, the default output is a fresh file under `renders/`, `--out` exports outside the Project with symlink-resolving protection of Project state, and invalid dimensions or unresolved content fail before any output is published (#80, #77).
 
 ### Fixed
