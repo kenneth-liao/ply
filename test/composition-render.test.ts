@@ -434,13 +434,13 @@ test("--out replaces the destination entry and never writes through an external 
   expect(readPngHeader(exported).width).toBe(32);
 });
 
-test("concurrent renders racing the same fresh in-Project --out publish exactly one output", async () => {
+test.each(["exports", "..exports"])("concurrent renders racing the same fresh in-Project --out under %s publish exactly one output", async (directory) => {
   const img = path.join(tempDir, "red.png");
   await writeFile(img, solidPng(32, 32, RED));
   await makeComposition("race", 32, 32, [{ local: "bg", file: img }]);
-  await mkdir(path.join(projDir, "exports"), { recursive: true });
+  await mkdir(path.join(projDir, directory), { recursive: true });
 
-  const out = path.join(projDir, "exports", "race.png");
+  const out = path.join(projDir, directory, "race.png");
   const [a, b] = await Promise.all([
     invoke(["composition", "render", "race", "--project", projDir, "--out", out, "--json"]),
     invoke(["composition", "render", "race", "--project", projDir, "--out", out, "--json"]),
@@ -451,4 +451,27 @@ test("concurrent renders racing the same fresh in-Project --out publish exactly 
   expect([JSON.parse(a.stdout).ok, JSON.parse(b.stdout).ok].sort()).toEqual([false, true]);
   // The surviving entry is the winning render, intact.
   expect(readPngHeader(await readFile(out)).width).toBe(32);
+});
+
+test("--out protects existing retained files under ..exports including symlink aliases", async () => {
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(32, 32, RED));
+  await makeComposition("retained", 32, 32, [{ local: "bg", file: img }]);
+  const directory = path.join(projDir, "..exports");
+  await mkdir(directory);
+  const retained = path.join(directory, "poster.png");
+  const original = solidPng(16, 16, BLUE);
+  await writeFile(retained, original);
+  const alias = path.join(tempDir, "alias.png");
+  await symlink(retained, alias);
+
+  for (const out of [retained, alias]) {
+    const result = await invoke(["composition", "render", "retained", "--project", projDir, "--out", out, "--json"]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout).ok).toBe(false);
+    expect(result.stdout).toContain("existing Project state and retained inputs");
+    expect<Buffer>(await readFile(retained)).toEqual(original);
+    expect<Buffer>(await readFile(alias)).toEqual(original);
+  }
+  expect(await readdir(directory)).toEqual(["poster.png"]);
 });

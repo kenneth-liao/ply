@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Protect `--out` destinations under Project directories such as `..exports` with separator-aware containment in both output guards; concurrent fresh renders yield one success and one refusal, and existing retained files remain unchanged (#80, #91, RE-1).
+
 - `composition render --out` path classification now protects only reserved Project inputs (manifest, lock, `compositions/`, `layers/`, `content/`, and render history via the existing-path rule); fresh paths with existing parents elsewhere in the Project — including nested paths like `renders/social/poster.png` and sibling directories like `exports/poster.png` — are permitted, with the documented missing-parent refusal preserved (#80, local followup SPEC-1).
 - Concurrent renders racing the same fresh in-Project `--out` can no longer both succeed: publication mode is carried from the locked snapshot — fresh in-Project destinations publish with `O_EXCL` (`atomicCreate`, the loser exits 1 and publishes nothing) while external exports keep hardlink-safe destination-entry `atomicReplace`; concurrent CLI regression added (#80, local followup RE-1).
 - Stabilized the three scene-author suites on Bun 1.4.0 with a test-only remedy (`agent: false` on five raw `httpRequest` option objects): Bun 1.4.0 HTTP pooling reused a closed socket and failed them with `ECONNRESET`; assertions, bodies, headers, timeouts, and product code unchanged (#80, #77).

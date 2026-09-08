@@ -236,7 +236,7 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
   }
   const candidate = path.join(parentReal, path.basename(target));
 
-  if (isInsideDir(realRoot, candidate)) {
+  if (isWithinProject(realRoot, candidate)) {
     refuseReservedProjectPath(realRoot, candidate, outPath);
     return { path: target, mode: "create" };
   }
@@ -246,9 +246,9 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
   return { path: target, mode: "replace" };
 }
 
-function isInsideDir(realRoot: string, realTarget: string): boolean {
+function isWithinProject(realRoot: string, realTarget: string): boolean {
   const rel = path.relative(realRoot, realTarget);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  return rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 function refuseReservedProjectPath(realRoot: string, realTarget: string, outPath: string): void {
@@ -265,7 +265,7 @@ function refuseReservedProjectPath(realRoot: string, realTarget: string, outPath
 
 function refuseExistingInsideProject(realRoot: string, realTarget: string, outPath: string): void {
   const rel = path.relative(realRoot, realTarget);
-  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+  if (isWithinProject(realRoot, realTarget)) {
     throw new Error(
       `--out path "${outPath}" resolves inside the Project ` +
         `(${path.join(realRoot, rel)}); existing Project state and retained inputs cannot be exported over. ` +
