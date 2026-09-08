@@ -17,7 +17,7 @@ if (!command || command === "--help" || command === "-h") {
 Usage: ply <project|composition|layer|scene|library|jobs> <command> [options]
 
   project        Create, select, and inspect self-contained Projects
-  composition    Create, add layers, remove, reorder, inspect, and list Compositions
+  composition    Create, add layers, import, remove, reorder, inspect, and list Compositions
   layer          Inspect and list Layers within a Project
   scene          Author, inspect, and render Scenes locally (legacy)
   library        Inspect and maintain the current asset library (legacy)
