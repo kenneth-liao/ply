@@ -87,6 +87,7 @@ Since #80, caller exports via `ply composition render --out` may create a fresh 
   - No per-use placement overrides, variant sets, or nested compositions.
   - `ply composition reorder` permutes existing uses to alter painting order (#83).
   - `ply composition remove` removes a use from this list without modifying or deleting the underlying Layer, its revisions, content blobs, or other Compositions' uses of that Layer (#83). Removing the last use yields an empty `layers: []` array.
+  - `ply composition import` appends a source Composition's Layer references into a target Composition as individual, independently editable uses pointing to the same shared Layer identities, with no baked images or subscription coupling (#84).
 
 #### `layers/<layer-id>.json` (Owned by #79, #82, #85)
 ```json
@@ -213,6 +214,36 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
    - If the requested permutation matches the existing order (no-op reorder), it returns cleanly without storage churn.
    - Valid permutations commit the updated `layers` array to `compositions/<name>.json` via `atomicReplace`.
 
+### Same-Project Composition Import (#84, US-003, US-008)
+
+1. **Acquire Project Lock**: The entire document discovery, reference verification, collision validation, and atomic destination update execute under `.ply.lock` to coordinate with other Composition mutations, in-place Layer edits (#82), and reader snapshots.
+2. **Document Parsing & Resolution**:
+   - Resolves target (destination) and source Composition documents using `readMutableComposition`.
+   - Re-verifies that every referenced Layer in both Compositions resolves via `readLayerInternal`. Fails closed immediately on missing or malformed documents or dangling references.
+3. **Self-Import & Empty-Source Invariants**:
+   - **Self-import refusal**: Importing a Composition into itself (`target === source`) fails closed with exit 1, leaving stored documents unchanged.
+   - **Empty-source no-op**: Importing a source Composition with 0 layers (`layers: []`) succeeds cleanly as a no-op returning 0 imported uses without storage churn.
+4. **Collision Policy (Explicit Fail-Closed Rejection)**:
+   - Compares all use names in `source.layers` against existing use names in `target.layers`.
+   - If any name collides, the operation fails closed with exit 1 and an actionable error naming the colliding local name(s).
+   - Live destination references and stored documents remain completely unmodified and byte-identical.
+5. **Shared Layer Identity Reuse & Content Preservation**:
+   - Appends source's `{ name, layerId }` uses to the end of target's `layers` array, preserving source ordering among imported uses.
+   - Reuses the exact same stable Layer identity pointers (`layerId`).
+   - Does NOT clone Layer identity documents (`layers/<layer-id>.json`), historical revision documents (`layers/<layer-id>.revisions/*.json`), or content blobs (`content/<sha256>`).
+   - Never substitutes a rendered image, raster snapshot, or flattened asset.
+6. **Non-Subscription Membership Semantics**:
+   - The destination Composition gains its own independent reference list.
+   - Subsequent additions, removals, or reorderings in the source Composition do NOT alter the destination Composition.
+   - Predecessor operations (`composition remove`, `composition add`, `composition reorder`) allow dropping imported uses or interleaving destination-owned Layers between imported uses without affecting the source.
+7. **In-Place Edit Propagation & Multi-Referrer Discovery**:
+   - In-place edits to a shared Layer (`ply layer edit <layer-id> --in-place`) advance the Layer's current revision and propagate upon resolution to all referring Compositions.
+   - Authoritative referrer discovery under the Project lock discovers all Compositions using that Layer. An unflagged edit (`ply layer edit <layer-id>`) on a Layer shared across multiple Compositions fails closed with exit 1, reporting all referring Compositions and `referrersCount: 2` (or greater).
+8. **Canvas Dimensions**:
+   - Importing between Compositions with different canvas dimensions preserves the destination's declared width and height and preserves Layer placements and opacities without rescaling.
+9. **Atomic Publication**:
+   - Commits updated `layers` array to `compositions/<target>.json` via `atomicReplace`.
+
 ### Interrupted operations and operator recovery
 
 This protocol provides atomic Composition replacement and serialization among cooperating Ply processes, not crash rollback. Abrupt termination (for example, SIGKILL or process/host failure) bypasses catch/finally cleanup. An interruption after identity staging and before replacement can leave an unreferenced identity, its revision, retained content, temporary files, and a stale `.ply.lock`. Once the lock is manually removed, Layer listing and Project counts can expose that unreferenced identity. An interruption after replacement may instead leave a committed use; a missing success response does not establish failure. The controlled staging test proves reader serialization under normal completion, not recovery after a crash.
@@ -257,6 +288,7 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply project inspect [options] [--json]`
 - `ply composition create <name> --width <w> --height <h> [options] [--json]`
 - `ply composition add <comp> <local-name> (--image <path> | --text <str> --font <family> [--font-size <px>] [--color <hex>]) [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+- `ply composition import <target> <source> [options] [--json]`
 - `ply composition remove <comp> <use-name> [options] [--json]`
 - `ply composition reorder <comp> --order <name1,name2,...> [options] [--json]`
 - `ply composition inspect <name> [options] [--json]`

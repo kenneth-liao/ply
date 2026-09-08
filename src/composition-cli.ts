@@ -6,6 +6,7 @@ import {
   createComposition,
   addLayerToComposition,
   addTextLayerToComposition,
+  importComposition,
   removeLayerFromComposition,
   reorderCompositionLayers,
   inspectComposition,
@@ -29,6 +30,10 @@ composition — Composition authoring and inspection
       Add a locally rendered text Layer. The bundled font family's bytes are
       retained into the Project, so rendering never needs the original font
       files. Mutually exclusive with --image.
+
+  bun run ply composition import <target> <source> [options]
+      Import a Composition's Layer references into another Composition
+      within the same Project as individually editable uses
 
   bun run ply composition remove <comp> <name> [options]
       Remove a Layer use from a Composition without deleting the Layer,
@@ -285,6 +290,39 @@ async function run() {
         output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
+    } else if (command === "import") {
+      const targetComp = positionals[1];
+      const sourceComp = positionals[2];
+      if (!targetComp || !sourceComp) {
+        output({ ok: false, error: "Usage: ply composition import <target> <source>" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+
+      try {
+        const res = await importComposition(targetProj, targetComp, sourceComp);
+        mutationCommitted = true;
+        output(
+          {
+            ok: true,
+            composition: res.composition,
+            sourceComposition: res.sourceComposition,
+            importedUses: res.importedUses,
+            layers: res.layers,
+          },
+          isJson,
+          () => {
+            const count = res.importedUses.length;
+            const noun = count === 1 ? "Layer" : "Layers";
+            console.log(
+              `Imported ${count} ${noun} from "${res.sourceComposition}" into Composition "${res.composition}" (total: ${res.layers.length} layers)`,
+            );
+          },
+        );
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
     } else if (command === "remove") {
       const compName = positionals[1];
       const localName = positionals[2];
@@ -413,7 +451,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, remove, reorder, inspect, render, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, render, list. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }

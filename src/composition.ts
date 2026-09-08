@@ -631,3 +631,74 @@ export async function reorderCompositionLayers(
   });
 }
 
+export interface ImportCompositionResult {
+  composition: string;
+  sourceComposition: string;
+  importedUses: CompositionLayerUse[];
+  layers: CompositionLayerUse[];
+}
+
+/**
+ * Import a Composition's Layer references into another Composition within the same Project (ADR-0013, spec #77 US-003).
+ * Preserves shared Layer identities while creating an independent reference list in the destination Composition.
+ */
+export async function importComposition(
+  projectPath: string,
+  targetCompName: string,
+  sourceCompName: string,
+): Promise<ImportCompositionResult> {
+  const sanitizedTarget = sanitizeName(targetCompName);
+  const sanitizedSource = sanitizeName(sourceCompName);
+
+  if (sanitizedTarget === sanitizedSource) {
+    throw new Error(`Cannot import composition "${sanitizedTarget}" into itself.`);
+  }
+
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { comp: targetComp, compFile: targetCompFile } = await readMutableComposition(resolvedRoot, sanitizedTarget);
+    const { comp: sourceComp } = await readMutableComposition(resolvedRoot, sanitizedSource);
+
+    // Empty source import is a no-op with 0 imported uses
+    if (sourceComp.layers.length === 0) {
+      return {
+        composition: sanitizedTarget,
+        sourceComposition: sanitizedSource,
+        importedUses: [],
+        layers: targetComp.layers,
+      };
+    }
+
+    // Explicit collision check: existing local names in target must not be overwritten
+    const targetNames = new Set(targetComp.layers.map((l) => l.name));
+    const collidingNames = sourceComp.layers.map((l) => l.name).filter((name) => targetNames.has(name));
+    if (collidingNames.length > 0) {
+      const namesFormatted = collidingNames.map((n) => `"${n}"`).join(", ");
+      throw new Error(
+        `Collision detected: local name(s) ${namesFormatted} already exist in composition "${sanitizedTarget}". Rejection leaves destination references unchanged.`,
+      );
+    }
+
+    // Preserve raw source use fields when copying references
+    const importedUses: CompositionLayerUse[] = sourceComp.layers.map((use) => ({
+      name: use.name,
+      layerId: use.layerId,
+    }));
+
+    const updatedLayers = [...targetComp.layers, ...importedUses];
+    const updatedTargetComp: Composition = {
+      ...targetComp,
+      layers: updatedLayers,
+    };
+
+    await atomicReplace(targetCompFile, JSON.stringify(updatedTargetComp, null, 2) + "\n");
+
+    return {
+      composition: sanitizedTarget,
+      sourceComposition: sanitizedSource,
+      importedUses,
+      layers: updatedLayers,
+    };
+  });
+}
+
