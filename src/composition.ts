@@ -1,11 +1,11 @@
 /**
  * Composition authoring, layer reference management, and inspection (ADR-0013, ADR-0014, DEC-001–006).
  */
-import { readFile, readdir, lstat, mkdir, unlink, rmdir } from "node:fs/promises";
+import { readFile, readdir, lstat, mkdir, unlink, rmdir, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { outsideDir, escapesDirReal } from "./paths.js";
-import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
+import { atomicCreate, atomicReplace, withProjectLock, acquireProjectLock, type ProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
 import {
   LAYER_SCHEMA_VERSION,
@@ -641,6 +641,222 @@ export interface ImportCompositionResult {
   sourceComposition: string;
   importedUses: CompositionLayerUse[];
   layers: CompositionLayerUse[];
+}
+
+/**
+ * Build a destination revision document for a cross-Project copy (#86, US-005).
+ * The canonical revision construction for copies: immutable source facts are
+ * preserved verbatim (kind, contentHash, placement, opacity, and text fields),
+ * bound to the new destination identity with a fresh createdAt, and text
+ * fields are re-validated through the one shared text validator used at
+ * ingestion. The retained content bytes are copied separately — no bundled
+ * face resolution and no re-reading of `assets/fonts/` happens during a copy.
+ */
+function buildCopiedRevision(newLayerId: string, createdAt: string, source: LayerRevision): LayerRevision {
+  if (source.kind === "text") {
+    validateTextContent(source.text, source.fontSize, source.color);
+    return {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      layerId: newLayerId,
+      createdAt,
+      kind: "text",
+      contentHash: source.contentHash,
+      text: source.text,
+      fontSize: source.fontSize,
+      color: source.color,
+      x: source.x,
+      y: source.y,
+      opacity: source.opacity,
+    };
+  }
+  if (source.kind !== "image") {
+    throw new Error(`Unsupported Layer kind "${(source as { kind: string }).kind}" on source Layer revision.`);
+  }
+  return {
+    schemaVersion: LAYER_SCHEMA_VERSION,
+    layerId: newLayerId,
+    createdAt,
+    kind: "image",
+    contentHash: source.contentHash,
+    x: source.x,
+    y: source.y,
+    opacity: source.opacity,
+  };
+}
+
+/**
+ * Copy a source Project Composition's reusable Layers into a destination
+ * Project Composition (ADR-0013, spec #77 US-005). Each distinct source Layer
+ * identity becomes exactly one independent destination Layer identity with the
+ * retained bytes required for inspection/edit/render; duplicate source uses
+ * remap through one identity map. The source Project is never mutated.
+ * Callers must hold BOTH Projects' locks.
+ */
+async function copyCrossProject(
+  destRoot: string,
+  srcRoot: string,
+  targetName: string,
+  sourceName: string,
+): Promise<ImportCompositionResult> {
+  // One consistent source snapshot through the canonical bytes-bearing reader
+  // (`readCompositionInternalFull`): the document is parsed once and every
+  // referenced source use is resolved through the canonical Layer resolver
+  // `readLayerInternalFull` (hash-verified identity, revision, and content
+  // bytes) — fail-closed on malformed or dangling source state. The source is
+  // read-only; the pre-mutation reader guards only the destination mutation
+  // boundary. Duplicate uses resolve per use; the identity map below remaps
+  // each distinct source Layer to one destination identity.
+  const sourceFull = await readCompositionInternalFull(srcRoot, sourceName);
+  const { comp: targetComp, compFile: targetCompFile } = await readMutableComposition(destRoot, targetName);
+
+  // Empty-source no-op: clean success with 0 imported uses, no storage churn.
+  if (sourceFull.layers.length === 0) {
+    return {
+      composition: targetName,
+      sourceComposition: sourceName,
+      importedUses: [],
+      layers: targetComp.layers,
+    };
+  }
+
+  // Collision check BEFORE staging: fail-closed with a byte-identical
+  // destination and no partial live identity state.
+  const targetNames = new Set(targetComp.layers.map((l) => l.name));
+  const collidingNames = sourceFull.layers.map((l) => l.name).filter((name) => targetNames.has(name));
+  if (collidingNames.length > 0) {
+    const namesFormatted = collidingNames.map((n) => `"${n}"`).join(", ");
+    throw new Error(
+      `Collision detected: local name(s) ${namesFormatted} already exist in composition "${targetName}". ` +
+        `Rejection leaves destination references unchanged.`,
+    );
+  }
+
+  // Map each DISTINCT source Layer identity to one destination identity from
+  // the verified snapshot — no second Full resolution; duplicate uses share
+  // the single mapped identity.
+  const identityMap = new Map<string, { revision: LayerRevision; contentBytes: Buffer }>();
+  for (const layer of sourceFull.layers) {
+    if (!identityMap.has(layer.layerId)) {
+      identityMap.set(layer.layerId, { revision: layer.revision, contentBytes: layer.contentBytes });
+    }
+  }
+
+  const newIdBySource = new Map<string, string>();
+  const staged: Array<{ identityFile: string; revFile: string; revDir: string }> = [];
+  try {
+    for (const [srcId, snapshot] of identityMap) {
+      const newId = generateLayerId();
+      newIdBySource.set(srcId, newId);
+
+      // Copy the retained content bytes into the destination content store
+      // (deduplicated, integrity-verified on reuse by storeContentBlob).
+      await storeContentBlob(destRoot, snapshot.revision.contentHash, snapshot.contentBytes);
+
+      const createdAt = new Date().toISOString();
+      const revision = buildCopiedRevision(newId, createdAt, snapshot.revision);
+      const revHash = computeRevisionHash(revision);
+      const revDir = path.join(destRoot, "layers", `${newId}.revisions`);
+      const revFile = path.join(revDir, `${revHash}.json`);
+      const identityFile = path.join(destRoot, "layers", `${newId}.json`);
+      staged.push({ identityFile, revFile, revDir });
+
+      await mkdir(revDir, { recursive: true });
+      await atomicCreate(revFile, JSON.stringify(revision, null, 2) + "\n");
+      const identity: LayerIdentity = {
+        schemaVersion: LAYER_SCHEMA_VERSION,
+        id: newId,
+        createdAt,
+        currentRevision: revHash,
+      };
+      await atomicCreate(identityFile, JSON.stringify(identity, null, 2) + "\n");
+    }
+
+    // Resolve every staged Layer before the live commit (publication protocol).
+    for (const newId of newIdBySource.values()) {
+      await readLayerInternal(destRoot, newId);
+    }
+
+    const importedUses: CompositionLayerUse[] = sourceFull.layers.map((layer) => ({
+      name: layer.name,
+      layerId: newIdBySource.get(layer.layerId)!,
+    }));
+
+    // Live Commit Point: one atomic replacement of the destination document.
+    const updatedTarget: Composition = {
+      ...targetComp,
+      layers: [...targetComp.layers, ...importedUses],
+    };
+    await atomicReplace(targetCompFile, JSON.stringify(updatedTarget, null, 2) + "\n");
+
+    return {
+      composition: targetName,
+      sourceComposition: sourceName,
+      importedUses,
+      layers: updatedTarget.layers,
+    };
+  } catch (err) {
+    // Caught-error cleanup: remove staged identities/revisions (best-effort).
+    // Retained content blobs stay for deduplication (established protocol).
+    for (const artifact of staged) {
+      await unlink(artifact.identityFile).catch(() => {});
+      await unlink(artifact.revFile).catch(() => {});
+      await rmdir(artifact.revDir).catch(() => {}); // only if now-empty
+    }
+    throw err;
+  }
+}
+
+/**
+ * Copy a Composition's reusable Layers across Project boundaries (#86, spec
+ * #77 US-005, ADR-0013). Both Projects are locked in deterministic
+ * sorted-canonical-realpath order so reverse-direction imports serialize
+ * instead of deadlocking; a failed second acquisition releases the first.
+ * A source path resolving to the destination Project is refused with
+ * guidance to same-Project import — cross-Project copy semantics and
+ * same-Project shared-identity reuse must never be silently confused.
+ */
+export async function importCompositionCrossProject(
+  destinationProjectPath: string,
+  targetCompName: string,
+  sourceCompName: string,
+  sourceProjectPath: string,
+): Promise<ImportCompositionResult> {
+  const sanitizedTarget = sanitizeName(targetCompName);
+  const sanitizedSource = sanitizeName(sourceCompName);
+
+  const destRoot = await resolveProjectRoot(destinationProjectPath);
+  const srcRoot = await resolveProjectRoot(sourceProjectPath);
+
+  // Alias guard (poka-yoke): identical realpaths mean one Project, whatever
+  // path spelling reached it. There is no "another Project" to copy into.
+  const [destReal, srcReal] = await Promise.all([realpath(destRoot), realpath(srcRoot)]);
+  if (destReal === srcReal) {
+    throw new Error(
+      `Source project "${sourceProjectPath}" resolves to the same Project as the destination (${destReal}). ` +
+        `Cross-Project import copies Layers into another Project with independent identities; to reuse ` +
+        `shared Layer identities within one Project, run ` +
+        `"ply composition import ${sanitizedTarget} ${sanitizedSource}" without --from-project.`,
+    );
+  }
+
+  // Dual-Project locking in sorted canonical order. The lock paths derive
+  // from the resolved roots, while ordering uses the canonical realpaths so
+  // every cooperating process agrees on the same global order.
+  const ordered: [string, string] = destReal < srcReal ? [destRoot, srcRoot] : [srcRoot, destRoot];
+  const first = await acquireProjectLock(ordered[0]!);
+  let second: ProjectLock;
+  try {
+    second = await acquireProjectLock(ordered[1]!);
+  } catch (err) {
+    await first.release();
+    throw err;
+  }
+  try {
+    return await copyCrossProject(destRoot, srcRoot, sanitizedTarget, sanitizedSource);
+  } finally {
+    await second.release();
+    await first.release();
+  }
 }
 
 /**

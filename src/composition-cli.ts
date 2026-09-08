@@ -7,6 +7,7 @@ import {
   addLayerToComposition,
   addTextLayerToComposition,
   importComposition,
+  importCompositionCrossProject,
   removeLayerFromComposition,
   reorderCompositionLayers,
   inspectComposition,
@@ -34,6 +35,11 @@ composition — Composition authoring and inspection
   bun run ply composition import <target> <source> [options]
       Import a Composition's Layer references into another Composition
       within the same Project as individually editable uses
+
+  bun run ply composition import <target> <source> --from-project <dir>
+      Copy a Composition's Layers from another Project into the target
+      Composition as independent destination Layer identities with retained
+      content bytes (source edits never propagate; no live links)
 
   bun run ply composition remove <comp> <name> [options]
       Remove a Layer use from a Composition without deleting the Layer,
@@ -74,6 +80,8 @@ Options:
   --x <num>             X position on canvas (default: 0)
   --y <num>             Y position on canvas (default: 0)
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)
+  --from-project <dir>  Import source: copy Layers from a Composition in
+                        another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
   --help, -h            Show this help message
 `;
@@ -110,6 +118,7 @@ let values: {
   color?: string;
   order?: string;
   out?: string;
+  "from-project"?: string;
   x?: string;
   y?: string;
   opacity?: string;
@@ -133,6 +142,7 @@ try {
       color: { type: "string" },
       order: { type: "string" },
       out: { type: "string" },
+      "from-project": { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
       opacity: { type: "string" },
@@ -300,7 +310,11 @@ async function run() {
       }
 
       try {
-        const res = await importComposition(targetProj, targetComp, sourceComp);
+        const fromProject = values["from-project"];
+        const res =
+          fromProject !== undefined
+            ? await importCompositionCrossProject(targetProj, targetComp, sourceComp, fromProject)
+            : await importComposition(targetProj, targetComp, sourceComp);
         mutationCommitted = true;
         output(
           {

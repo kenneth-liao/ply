@@ -261,6 +261,22 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
 9. **Atomic Publication**:
    - Commits updated `layers` array to `compositions/<target>.json` via `atomicReplace`.
 
+### Cross-Project Composition Copy (#86, US-005, US-008)
+
+`ply composition import <target> <source> --from-project <path>` copies a source Project Composition's reusable Layers into a destination Project Composition as independent destination Layer identities with retained destination bytes — never live source links. Flag absent ⇒ the #84 same-Project semantics apply unchanged.
+
+1. **Alias Guard (poka-yoke)**: the source `--from-project` root and the destination root are compared by realpath. Identical realpaths mean one Project under a different path spelling, so the operation is refused (exit 1) with actionable guidance to run the same-Project `ply composition import <target> <source>` instead. Cross-Project copy semantics and same-Project shared-identity reuse are never silently confused. Two genuinely different Projects that happen to share a Composition name remain valid.
+2. **Dual-Project Locking in Canonical Order**: both Projects' `.ply.lock` files are acquired in sorted canonical (realpath) order before any reading or staging. Every cooperating process derives the same global order, so reverse-direction imports (A importing from B while B imports from A) serialize instead of deadlocking. A failed second-lock acquisition releases the first lock. Under both locks, the source Composition is snapshotted through the canonical bytes-bearing reader `readCompositionInternalFull`: the document is parsed once and every referenced source use is resolved through the canonical Layer resolver `readLayerInternalFull` (hash-verified identity, revision, and content bytes) — one consistent snapshot, fail-closed on malformed or dangling source state. Duplicate uses of one source Layer each resolve through that same canonical resolver; the copy maps each distinct source Layer identity to exactly one destination identity from that snapshot (point 3). The source is read-only: the canonical pre-mutation reader (`readMutableComposition`) guards only the destination mutation boundary.
+3. **One Destination Identity per Distinct Source Layer**: the snapshot maps each distinct source `layerId` to exactly one newly generated destination identity; duplicate uses of the same source Layer within the source Composition remap through that single map. Placement, opacity, kind, and text revision facts are preserved verbatim through the canonical copy construction (`buildCopiedRevision`); text fields are re-validated through the one shared text validator used at ingestion; intrinsics are re-derived from the verified content blob at resolution. The destination revision binds the new identity with a fresh `createdAt`, yielding a new content-derived revision hash. Only the source Layer's current revision is copied: source historical revisions remain the source Project's (#87 owns retention; OOS-007).
+4. **Retained Bytes, No Font Re-resolution**: the source revision's verified content bytes (image raster or retained font TTF) are copied into the destination `content/` store via `storeContentBlob` (deduplicated, integrity-verified on reuse). Copying retained text never consults `assets/fonts/` or re-resolves a bundled face — the retained bytes are the only font identity, exactly as at ingestion.
+5. **Atomic Publication & Rollback**:
+   - Collision check BEFORE staging: any source local name colliding with an existing destination use name fails closed (exit 1) with a byte-identical destination — no staged artifacts, no partial live identity state.
+   - Stage content blobs → stage revisions → stage identities (`atomicCreate`) → fully resolve every staged Layer before the live commit.
+   - **Live Commit Point**: one `atomicReplace` of the destination Composition document appending the remapped uses (source order preserved; destination canvas, existing uses, and document fields untouched).
+   - **Caught-error cleanup**: newly staged identities and revision documents are deleted (best-effort, revision directory only if now-empty); retained content blobs stay for deduplication and may remain as documented orphans. The source Project is never mutated on any path.
+   - Empty-source import succeeds as a clean no-op with 0 imported uses and no storage churn.
+6. **Two-Way Independence & Source-Free Usability**: source in-place edits advance only the source identity; destination edits and forks touch only destination identities. Because the destination retains its own bytes, removing the source Project and the original external input files leaves destination inspection, editing, and rendering fully functional offline.
+
 ### Interrupted operations and operator recovery
 
 This protocol provides atomic Composition replacement and serialization among cooperating Ply processes, not crash rollback. Abrupt termination (for example, SIGKILL or process/host failure) bypasses catch/finally cleanup. An interruption after identity staging and before replacement can leave an unreferenced identity, its revision, retained content, temporary files, and a stale `.ply.lock`. Once the lock is manually removed, Layer listing and Project counts can expose that unreferenced identity. An interruption after replacement may instead leave a committed use; a missing success response does not establish failure. The controlled staging test proves reader serialization under normal completion, not recovery after a crash.
@@ -305,7 +321,9 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply project inspect [options] [--json]`
 - `ply composition create <name> --width <w> --height <h> [options] [--json]`
 - `ply composition add <comp> <local-name> (--image <path> | --text <str> --font <family> [--font-size <px>] [--color <hex>]) [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
-- `ply composition import <target> <source> [options] [--json]`
+- `ply composition import <target> <source> [--from-project <path>] [options] [--json]`
+  - Without `--from-project`, both Compositions live in the destination Project and import reuses shared Layer identities (#84).
+  - With `--from-project <path>`, the source Composition resolves in the other Project and its Layers are copied as independent destination identities with retained bytes (#86). A source path resolving to the destination Project is refused with same-Project guidance.
 - `ply composition remove <comp> <use-name> [options] [--json]`
 - `ply composition reorder <comp> --order <name1,name2,...> [options] [--json]`
 - `ply composition inspect <name> [options] [--json]`
