@@ -197,7 +197,7 @@ function sanitizeName(name: string): string {
  * code can assume the canonical shape: matching name, positive-integer
  * canvas, and an ordered list of unique `{ name, layerId }` uses.
  */
-function parseCompositionDocument(raw: string, expectedName: string): Composition {
+export function parseCompositionDocument(raw: string, expectedName: string): Composition {
   let comp: Composition;
   try {
     comp = JSON.parse(raw);
