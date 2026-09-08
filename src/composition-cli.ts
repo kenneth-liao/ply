@@ -5,9 +5,11 @@ import path from "node:path";
 import {
   createComposition,
   addLayerToComposition,
+  addTextLayerToComposition,
   inspectComposition,
   listCompositions,
   type ResolvedComposition,
+  type ResolvedCompositionLayer,
 } from "./composition.js";
 import { renderComposition } from "./composition-render.js";
 import { closeCliBrowser } from "./cli-browser.js";
@@ -20,6 +22,11 @@ composition — Composition authoring and inspection
 
   bun run ply composition add <comp> <name> --image <path> [options]
       Add a local image Layer to a Composition with optional placement
+
+  bun run ply composition add <comp> <name> --text <str> --font <family> [options]
+      Add a locally rendered text Layer. The bundled font family's bytes are
+      retained into the Project, so rendering never needs the original font
+      files. Mutually exclusive with --image.
 
   bun run ply composition inspect <name> [options]
       Inspect a Composition's canvas and ordered Layers
@@ -36,7 +43,14 @@ Options:
   --project, -p <dir>   Path to Project root (default: current working directory)
   --width <int>         Canvas width in pixels (required for create)
   --height <int>        Canvas height in pixels (required for create)
-  --image <path>        Path to local source image file (required for add)
+  --image <path>        Path to local source image file (required for add
+                        unless --text is used)
+  --text <str>          Text content for a text Layer (mutually exclusive
+                        with --image; requires --font)
+  --font <family>       Bundled font family name (required with --text;
+                        e.g. Anton, "Source Sans 3", "Archivo Black")
+  --font-size <num>     Font size in px for text Layers (default: 48)
+  --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
   --out <path>          Export path for render; fresh in-Project paths with an
                         existing parent (except reserved storage) or any path
                         outside the Project (existing Project state is never
@@ -74,6 +88,10 @@ let values: {
   width?: string;
   height?: string;
   image?: string;
+  text?: string;
+  font?: string;
+  "font-size"?: string;
+  color?: string;
   out?: string;
   x?: string;
   y?: string;
@@ -92,6 +110,10 @@ try {
       width: { type: "string" },
       height: { type: "string" },
       image: { type: "string" },
+      text: { type: "string" },
+      font: { type: "string" },
+      "font-size": { type: "string" },
+      color: { type: "string" },
       out: { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
@@ -161,12 +183,22 @@ async function run() {
       const compName = positionals[1];
       const localName = positionals[2];
       if (!compName || !localName) {
-        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> --image <path>" }, isJson);
+        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family>)" }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (!values.image) {
-        output({ ok: false, error: "Missing required option: --image <path>" }, isJson);
+      if (values.image && (values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined)) {
+        output({ ok: false, error: "--image and --text are mutually exclusive content kinds; use one per Layer." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.text === undefined && (values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined)) {
+        output({ ok: false, error: "--font, --font-size, and --color require --text <str>." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (!values.image && values.text === undefined) {
+        output({ ok: false, error: "Missing required content: --image <path> or --text <str> (with --font <family>)" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -187,15 +219,52 @@ async function run() {
       }
 
       try {
-        const res = await addLayerToComposition(targetProj, compName, localName, values.image, { x, y, opacity });
+        if (values.text !== undefined) {
+          if (!values.font) {
+            output({ ok: false, error: "Missing required option: --font <family> (required with --text)" }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const fontSize = values["font-size"] !== undefined ? parseNumericArgument(values["font-size"]) : 48;
+          if (!Number.isFinite(fontSize)) {
+            output({ ok: false, error: "Font size (--font-size) must be a finite number." }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const res = await addTextLayerToComposition(
+            targetProj, compName, localName,
+            { text: values.text, font: values.font, color: values.color },
+            { x, y, opacity, fontSize },
+          );
+          mutationCommitted = true;
+          output(
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+            isJson,
+            () => {
+              const rev = res.layer.currentRevision;
+              if (rev.kind !== "text") return; // unreachable: text ingestion returns a text revision
+              console.log(
+                `Added text Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
+                  `[${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}]`,
+              );
+            },
+          );
+          return;
+        }
+
+        const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity });
         mutationCommitted = true;
         output(
           { ok: true, composition: res.composition, use: res.use, layer: res.layer },
           isJson,
           () => {
+            const rev = res.layer.currentRevision;
+            const detail =
+              rev.kind === "text"
+                ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
+                : `${rev.width}×${rev.height} ${rev.format}`;
             console.log(
-              `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
-                `[${res.layer.currentRevision.width}×${res.layer.currentRevision.height} ${res.layer.currentRevision.format}]`,
+              `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" [${detail}]`,
             );
           },
         );
@@ -221,8 +290,12 @@ async function run() {
             console.log(`Layers (${composition.layers.length}):`);
             composition.layers.forEach((layer, idx) => {
               const rev = layer.revision;
+              const detail =
+                rev.kind === "text"
+                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
+                  : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(
-                `  ${idx + 1}. "${layer.name}" [${layer.layerId}] (${rev.kind}, ${rev.width}×${rev.height} ${rev.format}) ` +
+                `  ${idx + 1}. "${layer.name}" [${layer.layerId}] (${rev.kind}, ${detail}) ` +
                   `@ (${rev.x}, ${rev.y}) opacity: ${rev.opacity}`,
               );
             });

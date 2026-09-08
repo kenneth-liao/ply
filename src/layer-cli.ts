@@ -94,7 +94,12 @@ async function run() {
             console.log(`Created: ${layer.createdAt}`);
             console.log(`Current revision: ${layer.currentRevisionId}`);
             console.log(`  Kind: ${rev.kind}`);
-            console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
+            if (rev.kind === "text") {
+              console.log(`  Text: ${JSON.stringify(rev.text)}`);
+              console.log(`  Font: retained face (${(rev.fontBytes / 1024).toFixed(1)} KB), ${rev.fontSize}px, color ${rev.color}`);
+            } else {
+              console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
+            }
             console.log(`  Content hash: ${rev.contentHash}`);
             console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}`);
           },
@@ -113,7 +118,11 @@ async function run() {
             console.log(`Layers (${layers.length}):`);
             layers.forEach((l) => {
               const rev = l.currentRevision;
-              console.log(`  - ${l.id} [${rev.kind}, ${rev.width}×${rev.height} ${rev.format}, rev: ${l.currentRevisionId}]`);
+              const detail =
+                rev.kind === "text"
+                  ? `text ${JSON.stringify(rev.text)}, ${rev.fontSize}px`
+                  : `${rev.width}×${rev.height} ${rev.format}`;
+              console.log(`  - ${l.id} [${rev.kind}: ${detail}, rev: ${l.currentRevisionId}]`);
             });
           },
         );

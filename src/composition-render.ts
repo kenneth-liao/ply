@@ -12,8 +12,13 @@
  *   at the retained content's intrinsic size, clipped to the canvas. Areas
  *   no Layer covers stay transparent.
  * - Supported Layer effects in this foundation are position and opacity
- *   only. Text Layers, Render-history capture/replay, and advanced effects
- *   are separately scoped (#81, #87).
+ *   only. Text Layers are locally rendered DOM text (#81): each text
+ *   revision's retained font bytes are loaded through an internal @font-face
+ *   family (never re-consulting assets/fonts/), and every text layer's
+ *   family is probed for actual load/resolution after page load — an
+ *   unresolved face or unavailable font fails the render before any output
+ *   is published. Render-history capture/replay and advanced effects are
+ *   separately scoped (#87).
  * - The Project lock covers the snapshot: the Composition document, its
  *   current revisions, and verified retained bytes are resolved exactly once
  *   through the canonical full resolver, then the lock is released and those
@@ -32,10 +37,12 @@ import { lstat, mkdir, realpath } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { MAX_DIMENSION, MAX_PIXELS } from "./png.js";
-import { readCompositionInternalFull } from "./composition.js";
+import { readCompositionInternalFull, type ResolvedCompositionLayerFull } from "./composition.js";
 import { resolveProjectRoot } from "./project.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { withRenderPage } from "./browser.js";
+import type { Page } from "playwright";
+import { familyResolved } from "./fonts.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
   png: "image/png",
@@ -85,20 +92,15 @@ export async function renderComposition(
       );
     }
 
-    const layers = [];
+    const layers: SnapshotLayer[] = [];
     for (const use of comp.layers) {
-      if (use.kind !== "image") {
+      if (use.kind !== "image" && use.kind !== "text") {
         throw new Error(
           `Layer "${use.name}" in Composition "${comp.name}" has kind "${use.kind}", ` +
             `which this foundation cannot render.`,
         );
       }
-      layers.push({
-        name: use.name,
-        layerId: use.layerId,
-        revision: use.revision,
-        contentBytes: use.contentBytes,
-      });
+      layers.push(toSnapshotLayer(use));
     }
 
     const output = options.out
@@ -274,28 +276,41 @@ function refuseExistingInsideProject(realRoot: string, realTarget: string, outPa
   }
 }
 
-interface PaintLayer {
+/**
+ * A locked snapshot layer: the exact verified bytes plus discriminated
+ * revision metadata, resolved once under the Project lock.
+ */
+type SnapshotLayer = {
   name: string;
-  revision: { format: "png" | "jpeg" | "webp"; x: number; y: number; opacity: number };
+  layerId: string;
+  revision: ResolvedCompositionLayerFull["revision"];
   contentBytes: Buffer;
+};
+
+function toSnapshotLayer(use: ResolvedCompositionLayerFull): SnapshotLayer {
+  return { name: use.name, layerId: use.layerId, revision: use.revision, contentBytes: use.contentBytes };
 }
 
 /**
  * Paint the snapshot's exact bytes through the shared render page: one
- * absolutely-positioned image per Layer at its stored position and opacity,
- * intrinsic size, in reference-list order, over a transparent canvas sized
- * to the Composition. The screenshot is taken only after every image has
- * fully decoded.
+ * absolutely-positioned element per Layer at its stored position and opacity,
+ * in reference-list order, over a transparent canvas sized to the
+ * Composition. Images paint at intrinsic size; text layers paint as DOM text
+ * with their retained font bytes declared under an internal @font-face
+ * family (#81). The screenshot is taken only after every image has fully
+ * decoded AND every text family has actually loaded — an unresolved face
+ * fails the render instead of falling back silently.
  */
 async function paintComposition(
   canvas: { width: number; height: number },
-  layers: PaintLayer[],
+  layers: SnapshotLayer[],
 ): Promise<Buffer> {
   return withRenderPage(async (page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
     // Awaited decode: a partially painted canvas is never screenshotted.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+    await rejectUnresolvedFonts(page, layers);
     return page.screenshot({
       type: "png",
       omitBackground: true,
@@ -305,22 +320,90 @@ async function paintComposition(
 }
 
 /**
- * The page HTML for one Composition. Layer names never reach the markup;
- * every interpolated value is a validated finite number or a whitelisted
- * MIME type, so the markup needs no escaping.
+ * Internal @font-face family name for a retained font blob (#81). Derived
+ * from the content hash — the retained bytes are the only font identity, so
+ * the renderer never needs the bundled registry or the original family name.
  */
-function buildCompositionHtml(canvas: { width: number; height: number }, layers: PaintLayer[]): string {
-  const imgs = layers
+function internalFontFamily(contentHash: string): string {
+  return `ply-face-${contentHash.slice(0, 16)}`;
+}
+
+/**
+ * Verify each text layer's font actually loaded and resolved in the page via
+ * the shared family-resolution probe. Garbage bytes, undecodable faces, or a
+ * failed load fall through to a fallback font — detected here and rejected
+ * before any output is published.
+ */
+async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[]): Promise<void> {
+  const byFamily = new Map<string, string[]>();
+  for (const l of layers) {
+    if (l.revision.kind !== "text") continue;
+    const family = internalFontFamily(l.revision.contentHash);
+    byFamily.set(family, [...(byFamily.get(family) ?? []), l.name]);
+  }
+  const unresolved: string[] = [];
+  for (const [family, names] of byFamily) {
+    if (!(await page.evaluate(familyResolved, family))) {
+      unresolved.push(`Layer "${names.join('", "')}"`);
+    }
+  }
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Font face failed to load from retained bytes for ${unresolved.join(", ")} — ` +
+        `silent fallback is not allowed; the retained font content may be invalid or corrupted.`,
+    );
+  }
+}
+
+/** Minimal HTML escaping for text layer content (#81). */
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/**
+ * The page HTML for one Composition. Layer names never reach the markup;
+ * every interpolated value is a validated finite number, a whitelisted MIME
+ * type, a hash-derived internal family, or the strict-hex validated color —
+ * except text content, which is HTML-escaped.
+ */
+function buildCompositionHtml(canvas: { width: number; height: number }, layers: SnapshotLayer[]): string {
+  const faces = new Map<string, Buffer>();
+  for (const l of layers) {
+    if (l.revision.kind === "text" && !faces.has(l.revision.contentHash)) {
+      faces.set(l.revision.contentHash, l.contentBytes);
+    }
+  }
+  const fontCss = [...faces]
+    .map(
+      ([hash, bytes]) =>
+        `@font-face { font-family: "${internalFontFamily(hash)}"; ` +
+        `src: url(data:font/ttf;base64,${bytes.toString("base64")}) format("truetype"); }`,
+    )
+    .join("\n");
+  const els = layers
     .map((l) => {
-      const style = `position:absolute;left:${l.revision.x}px;top:${l.revision.y}px;opacity:${l.revision.opacity};`;
-      return `<img src="data:${MIME[l.revision.format]};base64,${l.contentBytes.toString("base64")}" style="${style}">`;
+      const rev = l.revision;
+      const base = `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};`;
+      if (rev.kind === "text") {
+        const style =
+          `${base}font-family:'${internalFontFamily(rev.contentHash)}';` +
+          `font-size:${rev.fontSize}px;color:${rev.color};white-space:pre-wrap;`;
+        return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
+      }
+      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}">`;
     })
     .join("");
   return (
     `<!doctype html><html><head><style>` +
+    fontCss +
     `html,body{margin:0;padding:0;background:transparent}` +
     `#canvas{position:relative;width:${canvas.width}px;height:${canvas.height}px;overflow:hidden}` +
     `</style></head>` +
-    `<body><div id="canvas">${imgs}</div></body></html>`
+    `<body><div id="canvas">${els}</div></body></html>`
   );
 }
