@@ -19,7 +19,7 @@
  * malformed history fails loudly and never resolves to current or newer
  * content.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, lstat } from "node:fs/promises";
 import path from "node:path";
 import { toolIdentity } from "./manifest.js";
 import { readRevisionInternalFull } from "./layer.js";
@@ -236,6 +236,15 @@ export async function resolveHistoricalLayers(
  */
 export async function requireProjectRenderManifest(resolvedRoot: string, manifestPath: string): Promise<void> {
   const target = path.resolve(manifestPath);
+  try {
+    await lstat(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // Absence is answered by the manifest reader's clear not-found failure.
+      return;
+    }
+    throw err;
+  }
   if (await escapesDirReal(resolvedRoot, target)) {
     throw new Error(
       `Render manifest "${manifestPath}" is outside the project; render history lives in the Project's renders/ directory.`,

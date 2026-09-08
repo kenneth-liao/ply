@@ -376,16 +376,22 @@ export async function readRevisionInternalFull(
     throw new Error(`Security error: revision path for layer "${layerId}" escapes project boundary.`);
   }
 
+  // Existence first: a missing revision gets its clear actionable failure,
+  // never a raw filesystem error. Only an existing file is judged by its
+  // resolved location, so an escaping alias is still refused.
+  try {
+    await lstat(revFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Revision "${revisionId}" for layer "${layerId}" not found in project.`);
+    }
+    throw err;
+  }
   if (await escapesDirReal(resolvedRoot, revFile)) {
     throw new Error(`Security error: revision for layer "${layerId}" escapes project boundary.`);
   }
 
-  let revRaw: string;
-  try {
-    revRaw = await readFile(revFile, "utf8");
-  } catch {
-    throw new Error(`Revision "${revisionId}" for layer "${layerId}" not found in project.`);
-  }
+  const revRaw = await readFile(revFile, "utf8");
 
   let revision: LayerRevision;
   try {
@@ -444,12 +450,21 @@ export async function readRevisionInternalFull(
     );
   }
 
-  // Read and verify content blob
+  // Read and verify content blob — existence first, then the resolved-location
+  // gate, then the bytes (missing stays a clear failure, never raw ENOENT).
   const contentBlob = path.join(resolvedRoot, "content", revision.contentHash);
   if (outsideDir(resolvedRoot, contentBlob)) {
     throw new Error(`Security error: content blob escapes project boundary.`);
   }
 
+  try {
+    await lstat(contentBlob);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
+    }
+    throw err;
+  }
   if (await escapesDirReal(resolvedRoot, contentBlob)) {
     throw new Error(`Security error: content blob for layer "${layerId}" escapes project boundary.`);
   }

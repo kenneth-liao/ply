@@ -22,7 +22,9 @@ import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
 import { mkdtemp, rm, readFile, readdir, writeFile, mkdir, unlink, rename, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { encodePngRgba, readPngHeader } from "../src/png.js";
+import { encodePngRgba, readPngHeader, decodePng } from "../src/png.js";
+import { replayRender } from "../src/composition-render.js";
+import { getBrowser, closeBrowser } from "../src/browser.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -366,4 +368,344 @@ test("compact replay text is one actionable line; usage errors exit 2", async ()
 
   const help = await invoke(["composition", "--help"]);
   expect(help.stdout).toContain("replay");
+});
+
+// ---------------------------------------------------------------------------
+// Slice 3 — failure boundaries, publication discipline, concurrent capture
+// ---------------------------------------------------------------------------
+
+const compositionCli = path.resolve(import.meta.dir, "../src/composition-cli.ts");
+const lockModule = path.resolve(import.meta.dir, "../src/project-lock.ts");
+
+/** Spawn the composition CLI directly with a --preload mock module applied. */
+function invokePreloaded(preload: string, args: string[]) {
+  const proc = Bun.spawn([process.execPath, "--preload", preload, compositionCli, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return proc;
+}
+
+async function waitForSignal(file: string, what: string): Promise<void> {
+  for (;;) {
+    try {
+      await readFile(file);
+      return;
+    } catch {
+      await Bun.sleep(10);
+    }
+  }
+}
+
+test("a missing render manifest fails loudly without publishing output", async () => {
+  const before = (await readdir(path.join(projDir, "renders")).catch(() => [])).length;
+  const { res } = await replayJson(path.join(projDir, "renders", "absent.manifest.json"));
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("not found");
+  expect((await readdir(path.join(projDir, "renders")).catch(() => [])).length).toBe(before);
+});
+
+test("a malformed render manifest fails with a field-specific error", async () => {
+  await writeFile(path.join(projDir, "renders", "broken.manifest.json"), "{not json");
+  const { res } = await replayJson(path.join(projDir, "renders", "broken.manifest.json"));
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("Malformed render manifest");
+});
+
+test("an unsupported manifest schemaVersion is rejected, not replayed", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  m.schemaVersion = 99;
+  const p = path.join(projDir, "renders", "future.manifest.json");
+  await writeFile(p, JSON.stringify(m, null, 2));
+  const { res } = await replayJson(p);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("schemaVersion");
+});
+
+test("pinned identifiers are validated before any filesystem path construction", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  m.layers[0].revisionId = "rev_../../evil";
+  const p = path.join(projDir, "renders", "evil.manifest.json");
+  await writeFile(p, JSON.stringify(m, null, 2));
+  const { res } = await replayJson(p);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("not a valid revision id");
+  // The evil path never escaped: nothing under the project tree changed.
+  expect(await readdir(path.join(projDir, "renders"))).not.toContain("evil");
+});
+
+test("a manifest outside the Project is refused — history is Project-owned", async () => {
+  const fx = await setupHistoryFixture();
+  const outside = path.join(tempDir, "copied.manifest.json");
+  await writeFile(outside, await readFile(fx.manifestPath, "utf8"));
+  const { res } = await replayJson(outside);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("outside the project");
+});
+
+test("a missing pinned historical revision fails and never resolves current content", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  const entry = m.layers[0];
+  await unlink(path.join(projDir, "layers", `${entry.layerId}.revisions`, `${entry.revisionId}.json`));
+  const { res } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain(entry.revisionId);
+});
+
+test("a corrupted pinned revision document fails the revision-hash check", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  const entry = m.layers[0];
+  const revFile = path.join(projDir, "layers", `${entry.layerId}.revisions`, `${entry.revisionId}.json`);
+  const rev = JSON.parse(await readFile(revFile, "utf8"));
+  rev.x = 1234; // contents no longer hash to the pinned revision id
+  await writeFile(revFile, JSON.stringify(rev, null, 2));
+  const { res } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("Corrupted revision document");
+});
+
+test("a missing pinned content blob fails loudly", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  const entry = m.layers[0];
+  const revFile = path.join(projDir, "layers", `${entry.layerId}.revisions`, `${entry.revisionId}.json`);
+  const rev = JSON.parse(await readFile(revFile, "utf8"));
+  await unlink(path.join(projDir, "content", rev.contentHash));
+  const { res } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("missing in project");
+});
+
+test("a corrupted retained content blob fails identity verification instead of resolving substitute bytes", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  const entry = m.layers[0];
+  const revFile = path.join(projDir, "layers", `${entry.layerId}.revisions`, `${entry.revisionId}.json`);
+  const rev = JSON.parse(await readFile(revFile, "utf8"));
+  await writeFile(path.join(projDir, "content", rev.contentHash), Buffer.from("garbage bytes"));
+  const { res } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("Corrupted content blob");
+});
+
+test("an unsupported rendering environment is rejected before any output", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  m.environment.browser = "chromium 1.2.3-not-the-real-browser";
+  const p = path.join(projDir, "renders", "foreign-env.manifest.json");
+  await writeFile(p, JSON.stringify(m, null, 2));
+  const before = (await readdir(path.join(projDir, "renders"))).length;
+  const { res } = await replayJson(p);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("environment mismatch");
+  expect((await readdir(path.join(projDir, "renders"))).length).toBe(before);
+});
+
+test("replay works when the original PNG is gone", async () => {
+  const fx = await setupHistoryFixture();
+  await rm(fx.manifestPath.replace(/\.manifest\.json$/, ".png"));
+  const { res, json } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(0);
+  const replayed = await readFile(json.replay.output);
+  expect(replayed.equals(fx.originalPng)).toBe(true);
+});
+
+test("unknown commands list replay in the available surface", async () => {
+  const res = await invoke(["composition", "nonsense", "--project", projDir]);
+  expect(res.code).toBe(2);
+  expect(res.stderr).toContain("replay");
+});
+
+test("concurrent capture cannot mix current-state revisions into a published snapshot", async () => {
+  const fx = await setupHistoryFixture();
+  const inspect0 = JSON.parse((await invoke(["layer", "inspect", fx.imageLayerId, "--project", projDir, "--json"])).stdout);
+  const rev1 = inspect0.layer.currentRevision.revisionId as string;
+
+  const signals = path.join(tempDir, "signals");
+  await mkdir(signals, { recursive: true });
+  const snapshotReleased = path.join(signals, "snapshot-released");
+  const gate = path.join(signals, "edit-committed");
+
+  // Render-process preload: after the locked snapshot is resolved and the
+  // lock released, signal and hold until the test's edit has committed.
+  const preload = path.join(tempDir, "render-gate.ts");
+  await writeFile(
+    preload,
+    `
+    import { mock } from "bun:test";
+    import * as lock from ${JSON.stringify(lockModule)};
+    const original = { ...lock };
+    mock.module(${JSON.stringify(lockModule)}, () => ({
+      ...original,
+      withProjectLock: async (root: string, fn: () => Promise<unknown>) => {
+        const result = await original.withProjectLock(root, fn);
+        const { writeFile } = await import("node:fs/promises");
+        await writeFile(${JSON.stringify(snapshotReleased)}, "1");
+        const { existsSync } = await import("node:fs");
+        while (!existsSync(${JSON.stringify(gate)})) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        return result;
+      },
+    }));
+    `,
+  );
+
+  const proc = invokePreloaded(preload, ["render", "hist", "--project", projDir, "--json"]);
+  await waitForSignal(snapshotReleased, "render snapshot released");
+
+  // Deterministically commit a current-state revision advance while the
+  // render holds no lock but has not yet published.
+  const green = path.join(tempDir, "sources", "green.png");
+  await writeFile(green, solidPng(64, 64, GREEN));
+  const edit = await invoke(["layer", "edit", fx.imageLayerId, "--image", green, "--in-place", "--project", projDir, "--json"]);
+  expect(edit.code).toBe(0);
+  await writeFile(gate, "1");
+
+  expect(await proc.exited).toBe(0);
+  const json = JSON.parse(await new Response(proc.stdout).text());
+  expect(json.ok).toBe(true);
+
+  // The published manifest pins the pre-edit revision, and the published PNG
+  // shows the pre-edit pixels — even though the current revision advanced
+  // before publication.
+  const manifest = JSON.parse(await readFile(json.render.manifest, "utf8"));
+  expect(manifest.layers[0].revisionId).toBe(rev1);
+  const decoded = decodePng(await readFile(json.render.output));
+  // Pixel (30, 30) sits inside the image Layer's 64×64 span at (10, 10) —
+  // red under the pinned revision, green under the concurrent edit.
+  const mid = (30 * decoded.width + 30) * 4;
+  expect(decoded.rgba[mid]!).toBe(255);
+  expect(decoded.rgba[mid + 1]!).toBe(0);
+
+  const inspect1 = JSON.parse((await invoke(["layer", "inspect", fx.imageLayerId, "--project", projDir, "--json"])).stdout);
+  expect(inspect1.layer.currentRevision.revisionId).not.toBe(rev1);
+
+  // And the retained history still replays byte-identically to that snapshot.
+  const replayed = await replayJson(json.render.manifest);
+  expect(replayed.res.code).toBe(0);
+  expect((await readFile(replayed.json.replay.output)).equals(await readFile(json.render.output))).toBe(true);
+});
+
+test("injected manifest-publication failure publishes no PNG and no orphan history", async () => {
+  await setupHistoryFixture();
+  await rm(path.join(projDir, "renders"), { recursive: true, force: true });
+  await mkdir(path.join(projDir, "renders"));
+
+  const preload = path.join(tempDir, "manifest-fail.ts");
+  await writeFile(
+    preload,
+    `
+    import { mock } from "bun:test";
+    import * as lock from ${JSON.stringify(lockModule)};
+    const original = { ...lock };
+    mock.module(${JSON.stringify(lockModule)}, () => ({
+      ...original,
+      atomicCreate: async (file: string, content: Buffer | string) => {
+        if (file.endsWith(".manifest.json")) {
+          throw new Error("injected manifest publication failure");
+        }
+        return original.atomicCreate(file, content);
+      },
+    }));
+    `,
+  );
+
+  const proc = invokePreloaded(preload, ["render", "hist", "--project", projDir, "--json"]);
+  expect(await proc.exited).toBe(1);
+  const out = JSON.parse(await new Response(proc.stdout).text());
+  expect(out.ok).toBe(false);
+  expect(out.error).toContain("injected manifest publication failure");
+  // No PNG and no orphan manifest: nothing was published.
+  expect(await readdir(path.join(projDir, "renders"))).toEqual([]);
+});
+
+test("injected output-publication failure cleans the freshly created manifest", async () => {
+  await setupHistoryFixture();
+  await rm(path.join(projDir, "renders"), { recursive: true, force: true });
+  await mkdir(path.join(projDir, "renders"));
+
+  const preload = path.join(tempDir, "png-fail.ts");
+  await writeFile(
+    preload,
+    `
+    import { mock } from "bun:test";
+    import * as lock from ${JSON.stringify(lockModule)};
+    const original = { ...lock };
+    mock.module(${JSON.stringify(lockModule)}, () => ({
+      ...original,
+      atomicCreate: async (file: string, content: Buffer | string) => {
+        if (file.endsWith(".png")) {
+          throw new Error("injected output publication failure");
+        }
+        return original.atomicCreate(file, content);
+      },
+    }));
+    `,
+  );
+
+  const proc = invokePreloaded(preload, ["render", "hist", "--project", projDir, "--json"]);
+  expect(await proc.exited).toBe(1);
+  const out = JSON.parse(await new Response(proc.stdout).text());
+  expect(out.ok).toBe(false);
+  // The freshly created manifest was removed; nothing preexisting was touched.
+  expect(await readdir(path.join(projDir, "renders"))).toEqual([]);
+});
+
+test("injected external-export failure cleans owned history and leaves the external file untouched", async () => {
+  await setupHistoryFixture();
+  await rm(path.join(projDir, "renders"), { recursive: true, force: true });
+  await mkdir(path.join(projDir, "renders"));
+  const external = path.join(tempDir, "external-out.png");
+  const originalBytes = solidPng(8, 8, GREEN);
+  await writeFile(external, originalBytes);
+
+  const preload = path.join(tempDir, "replace-fail.ts");
+  await writeFile(
+    preload,
+    `
+    import { mock } from "bun:test";
+    import * as lock from ${JSON.stringify(lockModule)};
+    const original = { ...lock };
+    mock.module(${JSON.stringify(lockModule)}, () => ({
+      ...original,
+      atomicReplace: async () => {
+        throw new Error("injected external export failure");
+      },
+    }));
+    `,
+  );
+
+  const proc = invokePreloaded(preload, ["render", "hist", "--project", projDir, "--out", external, "--json"]);
+  expect(await proc.exited).toBe(1);
+  const out = JSON.parse(await new Response(proc.stdout).text());
+  expect(out.ok).toBe(false);
+  expect((await readFile(external)).equals(originalBytes)).toBe(true);
+  expect((await readdir(path.join(projDir, "renders"))).filter((f) => f.endsWith(".manifest.json"))).toHaveLength(0);
+});
+
+// ---------------------------------------------------------------------------
+// Limited offline evidence (#87 owns its commands' US-006 partition; #88 owns
+// full OS-level CLI isolation). Replay resolves retained bytes locally and
+// paints embedded data URLs; this probe renders a replay with every browser
+// network route aborted — evidence that the replay path issues no requests,
+// not a claim of full CLI offline qualification.
+// ---------------------------------------------------------------------------
+test("replay completes with every browser network route aborted", async () => {
+  const fx = await setupHistoryFixture();
+  const browser = await getBrowser();
+  const ctx = await browser.newContext({ deviceScaleFactor: 1 });
+  await ctx.route("**/*", (route) => route.abort());
+  const page = await ctx.newPage();
+  try {
+    const result = await replayRender(projDir, fx.manifestPath, { page });
+    expect((await readFile(result.output)).equals(fx.originalPng)).toBe(true);
+  } finally {
+    await ctx.close();
+    await closeBrowser();
+  }
 });
