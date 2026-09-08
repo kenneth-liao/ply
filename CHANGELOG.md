@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `ply composition render`, painting a resolved local image Composition to a PNG at its exact canvas dimensions with reference-list paint order, position, opacity, and clipping; the Project lock covers the snapshot of verified retained bytes, the default output is a fresh file under `renders/`, `--out` exports outside the Project with symlink-resolving protection of Project state, and invalid dimensions or unresolved content fail before any output is published (#80, #77).
+
 ### Fixed
 
 - Report Composition and Layer CLI browser teardown failures without retrying committed mutations; clarify interrupted-operation recovery guarantees (#90).

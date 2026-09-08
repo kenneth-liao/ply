@@ -9,6 +9,7 @@ import {
   listCompositions,
   type ResolvedComposition,
 } from "./composition.js";
+import { renderComposition } from "./composition-render.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
 const HELP = `
@@ -23,6 +24,11 @@ composition — Composition authoring and inspection
   bun run ply composition inspect <name> [options]
       Inspect a Composition's canvas and ordered Layers
 
+  bun run ply composition render <name> [options]
+      Render a Composition to a PNG at its exact canvas dimensions
+      (default: a fresh file under the Project's renders/; --out exports
+      to a caller-chosen path outside the Project)
+
   bun run ply composition list [options]
       List all Compositions in the Project
 
@@ -31,6 +37,7 @@ Options:
   --width <int>         Canvas width in pixels (required for create)
   --height <int>        Canvas height in pixels (required for create)
   --image <path>        Path to local source image file (required for add)
+  --out <path>          Export path for render; must resolve outside the Project
   --x <num>             X position on canvas (default: 0)
   --y <num>             Y position on canvas (default: 0)
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)
@@ -64,6 +71,7 @@ let values: {
   width?: string;
   height?: string;
   image?: string;
+  out?: string;
   x?: string;
   y?: string;
   opacity?: string;
@@ -81,6 +89,7 @@ try {
       width: { type: "string" },
       height: { type: "string" },
       image: { type: "string" },
+      out: { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
       opacity: { type: "string" },
@@ -105,6 +114,8 @@ const targetProj = values.project ?? process.cwd();
 
 async function run() {
   let mutationCommitted = false;
+  // Exact published outcome for teardown-failure reporting (render only).
+  let teardownOutcome: string | undefined;
   try {
     if (command === "create") {
       const name = positionals[1];
@@ -218,6 +229,30 @@ async function run() {
         output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
+    } else if (command === "render") {
+      const name = positionals[1];
+      if (!name) {
+        emitRender({ ok: false, error: "Usage: ply composition render <name> [--out <path>]" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      try {
+        const render = await renderComposition(targetProj, name, { out: values.out });
+        // The output is on disk before the browser teardown runs; if teardown
+        // fails, the caller must hear exactly that.
+        teardownOutcome = `The rendered PNG was already written to ${render.output}. Do not re-render to recover it.`;
+        emitRender(
+          { ok: true, render },
+          isJson,
+          () => {
+            console.log(`Rendered Composition "${render.name}" at ${render.width}\u00d7${render.height} \u2192 ${render.output}`);
+          },
+        );
+      } catch (err) {
+        teardownOutcome = "No rendered PNG was written; no output was published.";
+        emitRender({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
     } else if (command === "list") {
       try {
         const compositions = await listCompositions(targetProj);
@@ -241,11 +276,30 @@ async function run() {
       process.exitCode = 2;
     }
   } finally {
-    await closeCliBrowser(mutationCommitted);
+    await closeCliBrowser(mutationCommitted, teardownOutcome);
   }
 }
 
 await run();
+
+/**
+ * Render output emission: JSON (success and failure) always goes to stdout
+ * so callers can parse it regardless of exit status; the compact default
+ * prints one actionable success line on stdout and failures on stderr.
+ */
+function emitRender(
+  result: { ok: true; [key: string]: unknown } | { ok: false; error: string },
+  isJson: boolean,
+  textFormatter?: () => void,
+): void {
+  if (isJson) {
+    console.log(JSON.stringify(result, null, 2));
+  } else if (result.ok) {
+    textFormatter?.();
+  } else {
+    console.error(`Error: ${result.error}`);
+  }
+}
 
 /** Blank supplied values are invalid, never implicit zero. */
 function parseNumericArgument(value: string | undefined): number {

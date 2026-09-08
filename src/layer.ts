@@ -217,8 +217,17 @@ export async function storeContentBlob(projectPath: string, contentHash: string,
   }
 }
 
-/** Unlocked internal reader for Layer identity and its active revision. Callers must hold the Project lock. */
-export async function readLayerInternal(projectPath: string, layerId: string): Promise<ResolvedLayer> {
+/**
+ * Unlocked internal reader that also returns the verified retained content
+ * bytes. Callers must hold the Project lock. This is the one canonical
+ * Layer resolution site: identity, current revision, and content are read,
+ * validated, and hash-verified here exactly once; metadata-only readers
+ * project from it without a second read or a second verification.
+ */
+export async function readLayerInternalFull(
+  projectPath: string,
+  layerId: string,
+): Promise<ResolvedLayer & { contentBytes: Buffer }> {
   if (!/^layer_[a-zA-Z0-9_]+$/.test(layerId)) {
     throw new Error(`Invalid Layer identity "${layerId}".`);
   }
@@ -387,6 +396,18 @@ export async function readLayerInternal(projectPath: string, layerId: string): P
       height: meta.height,
       bytes: contentBytes.length,
     },
+    contentBytes,
+  };
+}
+
+/** Unlocked internal reader for Layer identity and its active revision. Callers must hold the Project lock. */
+export async function readLayerInternal(projectPath: string, layerId: string): Promise<ResolvedLayer> {
+  const full = await readLayerInternalFull(projectPath, layerId);
+  return {
+    id: full.id,
+    createdAt: full.createdAt,
+    currentRevisionId: full.currentRevisionId,
+    currentRevision: full.currentRevision,
   };
 }
 
