@@ -359,27 +359,57 @@ test("--out may export a brand-new file directly under the Project's renders/", 
   expect(JSON.parse(again.stdout).ok).toBe(false);
 });
 
-test("--out protects the Project root and canonical storage directories from new writes", async () => {
+test("--out protects reserved Project storage and permits fresh exports elsewhere in the Project", async () => {
   const img = path.join(tempDir, "red.png");
   await writeFile(img, solidPng(32, 32, RED));
   await makeComposition("guarded2", 32, 32, [{ local: "bg", file: img }]);
   const manifestBefore = await readFile(path.join(projDir, "ply.json"), "utf8");
 
+  // Fresh paths under reserved storage are refused: manifest, lock, and the
+  // canonical compositions/layers/content directories.
   for (const out of [
-    path.join(projDir, "evil.png"),
     path.join(projDir, "compositions", "guarded2.json"),
     path.join(projDir, "layers", "evil.json"),
+    path.join(projDir, "content", "evil"),
   ]) {
     const res = await invoke(["composition", "render", "guarded2", "--project", projDir, "--out", out, "--json"]);
     expect(res.code).toBe(1);
     expect(JSON.parse(res.stdout).ok).toBe(false);
   }
-  // An --out naming a directory is refused.
+  // An --out naming an existing path (the renders/ directory itself) is refused.
   const dirRes = await invoke([
     "composition", "render", "guarded2", "--project", projDir, "--out", path.join(projDir, "renders"), "--json",
   ]);
   expect(dirRes.code).toBe(1);
   expect(await readFile(path.join(projDir, "ply.json"), "utf8")).toBe(manifestBefore);
+
+  // Fresh paths with existing parents elsewhere in the Project are safe:
+  // the root and non-reserved directories are not protected storage.
+  const rootOut = path.join(projDir, "poster.png");
+  const rootRes = await invoke(["composition", "render", "guarded2", "--project", projDir, "--out", rootOut, "--json"]);
+  expect(rootRes.code).toBe(0);
+  expect(readPngHeader(await readFile(rootOut)).width).toBe(32);
+});
+
+test("--out permits fresh nested and sibling in-Project exports with existing parents", async () => {
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(32, 32, RED));
+  await makeComposition("sibling", 32, 32, [{ local: "bg", file: img }]);
+
+  await mkdir(path.join(projDir, "renders", "social"), { recursive: true });
+  await mkdir(path.join(projDir, "exports"), { recursive: true });
+
+  const nested = path.join(projDir, "renders", "social", "poster.png");
+  const nestedRes = await invoke(["composition", "render", "sibling", "--project", projDir, "--out", nested, "--json"]);
+  expect(nestedRes.code).toBe(0);
+  expect(JSON.parse(nestedRes.stdout).render.output).toBe(nested);
+  expect(readPngHeader(await readFile(nested)).width).toBe(32);
+
+  const sibling = path.join(projDir, "exports", "poster.png");
+  const sibRes = await invoke(["composition", "render", "sibling", "--project", projDir, "--out", sibling, "--json"]);
+  expect(sibRes.code).toBe(0);
+  expect(JSON.parse(sibRes.stdout).render.output).toBe(sibling);
+  expect(readPngHeader(await readFile(sibling)).width).toBe(32);
 });
 
 test("--out replaces the destination entry and never writes through an external hardlink to Project state", async () => {
@@ -402,4 +432,23 @@ test("--out replaces the destination entry and never writes through an external 
   // The caller-chosen entry now holds the rendered PNG.
   const exported = await readFile(linked);
   expect(readPngHeader(exported).width).toBe(32);
+});
+
+test("concurrent renders racing the same fresh in-Project --out publish exactly one output", async () => {
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(32, 32, RED));
+  await makeComposition("race", 32, 32, [{ local: "bg", file: img }]);
+  await mkdir(path.join(projDir, "exports"), { recursive: true });
+
+  const out = path.join(projDir, "exports", "race.png");
+  const [a, b] = await Promise.all([
+    invoke(["composition", "render", "race", "--project", projDir, "--out", out, "--json"]),
+    invoke(["composition", "render", "race", "--project", projDir, "--out", out, "--json"]),
+  ]);
+
+  // Exactly one wins; the loser refuses to replace the winner's output.
+  expect([a.code, b.code].sort()).toEqual([0, 1]);
+  expect([JSON.parse(a.stdout).ok, JSON.parse(b.stdout).ok].sort()).toEqual([false, true]);
+  // The surviving entry is the winning render, intact.
+  expect(readPngHeader(await readFile(out)).width).toBe(32);
 });

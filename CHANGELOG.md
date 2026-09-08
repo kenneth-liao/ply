@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- `composition render --out` path classification now protects only reserved Project inputs (manifest, lock, `compositions/`, `layers/`, `content/`, and render history via the existing-path rule); fresh paths with existing parents elsewhere in the Project — including nested paths like `renders/social/poster.png` and sibling directories like `exports/poster.png` — are permitted, with the documented missing-parent refusal preserved (#80, local followup SPEC-1).
+- Concurrent renders racing the same fresh in-Project `--out` can no longer both succeed: publication mode is carried from the locked snapshot — fresh in-Project destinations publish with `O_EXCL` (`atomicCreate`, the loser exits 1 and publishes nothing) while external exports keep hardlink-safe destination-entry `atomicReplace`; concurrent CLI regression added (#80, local followup RE-1).
+- Stabilized the three scene-author suites on Bun 1.4.0 with a test-only remedy (`agent: false` on five raw `httpRequest` option objects): Bun 1.4.0 HTTP pooling reused a closed socket and failed them with `ECONNRESET`; assertions, bodies, headers, timeouts, and product code unchanged (#80, #77).
 - `composition render --out` replaces the destination by same-directory temp-file rename instead of writing through the target's inode, so an external hardlink alias onto Project state (e.g. `ply.json`) keeps its original bytes; regression test included (#80, local review CRAFT-1).
 - Render export now permits a brand-new file directly under the Project's `renders/` while continuing to refuse every existing in-Project path, canonical storage directories, and symlink aliases (#80, local review SPEC-1).
 - The render snapshot resolves each Layer exactly once through a canonical full resolver (`readCompositionInternalFull`); metadata readers project from it without a second resolution/verification pass (#80, local review CRAFT-2).

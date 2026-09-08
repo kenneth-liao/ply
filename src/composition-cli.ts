@@ -37,9 +37,10 @@ Options:
   --width <int>         Canvas width in pixels (required for create)
   --height <int>        Canvas height in pixels (required for create)
   --image <path>        Path to local source image file (required for add)
-  --out <path>          Export path for render; a new file directly in renders/
-                        or any path outside the Project (existing Project
-                        state is never exported over)
+  --out <path>          Export path for render; fresh in-Project paths with an
+                        existing parent (except reserved storage) or any path
+                        outside the Project (existing Project state is never
+                        exported over)
   --x <num>             X position on canvas (default: 0)
   --y <num>             Y position on canvas (default: 0)
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)

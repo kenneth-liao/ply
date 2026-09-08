@@ -112,6 +112,10 @@ const postRaw = (
     if (contentType !== null) headers["content-type"] = contentType;
     const req = httpRequest(
       {
+        // agent: false — Bun 1.4.0 HTTP pooling reuses a closed socket and
+        // fails the request with ECONNRESET (standalone repro; test-only
+        // remedy, no assertion or product change).
+        agent: false,
         host: "127.0.0.1",
         port,
         path: `/${token}/${route}`,

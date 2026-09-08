@@ -918,6 +918,10 @@ describe("scene author — moving Layers with unsaved live preview (#60)", () =>
           if (opts.contentLength !== undefined) headers["content-length"] = opts.contentLength;
           const req = httpRequest(
             {
+              // agent: false — Bun 1.4.0 HTTP pooling reuses a closed socket and
+              // fails the request with ECONNRESET (standalone repro; test-only
+              // remedy, no assertion or product change).
+              agent: false,
               host: "127.0.0.1",
               port,
               path: `/${token}/move`,
@@ -1586,6 +1590,10 @@ describe("scene author — moving Layers with unsaved live preview (#60)", () =>
             };
             const reqA = httpRequest(
               {
+                // agent: false — Bun 1.4.0 HTTP pooling reuses a closed socket
+                // and fails the request with ECONNRESET (standalone repro;
+                // test-only remedy, no assertion or product change).
+                agent: false,
                 host: "127.0.0.1",
                 port,
                 path: `/${token}/move`,
@@ -1615,6 +1623,10 @@ describe("scene author — moving Layers with unsaved live preview (#60)", () =>
             setTimeout(() => {
               const reqB = httpRequest(
                 {
+                  // agent: false — Bun 1.4.0 HTTP pooling reuses a closed
+                  // socket and fails the request with ECONNRESET (standalone
+                  // repro; test-only remedy, no assertion or product change).
+                  agent: false,
                   host: "127.0.0.1",
                   port,
                   path: `/${token}/move`,

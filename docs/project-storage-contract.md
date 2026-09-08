@@ -43,7 +43,7 @@ A Ply Project directory has the following canonical structure:
     └── <render-id>.png
 ```
 
-Since #80, caller exports via `ply composition render --out` may create a brand-new PNG directly in `renders/`; every other in-Project location is protected state (see §6, Render output).
+Since #80, caller exports via `ply composition render --out` may create a fresh PNG anywhere in the Project that is not reserved storage and has an existing parent directory; reserved inputs and every existing Project path are protected (see §6, Render output).
 
 ### Manifest & Schema Specifications
 
@@ -196,8 +196,9 @@ Atomic helpers do not `fsync` files or directories. Atomic visibility does not g
 
 - **Default**: a fresh, never-colliding `renders/<composition>-<unique>.png`, created with `O_EXCL` so repeated renders never collide or overwrite.
 - **`--out <path>` destination policy**:
-  - Every **existing** in-Project path is protected state and refused — the manifest, `compositions/`, `layers/`, `content/`, existing render outputs, and any symlink alias onto them (judged by the path's realpath, so an in-project alias cannot dodge the guard).
-  - A **brand-new** file directly under `renders/` is the one permitted in-Project export location; any other absent in-Project location (Project root, `compositions/`, `layers/`, `content/`) is refused.
+  - Every **existing** in-Project path is protected state and refused — render history in `renders/`, the manifest, `compositions/`, `layers/`, `content/`, and any symlink alias onto them (judged by the path's realpath, so an in-project alias cannot dodge the guard).
+  - A **fresh** path with an existing parent directory is permitted anywhere in the Project except reserved storage: the manifest (`ply.json`), the lock (`.ply.lock`), and the canonical `compositions/`, `layers/`, and `content/` directories. The parent must already exist; missing parents are refused, never created.
+  - Fresh in-Project targets publish with `O_EXCL` (`atomicCreate`): a concurrent render racing the same fresh path loses loudly with a nonzero status and publishes nothing, instead of silently replacing the winner (RE-1).
   - Outside the Project, the parent directory must exist, and an existing regular file is the documented overwrite case.
   - External destinations are written by **destination-entry atomic replacement**: a temp file in the destination directory, renamed over the target. The rename swaps the directory entry and never writes through the target's inode, so an external hardlink alias onto Project state (e.g. a hardlink to `ply.json`) keeps its original bytes; the temp file is cleaned up on failure.
   - The reported output path is the caller-chosen path verbatim; realpaths are only containment guards.

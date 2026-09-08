@@ -103,31 +103,34 @@ export async function renderComposition(
 
     const output = options.out
       ? await resolveExportTarget(resolvedRoot, options.out)
-      : await defaultRenderOutput(resolvedRoot, comp.name);
+      : { path: await defaultRenderOutput(resolvedRoot, comp.name), mode: "create" as const };
 
     return { comp, layers, output };
   });
 
   const png = await paintComposition(snapshot.comp.canvas, snapshot.layers);
 
-  if (options.out) {
-    // Destination-entry atomic replacement: write a temp file in the
-    // destination directory and rename it over the target. The rename swaps
-    // the directory entry — it never writes through the target's inode, so an
-    // external hardlink alias onto Project state (e.g. ply.json) keeps its
-    // original bytes. atomicReplace cleans up the temp file on failure.
-    await atomicReplace(snapshot.output, png);
+  if (snapshot.output.mode === "create") {
+    // Fresh destination (the default renders/ path, or a fresh in-Project
+    // export): O_EXCL creation. A concurrent render racing the same fresh
+    // path loses loudly here instead of silently replacing the winner's
+    // output; the loser publishes nothing.
+    await atomicCreate(snapshot.output.path, png);
   } else {
-    // Project-owned default output is always a brand-new file; O_EXCL keeps
-    // a collision from silently replacing an earlier Render.
-    await atomicCreate(snapshot.output, png);
+    // External export: destination-entry atomic replacement — write a temp
+    // file in the destination directory and rename it over the target. The
+    // rename swaps the directory entry — it never writes through the
+    // target's inode, so an external hardlink alias onto Project state (e.g.
+    // ply.json) keeps its original bytes. atomicReplace cleans up the temp
+    // file on failure.
+    await atomicReplace(snapshot.output.path, png);
   }
 
   return {
     name: snapshot.comp.name,
     width: snapshot.comp.canvas.width,
     height: snapshot.comp.canvas.height,
-    output: snapshot.output,
+    output: snapshot.output.path,
   };
 }
 
@@ -152,24 +155,47 @@ async function defaultRenderOutput(resolvedRoot: string, compName: string): Prom
 }
 
 /**
+ * A resolved --out destination and its publication mode: "create" for a
+ * fresh destination (O_EXCL, so a concurrent render racing the same path
+ * loses loudly instead of replacing the winner), "replace" for an existing
+ * external regular file (destination-entry atomic rename).
+ */
+interface ExportTarget {
+  path: string;
+  mode: "create" | "replace";
+}
+
+/**
+ * Reserved Project inputs a caller export may never create into or overwrite:
+ * the manifest, the lock, and the canonical compositions/layers/content
+ * storage. Existing paths anywhere in the Project (including render history
+ * already in renders/) are refused separately by the existence check; fresh
+ * paths under reserved storage are refused here.
+ */
+const RESERVED_PROJECT_PATHS = ["ply.json", ".ply.lock", "compositions", "layers", "content"];
+
+/**
  * Resolve an --out export target and refuse every path that could damage
  * Project state or retained inputs. The target is judged by where it really
  * lands: an existing path (including a symlink alias) by its own realpath,
  * an absent path by its parent's realpath joined with its basename.
  *
  * - Every existing in-Project path is protected Project state and refused —
- *   the manifest, canonical storage directories, retained inputs, render
- *   outputs, and any symlink alias onto them. The realpath check cannot be
- *   fooled by an alias, but it also cannot see hardlinks; hardlink safety is
- *   provided by writing through destination-entry atomic replacement (see
- *   the render write site), never by writing through the target's inode.
- * - A brand-new file directly under the Project's renders/ is a safe
- *   in-Project export and is permitted; any other absent in-Project location
- *   (root, compositions/, layers/, content/) is refused.
- * - Outside the Project, the parent directory must exist; an existing
- *   regular file (or symlink onto one) is the documented overwrite case.
+ *   render history in renders/, the manifest, canonical storage directories,
+ *   and any symlink alias onto them (judged by realpath, so an in-project
+ *   alias cannot dodge the guard).
+ * - A fresh path with an existing parent directory is permitted anywhere in
+ *   the Project except reserved storage (RESERVED_PROJECT_PATHS, which also
+ *   covers fresh writes under compositions/, layers/, and content/). The
+ *   parent must already exist; missing parents are refused, never created.
+ *   Fresh in-Project targets publish with O_EXCL (mode "create"), so
+ *   concurrent renders racing the same path cannot silently replace each
+ *   other (RE-1).
+ * - Outside the Project, the parent directory must exist, and the target
+ *   publishes by destination-entry atomic replacement (mode "replace"), so a
+ *   hardlink alias onto Project state is never written through.
  */
-async function resolveExportTarget(resolvedRoot: string, outPath: string): Promise<string> {
+async function resolveExportTarget(resolvedRoot: string, outPath: string): Promise<ExportTarget> {
   const target = path.resolve(outPath);
   const realRoot = await realpath(resolvedRoot);
 
@@ -198,7 +224,7 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
     }
     // The caller-chosen path is kept verbatim for writing and reporting; the
     // realpath above is only the containment guard.
-    return target;
+    return { path: target, mode: "replace" };
   }
 
   const parent = path.dirname(target);
@@ -211,29 +237,30 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
   const candidate = path.join(parentReal, path.basename(target));
 
   if (isInsideDir(realRoot, candidate)) {
-    // In-Project export: only a brand-new file directly in renders/ is safe.
-    // content/, compositions/, layers/, and the Project root are protected
-    // storage; nothing else in the Project gains caller files.
-    const rendersReal = await realpath(path.join(realRoot, "renders"));
-    const rel = path.relative(rendersReal, candidate);
-    if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes("/")) {
-      throw new Error(
-        `--out path "${outPath}" would create a file inside the Project at a protected location. ` +
-          `A new export inside the Project must go directly into renders/; ` +
-          `everything else in the Project is protected state.`,
-      );
-    }
-    return target;
+    refuseReservedProjectPath(realRoot, candidate, outPath);
+    return { path: target, mode: "create" };
   }
 
   // Same caller-chosen-path rule: the realpath only proves the parent's real
   // location is outside the Project.
-  return target;
+  return { path: target, mode: "replace" };
 }
 
 function isInsideDir(realRoot: string, realTarget: string): boolean {
   const rel = path.relative(realRoot, realTarget);
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function refuseReservedProjectPath(realRoot: string, realTarget: string, outPath: string): void {
+  const rel = path.relative(realRoot, realTarget);
+  const top = rel.split(path.sep)[0]!;
+  if (rel === "" || RESERVED_PROJECT_PATHS.includes(top)) {
+    throw new Error(
+      `--out path "${outPath}" would create a file inside reserved Project storage ` +
+        `(${rel === "" ? "." : top + "/"}); the manifest, lock, compositions/, layers/, content/, and ` +
+        `render history are protected. Export elsewhere in the Project or outside it.`,
+    );
+  }
 }
 
 function refuseExistingInsideProject(realRoot: string, realTarget: string, outPath: string): void {
@@ -242,7 +269,7 @@ function refuseExistingInsideProject(realRoot: string, realTarget: string, outPa
     throw new Error(
       `--out path "${outPath}" resolves inside the Project ` +
         `(${path.join(realRoot, rel)}); existing Project state and retained inputs cannot be exported over. ` +
-        `Use the default renders/ output or a path outside the Project.`,
+        `Use a fresh path or a path outside the Project.`,
     );
   }
 }
