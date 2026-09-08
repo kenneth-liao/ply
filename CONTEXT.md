@@ -1,8 +1,9 @@
 # Ply
 
 Canonical vocabulary and cross-cutting invariants for the accepted general-purpose
-composer destination. This is the target domain model, not a claim that the
-migration has shipped. `README.md` documents the current command surface;
+composer destination. Project-scoped sharing and retained Render history have
+shipped; generation, Matting, and content-policy migration remain target behavior.
+`README.md` documents the current command surface;
 `ISA.md` owns destination criteria and progress. Decisions live in `docs/adr/`.
 
 ## Language

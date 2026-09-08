@@ -1,6 +1,8 @@
 # ADR-0013: Layer sharing is project-scoped
 
-- Status: Accepted — target design; not yet implemented
+- Status: Accepted — Project sharing, independent cross-Project copying, and retained
+  Render history shipped in [spec #77](https://github.com/kenneth-liao/ply/issues/77).
+  Generation integration and caller-managed library promotion remain outside that delivery.
 
 A caller-selected Project owns its compositions, layers, generated content, and render history. Live layer sharing is confined to that Project; importing from another Project or a caller-managed library creates an independent local layer identity and copies the content needed to use it. This keeps Projects movable and self-contained rather than dependent on a global mutable library.
 
@@ -10,7 +12,7 @@ A stable layer ID identifies an editable layer within a Project. A composition-l
 
 An in-place edit preserves the layer ID and advances its current immutable revision. A fork creates a new ID and changes only the forking composition's reference. Render manifests pin immutable revisions and all required content, so later edits do not change a shipped render. Referenced revisions and content must remain available for reproduction.
 
-Content hashes identify revisions, not mutable layers. This extends ADR-0002's content-derived identity principle; it does not change that ADR's existing asset-resolution behavior retroactively. Retaining historical content is new machinery, not a guarantee provided by the current hash-pin verification alone.
+Content hashes identify revisions, not mutable layers. This extends ADR-0002's content-derived identity principle; it does not change that ADR's existing asset-resolution behavior retroactively. Retained historical content is implemented by the Project workflow; legacy Scene hash-pin verification alone does not provide that guarantee.
 
 ## Project state and reference discovery
 

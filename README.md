@@ -2,25 +2,27 @@
 
 Ply is becoming a general-purpose layered image composer.
 [ISA.md](ISA.md) defines the destination; [CONTEXT.md](CONTEXT.md) defines its
-accepted vocabulary. The first delivery of the composer foundation (spec #77)
-is in progress and partially merged: self-contained Projects, independently
-editable Layers and Compositions, and replayable Render history are
-implemented; integrated relocation/offline qualification, generation
-unification, and the matting/region-gate migration are still open, and the
-spec remains open until its acceptance audit.
+accepted vocabulary. The composer foundation ([spec #77](https://github.com/kenneth-liao/ply/issues/77))
+is shipped and acceptance-audited: self-contained Projects, independently
+editable and reusable Layers, arbitrary-size Compositions, and replayable
+Render history, including integrated relocation/offline qualification.
+Generation unification and the matting/region-gate migration remain unimplemented.
 
 ## Current implementation
 
-Ply currently provides an agent-friendly visual asset composer for 1280×720 images. A
-versioned **Scene** is the editable source: an ordered list of image, text,
-shape, connector, and group Layers. Rendering is local and deterministic.
+The new Project workflow below supports caller-selected canvas dimensions,
+local image and text Layers, shared edits and forks, and independent cross-Project
+copies. Rendering is local and deterministic.
+
+The preserved legacy workflow uses a versioned **Scene** for 1280×720 images:
+an ordered list of image, text, shape, connector, and group Layers.
 
 Models are optional source-asset producers. **Generation Jobs** can create
 background Plates, isolated Objects, and Creator candidates. Final text and
 final composition currently stay local. ADR-0014 supersedes the text/content
 policy for the target design; this rename does not remove existing gates.
 
-The normal workflow is:
+The legacy workflow is:
 
 1. Supply existing image files or generate candidate Assets.
 2. Adopt reusable candidates into the Asset library.

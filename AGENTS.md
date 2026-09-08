@@ -4,10 +4,12 @@
 
 - `ISA.md` owns the accepted destination, claims, fog, and progress; it is not
   an implementation spec. Do not duplicate its backlog in other documents.
-- `CONTEXT.md` defines the target composer vocabulary. The current runtime
-  still uses the legacy Scene/Job surface documented in `README.md`.
-- ADR-0013 through ADR-0015 record accepted target decisions, not shipped
-  functionality. Do not remove existing gates as part of a rename or docs pass.
+- `CONTEXT.md` defines the composer vocabulary. The shipped Project/Layer/
+  Composition foundation coexists with the preserved legacy Scene/Job surface;
+  `README.md` documents both.
+- ADR-0013's Project-scoped sharing and retained Render history are shipped
+  by spec #77. ADR-0014/0015's generation-policy and matting/region migrations
+  remain target decisions. Do not remove existing gates in a docs pass.
 - `.agents/skills/visual-authoring/SKILL.md` owns relocated authoring knowledge.
   It must be committed before any gate deletion (ISC-27).
 - This repository's instructions take precedence over stale generated profile

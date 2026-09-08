@@ -1,10 +1,10 @@
 ---
 thing: Ply — general-purpose layered image composer
 phase: active
-progress: 4/28
+progress: 16/28
 principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
 started: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # Ideal State — Ply
@@ -92,7 +92,7 @@ and the tool enforces nothing about what a layer contains.
 
 Why: the tool is a set of primitives, not a thumbnail machine.
 
-- [ ] ISC-1: A composition of any width and height renders correctly.
+- [x] ISC-1: A composition of any width and height renders correctly.
   Probe: render a 1080×1080 and a 2560×1440 composition; both come out at the
   requested size. bash
 - [ ] ISC-2: Every command except generation completes with no network access.
@@ -104,7 +104,7 @@ Why: the tool is a set of primitives, not a thumbnail machine.
   trying to make.
   Probe: generate a logo, a text-bearing panel, and a likeness with no identity
   reference — all succeed; `rg` finds no subject-content validation in `src/`. bash
-- [ ] ISC-5: Anti: no composition is ever flattened in order to be reused.
+- [x] ISC-5: Anti: no composition is ever flattened in order to be reused.
   Probe: `rg` finds no bake/flatten path; a composition used inside another
   exposes its layers individually. bash
 
@@ -112,29 +112,29 @@ Why: the tool is a set of primitives, not a thumbnail machine.
 
 Why: reuse without regeneration is the premise the whole tool rests on.
 
-- [ ] ISC-6: A composition is an ordered list of layers and nothing else.
+- [x] ISC-6: A composition is an ordered list of layers and nothing else.
   Probe: the schema admits no other top-level structure. bash
-- [ ] ISC-7: Importing composition A into B brings A's layers in individually,
+- [x] ISC-7: Importing composition A into B brings A's layers in individually,
   and B can drop any of them.
   Probe: build B from a subset of A's layers. bash
-- [ ] ISC-8: B can place its own layers at any position relative to imported
+- [x] ISC-8: B can place its own layers at any position relative to imported
   layers, including between two of them.
   Probe: render B with a B-owned layer between two A-owned layers. bash
-- [ ] ISC-9: A layer shared by A and B, edited in place, changes in both.
+- [x] ISC-9: A layer shared by A and B, edited in place, changes in both.
   Probe: edit in place, re-render both, both differ from their prior output. bash
-- [ ] ISC-10: A layer edited with `--fork` changes only the forking
+- [x] ISC-10: A layer edited with `--fork` changes only the forking
   composition.
   Probe: after the fork edit, A's render is byte-identical to before. bash
-- [ ] ISC-11: Editing a layer with more than one referrer without an explicit
+- [x] ISC-11: Editing a layer with more than one referrer without an explicit
   `--fork` or `--in-place` fails and names how many compositions are affected.
   Probe: the error text carries the referrer count. bash
-- [ ] ISC-12: Editing a layer with exactly one referrer succeeds with no
+- [x] ISC-12: Editing a layer with exactly one referrer succeeds with no
   ceremony.
   Probe: the edit needs no flag and emits no warning. bash
-- [ ] ISC-13: A composition built from a composition that was itself built from
+- [x] ISC-13: A composition built from a composition that was itself built from
   another renders correctly.
   Probe: an A→B→C chain renders. bash
-- [ ] ISC-14: A shipped render is exactly reproducible from its manifest after
+- [x] ISC-14: A shipped render is exactly reproducible from its manifest after
   its source layers have since changed.
   Probe: render, edit a source layer in place, rerender from the manifest;
   output matches the original. bash
@@ -143,7 +143,7 @@ Why: reuse without regeneration is the premise the whole tool rests on.
 
 Why: one primitive, or the modularity claim collapses.
 
-- [ ] ISC-15: A new layer is local to its composition and creates no library
+- [x] ISC-15: A new layer is local to its composition and creates no library
   entry.
   Probe: add a layer; the shared library is unchanged. bash
 - [ ] ISC-16: Promoting a layer to the shared library is an explicit
@@ -229,8 +229,9 @@ The checkout is `projects/tools/ply` and the repository is `kenneth-liao/ply`.
 is recorded in [ADR-0013](docs/adr/0013-project-scoped-layer-sharing.md): a
 caller-selected Project is the live-sharing boundary, stable layer IDs survive
 in-place edits, local names address uses, and immutable revisions pin renders.
-Cross-project imports are independent copies. This resolves the addressing
-blocker for ISC-9 through ISC-12; it does not mark those claims implemented.
+Cross-project imports are independent copies. This resolved the addressing
+blocker for ISC-9 through ISC-12; subsequent implementation evidence is recorded
+under Verification.
 
 **2026-09-07 — refined: the destination is a general composer, not a thumbnail
 tool.** The canvas becomes arbitrary and YouTube becomes one thing Ply can
@@ -301,3 +302,26 @@ refuted-by: the A/B case — varying one layer of a reused base is impossible on
 learned: reuse must preserve individual layer addressability; a composition is a list of layer references, not a node that gets baked
 criterion-now: ISC-5 (anti-flatten), ISC-7 and ISC-8 (import brings layers in individually and they stay movable)
 ```
+
+## Verification
+
+Foundation probes below passed in separate `bun test --isolate <file>` invocations
+on 2026-09-08 at `637cb17`; [spec #77's acceptance audit](https://github.com/kenneth-liao/ply/issues/77)
+records the integrated delivery evidence. These closures concern the new
+Composition model, not retirement of the legacy Scene surface. Whole-product
+ISC-2/3/4/17–23/27 remain open; ISC-16's explicit promotion is not implemented.
+
+- ISC-1: `test/composition-render.test.ts` — exact 1080×1080 and 2560×1440 output.
+- ISC-5: `test/composition-import.test.ts` — individual shared IDs without baking; transitive import.
+- ISC-6: `test/composition.test.ts`; `src/composition.ts` — ordered named Layer references; canvas/schema metadata adds no visual primitive (#77 US-002).
+- ISC-7: `test/composition-import.test.ts` — subsetting imported uses without altering A.
+- ISC-8: `test/composition-import.test.ts` — interleaving B's uses between imported Layers.
+- ISC-9: `test/layer-edit.test.ts`; `test/composition-import.test.ts` — visible shared in-place propagation.
+- ISC-10: `test/layer-fork.test.ts` — selected-use fork leaves other Compositions byte-identical.
+- ISC-11: `test/layer-edit.test.ts` — ambiguous edit refusal names referrers and count.
+- ISC-12: `test/layer-edit.test.ts` — single-referrer edit needs no intent flag.
+- ISC-13: `test/composition-import.test.ts` — A → B → C renders with individual Layer addressability.
+- ISC-14: `test/render-history.test.ts` — byte-identical replay after edits and relocation, within the recorded rendering environment.
+- ISC-15: `test/composition.test.ts`; #77 acceptance audit US-002 — Project-local publication, no implicit library entry.
+- ISC-24/25/26: `693bc03` — authoring skill, superseding ADRs, and target glossary preparation.
+- ISC-28: #77 acceptance audit DEC-005 — prior logo export retained in the consuming repository's history.
