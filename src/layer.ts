@@ -335,24 +335,63 @@ export async function readLayerInternalFull(
   }
 
   const revHash = identity.currentRevision;
+  const resolved = await readRevisionInternalFull(resolvedRoot, layerId, revHash);
+  return {
+    id: identity.id,
+    createdAt: identity.createdAt,
+    currentRevisionId: revHash,
+    currentRevision: resolved.revision,
+    contentBytes: resolved.contentBytes,
+  };
+}
+
+/**
+ * Resolve a pinned revision of a Layer by identity and revision id, without
+ * consulting the Layer identity document (#87). This is the one canonical
+ * revision-resolution site: the revision document is validated, hash-verified,
+ * and its retained content blob is read and hash-verified here exactly once —
+ * the same validation `readLayerInternalFull` performs for current revisions.
+ * Historical replay (render manifests, #87) resolves through this reader, so
+ * it never depends on current Layer pointers or Composition documents.
+ *
+ * Both pinned identifiers are strictly validated BEFORE any filesystem path
+ * is constructed. Callers must hold the Project lock.
+ */
+export async function readRevisionInternalFull(
+  projectPath: string,
+  layerId: string,
+  revisionId: string,
+): Promise<{ revision: ResolvedLayerRevision; contentBytes: Buffer }> {
+  if (!/^layer_[a-zA-Z0-9_]+$/.test(layerId)) {
+    throw new Error(`Invalid Layer identity "${layerId}".`);
+  }
+  if (!/^rev_[0-9a-f]{16}$/.test(revisionId)) {
+    throw new Error(`Invalid revision id "${revisionId}" for layer "${layerId}".`);
+  }
+  const resolvedRoot = path.resolve(projectPath);
   const revDir = path.join(resolvedRoot, "layers", `${layerId}.revisions`);
-  const revFile = path.join(revDir, `${revHash}.json`);
+  const revFile = path.join(revDir, `${revisionId}.json`);
 
   if (outsideDir(resolvedRoot, revFile)) {
     throw new Error(`Security error: revision path for layer "${layerId}" escapes project boundary.`);
   }
 
+  // Existence first: a missing revision gets its clear actionable failure,
+  // never a raw filesystem error. Only an existing file is judged by its
+  // resolved location, so an escaping alias is still refused.
+  try {
+    await lstat(revFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Revision "${revisionId}" for layer "${layerId}" not found in project.`);
+    }
+    throw err;
+  }
   if (await escapesDirReal(resolvedRoot, revFile)) {
     throw new Error(`Security error: revision for layer "${layerId}" escapes project boundary.`);
   }
 
-  let revRaw: string;
-  try {
-    revRaw = await readFile(revFile, "utf8");
-  } catch {
-    throw new Error(`Current revision "${revHash}" for layer "${layerId}" not found.`);
-  }
-
+  const revRaw = await readFile(revFile, "utf8");
 
   let revision: LayerRevision;
   try {
@@ -374,18 +413,18 @@ export async function readLayerInternalFull(
   }
   if (revision.layerId !== layerId) {
     throw new Error(
-      `Malformed revision document "${revHash}" for layer "${layerId}": layerId "${revision.layerId}" does not match.`,
+      `Malformed revision document "${revisionId}" for layer "${layerId}": layerId "${revision.layerId}" does not match.`,
     );
   }
   const storedKind = (revision as { kind?: unknown }).kind;
   if (storedKind !== "image" && storedKind !== "text") {
     throw new Error(
-      `Malformed revision document "${revHash}" for layer "${layerId}": unsupported kind "${String(storedKind)}".`,
+      `Malformed revision document "${revisionId}" for layer "${layerId}": unsupported kind "${String(storedKind)}".`,
     );
   }
   if (typeof revision.contentHash !== "string" || !/^[0-9a-f]{64}$/.test(revision.contentHash)) {
     throw new Error(
-      `Malformed revision document "${revHash}" for layer "${layerId}": contentHash is not a sha-256 digest.`,
+      `Malformed revision document "${revisionId}" for layer "${layerId}": contentHash is not a sha-256 digest.`,
     );
   }
   if (revision.kind === "text") {
@@ -395,28 +434,37 @@ export async function readLayerInternalFull(
   }
   if (!Number.isFinite(revision.x) || !Number.isFinite(revision.y)) {
     throw new Error(
-      `Malformed revision document "${revHash}" for layer "${layerId}": x and y must be finite numbers.`,
+      `Malformed revision document "${revisionId}" for layer "${layerId}": x and y must be finite numbers.`,
     );
   }
   if (!Number.isFinite(revision.opacity) || revision.opacity < 0 || revision.opacity > 1) {
     throw new Error(
-      `Malformed revision document "${revHash}" for layer "${layerId}": opacity must be a finite number between 0 and 1.`,
+      `Malformed revision document "${revisionId}" for layer "${layerId}": opacity must be a finite number between 0 and 1.`,
     );
   }
 
-  // The stored document must hash to exactly the revision the identity points at
-  if (computeRevisionHash(revision) !== revHash) {
+  // The stored document must hash to exactly the pinned revision id
+  if (computeRevisionHash(revision) !== revisionId) {
     throw new Error(
-      `Corrupted revision document "${revHash}" for layer "${layerId}": contents do not match the revision hash.`,
+      `Corrupted revision document "${revisionId}" for layer "${layerId}": contents do not match the revision hash.`,
     );
   }
 
-  // Read and verify content blob
+  // Read and verify content blob — existence first, then the resolved-location
+  // gate, then the bytes (missing stays a clear failure, never raw ENOENT).
   const contentBlob = path.join(resolvedRoot, "content", revision.contentHash);
   if (outsideDir(resolvedRoot, contentBlob)) {
     throw new Error(`Security error: content blob escapes project boundary.`);
   }
 
+  try {
+    await lstat(contentBlob);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
+    }
+    throw err;
+  }
   if (await escapesDirReal(resolvedRoot, contentBlob)) {
     throw new Error(`Security error: content blob for layer "${layerId}" escapes project boundary.`);
   }
@@ -427,7 +475,6 @@ export async function readLayerInternalFull(
   } catch {
     throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
   }
-
 
   // Retained bytes must still hash to the content identity the revision pins
   const actualHash = createHash("sha256").update(contentBytes).digest("hex");
@@ -441,7 +488,7 @@ export async function readLayerInternalFull(
   // pass, kind-specific projection. Image revisions derive intrinsic raster
   // facts from the verified bytes; text revisions carry their facts in the
   // hash-covered revision document and pin the retained font bytes.
-  const currentRevision: ResolvedLayerRevision =
+  const resolved: ResolvedLayerRevision =
     revision.kind === "image"
       ? (() => {
           const meta = readRasterMeta(contentBytes, contentBlob);
@@ -450,7 +497,7 @@ export async function readLayerInternalFull(
           }
           return {
             schemaVersion: revision.schemaVersion,
-            revisionId: revHash,
+            revisionId,
             layerId: revision.layerId,
             createdAt: revision.createdAt,
             kind: revision.kind,
@@ -466,7 +513,7 @@ export async function readLayerInternalFull(
         })()
       : {
           schemaVersion: revision.schemaVersion,
-          revisionId: revHash,
+          revisionId,
           layerId: revision.layerId,
           createdAt: revision.createdAt,
           kind: revision.kind,
@@ -480,13 +527,7 @@ export async function readLayerInternalFull(
           fontBytes: contentBytes.length,
         };
 
-  return {
-    id: identity.id,
-    createdAt: identity.createdAt,
-    currentRevisionId: revHash,
-    currentRevision,
-    contentBytes,
-  };
+  return { revision: resolved, contentBytes };
 }
 
 /** Unlocked internal reader for Layer identity and its active revision. Callers must hold the Project lock. */

@@ -15,7 +15,7 @@ import {
   type ResolvedComposition,
   type ResolvedCompositionLayer,
 } from "./composition.js";
-import { renderComposition } from "./composition-render.js";
+import { renderComposition, replayRender } from "./composition-render.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
 const HELP = `
@@ -53,9 +53,19 @@ composition — Composition authoring and inspection
       Inspect a Composition's canvas and ordered Layers
 
   bun run ply composition render <name> [options]
-      Render a Composition to a PNG at its exact canvas dimensions
-      (default: a fresh file under the Project's renders/; --out exports
-      to a caller-chosen path outside the Project)
+      Render a Composition to a PNG at its exact canvas dimensions and
+      capture a retained Render manifest under the Project's renders/
+      (default: a fresh file under renders/; --out exports the PNG elsewhere,
+      history is always kept in renders/)
+
+  bun run ply composition replay <manifest-path> [options]
+      Replay a retained Render manifest: regenerate the Render's pixels
+      byte-identically from its pinned historical inputs, independent of
+      current Layer revisions and Composition documents. Requires the exact
+      rendering environment that captured the manifest (tool, runtime,
+      platform, browser); an unsupported environment fails before any output.
+      Works after Project relocation, without the original source files, and
+      without the original PNG
 
   bun run ply composition list [options]
       List all Compositions in the Project
@@ -73,10 +83,11 @@ Options:
   --font-size <num>     Font size in px for text Layers (default: 48)
   --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
   --order <names>       Comma-separated permutation of use names (required for reorder)
-  --out <path>          Export path for render; fresh in-Project paths with an
-                        existing parent (except reserved storage) or any path
-                        outside the Project (existing Project state is never
-                        exported over)
+  --out <path>          Export path for a render or replay; fresh in-Project
+                        paths with an existing parent (except reserved storage)
+                        or any path outside the Project (existing Project
+                        state is never exported over). Render history always
+                        stays under the Project's renders/
   --x <num>             X position on canvas (default: 0)
   --y <num>             Y position on canvas (default: 0)
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)
@@ -439,11 +450,37 @@ async function run() {
           { ok: true, render },
           isJson,
           () => {
-            console.log(`Rendered Composition "${render.name}" at ${render.width}\u00d7${render.height} \u2192 ${render.output}`);
+            console.log(`Rendered Composition "${render.name}" at ${render.width}\u00d7${render.height} \u2192 ${render.output} (manifest: ${render.manifest})`);
           },
         );
       } catch (err) {
         teardownOutcome = "No rendered PNG was written; no output was published.";
+        emitRender({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
+    } else if (command === "replay") {
+      const manifestPath = positionals[1];
+      if (!manifestPath) {
+        emitRender({ ok: false, error: "Usage: ply composition replay <manifest-path> [--out <path>]" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      try {
+        const replay = await replayRender(targetProj, manifestPath, { out: values.out });
+        // The output is on disk before the browser teardown runs; if teardown
+        // fails, the caller must hear exactly that.
+        teardownOutcome = `The replayed PNG was already written to ${replay.output}. Do not re-replay to recover it.`;
+        emitRender(
+          { ok: true, replay },
+          isJson,
+          () => {
+            console.log(
+              `Replayed Composition "${replay.name}" from its retained history \u2192 ${replay.output} (manifest: ${replay.manifest})`,
+            );
+          },
+        );
+      } catch (err) {
+        teardownOutcome = "No replayed PNG was written; no output was published.";
         emitRender({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
@@ -465,7 +502,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, render, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, render, replay, list. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }

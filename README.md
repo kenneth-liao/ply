@@ -2,8 +2,12 @@
 
 Ply is becoming a general-purpose layered image composer.
 [ISA.md](ISA.md) defines the destination; [CONTEXT.md](CONTEXT.md) defines its
-accepted vocabulary. Project-scoped sharing and the new edit/compose/generate
-modules are **not implemented yet**.
+accepted vocabulary. The first delivery of the composer foundation (spec #77)
+is in progress and partially merged: self-contained Projects, independently
+editable Layers and Compositions, and replayable Render history are
+implemented; integrated relocation/offline qualification, generation
+unification, and the matting/region-gate migration are still open, and the
+spec remains open until its acceptance audit.
 
 ## Current implementation
 
@@ -26,6 +30,30 @@ The normal workflow is:
 
 The legacy terms and commands below describe what runs today, not the target
 glossary. Architectural decisions are in [docs/adr/](docs/adr/).
+
+## Projects and Compositions (new surface)
+
+The composer workflow runs through `ply project`, `ply composition`, and
+`ply layer` — see `ply <module> --help` and
+[docs/project-storage-contract.md](docs/project-storage-contract.md) for the
+full contracts. In brief:
+
+```bash
+ply project init ~/projects/my-poster
+ply composition create poster --width 1080 --height 1080 -p ~/projects/my-poster
+ply composition add poster headline --text "Hello" --font Anton -p ~/projects/my-poster
+ply composition render poster -p ~/projects/my-poster
+# Every successful render retains a manifest under the Project's renders/:
+ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster
+```
+
+A render manifest pins the exact ordered Layer revisions, canvas, and
+rendering-environment identity used for that paint. Replay regenerates the
+pixels byte-identically from those pinned inputs — after source Layers are
+edited, uses are removed or reordered, the Project is relocated, or the
+original source files and the rendered PNG are gone — and refuses missing,
+corrupted, or malformed history, or a different rendering environment,
+instead of silently substituting content.
 
 ## Setup
 
