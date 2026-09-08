@@ -913,3 +913,51 @@ test("stored document and content containment is checked before reading escaped 
     }
   }
 });
+
+test("CLI teardown failure reports operational failure without retrying committed publication", async () => {
+  const project = path.join(tempDir, "teardown");
+  await invoke(["project", "init", project, "--json"]);
+  await invoke(["composition", "create", "c", "--width", "10", "--height", "10", "--project", project, "--json"]);
+  const img = path.join(tempDir, "teardown.png");
+  await writeFile(img, createSolidPng(10, 10));
+  const preload = path.join(tempDir, "fail-close.ts");
+  // Exercise the shared browser's real failure-injection seam, then reclaim
+  // this test's browser before propagating the simulated lifecycle failure.
+  await writeFile(preload, `
+    import { mock } from "bun:test";
+    import * as browser from ${JSON.stringify(path.resolve(import.meta.dir, "../src/browser.ts"))};
+    const original = { ...browser };
+    mock.module(${JSON.stringify(path.resolve(import.meta.dir, "../src/browser.ts"))}, () => ({ ...original,
+      closeBrowser: async () => {
+        await original.getBrowser();
+        try {
+          await original.shutdownShared(async () => { throw new Error("injected connected-browser shutdown failure"); });
+        } finally { await original.closeBrowser(); }
+      }
+    }));
+  `);
+  async function failingCleanup(module: string, args: string[]) {
+    const proc = Bun.spawn([process.execPath, "--preload", preload, path.resolve(import.meta.dir, `../src/${module}-cli.ts`), ...args, "--project", project], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, code };
+  }
+  const added = await failingCleanup("composition", ["add", "c", "n", "--image", img, "--json"]);
+  expect(added.code).toBe(1);
+  const result = JSON.parse(added.stdout);
+  expect(result.ok).toBe(true);
+  expect(added.stderr).toContain("injected connected-browser shutdown failure");
+  expect(added.stderr).toMatch(/already committed/i);
+  expect(added.stderr).toMatch(/do not retry/i);
+  const inspected = JSON.parse((await invoke(["composition", "inspect", "c", "--project", project, "--json"])).stdout);
+  expect(inspected.composition.layers.map((l: { layerId: string }) => l.layerId)).toEqual([result.use.layerId]);
+  expect((await readdir(path.join(project, "layers"))).filter(f => f.endsWith(".json"))).toEqual([`${result.use.layerId}.json`]);
+  const listed = await failingCleanup("layer", ["list", "--json"]);
+  expect(listed.code).toBe(1);
+  expect(JSON.parse(listed.stdout).layers).toHaveLength(1);
+  expect(listed.stderr).toMatch(/browser.*shutdown|teardown/i);
+  expect(listed.stderr).not.toMatch(/already committed/i);
+  const textResult = await failingCleanup("composition", ["create", "text", "--width", "10", "--height", "10"]);
+  expect(textResult.code).toBe(1);
+  expect(textResult.stdout).toContain('Created Composition "text"');
+  expect(textResult.stderr).toMatch(/already committed/i);
+}, 15000);

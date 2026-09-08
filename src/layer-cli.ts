@@ -3,7 +3,7 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { inspectLayer, listLayers, type ResolvedLayer } from "./layer.js";
-import { closeBrowser } from "./browser.js";
+import { closeCliBrowser } from "./cli-browser.js";
 
 const HELP = `
 layer — Layer inspection within a Project
@@ -127,7 +127,7 @@ async function run() {
       process.exitCode = 2;
     }
   } finally {
-    await closeBrowser().catch(() => {});
+    await closeCliBrowser();
   }
 }
 

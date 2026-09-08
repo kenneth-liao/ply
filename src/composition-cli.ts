@@ -9,7 +9,7 @@ import {
   listCompositions,
   type ResolvedComposition,
 } from "./composition.js";
-import { closeBrowser } from "./browser.js";
+import { closeCliBrowser } from "./cli-browser.js";
 
 const HELP = `
 composition — Composition authoring and inspection
@@ -104,6 +104,7 @@ const command = positionals[0]!;
 const targetProj = values.project ?? process.cwd();
 
 async function run() {
+  let mutationCommitted = false;
   try {
     if (command === "create") {
       const name = positionals[1];
@@ -130,6 +131,7 @@ async function run() {
 
       try {
         const composition = await createComposition(targetProj, name, { width, height });
+        mutationCommitted = true;
         output(
           { ok: true, composition },
           isJson,
@@ -172,6 +174,7 @@ async function run() {
 
       try {
         const res = await addLayerToComposition(targetProj, compName, localName, values.image, { x, y, opacity });
+        mutationCommitted = true;
         output(
           { ok: true, composition: res.composition, use: res.use, layer: res.layer },
           isJson,
@@ -238,7 +241,7 @@ async function run() {
       process.exitCode = 2;
     }
   } finally {
-    await closeBrowser().catch(() => {});
+    await closeCliBrowser(mutationCommitted);
   }
 }
 

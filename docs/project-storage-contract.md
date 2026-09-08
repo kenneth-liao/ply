@@ -163,8 +163,21 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
 4. Stage immutable revision in `layers/<layer-id>.revisions/<revision-hash>.json` (atomic create).
 5. Stage Layer identity in `layers/<layer-id>.json` (atomic create), then fully resolve the staged Layer before the live commit. Resolution failure follows the same rollback path.
 6. **Live Commit Point**: Update `compositions/<name>.json` with `{ name: localName, layerId }` via `atomicReplace`.
-7. **Rollback**: If any failure occurs prior to step 6, delete staged `layers/<layer-id>.json` and revision file (removing the revision directory if it is now empty). The composition remains unchanged and no live reference is published; the immutable content blob is retained for deduplication.
-8. Release Project Lock.
+7. **Caught-error cleanup**: If an error reaches the staging catch before step 6 completes, attempt to delete the staged identity and revision and remove the empty revision directory. This cleanup is best-effort: deletion errors are ignored, so artifacts may remain. The Composition reference is not published when replacement fails; immutable content is retained for deduplication.
+8. Release Project Lock in the normal `finally` path. Release is also best-effort; it is not guaranteed after abrupt termination.
+
+### Interrupted operations and operator recovery
+
+This protocol provides atomic Composition replacement and serialization among cooperating Ply processes, not crash rollback. Abrupt termination (for example, SIGKILL or process/host failure) bypasses catch/finally cleanup. An interruption after identity staging and before replacement can leave an unreferenced identity, its revision, retained content, temporary files, and a stale `.ply.lock`. Once the lock is manually removed, Layer listing and Project counts can expose that unreferenced identity. An interruption after replacement may instead leave a committed use; a missing success response does not establish failure. The controlled staging test proves reader serialization under normal completion, not recovery after a crash.
+
+For recovery:
+
+1. Confirm the owning command and every writer for this Project have stopped. Do not remove a lock merely because it is old or a wait timed out; inspect its PID and verify ownership/liveness. Copy the Project for recovery before changing files.
+2. Inspect the stored Composition documents to establish whether the intended use was committed. Preserve all referenced identities, revisions, and content, including inputs retained by Render history. Do not retry an add merely because its command exited unsuccessfully or produced no response.
+3. Residual unreferenced identities/revisions and temporary files are not automatically reconciled. Leave uncertain artifacts intact. Quarantine or remove artifacts only after establishing that they belong to the interrupted operation and are not required by any Composition or retained history; this is operator work, not a Ply garbage-collection or recovery command.
+4. After confirming there is no active owner, remove the stale `.ply.lock` manually. Inspect the Project and its Compositions/Layers through the CLI to verify resolution before further mutations. If resolution fails, investigate the retained files or restore the recovery copy rather than substituting content or blindly retrying.
+
+Atomic helpers do not `fsync` files or directories. Atomic visibility does not guarantee persistence or write ordering across power loss; this protocol provides no power-loss durability guarantee or crash journal.
 
 ---
 
@@ -183,5 +196,5 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 
 ### Status & Error Codes:
 - **0**: Success.
-- **1**: Runtime error (missing project, invalid image, duplicate name, etc.). Structured error JSON in `--json` mode.
+- **1**: Runtime error (missing project, invalid image, duplicate name, etc.). Structured error JSON in `--json` mode. Browser teardown failure also exits with status 1: the already-emitted command result remains unchanged on stdout (including valid JSON in `--json` mode), while stderr reports the separate lifecycle failure and recovery guidance. For a successful mutation the diagnostic explicitly says it is already committed and must not be retried; teardown failure does not trigger rollback or mutation retry. Consumers must check exit status and stderr as well as the command-result JSON's `ok` field.
 - **2**: Usage error / malformed flags / missing required options. Structured error JSON in `--json` mode.

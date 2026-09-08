@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Report Composition and Layer CLI browser teardown failures without retrying committed mutations; clarify interrupted-operation recovery guarantees (#90).
+
 ### Removed
 
 - Removed the deprecated `thumb` command and its specialized renderer, styles, overlays, tests, and examples. Scene composition is now the only rendering path.
