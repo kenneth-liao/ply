@@ -203,7 +203,12 @@ export interface AddLayerOptions {
   opacity?: number;
 }
 
-function sanitizeName(name: string): string {
+/**
+ * The one name rule for Project-visible names (Compositions, Layers, uses):
+ * nonempty, alphanumeric, dash, underscore. Render manifests reuse it so a
+ * stored composition name is always a safe single path component (CRAFT-1).
+ */
+export function sanitizeName(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) {
     throw new Error("Name cannot be empty.");

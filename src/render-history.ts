@@ -23,6 +23,7 @@ import { readFile, lstat } from "node:fs/promises";
 import path from "node:path";
 import { toolIdentity } from "./manifest.js";
 import { readRevisionInternalFull } from "./layer.js";
+import { sanitizeName } from "./composition.js";
 import { escapesDirReal } from "./paths.js";
 import { isStoredTimestamp } from "./stored-schema.js";
 import type { SnapshotLayer, PaintEnvironment } from "./composition-paint.js";
@@ -123,6 +124,22 @@ export function parseRenderManifest(raw: string): RenderManifestDocument {
     );
   }
   nonemptyString(m.composition, "composition");
+  // The composition name becomes a path component of the default replay
+  // destination (renders/<name>-<id>.png), so it must obey the one name rule
+  // shared with creation — a mutated manifest can never escape renders/ (CRAFT-1).
+  let compositionName: string;
+  try {
+    compositionName = sanitizeName(m.composition);
+  } catch (err) {
+    throw new Error(
+      `Malformed render manifest: "composition" ${JSON.stringify(m.composition)} is not a valid Composition name — ${(err as Error).message}`,
+    );
+  }
+  if (compositionName !== m.composition) {
+    throw new Error(
+      `Malformed render manifest: "composition" ${JSON.stringify(m.composition)} is not a valid Composition name.`,
+    );
+  }
   if (
     !m.canvas ||
     typeof m.canvas !== "object" ||

@@ -85,14 +85,6 @@ async function renderJson(name: string, extra: string[] = []) {
   return json as RenderInvocation["json"];
 }
 
-/** The single manifest stored under the Project's renders/ directory. */
-async function readSoleManifest(): Promise<Record<string, any>> {
-  const entries = await readdir(path.join(projDir, "renders"));
-  const manifests = entries.filter((f) => f.endsWith(".manifest.json"));
-  expect(manifests).toHaveLength(1);
-  return JSON.parse(await readFile(path.join(projDir, "renders", manifests[0]!), "utf8"));
-}
-
 // ---------------------------------------------------------------------------
 // Slice 1 — capture
 // ---------------------------------------------------------------------------
@@ -132,7 +124,6 @@ test("default render captures a manifest beside the PNG pinning revisions, canva
   // `output` is informational, project-relative, never an absolute path; the
   // createdAt timestamp is canonical ISO.
   expect(manifest.output).toMatch(/^renders\/poster-.+\.png$/);
-  expect(new Date(manifest.createdAt).toISOString()).toBe(manifest.createdAt);
   expect(new Date(manifest.createdAt).toISOString()).toBe(manifest.createdAt);
 });
 
@@ -329,11 +320,11 @@ test("replay survives Project relocation and deletion of external source files",
   expect(replayed.equals(fx.originalPng)).toBe(true);
 });
 
-test("replay works when the original PNG is gone", async () => {
+test("replay is deterministic — two replays of the same manifest are byte-identical", async () => {
   const fx = await setupHistoryFixture();
   const { res, json } = await replayJson(fx.manifestPath);
   expect(res.code).toBe(0);
-  // Delete the original output; a replayed replay must still regenerate it.
+  // A second replay regenerates the same pixels from the same pinned history.
   const rmRes = await invoke(["composition", "replay", fx.manifestPath, "--project", projDir, "--json"]);
   expect(rmRes.code).toBe(0);
   const replayed = await readFile(JSON.parse(rmRes.stdout).replay.output);
@@ -505,6 +496,33 @@ test("an unsupported rendering environment is rejected before any output", async
   expect((await readdir(path.join(projDir, "renders"))).length).toBe(before);
 });
 
+test("a mutated composition name cannot escape the default replay destination (CRAFT-1)", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  m.composition = "../compositions/evil";
+  const p = path.join(projDir, "renders", "evil-name.manifest.json");
+  await writeFile(p, JSON.stringify(m, null, 2));
+  const { res } = await replayJson(p);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("not a valid Composition name");
+  // Nothing was written outside renders/ — the live Composition store is intact.
+  const inspect = await invoke(["composition", "inspect", "hist", "--project", projDir, "--json"]);
+  expect(inspect.code).toBe(0);
+});
+
+test("replay applies the same canvas caps as render before painting (CRAFT-2)", async () => {
+  const fx = await setupHistoryFixture();
+  const m = JSON.parse(await readFile(fx.manifestPath, "utf8"));
+  m.canvas = { width: 99999, height: 99999 };
+  const p = path.join(projDir, "renders", "huge.manifest.json");
+  await writeFile(p, JSON.stringify(m, null, 2));
+  const before = (await readdir(path.join(projDir, "renders"))).length;
+  const { res } = await replayJson(p);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("the render limit is");
+  expect((await readdir(path.join(projDir, "renders"))).length).toBe(before);
+});
+
 test("replay works when the original PNG is gone", async () => {
   const fx = await setupHistoryFixture();
   await rm(fx.manifestPath.replace(/\.manifest\.json$/, ".png"));
@@ -654,6 +672,40 @@ test("injected output-publication failure cleans the freshly created manifest", 
   expect(out.ok).toBe(false);
   // The freshly created manifest was removed; nothing preexisting was touched.
   expect(await readdir(path.join(projDir, "renders"))).toEqual([]);
+});
+
+test("injected replay output-publication failure cleans the freshly created manifest", async () => {
+  const fx = await setupHistoryFixture();
+  const before = await readdir(path.join(projDir, "renders"));
+
+  const preload = path.join(tempDir, "replay-png-fail.ts");
+  await writeFile(
+    preload,
+    `
+    import { mock } from "bun:test";
+    import * as lock from ${JSON.stringify(lockModule)};
+    const original = { ...lock };
+    mock.module(${JSON.stringify(lockModule)}, () => ({
+      ...original,
+      atomicCreate: async (file: string, content: Buffer | string) => {
+        if (file.endsWith(".png")) {
+          throw new Error("injected replay output publication failure");
+        }
+        return original.atomicCreate(file, content);
+      },
+    }));
+    `,
+  );
+
+  const proc = invokePreloaded(preload, ["replay", fx.manifestPath, "--project", projDir, "--json"]);
+  expect(await proc.exited).toBe(1);
+  const out = JSON.parse(await new Response(proc.stdout).text());
+  expect(out.ok).toBe(false);
+  expect(out.error).toContain("injected replay output publication failure");
+  // The freshly created replay manifest was removed; the preexisting render
+  // history (original PNG + manifest) is untouched.
+  const after = await readdir(path.join(projDir, "renders"));
+  expect(after).toEqual(before);
 });
 
 test("injected external-export failure cleans owned history and leaves the external file untouched", async () => {

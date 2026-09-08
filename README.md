@@ -2,10 +2,12 @@
 
 Ply is becoming a general-purpose layered image composer.
 [ISA.md](ISA.md) defines the destination; [CONTEXT.md](CONTEXT.md) defines its
-accepted vocabulary. The composer foundation — self-contained Projects,
-independently editable Layers and Compositions, and replayable Render history —
-is implemented (spec #77). Generation unification, matting/region-gate
-migration, and the remaining composer surface are still open.
+accepted vocabulary. The first delivery of the composer foundation (spec #77)
+is in progress and partially merged: self-contained Projects, independently
+editable Layers and Compositions, and replayable Render history are
+implemented; integrated relocation/offline qualification, generation
+unification, and the matting/region-gate migration are still open, and the
+spec remains open until its acceptance audit.
 
 ## Current implementation
 

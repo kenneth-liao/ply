@@ -126,6 +126,8 @@ export async function renderComposition(
       layers.push(toSnapshotLayer(use));
     }
 
+    assertRenderableCanvas(comp.canvas, comp.name);
+
     const destination = options.out
       ? await resolveExportTarget(resolvedRoot, options.out)
       : await defaultRenderDestination(resolvedRoot, comp.name);
@@ -145,31 +147,7 @@ export async function renderComposition(
     snapshot.destination.informationalOutput,
   );
 
-  // Owned render history is published before the final output, so a
-  // successful Render always reports both. Output-publication failure removes
-  // the freshly created manifest (O_EXCL: this render's own file — a
-  // preexisting or concurrent winner is never deleted).
-  await atomicCreate(snapshot.destination.manifest, JSON.stringify(manifest, null, 2) + "\n");
-  try {
-    if (snapshot.destination.mode === "create") {
-      // Fresh destination (the default renders/ path, or a fresh in-Project
-      // export): O_EXCL creation. A concurrent render racing the same fresh
-      // path loses loudly here instead of silently replacing the winner's
-      // output; the loser publishes nothing and its history is removed.
-      await atomicCreate(snapshot.destination.path, png);
-    } else {
-      // External export: destination-entry atomic replacement — write a temp
-      // file in the destination directory and rename it over the target. The
-      // rename swaps the directory entry — it never writes through the
-      // target's inode, so an external hardlink alias onto Project state
-      // (e.g. ply.json) keeps its original bytes. atomicReplace cleans up the
-      // temp file on failure.
-      await atomicReplace(snapshot.destination.path, png);
-    }
-  } catch (err) {
-    await unlink(snapshot.destination.manifest).catch(() => {});
-    throw err;
-  }
+  await publishRender(png, manifest, snapshot.destination);
 
   return {
     name: snapshot.comp.name,
@@ -178,6 +156,63 @@ export async function renderComposition(
     output: snapshot.destination.path,
     manifest: snapshot.destination.manifest,
   };
+}
+
+/**
+ * Render caps shared by current rendering and historical replay: a manifest's
+ * recorded canvas is untrusted input, so replay applies the exact limits the
+ * render boundary enforces before painting anything (CRAFT-2).
+ */
+function assertRenderableCanvas(canvas: { width: number; height: number }, name: string): void {
+  const { width, height } = canvas;
+  if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+    throw new Error(
+      `Invalid canvas dimensions ${width}×${height} for Composition "${name}": ` +
+        `the render limit is ${MAX_DIMENSION}px per axis.`,
+    );
+  }
+  if (width * height > MAX_PIXELS) {
+    throw new Error(
+      `Invalid canvas dimensions ${width}×${height} for Composition "${name}": ` +
+        `the render limit is ${MAX_PIXELS.toLocaleString("en-US")} pixels.`,
+    );
+  }
+}
+
+/**
+ * The one publication path for render history and output, shared by render
+ * and replay: owned history is created (O_EXCL) before the PNG is published,
+ * so a successful render always reports both; output-publication failure
+ * removes only the freshly created manifest — never a preexisting or
+ * concurrently-winning file. No multi-file atomicity across a crash is
+ * promised (documented in the storage contract).
+ */
+async function publishRender(
+  png: Buffer,
+  manifest: RenderManifestDocument,
+  destination: ExportTarget,
+): Promise<void> {
+  await atomicCreate(destination.manifest, JSON.stringify(manifest, null, 2) + "\n");
+  try {
+    if (destination.mode === "create") {
+      // Fresh destination (the default renders/ path, or a fresh in-Project
+      // export): O_EXCL creation. A concurrent render racing the same fresh
+      // path loses loudly here instead of silently replacing the winner's
+      // output; the loser publishes nothing and its history is removed.
+      await atomicCreate(destination.path, png);
+    } else {
+      // External export: destination-entry atomic replacement — write a temp
+      // file in the destination directory and rename it over the target. The
+      // rename swaps the directory entry — it never writes through the
+      // target's inode, so an external hardlink alias onto Project state
+      // (e.g. ply.json) keeps its original bytes. atomicReplace cleans up the
+      // temp file on failure.
+      await atomicReplace(destination.path, png);
+    }
+  } catch (err) {
+    await unlink(destination.manifest).catch(() => {});
+    throw err;
+  }
 }
 
 export interface ReplayRenderOptions extends RenderCompositionOptions {
@@ -222,6 +257,10 @@ export async function replayRender(
   // resolved exactly once. Painting never re-reads Project state.
   const layers = await withProjectLock(resolvedRoot, () => resolveHistoricalLayers(resolvedRoot, manifest));
 
+  // A manifest's canvas is untrusted input: apply the same render caps as the
+  // render boundary before any paint (CRAFT-2).
+  assertRenderableCanvas(manifest.canvas, manifest.composition);
+
   const { png, environment } = await paintComposition(manifest.canvas, layers, { page: options.page });
   // Reject an unsupported environment before any output is published.
   verifyEnvironmentMatch(manifest.environment, environment);
@@ -236,17 +275,7 @@ export async function replayRender(
     destination.informationalOutput,
   );
 
-  await atomicCreate(destination.manifest, JSON.stringify(replayedManifest, null, 2) + "\n");
-  try {
-    if (destination.mode === "create") {
-      await atomicCreate(destination.path, png);
-    } else {
-      await atomicReplace(destination.path, png);
-    }
-  } catch (err) {
-    await unlink(destination.manifest).catch(() => {});
-    throw err;
-  }
+  await publishRender(png, replayedManifest, destination);
 
   return {
     name: manifest.composition,

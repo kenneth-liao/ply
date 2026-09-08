@@ -19,7 +19,8 @@
  *
  * The same paint callback also captures the rendering-environment identity
  * (#87): the tool, runtime, platform, and the actual browser used to paint.
- * Replay requires an exact match on this identity before painting.
+ * Replay requires an exact match on this identity, checked after the paint
+ * pass and before any output is published.
  */
 import { withRenderPage } from "./browser.js";
 import { familyResolved } from "./fonts.js";
