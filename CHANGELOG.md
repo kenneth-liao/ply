@@ -18,6 +18,7 @@
 
 ### Added
 
+- Added `ply project <init|inspect>` commands and the self-contained Project storage boundary (#78, #77).
 - Added the `ply` executable over the existing scene, library, and jobs commands.
 - Added the `visual-authoring` skill before gate removal, preserving prompting, text, safe-region, and likeness-review knowledge.
 - The Scene author session saves explicitly (#62): a Save control POSTs the token-scoped `/save` route through the same arrival-order queue as geometry, re-validates the complete candidate through the ordinary gate, and atomically replaces the Scene with exactly the raw authored document — refusing a stale on-disk edit and leaving the previous Scene usable and unchanged on any failure.

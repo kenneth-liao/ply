@@ -2,6 +2,7 @@
 /** Ply's entry point delegates to the existing command surfaces unchanged. */
 import { fileURLToPath } from "node:url";
 const commands = {
+  project: "project-cli.ts",
   scene: "scene-cli.ts",
   library: "library-cli.ts",
   jobs: "job-cli.ts",
@@ -11,8 +12,9 @@ const [command, ...args] = process.argv.slice(2);
 if (!command || command === "--help" || command === "-h") {
   console.log(`Ply — local image composition
 
-Usage: ply <scene|library|jobs> <command> [options]
+Usage: ply <project|scene|library|jobs> <command> [options]
 
+  project    Create, select, and inspect self-contained Projects
   scene      Author, inspect, and render Scenes locally
   library    Inspect and maintain the current asset library
   jobs       Generate and review source images

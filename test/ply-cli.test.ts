@@ -24,7 +24,7 @@ test("ply help names only available modules", async () => {
   const result = await invoke("--help");
   expect(result.code).toBe(0);
   expect(result.stdout).toContain("Ply");
-  for (const [module, code] of [["scene", 2], ["library", 0], ["jobs", 2]] as const) {
+  for (const [module, code] of [["project", 0], ["scene", 2], ["library", 0], ["jobs", 2]] as const) {
     expect(result.stdout).toContain(module);
     // Preserve the existing surfaces: scene/jobs classify help as usage (2).
     const help = await invoke(module, "--help");

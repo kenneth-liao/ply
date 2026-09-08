@@ -1,12 +1,13 @@
 {
   "name": "ply",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "bin": { "ply": "src/cli.ts" },
   "private": true,
   "type": "module",
   "scripts": {
     "ply": "bun run src/cli.ts",
     "test": "for f in $(find test -name '*.test.ts'); do bun test --isolate \"$f\" || exit 1; done",
+    "project": "bun run src/project-cli.ts",
     "scene": "bun run src/scene-cli.ts",
     "library": "bun run src/library-cli.ts",
     "jobs": "bun run src/job-cli.ts"
