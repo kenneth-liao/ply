@@ -698,13 +698,19 @@ async function copyCrossProject(
   targetName: string,
   sourceName: string,
 ): Promise<ImportCompositionResult> {
-  // One consistent source snapshot: the canonical pre-mutation reader verifies
-  // every source reference resolves before anything else runs.
-  const { comp: sourceComp } = await readMutableComposition(srcRoot, sourceName);
+  // One consistent source snapshot through the canonical bytes-bearing reader
+  // (`readCompositionInternalFull`): the document is parsed once and every
+  // referenced source use is resolved through the canonical Layer resolver
+  // `readLayerInternalFull` (hash-verified identity, revision, and content
+  // bytes) — fail-closed on malformed or dangling source state. The source is
+  // read-only; the pre-mutation reader guards only the destination mutation
+  // boundary. Duplicate uses resolve per use; the identity map below remaps
+  // each distinct source Layer to one destination identity.
+  const sourceFull = await readCompositionInternalFull(srcRoot, sourceName);
   const { comp: targetComp, compFile: targetCompFile } = await readMutableComposition(destRoot, targetName);
 
   // Empty-source no-op: clean success with 0 imported uses, no storage churn.
-  if (sourceComp.layers.length === 0) {
+  if (sourceFull.layers.length === 0) {
     return {
       composition: targetName,
       sourceComposition: sourceName,
@@ -716,7 +722,7 @@ async function copyCrossProject(
   // Collision check BEFORE staging: fail-closed with a byte-identical
   // destination and no partial live identity state.
   const targetNames = new Set(targetComp.layers.map((l) => l.name));
-  const collidingNames = sourceComp.layers.map((l) => l.name).filter((name) => targetNames.has(name));
+  const collidingNames = sourceFull.layers.map((l) => l.name).filter((name) => targetNames.has(name));
   if (collidingNames.length > 0) {
     const namesFormatted = collidingNames.map((n) => `"${n}"`).join(", ");
     throw new Error(
@@ -725,13 +731,13 @@ async function copyCrossProject(
     );
   }
 
-  // Snapshot each DISTINCT source Layer exactly once with hash-verified
-  // retained content bytes; duplicate uses share the single mapped identity.
+  // Map each DISTINCT source Layer identity to one destination identity from
+  // the verified snapshot — no second Full resolution; duplicate uses share
+  // the single mapped identity.
   const identityMap = new Map<string, { revision: LayerRevision; contentBytes: Buffer }>();
-  for (const use of sourceComp.layers) {
-    if (!identityMap.has(use.layerId)) {
-      const full = await readLayerInternalFull(srcRoot, use.layerId);
-      identityMap.set(use.layerId, { revision: full.currentRevision, contentBytes: full.contentBytes });
+  for (const layer of sourceFull.layers) {
+    if (!identityMap.has(layer.layerId)) {
+      identityMap.set(layer.layerId, { revision: layer.revision, contentBytes: layer.contentBytes });
     }
   }
 
@@ -770,9 +776,9 @@ async function copyCrossProject(
       await readLayerInternal(destRoot, newId);
     }
 
-    const importedUses: CompositionLayerUse[] = sourceComp.layers.map((use) => ({
-      name: use.name,
-      layerId: newIdBySource.get(use.layerId)!,
+    const importedUses: CompositionLayerUse[] = sourceFull.layers.map((layer) => ({
+      name: layer.name,
+      layerId: newIdBySource.get(layer.layerId)!,
     }));
 
     // Live Commit Point: one atomic replacement of the destination document.
