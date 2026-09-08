@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit fork editing for shared Layers (#85, #77): `ply layer edit <layer-id> --fork --composition <comp> --use <local-name>` publishes a new Layer identity with the edited revision and retargets only the selected use in the target Composition under one Project mutation; other Compositions render byte-identically across the fork and the original identity, its historical revisions, and content blobs remain untouched. `--fork` and `--in-place` are mutually exclusive, fork requires `--composition`/`--use` (forbidden without `--fork`), and an explicit fork always creates a new identity even with unchanged content. Intent is normalized once into a canonical discriminated shape; edited revisions for both modes build through one shared construction path (kind stability, ingestion, field preservation); fork publication stages the new identity/revision and commits the use retarget via `atomicReplace` as the live commit point, cleaning up only newly staged artifacts on caught errors. Usage misuse exits 2; target/use mismatches and publication failures exit 1 leaving live state unchanged with a documented retry path.
+- Extended `docs/project-storage-contract.md` (§3, §5, §7) with the explicit fork editing protocol, target validation rule, no-content-change fork behavior, and CLI surface (#85).
+
 ### Fixed
 
 - Protect `--out` destinations under Project directories such as `..exports` with separator-aware containment in both output guards; concurrent fresh renders yield one success and one refusal, and existing retained files remain unchanged (#80, #91, RE-1).

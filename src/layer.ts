@@ -4,7 +4,7 @@ import { isStoredTimestamp } from "./stored-schema.js";
  * ingestion (ADR-0013, ADR-0014, DEC-001–006, #81).
  */
 import { createHash } from "node:crypto";
-import { open as fsOpen, readFile, readdir, lstat, mkdir, unlink } from "node:fs/promises";
+import { open as fsOpen, readFile, readdir, lstat, mkdir, unlink, rmdir } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { MAX_DIMENSION, MAX_ENCODED_BYTES, MAX_PIXELS, decodePng } from "./png.js";
@@ -13,7 +13,7 @@ import { escapesDirReal, outsideDir } from "./paths.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
-import { parseCompositionDocument } from "./composition.js";
+import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
 import { resolveFace, fontAssetBytes } from "./fonts.js";
 
 export const LAYER_SCHEMA_VERSION = 1;
@@ -526,6 +526,12 @@ export async function listLayers(projectPath: string): Promise<ResolvedLayer[]> 
 
 export interface EditLayerOptions {
   inPlace?: boolean;
+  /** Explicit fork intent (#85): publish a new Layer identity for one Composition use. */
+  fork?: boolean;
+  /** Fork target Composition (required with `fork`). */
+  composition?: string;
+  /** Fork target use local name (required with `fork`). */
+  use?: string;
   image?: string;
   text?: string;
   font?: string;
@@ -536,10 +542,46 @@ export interface EditLayerOptions {
   opacity?: number;
 }
 
+/** Canonical normalized edit intent (#85, DEC-003): the only shape the edit
+ * lifecycle branches on. Normalized once at the entry of the edit path. */
+type EditIntent =
+  | { mode: "in-place" }
+  | { mode: "fork"; composition: string; use: string };
+
+/** Normalize and validate external edit intent into the canonical shape.
+ * Flag misuse reaches here as a fail-fast guard; the CLI classifies the same
+ * misuse as a usage error (exit 2) before invoking the edit. */
+function normalizeEditIntent(options: EditLayerOptions): EditIntent {
+  if (options.fork) {
+    if (options.inPlace) {
+      throw new Error("--fork and --in-place are mutually exclusive edit intents.");
+    }
+    if (!options.composition || options.composition.trim() === "") {
+      throw new Error("Fork editing requires --composition <comp>: the Composition whose use is retargeted.");
+    }
+    if (!options.use || options.use.trim() === "") {
+      throw new Error("Fork editing requires --use <local-name>: the use in the target Composition to retarget.");
+    }
+    return { mode: "fork", composition: options.composition, use: options.use };
+  }
+  if (options.composition !== undefined || options.use !== undefined) {
+    throw new Error("--composition and --use are only valid together with --fork.");
+  }
+  return { mode: "in-place" };
+}
+
+export interface ForkInfo {
+  previousLayerId: string;
+  composition: string;
+  use: string;
+}
+
 export interface EditLayerResult {
   layer: ResolvedLayer;
   referringCompositions: string[];
   referrersCount: number;
+  /** Present only when the edit published a fork. */
+  fork?: ForkInfo;
 }
 
 /**
@@ -607,38 +649,8 @@ export async function findLayerReferrers(projectPath: string, layerId: string): 
   return withProjectLock(resolvedRoot, () => findLayerReferrersInternal(resolvedRoot, layerId));
 }
 
-/**
- * Unlocked internal editor for Layer identity and revision advancement.
- * Callers must hold the Project lock.
- */
-export async function editLayerInternal(
-  projectPath: string,
-  layerId: string,
-  options: EditLayerOptions,
-): Promise<EditLayerResult> {
-  const resolvedRoot = path.resolve(projectPath);
-  const current = await readLayerInternalFull(resolvedRoot, layerId);
-  const prevRev = current.currentRevision;
-
-  // 1. Authoritative referrer discovery under the Project lock
-  const referringCompositions = await findLayerReferrersInternal(resolvedRoot, layerId);
-  const referrersCount = referringCompositions.length;
-
-  // 2. Blast-radius guard: require --in-place when referenced by multiple Compositions
-  if (referrersCount > 1 && !options.inPlace) {
-    const namesList = referringCompositions.map((n) => `"${n}"`).join(", ");
-    const err = new Error(
-      `Layer "${layerId}" is referenced by ${referrersCount} Compositions (${namesList}). ` +
-        `Editing it in-place will affect all of them. Pass --in-place to confirm, or fork into an independent Layer.`,
-    );
-    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referringCompositions =
-      referringCompositions;
-    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referrersCount =
-      referrersCount;
-    throw err;
-  }
-
-  // 3. Placement options: preserve existing values if omitted
+/** Placement values for an edited revision: explicit options win, omitted values preserve the current revision. */
+function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision): { x: number; y: number; opacity: number } {
   const x = options.x !== undefined ? options.x : prevRev.x;
   const y = options.y !== undefined ? options.y : prevRev.y;
   const opacity = options.opacity !== undefined ? options.opacity : prevRev.opacity;
@@ -649,9 +661,28 @@ export async function editLayerInternal(
   if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
     throw new Error(`Invalid opacity ${options.opacity}: must be a finite number between 0 and 1.`);
   }
+  return { x, y, opacity };
+}
 
-  // 4. Kind stability and kind-specific option handling
-  let newRevision: LayerRevision;
+/**
+ * Canonical edited-revision construction shared by in-place and fork editing
+ * (#85): one home for kind stability, content ingestion/validation, and
+ * field preservation, so no publication path can build a divergent revision.
+ *
+ * Returns the fully formed revision document for `layerId`/`createdAt` plus
+ * whether every field is identical to the current revision. In-place editing
+ * uses `unchanged` to skip storage churn; fork ignores it because an explicit
+ * fork always publishes a new identity, even with unchanged content.
+ */
+async function buildEditedRevision(
+  resolvedRoot: string,
+  prevRev: LayerRevision,
+  layerId: string,
+  createdAt: string,
+  options: EditLayerOptions,
+  placement: { x: number; y: number; opacity: number },
+): Promise<{ revision: LayerRevision; unchanged: boolean }> {
+  const { x, y, opacity } = placement;
 
   if (prevRev.kind === "image") {
     // Incompatible text options passed to image layer
@@ -671,28 +702,22 @@ export async function editLayerInternal(
       contentHash = ingested.contentHash;
     }
 
-    // No-op check: if all fields are identical to previous revision, avoid storage churn
-    if (
-      contentHash === prevRev.contentHash &&
-      x === prevRev.x &&
-      y === prevRev.y &&
-      opacity === prevRev.opacity
-    ) {
-      const resolved = await readLayerInternal(resolvedRoot, layerId);
-      return { layer: resolved, referringCompositions, referrersCount };
-    }
-
-    newRevision = {
+    const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
-      createdAt: new Date().toISOString(),
+      createdAt,
       kind: "image",
       contentHash,
       x,
       y,
       opacity,
     };
-  } else if (prevRev.kind === "text") {
+    const unchanged =
+      contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity;
+    return { revision, unchanged };
+  }
+
+  if (prevRev.kind === "text") {
     // Incompatible image option passed to text layer
     if (options.image !== undefined) {
       throw new Error(`Cannot edit image source on a text Layer. Layer "${layerId}" is a text Layer.`);
@@ -714,24 +739,10 @@ export async function editLayerInternal(
     // Canonical text validation
     validateTextContent(text, fontSize, color);
 
-    // No-op check: if all fields are identical to previous revision, avoid storage churn
-    if (
-      contentHash === prevRev.contentHash &&
-      text === prevRev.text &&
-      fontSize === prevRev.fontSize &&
-      color === prevRev.color &&
-      x === prevRev.x &&
-      y === prevRev.y &&
-      opacity === prevRev.opacity
-    ) {
-      const resolved = await readLayerInternal(resolvedRoot, layerId);
-      return { layer: resolved, referringCompositions, referrersCount };
-    }
-
-    newRevision = {
+    const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
-      createdAt: new Date().toISOString(),
+      createdAt,
       kind: "text",
       contentHash,
       text,
@@ -741,12 +752,203 @@ export async function editLayerInternal(
       y,
       opacity,
     };
-  } else {
-    throw new Error(`Unsupported Layer kind on layer "${layerId}".`);
+    const unchanged =
+      contentHash === prevRev.contentHash &&
+      text === prevRev.text &&
+      fontSize === prevRev.fontSize &&
+      color === prevRev.color &&
+      x === prevRev.x &&
+      y === prevRev.y &&
+      opacity === prevRev.opacity;
+    return { revision, unchanged };
+  }
+
+  throw new Error(`Unsupported Layer kind on layer "${layerId}".`);
+}
+
+/**
+ * Validate the fork target against the canonical target/use→original-id rule
+ * (#85): the Composition must exist and parse, the selected use must exist in
+ * it, and that use must reference the Layer being forked. Composition
+ * boundary containment, canonical parsing, and reference-resolution
+ * verification are all delegated to the one canonical pre-mutation reader
+ * `readMutableComposition` (#85, local review CRAFT-1) — the only fork-"
+ * specific checks here are the use lookup and the id match. Callers must
+ * hold the Project lock.
+ */
+async function resolveForkTarget(
+  resolvedRoot: string,
+  composition: string,
+  useName: string,
+  originalLayerId: string,
+): Promise<{ comp: Composition; compFile: string }> {
+  const { comp, compFile } = await readMutableComposition(resolvedRoot, composition);
+
+  const targetUse = comp.layers.find((u) => u.name === useName);
+  if (!targetUse) {
+    throw new Error(`Use "${useName}" not found in composition "${composition}".`);
+  }
+  if (targetUse.layerId !== originalLayerId) {
+    throw new Error(
+      `Use "${useName}" in composition "${composition}" references Layer "${targetUse.layerId}", not "${originalLayerId}".`,
+    );
+  }
+
+  return { comp, compFile };
+}
+
+/**
+ * Fork publication (#85): stage the new identity and edited revision, then
+ * retarget ONLY the selected use in the target Composition as the live commit
+ * point. Other uses keep their raw fields; the original identity, its
+ * revisions, and its content are never touched. Caught-error cleanup removes
+ * only the newly staged identity/revision — never old content or history.
+ * Callers must hold the Project lock.
+ */
+async function publishForkEdit(
+  resolvedRoot: string,
+  originalLayerId: string,
+  fork: { composition: string; use: string },
+  target: { comp: Composition; compFile: string },
+  newLayerId: string,
+  revision: LayerRevision,
+  refs: { referringCompositions: string[]; referrersCount: number },
+): Promise<EditLayerResult> {
+  const { comp, compFile } = target;
+  const revHash = computeRevisionHash(revision);
+  const revDir = path.join(resolvedRoot, "layers", `${newLayerId}.revisions`);
+  const revFile = path.join(revDir, `${revHash}.json`);
+  const identityFile = path.join(resolvedRoot, "layers", `${newLayerId}.json`);
+
+  await mkdir(revDir, { recursive: true });
+
+  let stagedRevision = false;
+  let stagedIdentity = false;
+  try {
+    await atomicCreate(revFile, JSON.stringify(revision, null, 2) + "\n");
+    stagedRevision = true;
+
+    const identity: LayerIdentity = {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      id: newLayerId,
+      createdAt: revision.createdAt,
+      currentRevision: revHash,
+    };
+
+    await atomicCreate(identityFile, JSON.stringify(identity, null, 2) + "\n");
+    stagedIdentity = true;
+
+    // Resolve the staged Layer before the live commit (publication protocol).
+    await readLayerInternal(resolvedRoot, newLayerId);
+
+    // Live Commit Point: retarget only the selected use, preserving every
+    // other raw document/use field.
+    const updatedComp: Composition = {
+      ...comp,
+      layers: comp.layers.map((use) => (use.name === fork.use ? { name: use.name, layerId: newLayerId } : use)),
+    };
+
+    await atomicReplace(compFile, JSON.stringify(updatedComp, null, 2) + "\n");
+  } catch (err) {
+    if (stagedIdentity) {
+      await unlink(identityFile).catch(() => {});
+    }
+    if (stagedRevision) {
+      await unlink(revFile).catch(() => {});
+      await rmdir(revDir).catch(() => {}); // remove the now-empty revision directory
+    }
+    throw err;
+  }
+
+  const layer = await readLayerInternal(resolvedRoot, newLayerId);
+  return {
+    layer,
+    referringCompositions: refs.referringCompositions,
+    referrersCount: refs.referrersCount,
+    fork: { previousLayerId: originalLayerId, composition: fork.composition, use: fork.use },
+  };
+}
+
+/**
+ * Unlocked internal editor for Layer identity and revision advancement.
+ * Callers must hold the Project lock.
+ */
+export async function editLayerInternal(
+  projectPath: string,
+  layerId: string,
+  options: EditLayerOptions,
+): Promise<EditLayerResult> {
+  const resolvedRoot = path.resolve(projectPath);
+  const current = await readLayerInternalFull(resolvedRoot, layerId);
+  const prevRev = current.currentRevision;
+
+  // Normalize intent once into the canonical discriminated shape (#85).
+  const intent = normalizeEditIntent(options);
+
+  // 1. Authoritative referrer discovery under the Project lock (fail-closed)
+  const referringCompositions = await findLayerReferrersInternal(resolvedRoot, layerId);
+  const referrersCount = referringCompositions.length;
+
+  // 2. Blast-radius guard: in-place editing only; a fork changes exactly one
+  //    use in one Composition, so it never needs the propagation flag.
+  if (intent.mode === "in-place" && referrersCount > 1 && !options.inPlace) {
+    const namesList = referringCompositions.map((n) => `"${n}"`).join(", ");
+    const err = new Error(
+      `Layer "${layerId}" is referenced by ${referrersCount} Compositions (${namesList}). ` +
+        `Editing it in-place will affect all of them. Pass --in-place to confirm, or fork into an independent Layer.`,
+    );
+    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referringCompositions =
+      referringCompositions;
+    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referrersCount =
+      referrersCount;
+    throw err;
+  }
+
+  // 3. Placement options: preserve existing values if omitted
+  const placement = resolveEditPlacement(options, prevRev);
+
+  if (intent.mode === "fork") {
+    // Canonical target/use→original-id validation before any content work.
+    const target = await resolveForkTarget(resolvedRoot, intent.composition, intent.use, layerId);
+
+    // New identity + edited revision through the shared canonical builder.
+    const newLayerId = generateLayerId();
+    const createdAt = new Date().toISOString();
+    const { revision } = await buildEditedRevision(
+      resolvedRoot,
+      prevRev,
+      newLayerId,
+      createdAt,
+      options,
+      placement,
+    );
+    // An explicit fork always publishes the new identity, even when the
+    // edited revision is field-identical to the current one (documented
+    // no-content-change fork).
+    return publishForkEdit(resolvedRoot, layerId, intent, target, newLayerId, revision, {
+      referringCompositions,
+      referrersCount,
+    });
+  }
+
+  // 4. Shared canonical edited-revision construction (in-place)
+  const { revision, unchanged } = await buildEditedRevision(
+    resolvedRoot,
+    prevRev,
+    layerId,
+    new Date().toISOString(),
+    options,
+    placement,
+  );
+
+  // No-op check: if all fields are identical to previous revision, avoid storage churn
+  if (unchanged) {
+    const resolved = await readLayerInternal(resolvedRoot, layerId);
+    return { layer: resolved, referringCompositions, referrersCount };
   }
 
   // 5. Compute new revision hash and stage revision document
-  const revHash = computeRevisionHash(newRevision);
+  const revHash = computeRevisionHash(revision);
   const revDir = path.join(resolvedRoot, "layers", `${layerId}.revisions`);
   const revFile = path.join(revDir, `${revHash}.json`);
   const identityFile = path.join(resolvedRoot, "layers", `${layerId}.json`);
@@ -755,7 +957,7 @@ export async function editLayerInternal(
 
   let stagedRevision = false;
   try {
-    await atomicCreate(revFile, JSON.stringify(newRevision, null, 2) + "\n");
+    await atomicCreate(revFile, JSON.stringify(revision, null, 2) + "\n");
     stagedRevision = true;
 
     const identity: LayerIdentity = {
