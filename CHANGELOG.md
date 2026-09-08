@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Report Composition and Layer CLI browser teardown failures without retrying committed mutations; clarify interrupted-operation recovery guarantees (#90).
+
 ### Removed
 
 - Removed the deprecated `thumb` command and its specialized renderer, styles, overlays, tests, and examples. Scene composition is now the only rendering path.
@@ -18,6 +22,7 @@
 
 ### Added
 
+- Added Composition authoring, local image Layer ingestion into content-addressed storage, immutable revision documents, and project-level locking (#79, #77).
 - Added `ply project <init|inspect>` commands and the self-contained Project storage boundary (#78, #77).
 - Added the `ply` executable over the existing scene, library, and jobs commands.
 - Added the `visual-authoring` skill before gate removal, preserving prompting, text, safe-region, and likeness-review knowledge.
