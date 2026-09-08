@@ -224,3 +224,146 @@ test("default compact text output stays one actionable line and names the manife
   expect(lines[0]).toContain(".png");
   expect(lines[0]).toContain(".manifest.json");
 });
+// ---------------------------------------------------------------------------
+// Slice 2 — replay
+// ---------------------------------------------------------------------------
+
+/** Build a mixed image+text Composition and render it; return ids and the PNG bytes. */
+async function setupHistoryFixture(): Promise<{
+  manifestPath: string;
+  originalPng: Buffer;
+  imageLayerId: string;
+  textLayerId: string;
+  sourceImage: string;
+}> {
+  const sourceImage = path.join(tempDir, "sources", "red.png");
+  await mkdir(path.dirname(sourceImage), { recursive: true });
+  await writeFile(sourceImage, solidPng(64, 64, RED));
+  await invoke(["composition", "create", "hist", "--width", "200", "--height", "100", "--project", projDir]);
+  const imgAdd = await invoke(["composition", "add", "hist", "badge", "--image", sourceImage, "--x", "10", "--y", "10", "--project", projDir, "--json"]);
+  expect(imgAdd.code).toBe(0);
+  const textAdd = await invoke(["composition", "add", "hist", "headline", "--text", "Hello", "--font", "Anton", "--x", "80", "--y", "30", "--project", projDir, "--json"]);
+  expect(textAdd.code).toBe(0);
+  const { json } = { json: (await renderJson("hist")).render! };
+  return {
+    manifestPath: json.manifest,
+    originalPng: await readFile(json.output),
+    imageLayerId: JSON.parse(imgAdd.stdout).use.layerId,
+    textLayerId: JSON.parse(textAdd.stdout).use.layerId,
+    sourceImage,
+  };
+}
+
+/** Replay a manifest through the public CLI; returns JSON + replay output bytes. */
+async function replayJson(manifestPath: string, extra: string[] = []) {
+  const res = await invoke(["composition", "replay", manifestPath, "--project", projDir, "--json", ...extra]);
+  return { res, json: res.stdout ? JSON.parse(res.stdout) : {} };
+}
+
+test("replay regenerates byte-identical output from pinned history", async () => {
+  const fx = await setupHistoryFixture();
+  const { res, json } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(0);
+  expect(json.ok).toBe(true);
+  expect(json.replay.name).toBe("hist");
+  const replayed = await readFile(json.replay.output);
+  expect(replayed.equals(fx.originalPng)).toBe(true);
+});
+
+test("replay is byte-identical after in-place edits, use removal, and reordering", async () => {
+  const fx = await setupHistoryFixture();
+
+  // Advance both source Layers in place (new image bytes, new text).
+  const green = path.join(tempDir, "sources", "green.png");
+  await writeFile(green, solidPng(64, 64, GREEN));
+  const edit1 = await invoke(["layer", "edit", fx.imageLayerId, "--image", green, "--in-place", "--project", projDir, "--json"]);
+  expect(edit1.code).toBe(0);
+  const edit2 = await invoke(["layer", "edit", fx.textLayerId, "--text", "Changed", "--in-place", "--project", projDir, "--json"]);
+  expect(edit2.code).toBe(0);
+
+  // Remove the text use, then restore order changes on the current document.
+  const rm = await invoke(["composition", "remove", "hist", "headline", "--project", projDir]);
+  expect(rm.code).toBe(0);
+  const readd = await invoke(["composition", "add", "hist", "footer", "--image", green, "--project", projDir]);
+  expect(readd.code).toBe(0);
+
+  const { res, json } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(0);
+  const replayed = await readFile(json.replay.output);
+  expect(replayed.equals(fx.originalPng)).toBe(true);
+});
+
+test("replay depends on neither current Layer pointers nor the current Composition document", async () => {
+  const fx = await setupHistoryFixture();
+
+  // Advance sources so replay must use the pinned revision, then remove the
+  // current-state documents replay must never consult.
+  const green = path.join(tempDir, "sources", "green.png");
+  await writeFile(green, solidPng(64, 64, GREEN));
+  await invoke(["layer", "edit", fx.imageLayerId, "--image", green, "--in-place", "--project", projDir]);
+
+  await unlink(path.join(projDir, "layers", `${fx.imageLayerId}.json`));
+  await unlink(path.join(projDir, "layers", `${fx.textLayerId}.json`));
+  await unlink(path.join(projDir, "compositions", "hist.json"));
+
+  const { res, json } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(0);
+  const replayed = await readFile(json.replay.output);
+  expect(replayed.equals(fx.originalPng)).toBe(true);
+});
+
+test("replay survives Project relocation and deletion of external source files", async () => {
+  const fx = await setupHistoryFixture();
+  const moved = path.join(tempDir, "relocated");
+  await cp(projDir, moved, { recursive: true });
+  // The original source file is gone and the Project moved elsewhere.
+  await rm(path.dirname(fx.sourceImage), { recursive: true, force: true });
+
+  const res = await invoke(["composition", "replay", path.join(moved, path.relative(projDir, fx.manifestPath)), "--project", moved, "--json"]);
+  expect(res.code).toBe(0);
+  const json = JSON.parse(res.stdout);
+  expect(json.ok).toBe(true);
+  const replayed = await readFile(json.replay.output);
+  expect(replayed.equals(fx.originalPng)).toBe(true);
+});
+
+test("replay works when the original PNG is gone", async () => {
+  const fx = await setupHistoryFixture();
+  const { res, json } = await replayJson(fx.manifestPath);
+  expect(res.code).toBe(0);
+  // Delete the original output; a replayed replay must still regenerate it.
+  const rmRes = await invoke(["composition", "replay", fx.manifestPath, "--project", projDir, "--json"]);
+  expect(rmRes.code).toBe(0);
+  const replayed = await readFile(JSON.parse(rmRes.stdout).replay.output);
+  expect(replayed.equals(fx.originalPng)).toBe(true);
+  expect(replayed.equals(await readFile(json.replay.output))).toBe(true);
+});
+
+test("replay honors --out with the same export policy and still retains history", async () => {
+  const fx = await setupHistoryFixture();
+  const out = path.join(tempDir, "replay-out.png");
+  const { res, json } = await replayJson(fx.manifestPath, ["--out", out]);
+  expect(res.code).toBe(0);
+  expect(json.replay.output).toBe(out);
+  expect((await readFile(out)).equals(fx.originalPng)).toBe(true);
+  // The replayed render is itself retained history.
+  const manifest = JSON.parse(await readFile(json.replay.manifest, "utf8"));
+  expect(manifest.composition).toBe("hist");
+  expect(manifest.layers).toHaveLength(2);
+});
+
+test("compact replay text is one actionable line; usage errors exit 2", async () => {
+  const fx = await setupHistoryFixture();
+  const res = await invoke(["composition", "replay", fx.manifestPath, "--project", projDir]);
+  expect(res.code).toBe(0);
+  const lines = res.stdout.trim().split("\n");
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain("hist");
+  expect(lines[0]).toContain(".png");
+
+  const usage = await invoke(["composition", "replay", "--project", projDir]);
+  expect(usage.code).toBe(2);
+
+  const help = await invoke(["composition", "--help"]);
+  expect(help.stdout).toContain("replay");
+});

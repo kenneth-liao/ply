@@ -61,7 +61,15 @@ import { readCompositionInternalFull } from "./composition.js";
 import { resolveProjectRoot } from "./project.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { paintComposition, type SnapshotLayer } from "./composition-paint.js";
-import { buildRenderManifest, type RenderManifestDocument } from "./render-history.js";
+import {
+  buildRenderManifest,
+  readRenderManifest,
+  requireProjectRenderManifest,
+  resolveHistoricalLayers,
+  verifyEnvironmentMatch,
+  type RenderManifestDocument,
+} from "./render-history.js";
+import type { Page } from "playwright";
 
 export interface RenderCompositionResult {
   name: string;
@@ -172,7 +180,91 @@ export async function renderComposition(
   };
 }
 
+export interface ReplayRenderOptions extends RenderCompositionOptions {
+  /** Caller-owned page (tests: route-aborted offline evidence); never closed. */
+  page?: Page;
+}
+
+/**
+ * Replay a retained Render manifest (#87, US-007): regenerate the Render's
+ * pixels byte-identically from the pinned historical inputs, independent of
+ * current Layer revisions and Composition documents.
+ *
+ * Resolution order — every fallible step precedes output publication:
+ * 1. The manifest is read and strictly parsed (malformed/unsupported history
+ *    fails loudly, publishing nothing).
+ * 2. The manifest must live inside the Project, outside reserved input
+ *    storage (render history is Project-owned; relocation moves it along).
+ * 3. Under the Project lock, every pinned use is resolved through the one
+ *    canonical revision reader — the exact revision documents and their
+ *    hash-verified retained bytes. Current Layer identity pointers and
+ *    Composition documents are never consulted, so changed or removed
+ *    current uses cannot invalidate replay.
+ * 4. The pinned bytes are painted; the environment captured inside the same
+ *    paint pass must exactly match the recorded one or replay is rejected
+ *    before any output is published (byte identity is guaranteed within one
+ *    environment, never claimed across environments).
+ * 5. The replayed render is itself retained history: its manifest is
+ *    published before its PNG under the same publication discipline as
+ *    render — output-publication failure removes only the freshly created
+ *    manifest.
+ */
+export async function replayRender(
+  projectPath: string,
+  manifestPath: string,
+  options: ReplayRenderOptions = {},
+): Promise<RenderCompositionResult> {
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  await requireProjectRenderManifest(resolvedRoot, manifestPath);
+  const manifest = await readRenderManifest(manifestPath);
+
+  // Locked historical snapshot: pinned revisions + verified retained bytes,
+  // resolved exactly once. Painting never re-reads Project state.
+  const layers = await withProjectLock(resolvedRoot, () => resolveHistoricalLayers(resolvedRoot, manifest));
+
+  const { png, environment } = await paintComposition(manifest.canvas, layers, { page: options.page });
+  // Reject an unsupported environment before any output is published.
+  verifyEnvironmentMatch(manifest.environment, environment);
+
+  const destination = options.out
+    ? await resolveExportTarget(resolvedRoot, options.out)
+    : await defaultRenderDestination(resolvedRoot, manifest.composition);
+
+  const replayedManifest: RenderManifestDocument = buildRenderManifest(
+    { name: manifest.composition, canvas: manifest.canvas, layers },
+    environment,
+    destination.informationalOutput,
+  );
+
+  await atomicCreate(destination.manifest, JSON.stringify(replayedManifest, null, 2) + "\n");
+  try {
+    if (destination.mode === "create") {
+      await atomicCreate(destination.path, png);
+    } else {
+      await atomicReplace(destination.path, png);
+    }
+  } catch (err) {
+    await unlink(destination.manifest).catch(() => {});
+    throw err;
+  }
+
+  return {
+    name: manifest.composition,
+    width: manifest.canvas.width,
+    height: manifest.canvas.height,
+    output: destination.path,
+    manifest: destination.manifest,
+  };
+}
+
 /** Fresh, never-colliding default PNG+manifest destination under renders/. */
+interface RenderDestination {
+  path: string;
+  manifest: string;
+  informationalOutput: string;
+  mode: "create" | "replace";
+}
+
 async function defaultRenderDestination(
   resolvedRoot: string,
   compName: string,
