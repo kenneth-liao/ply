@@ -137,17 +137,16 @@ function parsePlacement(options: AddLayerOptions): { x: number; y: number; opaci
 }
 
 /**
- * Read the target Composition under the lock for a live mutation: contained,
- * parseable, unique local name for the new use, and every existing reference
- * still resolving — never mutate a composition whose existing references no
- * longer resolve.
+ * Unlocked internal reader for stored Composition JSON documents.
+ * Verifies Project boundary containment and parses the stored document through
+ * the canonical parser.
  */
-async function readMutableComposition(
+async function readCompositionDocument(
   resolvedRoot: string,
-  compFile: string,
   compName: string,
-  localName: string,
-): Promise<Composition> {
+): Promise<{ comp: Composition; compFile: string }> {
+  const compFile = path.join(resolvedRoot, "compositions", `${compName}.json`);
+
   if (await escapesDirReal(resolvedRoot, compFile)) {
     throw new Error(`Security error: composition "${compName}" escapes project boundary.`);
   }
@@ -160,18 +159,37 @@ async function readMutableComposition(
   }
 
   const comp = parseCompositionDocument(compRaw, compName);
+  return { comp, compFile };
+}
+
+/**
+ * Read the target Composition document under the lock for a live mutation:
+ * verifies Project boundary containment, parses the stored document through
+ * the canonical parser, and confirms that every existing Layer reference
+ * still resolves — never mutate a composition whose existing references no
+ * longer resolve.
+ *
+ * If `checkUniqueLocalName` is provided, additionally enforces that the local
+ * name is not already in use within the Composition.
+ */
+async function readMutableComposition(
+  resolvedRoot: string,
+  compName: string,
+  checkUniqueLocalName?: string,
+): Promise<{ comp: Composition; compFile: string }> {
+  const { comp, compFile } = await readCompositionDocument(resolvedRoot, compName);
 
   // Local name uniqueness check
-  if (comp.layers.some((l) => l.name === localName)) {
+  if (checkUniqueLocalName !== undefined && comp.layers.some((l) => l.name === checkUniqueLocalName)) {
     throw new Error(
-      `duplicate local name "${localName}" in composition "${compName}" — local names within a composition must be unique.`,
+      `duplicate local name "${checkUniqueLocalName}" in composition "${compName}" — local names within a composition must be unique.`,
     );
   }
 
   for (const use of comp.layers) {
     await readLayerInternal(resolvedRoot, use.layerId);
   }
-  return comp;
+  return { comp, compFile };
 }
 
 export interface AddLayerOptions {
@@ -304,8 +322,7 @@ export async function addLayerToComposition(
 
   const resolvedRoot = await resolveProjectRoot(projectPath);
   return withProjectLock(resolvedRoot, async () => {
-    const compFile = path.join(resolvedRoot, "compositions", `${sanitizedComp}.json`);
-    const comp = await readMutableComposition(resolvedRoot, compFile, sanitizedComp, sanitizedLocalName);
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
 
     return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
       // Ingest & decode input image, then stage the content blob.
@@ -359,8 +376,7 @@ export async function addTextLayerToComposition(
 
   const resolvedRoot = await resolveProjectRoot(projectPath);
   return withProjectLock(resolvedRoot, async () => {
-    const compFile = path.join(resolvedRoot, "compositions", `${sanitizedComp}.json`);
-    const comp = await readMutableComposition(resolvedRoot, compFile, sanitizedComp, sanitizedLocalName);
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
 
     return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
       // Resolve the bundled face once and retain its exact bytes as the
@@ -414,21 +430,7 @@ export async function readCompositionInternalFull(
 ): Promise<ResolvedCompositionFull> {
   const sanitized = sanitizeName(compName);
   const resolvedRoot = path.resolve(projectPath);
-  const compFile = path.join(resolvedRoot, "compositions", `${sanitized}.json`);
-
-  if (await escapesDirReal(resolvedRoot, compFile)) {
-    throw new Error(`Security error: composition "${sanitized}" escapes project boundary.`);
-  }
-
-  let compRaw: string;
-  try {
-    compRaw = await readFile(compFile, "utf8");
-  } catch {
-    throw new Error(`Composition "${sanitized}" not found in project.`);
-  }
-
-
-  const comp = parseCompositionDocument(compRaw, sanitized);
+  const { comp } = await readCompositionDocument(resolvedRoot, sanitized);
 
   const resolvedLayers: ResolvedCompositionLayerFull[] = [];
   for (const use of comp.layers) {
@@ -488,3 +490,144 @@ export async function listCompositions(projectPath: string): Promise<ResolvedCom
     return compositions;
   });
 }
+
+export interface RemoveLayerResult {
+  composition: string;
+  removedUse: CompositionLayerUse;
+  layers: CompositionLayerUse[];
+}
+
+export interface ReorderLayersResult {
+  composition: string;
+  layers: CompositionLayerUse[];
+}
+
+/**
+ * Remove a Layer use from a Composition without deleting the Layer, its revisions,
+ * or its content blobs (ADR-0013, spec #77 US-002).
+ */
+export async function removeLayerFromComposition(
+  projectPath: string,
+  compName: string,
+  localName: string,
+): Promise<RemoveLayerResult> {
+  const sanitizedComp = sanitizeName(compName);
+  const sanitizedLocalName = sanitizeName(localName);
+
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp);
+
+    const useIndex = comp.layers.findIndex((l) => l.name === sanitizedLocalName);
+    if (useIndex === -1) {
+      throw new Error(`Use "${sanitizedLocalName}" not found in composition "${sanitizedComp}".`);
+    }
+
+    const removedUse = comp.layers[useIndex]!;
+    const updatedLayers = comp.layers.filter((_, idx) => idx !== useIndex);
+    const updatedComp: Composition = {
+      ...comp,
+      layers: updatedLayers,
+    };
+
+    await atomicReplace(compFile, JSON.stringify(updatedComp, null, 2) + "\n");
+    return {
+      composition: sanitizedComp,
+      removedUse,
+      layers: updatedLayers,
+    };
+  });
+}
+
+/**
+ * Reorder Layer uses in a Composition (ADR-0013, spec #77 US-002).
+ * Accepts an exact full-order permutation of existing use names.
+ */
+export async function reorderCompositionLayers(
+  projectPath: string,
+  compName: string,
+  order: string | string[],
+): Promise<ReorderLayersResult> {
+  const sanitizedComp = sanitizeName(compName);
+
+  let rawNames: string[];
+  if (typeof order === "string") {
+    if (order.trim() === "") {
+      rawNames = [];
+    } else {
+      rawNames = order.split(",").map((s) => s.trim());
+    }
+  } else if (Array.isArray(order)) {
+    rawNames = order.map((s) => (typeof s === "string" ? s.trim() : ""));
+  } else {
+    throw new Error("Invalid order specification: must be a comma-separated string or array of names.");
+  }
+
+  // Check for empty string elements when order was specified
+  for (const name of rawNames) {
+    if (!name) {
+      throw new Error("Empty use name in order list.");
+    }
+  }
+
+  const sanitizedOrder = rawNames.map((n) => sanitizeName(n));
+
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp);
+
+    if (comp.layers.length === 0) {
+      if (sanitizedOrder.length === 0) {
+        return { composition: sanitizedComp, layers: [] };
+      }
+      throw new Error(
+        `Cannot reorder empty composition "${sanitizedComp}": expected 0 names, received ${sanitizedOrder.length}.`,
+      );
+    }
+
+    if (sanitizedOrder.length !== comp.layers.length) {
+      throw new Error(
+        `Invalid reorder for composition "${sanitizedComp}": expected ${comp.layers.length} names, received ${sanitizedOrder.length}.`,
+      );
+    }
+
+    const seen = new Set<string>();
+    for (const name of sanitizedOrder) {
+      if (seen.has(name)) {
+        throw new Error(`Duplicate name "${name}" in reorder list.`);
+      }
+      seen.add(name);
+    }
+
+    const useMap = new Map<string, CompositionLayerUse>();
+    for (const use of comp.layers) {
+      useMap.set(use.name, use);
+    }
+
+    for (const name of sanitizedOrder) {
+      if (!useMap.has(name)) {
+        throw new Error(`Use "${name}" not found in composition "${sanitizedComp}".`);
+      }
+    }
+
+    const reorderedLayers = sanitizedOrder.map((name) => useMap.get(name)!);
+
+    // No-op check: if order is identical, return without file replacement churn
+    const isNoop = reorderedLayers.every((use, idx) => use.name === comp.layers[idx]!.name);
+    if (isNoop) {
+      return { composition: sanitizedComp, layers: comp.layers };
+    }
+
+    const updatedComp: Composition = {
+      ...comp,
+      layers: reorderedLayers,
+    };
+
+    await atomicReplace(compFile, JSON.stringify(updatedComp, null, 2) + "\n");
+    return {
+      composition: sanitizedComp,
+      layers: reorderedLayers,
+    };
+  });
+}
+
