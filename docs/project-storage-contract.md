@@ -297,7 +297,7 @@ Atomic helpers do not `fsync` files or directories. Atomic visibility does not g
 ### Snapshot
 
 - `ply composition render` resolves under the Project lock in exactly one pass: the Composition document, its ordered Layer references, each Layer's current revision metadata (position, opacity, format, intrinsic size), and the hash-verified retained content bytes, all through `readCompositionInternalFull`. The lock is then released; painting never re-reads Project state.
-- The snapshot's exact bytes are painted through the shared render page with awaited image decode. Paint contract: later Layers paint over earlier ones at each revision's stored position and opacity, at intrinsic size, clipped to the canvas; uncovered canvas stays transparent. Foundation Layer effects are position and opacity only. Text Layers (#81) paint as DOM text — never pre-rasterized into image content — with each text revision's retained font bytes declared under an internal `@font-face` family; after page load, every text family is probed for actual load/resolution, and an unresolved face (invalid or undecodable retained font bytes, unavailable font) fails the Render with a nonzero status and no published output instead of accepting browser/system fallback. Rendering a text Layer after retention never consults `assets/fonts/` or any global font store. Render-history capture/replay and advanced effects are separately scoped (#87).
+- The snapshot's exact bytes are painted through the shared render page with awaited image decode. Paint contract: later Layers paint over earlier ones at each revision's stored position and opacity, at intrinsic size, clipped to the canvas; uncovered canvas stays transparent. Foundation Layer effects are position and opacity only. Text Layers (#81) paint as DOM text — never pre-rasterized into image content — with each text revision's retained font bytes declared under an internal `@font-face` family; after page load, every text family is probed for actual load/resolution, and an unresolved face (invalid or undecodable retained font bytes, unavailable font) fails the Render with a nonzero status and no published output instead of accepting browser/system fallback. Rendering a text Layer after retention never consults `assets/fonts/` or any global font store. Render-history capture is layered on this same snapshot (#87).
 - Canvas limits are enforced at the render boundary: 8192 px per axis and 16,777,216 pixels total. Invalid dimensions, dangling Layer references, and corrupted or missing retained content fail with an actionable diagnostic and nonzero status. A failed Render publishes no output.
 
 ### Output
@@ -310,6 +310,51 @@ Atomic helpers do not `fsync` files or directories. Atomic visibility does not g
   - Outside the Project, the parent directory must exist, and an existing regular file is the documented overwrite case.
   - External destinations are written by **destination-entry atomic replacement**: a temp file in the destination directory, renamed over the target. The rename swaps the directory entry and never writes through the target's inode, so an external hardlink alias onto Project state (e.g. a hardlink to `ply.json`) keeps its original bytes; the temp file is cleaned up on failure.
   - The reported output path is the caller-chosen path verbatim; realpaths are only containment guards.
+
+### Render history & replay (#87, US-007)
+
+#### Capture
+
+Every successful `ply composition render` retains a Project-owned Render manifest under the Project's `renders/` directory — whatever PNG destination the caller chose (`--out` included; no duplicate PNG bytes are retained for external exports). The manifest records identities only:
+
+```json
+{
+  "schemaVersion": 1,
+  "composition": "poster",
+  "canvas": { "width": 1080, "height": 1080 },
+  "environment": {
+    "tool": { "name": "ply", "version": "2.10.0" },
+    "runtime": "bun 1.4.0",
+    "browser": "chromium 151.0.7922.34",
+    "platform": "darwin-arm64"
+  },
+  "output": "renders/poster-mtxa1b2c-3d4e5f60.png",
+  "createdAt": "2026-09-08T12:00:00.000Z",
+  "layers": [
+    { "name": "background", "layerId": "layer_01j7abc123", "revisionId": "rev_e3b0c44298fc1c14" }
+  ]
+}
+```
+
+- **One home per fact**: revision facts (kind, placement, opacity, text fields, `contentHash`) stay in the immutable revision documents; content identity stays in their `contentHash`. The manifest pins `layerId` + `revisionId` per ordered use, plus the canvas and environment. `layers[i].revisionId` is the content-derived revision id the render resolved.
+- **Relocation-proof by construction**: the manifest carries no filesystem path that replay depends on. `output` is informational only — the project-relative form for in-Project destinations, the caller-chosen path verbatim for external ones — and replay works without the original PNG.
+- **No-mix invariant**: the manifest is built strictly from the one locked snapshot the paint used (`readCompositionInternalFull`) — capture never re-consults Project state, so an edit committed between snapshot release and publication cannot mix revisions into the published manifest+PNG pair (deterministic `--preload` lock-gate evidence).
+- **Publication discipline — no reported-success Render without history**: all fallible preparation (paint, environment capture) precedes publication; the manifest is created (O_EXCL, fresh never-colliding `renders/<render-id>.manifest.json`) before the PNG is published. If output publication fails, only the freshly created manifest is removed — never a preexisting or concurrently-winning file. **Honest crash limits**: no multi-file atomicity is promised — abrupt termination can leave a manifest without its PNG (replay still regenerates the pixels from retained inputs) or an unreferenced artifact; the interrupted-operations notes in §5 apply.
+
+#### Environment identity & compatibility
+
+The environment is captured inside the same paint pass that produced the pixels: tool name+version, Bun runtime version, platform (`os-arch`), and the actual browser used to paint. Replay requires an **exact match on every field** and rejects a mismatch before any output is published (exit 1, actionable diagnostic naming both identities). This is a conservative boundary: byte-identical replay is guaranteed within one environment, and is **not claimed universally** across machines that merely report equal version strings.
+
+#### Replay
+
+`ply composition replay <manifest-path> [--out <path>]`:
+
+- The manifest must live inside the Project, outside reserved input storage (`compositions/`, `layers/`, `content/`) — render history lives in `renders/`, and relocation moves manifest and Project together.
+- **Historical resolution never consults current state**: every pinned use resolves through the one canonical revision-only reader (`readRevisionInternalFull` in `src/layer.ts`, factored from `readLayerInternalFull`'s validation): the exact revision document is validated and re-hashed to its pinned revision id, and its retained content blob is read and re-hashed to its `contentHash`. Layer identity pointers (`layers/<id>.json`) and Composition documents (`compositions/*.json`) are never read, so in-place edits, fork edits, use removal, and reordering cannot invalidate retained history.
+- Pinned identifiers are strictly validated **before** any filesystem path is constructed from them (`layers/[0-9a-f]{16}` revision ids and `layer_[a-zA-Z0-9_]+` identities).
+- **Fail-loud boundaries** (exit 1, actionable diagnostic, no output published, no resolution to current or newer content): manifest not found, malformed JSON, unsupported `schemaVersion`, invalid pinned identifiers, missing pinned revision document, corrupted revision document (contents re-hash to a different id), missing content blob, corrupted content blob (hash mismatch), and environment mismatch.
+- Default replay output is a fresh, never-colliding `renders/<composition>-<unique>.png`; `--out` follows the identical destination policy as render. A successful replay retains its own manifest under the same publication discipline (its manifest pins the same historical revisions; its `output` names the replay's PNG).
+- Replay works after Project relocation, deletion of external source files, and deletion of the original PNG. Offline behavior follows US-006: resolution and painting are local (embedded data URLs, retained font bytes); #88 owns the full-surface OS-level isolation qualification.
 
 ---
 
@@ -328,6 +373,9 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply composition reorder <comp> --order <name1,name2,...> [options] [--json]`
 - `ply composition inspect <name> [options] [--json]`
 - `ply composition render <name> [--out <path>] [options] [--json]`
+  - Every successful render also retains a Project-owned manifest under `renders/` pinning the exact historical inputs (#87).
+- `ply composition replay <manifest-path> [--out <path>] [options] [--json]`
+  - Replay a retained Render manifest from pinned history; requires the exact capturing environment (#87).
 - `ply composition list [options] [--json]`
 - `ply layer inspect <layer-id> [options] [--json]`
 - `ply layer edit <layer-id> [--in-place | --fork --composition <comp> --use <local-name>] [--image <path> | --text <str> [--font <family>] [--font-size <px>] [--color <hex>]] [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
@@ -335,5 +383,5 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 
 ### Status & Error Codes:
 - **0**: Success.
-- **1**: Runtime error (missing project, invalid image, duplicate name, unknown use name, invalid reorder permutation, etc.). Structured error JSON in `--json` mode. `composition render` emits its JSON — success and failure — on stdout, so callers can parse it regardless of exit status. Browser teardown failure also exits with status 1: the already-emitted command result remains unchanged on stdout (including valid JSON in `--json` mode), while stderr reports the separate lifecycle failure and recovery guidance, including the render's exact published outcome (output already written to the reported path, or no output published). For a successful mutation the diagnostic explicitly says it is already committed and must not be retried; teardown failure does not trigger rollback or mutation retry. Consumers must check exit status and stderr as well as the command-result JSON's `ok` field.
+- **1**: Runtime error (missing project, invalid image, duplicate name, unknown use name, invalid reorder permutation, etc.). Structured error JSON in `--json` mode. `composition render` and `composition replay` emit their JSON — success and failure — on stdout, so callers can parse it regardless of exit status. Browser teardown failure also exits with status 1: the already-emitted command result remains unchanged on stdout (including valid JSON in `--json` mode), while stderr reports the separate lifecycle failure and recovery guidance, including the render's exact published outcome (output already written to the reported path, or no output published). For a successful mutation the diagnostic explicitly says it is already committed and must not be retried; teardown failure does not trigger rollback or mutation retry. Consumers must check exit status and stderr as well as the command-result JSON's `ok` field.
 - **2**: Usage error / malformed flags / missing required options. Structured error JSON in `--json` mode.
