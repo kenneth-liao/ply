@@ -220,6 +220,8 @@ describe("finalizeRender", () => {
     expect(r.optimization).toBeUndefined();
   });
 
+  // Full-size 1280×720 opaque noise PNG: local encode + quantize is CPU-bound
+  // (~3.6–3.9s idle, ~6s under contention) and can exceed Bun's 5s default.
   it("optimizes an oversized opaque render below the limit at exact 1280×720", () => {
     const r = finalizeRender(BUSY());
     expect(r.ok).toBe(true);
@@ -231,7 +233,7 @@ describe("finalizeRender", () => {
     expect(r.optimization?.stage).toBe("quantized");
     expect(r.optimization?.bytesBefore).toBeGreaterThan(OUTPUT_LIMIT);
     expect(r.optimization?.bytesAfter).toBe(r.png.length);
-  });
+  }, 30_000);
 
   it("drops a fully opaque alpha channel losslessly when that alone reaches compliance", () => {
     // Opaque 512×512 noise: the incompressible alpha plane is a quarter of the
