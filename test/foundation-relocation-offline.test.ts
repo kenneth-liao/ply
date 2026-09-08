@@ -24,13 +24,17 @@
  *      (font-preserving in-place & fork), add a text Layer, render the new state, and replay
  *      the historical manifest (100% byte-identical).
  * 4. Full introduced command and help coverage under network denial.
+ *
+ * The suite runs only on Darwin, where kernel-level process denial
+ * (sandbox-exec) is available and proven by the negative control; off
+ * Darwin it skips rather than claiming a weaker isolation is enough.
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
 import { mkdtemp, rm, readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
-import { encodePngRgba } from "../src/png.js";
+import { encodePngRgba, readPngHeader, decodePng } from "../src/png.js";
 import { closeBrowser } from "../src/browser.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
@@ -50,47 +54,47 @@ function solidPng(width: number, height: number, rgba: [number, number, number, 
 const RED: [number, number, number, number] = [255, 0, 0, 255];
 const BLUE: [number, number, number, number] = [0, 0, 255, 255];
 
-/**
- * Build offline execution parameters enforcing process-level network denial.
- * On macOS (Darwin), uses sandbox-exec kernel-level network denial.
- * On other platforms, sets non-routable proxy configuration.
- */
-function getOfflineSpawnArgs(scriptArgs: string[]): { cmd: string[]; env?: Record<string, string> } {
-  if (process.platform === "darwin") {
-    return {
-      cmd: [
-        "sandbox-exec",
-        "-p",
-        "(version 1) (allow default) (deny network*)",
-        process.execPath,
-        cli,
-        ...scriptArgs,
-      ],
-    };
+/** Pixel (x, y) of a decoded RGBA PNG as [r, g, b, a] — the predecessor test idiom. */
+function pixel(png: ReturnType<typeof decodePng>, x: number, y: number): [number, number, number, number] {
+  const i = (y * png.width + x) * 4;
+  return [png.rgba[i]!, png.rgba[i + 1]!, png.rgba[i + 2]!, png.rgba[i + 3]!];
+}
+
+/** Whether any pixel satisfies the predicate — finds visible rendered content without sampling guesses. */
+function hasPixel(png: ReturnType<typeof decodePng>, match: (p: [number, number, number, number]) => boolean): boolean {
+  for (let i = 0; i < png.rgba.length; i += 4) {
+    if (match([png.rgba[i]!, png.rgba[i + 1]!, png.rgba[i + 2]!, png.rgba[i + 3]!])) {
+      return true;
+    }
   }
-  return {
-    cmd: [process.execPath, cli, ...scriptArgs],
-    env: {
-      ...process.env,
-      HTTP_PROXY: "http://127.0.0.1:0",
-      HTTPS_PROXY: "http://127.0.0.1:0",
-      ALL_PROXY: "http://127.0.0.1:0",
-      http_proxy: "http://127.0.0.1:0",
-      https_proxy: "http://127.0.0.1:0",
-      all_proxy: "http://127.0.0.1:0",
-      NO_PROXY: "",
-      no_proxy: "",
-    },
-  };
+  return false;
+}
+
+const isRedPixel = (p: [number, number, number, number]) => p[0]! > 230 && p[1]! < 40 && p[2]! < 40;
+const isBluePixel = (p: [number, number, number, number]) => p[2]! > 230 && p[0]! < 40 && p[1]! < 40;
+
+/**
+ * Offline execution parameters enforcing process-level network denial:
+ * kernel-level sandbox-exec '(deny network*)'. Darwin-only — off Darwin the
+ * suite skips instead of claiming weaker (proxy-env) isolation is proof.
+ */
+function offlineCommand(scriptArgs: string[]): string[] {
+  return [
+    "sandbox-exec",
+    "-p",
+    "(version 1) (allow default) (deny network*)",
+    process.execPath,
+    cli,
+    ...scriptArgs,
+  ];
 }
 
 async function invokeOffline(args: string[]) {
-  const { cmd, env } = getOfflineSpawnArgs(args);
-  const result = Bun.spawn(cmd, {
+  const result = Bun.spawn(offlineCommand(args), {
     cwd: path.resolve(import.meta.dir, ".."),
     stdout: "pipe",
     stderr: "pipe",
-    env: env ?? process.env,
+    env: process.env,
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(result.stdout).text(),
@@ -118,7 +122,9 @@ afterEach(async () => {
 // 1. Process-level network denial negative control
 // ---------------------------------------------------------------------------
 
-test("network isolation negative control: local listener is reachable outside sandbox but denied inside", async () => {
+const darwinOnly = test.skipIf(process.platform !== "darwin");
+
+darwinOnly("network isolation negative control: local listener is reachable outside sandbox but denied inside", async () => {
   let server: Server | null = null;
   const port = await new Promise<number>((resolve, reject) => {
     const s = createServer((_req, res) => {
@@ -145,24 +151,22 @@ test("network isolation negative control: local listener is reachable outside sa
     expect(await onlineRes.text()).toBe("online-ok");
 
     // 2. Sandboxed request inside child process fails at OS socket layer
-    if (process.platform === "darwin") {
-      const probeProc = Bun.spawn(
-        [
-          "sandbox-exec",
-          "-p",
-          "(version 1) (allow default) (deny network*)",
-          process.execPath,
-          "-e",
-          `fetch("${targetUrl}").then(() => process.exit(0)).catch(() => process.exit(42))`,
-        ],
-        {
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
-      const probeCode = await probeProc.exited;
-      expect(probeCode).toBe(42);
-    }
+    const probeProc = Bun.spawn(
+      [
+        "sandbox-exec",
+        "-p",
+        "(version 1) (allow default) (deny network*)",
+        process.execPath,
+        "-e",
+        `fetch("${targetUrl}").then(() => process.exit(0)).catch(() => process.exit(42))`,
+      ],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const probeCode = await probeProc.exited;
+    expect(probeCode).toBe(42);
   } finally {
     if (server) {
       await new Promise<void>((resolve) => (server as Server).close(() => resolve()));
@@ -174,7 +178,7 @@ test("network isolation negative control: local listener is reachable outside sa
 // 2. Integrated A -> B -> C mixed workflow with shared edits, fork, and replay
 // ---------------------------------------------------------------------------
 
-test("integrated mixed image/text A -> B -> C workflow with reuse, interleave, propagation, fork, and historical replay offline", async () => {
+test.skipIf(process.platform !== "darwin")("integrated mixed image/text A -> B -> C workflow with reuse, interleave, propagation, fork, and historical replay offline", async () => {
   const projA = path.join(tempDir, "projA");
   const initA = await invokeOffline(["project", "init", projA, "--name", "Project A", "--json"]);
   expect(initA.code).toBe(0);
@@ -267,6 +271,12 @@ test("integrated mixed image/text A -> B -> C workflow with reuse, interleave, p
   const pngAPath = renderAJson.render.output as string;
   const pngABytes = await readFile(pngAPath);
   expect(pngABytes.length).toBeGreaterThan(0);
+
+  // Dimension + pixel evidence for Composition A (TEST-002/TEST-005):
+  // exactly the requested canvas, and the solid red image Layer is visibly painted.
+  expect(readPngHeader(pngABytes)).toMatchObject({ width: 1280, height: 720 });
+  const decodedA = decodePng(pngABytes);
+  expect(hasPixel(decodedA, isRedPixel)).toBe(true);
 
   // Save evidence
   await writeFile(path.join(outEvidenceDir, "compA_initial.png"), pngABytes);
@@ -376,6 +386,12 @@ test("integrated mixed image/text A -> B -> C workflow with reuse, interleave, p
   // -------------------------------------------------------------------------
   // In-place edit propagation: advances shared Layer revision
   // -------------------------------------------------------------------------
+  // Pre-edit render of B: the baseline the propagation must visibly change.
+  const renderBBefore = await invokeOffline(["composition", "render", "compB", "--project", projA, "--json"]);
+  expect(renderBBefore.code).toBe(0);
+  const pngBBeforeBytes = await readFile(JSON.parse(renderBBefore.stdout).render.output);
+  const decodedBBefore = decodePng(pngBBeforeBytes);
+
   const inPlaceEdit = await invokeOffline([
     "layer",
     "edit",
@@ -395,6 +411,11 @@ test("integrated mixed image/text A -> B -> C workflow with reuse, interleave, p
   expect(renderB.code).toBe(0);
   const pngBBytes = await readFile(JSON.parse(renderB.stdout).render.output);
   await writeFile(path.join(outEvidenceDir, "compB_propagated.png"), pngBBytes);
+
+  // In-place propagation is visible in-suite: same canvas, changed pixels.
+  expect(readPngHeader(pngBBytes)).toMatchObject({ width: 1280, height: 720 });
+  const decodedBAfter = decodePng(pngBBytes);
+  expect(decodedBAfter.rgba.equals(decodedBBefore.rgba)).toBe(false);
 
   // -------------------------------------------------------------------------
   // Isolated fork: changes only Composition C
@@ -426,6 +447,13 @@ test("integrated mixed image/text A -> B -> C workflow with reuse, interleave, p
   const pngCBytes = await readFile(JSON.parse(renderC.stdout).render.output);
   await writeFile(path.join(outEvidenceDir, "compC_forked.png"), pngCBytes);
 
+  // Fork is visible in-suite: C keeps the canvas but paints the forked red
+  // title pixels B (still sharing the white original) does not have.
+  expect(readPngHeader(pngCBytes)).toMatchObject({ width: 1280, height: 720 });
+  const decodedC = decodePng(pngCBytes);
+  expect(hasPixel(decodedC, isRedPixel)).toBe(true);
+  expect(pngCBytes.equals(pngBBytes)).toBe(false);
+
   // Re-render B: unchanged across C's fork
   const reRenderB = await invokeOffline(["composition", "render", "compB", "--project", projA, "--json"]);
   expect(reRenderB.code).toBe(0);
@@ -455,7 +483,7 @@ test("integrated mixed image/text A -> B -> C workflow with reuse, interleave, p
 // 3. Cross-Project copy, complete source deletion, relocation & offline usability
 // ---------------------------------------------------------------------------
 
-test("cross-Project copy, complete source/input deletion, Project relocation, and offline usability", async () => {
+test.skipIf(process.platform !== "darwin")("cross-Project copy, complete source/input deletion, Project relocation, and offline usability", async () => {
   // Source Project (projSrc)
   const projSrc = path.join(tempDir, "projSrc");
   const initSrc = await invokeOffline(["project", "init", projSrc, "--name", "Source Proj", "--json"]);
@@ -564,6 +592,10 @@ test("cross-Project copy, complete source/input deletion, Project relocation, an
   const destPngBytes = await readFile(destRenderJson.render.output);
   expect(destPngBytes.length).toBeGreaterThan(0);
   await writeFile(path.join(outEvidenceDir, "dest_initial.png"), destPngBytes);
+
+  // Dimension + pixel evidence: the copied image Layer is visibly painted.
+  expect(readPngHeader(destPngBytes)).toMatchObject({ width: 800, height: 600 });
+  expect(hasPixel(decodePng(destPngBytes), isBluePixel)).toBe(true);
 
   // -------------------------------------------------------------------------
   // Complete source deletion: remove original external inputs and delete projSrc completely
@@ -675,6 +707,10 @@ test("cross-Project copy, complete source/input deletion, Project relocation, an
   expect(relPngBytes.length).toBeGreaterThan(0);
   await writeFile(path.join(outEvidenceDir, "dest_relocated_edited.png"), relPngBytes);
 
+  // Relocation edits are visible in-suite: same canvas, changed pixels.
+  expect(readPngHeader(relPngBytes)).toMatchObject({ width: 800, height: 600 });
+  expect(relPngBytes.equals(destPngBytes)).toBe(false);
+
   // 6. Replay historical manifest captured before source deletion and relocation
   const relocatedManifestPath = path.join(projRelocated, destManifestPathRel);
   const replayedDestPath = path.join(outEvidenceDir, "dest_replayed.png");
@@ -697,7 +733,7 @@ test("cross-Project copy, complete source/input deletion, Project relocation, an
 // 4. Introduced CLI commands and help surface under network denial
 // ---------------------------------------------------------------------------
 
-test("every introduced CLI module and help surface operates cleanly under process-level network denial", async () => {
+test.skipIf(process.platform !== "darwin")("every introduced CLI module and help surface operates cleanly under process-level network denial", async () => {
   const topHelp = await invokeOffline(["--help"]);
   expect(topHelp.code).toBe(0);
   expect(topHelp.stdout).toContain("Ply — local image composition");
