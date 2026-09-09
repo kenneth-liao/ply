@@ -37,6 +37,18 @@ export interface MatteEngineResult {
 }
 
 /**
+ * The engine ran, but its output cannot qualify as a matte. A type, not a
+ * message shape: callers attach their own recovery (adoption says rerun,
+ * independent Matting says ply matte) without string-matching the why.
+ */
+export class UnusableMatteError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "UnusableMatteError";
+  }
+}
+
+/**
  * The matting seam. Input is one candidate; output is its true-alpha matte.
  *
  * `preflight` is how an engine says "I cannot run" *before* anything is paid
@@ -170,7 +182,7 @@ export async function matteCandidate(
   try {
     report = verifyTrueAlpha(result.bytes, label);
   } catch (err) {
-    throw new Error(
+    throw new UnusableMatteError(
       `The matting pass ("${result.engine}") did not produce a usable matte for "${label}": ${(err as Error).message}`,
       { cause: err },
     );

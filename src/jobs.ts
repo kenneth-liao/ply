@@ -19,7 +19,7 @@ import type { TextZone } from "./generate.js";
 import { resolveModel, validateReferenceCapability } from "./models.js";
 import { extensionFor, writePlateAsset, writeObjectAsset, writeCreatorAsset } from "./assets.js";
 import { verifyTrueAlpha } from "./alpha.js";
-import { matteCandidate, type MatteEngine } from "./matte.js";
+import { matteCandidate, UnusableMatteError, type MatteEngine } from "./matte.js";
 
 /**
  * Job record schema versions. v1 is the legacy plate-only record; v2 the
@@ -514,8 +514,15 @@ async function recordRun(
         await writeFile(path.join(dir, matteFile), result.bytes);
         record.matte = { contentHash: matteHash, file: matteFile, engine: result.engine };
       } catch (err) {
+        // The gate's recovery is the adoption surface's, not the pass's: an
+        // unusable matte carries the rerun/adopt next step here, where a Job
+        // exists. (Independent Matting attaches its own at its own boundary.)
+        const message =
+          err instanceof UnusableMatteError
+            ? `${(err as Error).message} ${adoptionRecovery(job.jobId)}`
+            : (err as Error).message;
         warnings.push(
-          `matte: candidate ${contentHash.slice(0, 12)} could not be isolated — ${(err as Error).message}`,
+          `matte: candidate ${contentHash.slice(0, 12)} could not be isolated — ${message}`,
         );
       }
     }
@@ -710,6 +717,19 @@ export interface ResolvedCandidateEvidence {
  * here first, and throw — a loud failure for both callers, never a silent
  * downgrade or a partial render.
  */
+/**
+ * The adoption surface's recovery for a candidate that failed the true-alpha
+ * gate. One home: the gate (src/alpha.ts) states only the why, so every
+ * adoption call site attaches the same next step through this helper.
+ */
+function adoptionRecovery(jobId: string): string {
+  return (
+    `Adoption requires true alpha (a transparent-background PNG with a real matte) — ` +
+    `RGB chroma-key color distance alone cannot qualify an output (REQ-015, REQ-017). ` +
+    `Rerun the job ("jobs rerun ${jobId}") so the matting pass mattes fresh candidates, or adopt a candidate that has one.`
+  );
+}
+
 export async function resolveAdoptionEvidence(
   jobRoot: string,
   jobId: string,
@@ -754,7 +774,14 @@ export async function resolveAdoptionEvidence(
     try {
       verifyTrueAlpha(matteBytes, record.file);
     } catch (err) {
-      return { candidate, evidence: { from: "none", cause: "invalid-matte", reason: (err as Error).message } };
+      return {
+        candidate,
+        evidence: {
+          from: "none",
+          cause: "invalid-matte",
+          reason: `${(err as Error).message} ${adoptionRecovery(jobId)}`,
+        },
+      };
     }
     return {
       candidate,
@@ -787,7 +814,14 @@ export async function resolveAdoptionEvidence(
   try {
     verifyTrueAlpha(bytes, cand.file);
   } catch (err) {
-    return { candidate, evidence: { from: "none", cause: "no-matte", reason: (err as Error).message } };
+    return {
+      candidate,
+      evidence: {
+        from: "none",
+        cause: "no-matte",
+        reason: `${(err as Error).message} ${adoptionRecovery(jobId)}`,
+      },
+    };
   }
   return {
     candidate,

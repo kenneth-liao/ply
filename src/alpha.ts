@@ -30,13 +30,13 @@ export interface AlphaReport {
   opaquePx: number;
 }
 
+/**
+ * The gate states the *why* only: it serves callers with different recoveries
+ * (adoption says rerun/adopt, independent Matting says ply matte), so the
+ * next step belongs at the call site, not here.
+ */
 function refuse(label: string, why: string): never {
-  throw new Error(
-    `Candidate "${label}" cannot qualify: ${why}\n` +
-      `Adoption requires true alpha (a transparent-background PNG with a real matte) — ` +
-      `RGB chroma-key color distance alone cannot qualify an output (REQ-015, REQ-017). ` +
-      `Rerun the job ("jobs rerun <jobId>") so the matting pass mattes fresh candidates, or adopt a candidate that has one.`,
-  );
+  throw new Error(`Candidate "${label}" cannot qualify: ${why}`);
 }
 
 /** Run a parser call, converting its refusal reason into this gate's contract error. */

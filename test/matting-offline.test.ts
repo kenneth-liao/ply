@@ -46,7 +46,7 @@ async function invokeOffline(cwd: string, args: string[]) {
 const cli = path.resolve(import.meta.dir, "../src/matting-cli.ts");
 
 describe("ply matte works offline — no generation import (tripwire armed)", () => {
-  test("native-alpha and inference paths complete with the generation SDK module forbidden", async () => {
+  test("the native-alpha path completes with production wiring and the generation SDK module forbidden", async () => {
     // Import lazily inside the test so the mock is definitely armed first.
     const { run } = await import("../src/matting-cli.js");
     const root = await mkdtemp(path.join(tmpdir(), "ply-matting-offline-"));

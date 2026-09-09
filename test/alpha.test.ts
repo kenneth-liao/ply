@@ -59,6 +59,19 @@ describe("verifyTrueAlpha", () => {
     odd[24] = 16; // IHDR bit depth byte → 16
     expect(() => verifyTrueAlpha(odd, "odd.png")).toThrow(/bit depth/i);
   });
+
+  test("states the why only — caller recovery lives at the call site, not in the gate", () => {
+    // The gate serves both the adoption surface (rerun/adopt) and independent
+    // Matting (ply matte): its message must stay caller-neutral.
+    let message = "";
+    try {
+      verifyTrueAlpha(OPAQUE, "opaque.png");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/cannot qualify/);
+    expect(message).not.toMatch(/jobs rerun|adopt/i);
+  });
 });
 
 describe("verifyTrueAlpha — bounded parsing of external bytes (PROD-1)", () => {

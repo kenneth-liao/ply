@@ -12,8 +12,10 @@
  *     once at the operation boundary (DEC-003 idiom); PNG-only, refused with
  *     an actionable convert-locally diagnostic otherwise;
  *   - the matte — delegated to `matteCandidate`, the one reader of the
- *     native-alpha-first policy and of the true-alpha gate, with engine
- *     preflight called here before inference;
+ *     native-alpha-first policy and of the true-alpha gate: preflight runs
+ *     inside that seam before any inference, and an unusable matte carries
+ *     this operation's recovery, attached here by type (the gate states
+ *     only the why);
  *   - publication — content-addressed output bytes first, `matte.json` last
  *     as the commit point; any caught failure removes exactly the freshly
  *     created directory, so the source is never replaced and nothing is left
@@ -27,7 +29,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { readPngHeader, PngParseError } from "./png.js";
-import { matteCandidate, type MatteEngine } from "./matte.js";
+import { matteCandidate, UnusableMatteError, type MatteEngine } from "./matte.js";
 import type { AlphaReport } from "./alpha.js";
 
 export const MATTING_SCHEMA_VERSION = 1;
@@ -117,8 +119,21 @@ export async function runMatting(
 
   const source: MattingSource = { path: sourcePath, contentHash: sha256(sourceBytes) };
   // The one reader of the native-alpha-first policy and of the true-alpha
-  // gate; preflight belongs to this operation, before anything is written.
-  const outcome = await matteCandidate(sourceBytes, sourcePath, deps.engine);
+  // gate; its engine path prefights before any inference.
+  let outcome: Awaited<ReturnType<typeof matteCandidate>>;
+  try {
+    outcome = await matteCandidate(sourceBytes, sourcePath, deps.engine);
+  } catch (err) {
+    // The gate states the why; this operation states the recovery. There is
+    // no Job to rerun and nothing to adopt — the next step is this command.
+    // Other failures (preflight, engine errors) already carry their own fix.
+    if (err instanceof UnusableMatteError)
+      throw new Error(
+        `${err.message} Nothing was published and the source is unchanged — check the input (it must contain an isolable subject) and the engine, then run "ply matte" again.`,
+        { cause: err },
+      );
+    throw err;
+  }
   const contentHash = sha256(outcome.bytes);
   const result: MattingResult = {
     engine: outcome.engine,

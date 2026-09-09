@@ -226,7 +226,11 @@ describe("ply matte — failure contract", () => {
     const res = await run([source], deps(engineOf(ALL_BLACK, "test/empty")));
     expect(res.exitCode).toBe(1);
     expect(res.text).toContain("test/empty");
-    expect(res.text).toMatch(/matte/i);
+    // The gate's why is kept, with this operation's recovery — the adoption
+    // recovery is not this surface's (there is no Job to rerun).
+    expect(res.text).toMatch(/matte is empty|opaque pixels/i);
+    expect(res.text).toMatch(/ply matte/);
+    expect(res.text).not.toMatch(/jobs rerun|adopt/i);
     expect(await publishedIds()).toEqual([]);
   });
 
@@ -234,7 +238,8 @@ describe("ply matte — failure contract", () => {
     const source = await writeSource(OPAQUE_SUBJECT);
     const res = await run([source], deps(engineOf(ALL_WHITE, "test/opaque")));
     expect(res.exitCode).toBe(1);
-    expect(res.text).toMatch(/matte/i);
+    expect(res.text).toMatch(/effectively opaque|transparent/i);
+    expect(res.text).not.toMatch(/jobs rerun|adopt/i);
     expect(await publishedIds()).toEqual([]);
   });
 
