@@ -105,6 +105,16 @@ ply matte out/generation/<jobId>/outputs/<sha256>.png --id my-cutout
 The input is PNG only — convert other formats locally with an offline tool
 first. Matting never generates content and never touches Projects or Layers.
 
+Both new results become ordinary Project Layers through the composer surface:
+`ply composition add --from-matte <matteId>` and
+`ply layer edit <layerId> --from-matte <matteId>` ingest a published matte's
+verified output (and `--from-generation <jobId>` a generated output, #107).
+The matte's provenance — and, when the matte's source was a generated output,
+that job's provenance — is retained verbatim inside the Project and resolves
+offline after the external `out/` files are removed and the Project is
+relocated; see
+[docs/project-storage-contract.md](docs/project-storage-contract.md).
+
 ## Setup
 
 ```bash

@@ -40,6 +40,14 @@ Options:
                         exclusive with --image/--text; invalid on text Layers.
   --output <n|sha256>   Which output of the --from-generation job to ingest:
                         a 1-based index or the full sha-256 content identity.
+  --from-matte <matteId>
+                        Replace an image Layer's content with the verified
+                        output of a published matte (see ply matte) without
+                        running inference again; the matte's provenance is
+                        retained with the Project (and a generated source's
+                        job provenance too). Mutually exclusive with
+                        --image/--text/--from-generation; invalid on text
+                        Layers.
   --text <str>          New text content for a text Layer
   --font <family>       Bundled font family name for a text Layer
   --font-size <num>     Font size in px for a text Layer
@@ -87,6 +95,7 @@ let values: {
   use?: string;
   image?: string;
   "from-generation"?: string;
+  "from-matte"?: string;
   output?: string;
   text?: string;
   font?: string;
@@ -112,6 +121,7 @@ try {
       use: { type: "string" },
       image: { type: "string" },
       "from-generation": { type: "string" },
+      "from-matte": { type: "string" },
       output: { type: "string" },
       text: { type: "string" },
       font: { type: "string" },
@@ -150,6 +160,7 @@ async function run() {
       const hasEditOption =
         values.image !== undefined ||
         values["from-generation"] !== undefined ||
+        values["from-matte"] !== undefined ||
         values.text !== undefined ||
         values.font !== undefined ||
         values["font-size"] !== undefined ||
@@ -163,7 +174,7 @@ async function run() {
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --text, --font, --font-size, --color, --x, --y, --opacity, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, or --fork.",
           },
           isJson,
         );
@@ -249,6 +260,26 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      // Matting-content ingestion (#108): --from-matte is an image content
+      // option, mutually exclusive with --image, --from-generation, and the
+      // text options.
+      if (values["from-matte"] !== undefined && !values["from-matte"].trim()) {
+        output({ ok: false, error: "--from-matte takes a matte id (see ply matte)." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (
+        values["from-matte"] !== undefined &&
+        (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
+          values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined)
+      ) {
+        output(
+          { ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content options." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
       if (values.output !== undefined && values["from-generation"] === undefined) {
         output(
           { ok: false, error: "--output is only valid together with --from-generation <jobId>." },
@@ -303,6 +334,14 @@ async function run() {
             values["from-generation"] !== undefined
               ? { jobRoot: path.resolve("out", "generation"), jobId: values["from-generation"].trim(), output: values.output }
               : undefined,
+          fromMatte:
+            values["from-matte"] !== undefined
+              ? {
+                  matteRoot: path.resolve("out", "matting"),
+                  matteId: values["from-matte"].trim(),
+                  generationRoot: path.resolve("out", "generation"),
+                }
+              : undefined,
           text: values.text,
           font: values.font,
           fontSize,
@@ -324,6 +363,9 @@ async function run() {
         if (res.generatedFrom) {
           resultBody.generatedFrom = res.generatedFrom;
         }
+        if (res.mattedFrom) {
+          resultBody.mattedFrom = res.mattedFrom;
+        }
 
         output(
           resultBody,
@@ -336,13 +378,16 @@ async function run() {
             const generated = res.generatedFrom
               ? `; from Generation Job ${res.generatedFrom.jobId} (${res.generatedFrom.contentHash.slice(0, 12)}, provenance retained)`
               : "";
+            const matted = res.mattedFrom
+              ? `; from matte ${res.mattedFrom.matteId} (engine ${res.mattedFrom.engine}, provenance retained)`
+              : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}`);
             }
           },
         );

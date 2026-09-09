@@ -105,7 +105,11 @@ Facts and their one home:
   source bytes are byte-identical, and nothing is left that reports success.
 - Matting is local correctness machinery (ADR-0015): it never touches
   Projects or Layers, never calls the network, and never invokes generation.
-  Ingestion of the published result into Projects is #108's ownership.
+  Ingestion of the published result into Projects is #108's ownership: it
+  retains this record **verbatim** under the Project's `matting/<matteId>/`
+  and derives the Layer linkage from the content identities this record
+  already pins — see docs/project-storage-contract.md for the retention and
+  resolution contract. No second copy of a Matting fact is created.
 
 ## 5. Command contract (US-005)
 

@@ -7,6 +7,7 @@ import {
   addLayerToComposition,
   addTextLayerToComposition,
   addGeneratedLayerToComposition,
+  addMattedLayerToComposition,
   importComposition,
   importCompositionCrossProject,
   removeLayerFromComposition,
@@ -84,6 +85,14 @@ Options:
                         resolvable offline. Mutually exclusive with --image
                         and --text. The output is selected explicitly with
                         --output; a multi-output job without it is refused.
+  --from-matte <matteId>
+                        Add the verified output of a published matte (see ply
+                        matte) as an ordinary image Layer. The matte's
+                        provenance is retained inside the Project and
+                        resolvable offline; when the matte's source was a
+                        generated output, that job's provenance is retained
+                        too. Mutually exclusive with --image, --text, and
+                        --from-generation.
   --output <n|sha256>   Which output of the --from-generation job to ingest:
                         a 1-based index or the full sha-256 content identity.
   --text <str>          Text content for a text Layer (mutually exclusive
@@ -141,6 +150,7 @@ let values: {
   out?: string;
   "from-project"?: string;
   "from-generation"?: string;
+  "from-matte"?: string;
   output?: string;
   x?: string;
   y?: string;
@@ -167,6 +177,7 @@ try {
       out: { type: "string" },
       "from-project": { type: "string" },
       "from-generation": { type: "string" },
+      "from-matte": { type: "string" },
       output: { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
@@ -253,6 +264,18 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      // Matting-content ingestion (#108): --from-matte is a fourth, mutually
+      // exclusive content kind.
+      if (values["from-matte"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined)) {
+        output({ ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values["from-matte"] !== undefined && !values["from-matte"].trim()) {
+        output({ ok: false, error: "--from-matte takes a matte id (see ply matte)." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
       if (values.output !== undefined && values["from-generation"] === undefined) {
         output({ ok: false, error: "--output is only valid together with --from-generation <jobId>." }, isJson);
         process.exitCode = 2;
@@ -273,8 +296,8 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (!values.image && values.text === undefined && values["from-generation"] === undefined) {
-        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family>), or --from-generation <jobId>" }, isJson);
+      if (!values.image && values.text === undefined && values["from-generation"] === undefined && values["from-matte"] === undefined) {
+        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family>), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -315,6 +338,45 @@ async function run() {
                 `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
                   `[${detail}] from Generation Job ${res.generatedFrom.jobId} ` +
                   `(${res.generatedFrom.contentHash.slice(0, 12)}; provenance retained)`,
+              );
+            },
+          );
+          return;
+        }
+        if (values["from-matte"] !== undefined) {
+          const res = await addMattedLayerToComposition(
+            targetProj, compName, localName,
+            {
+              matteRoot: path.resolve("out", "matting"),
+              matteId: values["from-matte"].trim(),
+              generationRoot: path.resolve("out", "generation"),
+            },
+            { x, y, opacity },
+          );
+          mutationCommitted = true;
+          output(
+            {
+              ok: true,
+              composition: res.composition,
+              use: res.use,
+              layer: res.layer,
+              mattedFrom: res.mattedFrom,
+              ...(res.generatedFrom ? { generatedFrom: res.generatedFrom } : {}),
+            },
+            isJson,
+            () => {
+              const rev = res.layer.currentRevision;
+              const detail =
+                rev.kind === "text"
+                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
+                  : `${rev.width}×${rev.height} ${rev.format}`;
+              const generated = res.generatedFrom
+                ? `; generation lineage from Generation Job ${res.generatedFrom.jobId} retained`
+                : "";
+              console.log(
+                `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
+                  `[${detail}] from matte ${res.mattedFrom.matteId} ` +
+                  `(engine ${res.mattedFrom.engine}, ${res.mattedFrom.contentHash.slice(0, 12)}; provenance retained${generated})`,
               );
             },
           );
