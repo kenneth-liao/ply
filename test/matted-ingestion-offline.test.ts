@@ -19,7 +19,6 @@ import { encodePng } from "./png.js";
 import { initProject } from "../src/project.js";
 import { runMatting } from "../src/matting.js";
 import { composeMatte, type MatteEngine } from "../src/matte.js";
-import { createComposition, addMattedLayerToComposition } from "../src/composition.js";
 
 mock.module("../src/segment.js", () => {
   throw new Error("TRIPWIRE: Matting ingestion imported the Matting engine module");
@@ -36,8 +35,10 @@ mock.module("ai", () => ({
 
 describe("matted-content ingestion runs with the engine and generation SDK forbidden (tripwire armed)", () => {
   test("ingesting a published matte completes offline with both modules unloaded", async () => {
-    // Import lazily inside the test so the mocks are definitely armed first.
-    const composition = await import("../src/composition.js");
+    // Import the ingest graph lazily inside the test so both mocks are
+    // definitely armed first (#106 pattern): a static import would evaluate
+    // composition.js before mock.module and never rebind.
+    const { createComposition, addMattedLayerToComposition } = await import("../src/composition.js");
     const root = await mkdtemp(path.join(tmpdir(), "ply-matted-offline-"));
     try {
       const projDir = path.join(root, "proj");
@@ -63,7 +64,7 @@ describe("matted-content ingestion runs with the engine and generation SDK forbi
       // ingestion below must run with the forbidden modules unloaded.
       const matte = await runMatting(path.join(root, "out", "matting"), "matte-offline-1", source, { engine });
 
-      const res = await composition.addMattedLayerToComposition(
+      const res = await addMattedLayerToComposition(
         projDir,
         "thumb",
         "hero",

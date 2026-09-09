@@ -247,7 +247,7 @@ async function run() {
       const compName = positionals[1];
       const localName = positionals[2];
       if (!compName || !localName) {
-        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --from-generation <jobId>)" }, isJson);
+        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
         process.exitCode = 2;
         return;
       }
