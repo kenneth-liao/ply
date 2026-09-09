@@ -383,6 +383,41 @@ describe("layer review — retained evidence", () => {
     expect(ok.reviewPath).toBe(fresh);
   });
 
+  test("an external directory symlink into the Project cannot bypass protection (PROD-1)", async () => {
+    await publishJob("gen-dest-2", []);
+    const ingested = await addGeneratedLayerToComposition(projDir, "thumb", "hero", {
+      jobRoot: jobsRoot,
+      jobId: "gen-dest-2",
+    });
+    const manifestBefore = await readFile(path.join(projDir, "ply.json"));
+
+    // alias -> proj: the lexical destination looks external, the write would
+    // land inside the Project. Every reserved target through the alias is
+    // refused and the Project's bytes stay intact.
+    const alias = path.join(root, "alias");
+    await Bun.spawn(["ln", "-s", projDir, alias]).exited;
+    for (const dest of [
+      path.join(alias, "ply.json"),
+      path.join(alias, ".ply.lock"),
+      path.join(alias, "renders", "x.html"),
+      path.join(alias, "compositions", "x.html"),
+    ]) {
+      await expect(reviewRetainedLayer(projDir, ingested.layer.id, dest)).rejects.toThrow(/reserved storage/);
+    }
+    expect(await readFile(path.join(projDir, "ply.json"))).toEqual(manifestBefore);
+
+    // A fresh non-reserved path through the alias is allowed and lands in
+    // the Project; a second attempt on the same physical path is refused —
+    // in-Project state is never overwritten.
+    const throughAlias = path.join(alias, "alias-review.html");
+    const ok = await reviewRetainedLayer(projDir, ingested.layer.id, throughAlias);
+    // The reported path is the caller-chosen destination verbatim; realpaths
+    // are containment guards only.
+    expect(ok.reviewPath).toBe(throughAlias);
+    await expect(reviewRetainedLayer(projDir, ingested.layer.id, throughAlias)).rejects.toThrow(/never overwritten/);
+    expect(await readFile(path.join(projDir, "alias-review.html"), "utf8")).toContain("evidence ·");
+  });
+
   test("a text Layer has no evidence to inspect — clear failure", async () => {
     const added = await import("../src/composition.js");
     const res = await added.addTextLayerToComposition(projDir, "thumb", "headline", {

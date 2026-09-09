@@ -31,7 +31,7 @@
  * generates, runs an engine, adopts into a library, or touches the network.
  */
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { GenerationJobRecord } from "./generation.js";
 import type { MattingRecord } from "./matting.js";
@@ -45,7 +45,7 @@ import {
 } from "./matting-retention.js";
 import { readLayerInternalFull, type ResolvedLayer } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
-import { withProjectLock } from "./project-lock.js";
+import { withProjectLock, atomicCreate } from "./project-lock.js";
 import { atomicReplace } from "./reference-import.js";
 import { outsideDir } from "./paths.js";
 import { dataUrl, escapeHtml } from "./html.js";
@@ -335,7 +335,9 @@ export async function reviewRetainedLayer(
   opts: ReviewOptions = {},
 ): Promise<RetainedLayerReview> {
   const resolvedRoot = await resolveProjectRoot(projectPath);
-  await guardProjectDestination(resolvedRoot, outPath);
+  // The destination guard runs before any evidence resolution: reserved
+  // Project storage and alias paths into it are refused before any read.
+  const dest = await guardProjectDestination(resolvedRoot, outPath);
   const review = await withProjectLock(resolvedRoot, async () => {
     const full = await readLayerInternalFull(resolvedRoot, layerId);
     const layer: ResolvedLayer = {
@@ -472,10 +474,12 @@ export async function reviewRetainedLayer(
     candidates,
     mattes,
   });
-  await publishSheet(outPath, Buffer.from(sheet), opts);
+  await publishSheet(dest, Buffer.from(sheet), outPath, opts);
   return {
     layerId: review.layerId,
-    reviewPath: outPath,
+    // The caller-chosen destination path verbatim; realpaths are containment
+    // guards only (the render --out reporting rule).
+    reviewPath: dest.target,
     candidate: review.candidate,
     references: review.references,
     generation: review.generation,
@@ -485,29 +489,20 @@ export async function reviewRetainedLayer(
   };
 }
 
-/** Publish the sheet atomically; the parent directory must already exist. */
-async function publishSheet(outPath: string, bytes: Buffer, opts: ReviewOptions): Promise<void> {
-  const parent = path.dirname(path.resolve(outPath));
-  let parentStat;
-  try {
-    parentStat = await stat(parent);
-  } catch {
-    throw new Error(`Review destination "${outPath}" has no existing parent directory — create it first`);
-  }
-  if (!parentStat.isDirectory()) {
-    throw new Error(`Review destination "${outPath}" parent is not a directory`);
-  }
-  await (opts.replaceArtifact ?? atomicReplace)(path.resolve(outPath), bytes);
-}
-
 /**
- * Reserved Project storage is protected state (docs/project-storage-contract.md
- * §6): a review sheet is derived evidence and must never be publishable over
- * the manifest, the lock, or any canonical directory — a caller pointing
- * --out there is refused instead of the Project being silently clobbered.
- * A fresh non-reserved path inside the Project is fine (like render exports);
- * an existing in-Project file is refused too — in-Project state is never
- * overwritten, and the sheet is regenerable anywhere.
+ * Destination policy for the retained review sheet (docs/project-storage-contract.md
+ * §6): reserved Project storage is protected state — a review sheet is derived
+ * evidence and must never be publishable over the manifest, the lock, or any
+ * canonical directory — and existing in-Project files are never overwritten.
+ * A fresh non-reserved path inside the Project is fine (like render exports).
+ *
+ * Containment is judged on PHYSICAL paths: the Project root and the existing
+ * destination parent are realpath-resolved first, so an external directory
+ * symlink that resolves into the Project is classified by where the write
+ * actually lands, not by its lexical shape — the alias cannot bypass the
+ * reserved-storage guard (PROD-1). Fresh in-Project destinations publish with
+ * atomic no-replace (O_EXCL), so even a writer racing the same path loses
+ * loudly instead of being silently replaced.
  */
 const RESERVED_PROJECT_STORAGE = new Set([
   "compositions",
@@ -518,25 +513,67 @@ const RESERVED_PROJECT_STORAGE = new Set([
   "matting",
 ]);
 
-async function guardProjectDestination(resolvedProjectRoot: string, outPath: string): Promise<void> {
+interface ResolvedDestination {
+  /** The lexical destination path — the external overwrite case's target. */
+  target: string;
+  /** Where an in-Project write physically lands (realpath'd parent + name). */
+  landedPath: string;
+  inProject: boolean;
+}
+
+async function resolveReviewDestination(resolvedProjectRoot: string, outPath: string): Promise<ResolvedDestination> {
   const target = path.resolve(outPath);
-  if (outsideDir(resolvedProjectRoot, target)) return; // outside the Project: the documented overwrite case
-  const rel = path.relative(resolvedProjectRoot, target);
+  const parent = path.dirname(target);
+  let parentStat;
+  try {
+    parentStat = await stat(parent);
+  } catch {
+    throw new Error(`Review destination "${outPath}" has no existing parent directory — create it first`);
+  }
+  if (!parentStat.isDirectory()) {
+    throw new Error(`Review destination "${outPath}" parent is not a directory`);
+  }
+  // The parent exists, so its realpath is authoritative for where a rename
+  // or create lands; a dangling alias already failed the stat above.
+  const parentReal = await realpath(parent);
+  const inProject = !outsideDir(await realpath(resolvedProjectRoot), parentReal);
+  return { target, landedPath: path.join(parentReal, path.basename(target)), inProject };
+}
+
+async function guardProjectDestination(resolvedProjectRoot: string, outPath: string): Promise<ResolvedDestination> {
+  const dest = await resolveReviewDestination(resolvedProjectRoot, outPath);
+  if (!dest.inProject) return dest; // outside the Project: the documented overwrite case
+  const rel = path.relative(await realpath(resolvedProjectRoot), dest.landedPath);
   const top = rel.split(path.sep)[0]!;
   if (rel === "ply.json" || rel === ".ply.lock" || RESERVED_PROJECT_STORAGE.has(top)) {
     throw new Error(
       `Review destination "${outPath}" is inside the Project's reserved storage — choose a path outside it (reserved Project state is never overwritten)`,
     );
   }
+  return dest;
+}
+
+/**
+ * Publish the resolved destination: fresh in-Project paths with atomic
+ * no-replace (an existing file — including one created concurrently after
+ * the guard — makes the publication fail loudly; in-Project state is never
+ * overwritten), external destinations with the documented atomic replace.
+ */
+async function publishSheet(dest: ResolvedDestination, bytes: Buffer, outPath: string, opts: ReviewOptions): Promise<void> {
+  if (!dest.inProject) {
+    await (opts.replaceArtifact ?? atomicReplace)(dest.target, bytes);
+    return;
+  }
   try {
-    await stat(target);
+    await atomicCreate(dest.landedPath, bytes);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // fresh non-reserved path: allowed
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(
+        `Review destination "${outPath}" already exists inside the Project — choose a fresh path (in-Project state is never overwritten)`,
+      );
+    }
     throw err;
   }
-  throw new Error(
-    `Review destination "${outPath}" already exists inside the Project — choose a fresh path (in-Project state is never overwritten)`,
-  );
 }
 
 /**
