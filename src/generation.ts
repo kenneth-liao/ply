@@ -178,15 +178,31 @@ export interface ValidatedUniformRequest {
   spec: ReturnType<typeof resolveModel>;
 }
 
-/** A request after ingestion (validateUniformRequest + Reference identity derivation). */
-export type IngestedUniformRequest = ValidatedUniformRequest;
+/**
+ * Compile-time brand: only ingestUniformRequest produces an
+ * IngestedUniformRequest. executeUniformGeneration therefore cannot accept
+ * validateUniformRequest() output — a validated request carries no Reference
+ * identities, so executing it would silently generate with zero attachments
+ * (INT-1). The brand is a runtime symbol, so it never serializes into
+ * records (JSON.stringify skips symbol keys) and never reaches a provider.
+ */
+const ingestedBrand = Symbol("ingestedUniformRequest");
+
+/** A request after ingestion (validateUniformRequest + Reference identity derivation) — the only shape Generation executes. */
+export interface IngestedUniformRequest {
+  request: NormalizedUniformRequest;
+  spec: ReturnType<typeof resolveModel>;
+  [ingestedBrand]: true;
+}
 
 /**
- * The one ingestion point for uniform generation requests: external input
- * becomes the canonical normalized shape here, so every downstream reader can
- * assume it. All semantic validation happens before any provider call — a
- * refused request costs nothing. The returned request carries the effective
- * (default-filled, normalized) sizing the record will publish.
+ * The pure semantic/capability gate for uniform generation requests: external
+ * input is checked here before any provider call and before any Reference
+ * byte is read — a refused request costs nothing. It performs no IO and
+ * derives no identities; the returned request carries the effective
+ * (default-filled, normalized) sizing. Reference identity derivation is
+ * ingestUniformRequest's job — that is the ingestion boundary, and only its
+ * output may be executed.
  */
 export function validateUniformRequest(input: UniformGenerationRequest): ValidatedUniformRequest {
   if (!input.prompt.trim())
@@ -263,11 +279,13 @@ function normalizeSizing(
  * semantic validation plus Reference identity derivation (DEC-003) — each
  * Reference file is read exactly once here, at Job creation, and its sha-256
  * becomes the recorded identity in caller order. Missing files and
- * unsupported model capability are refused before any provider call.
+ * unsupported model capability are refused before any provider call. This is
+ * the one ingestion point and the only producer of IngestedUniformRequest;
+ * validateUniformRequest's output cannot be executed.
  */
 export async function ingestUniformRequest(input: UniformGenerationRequest): Promise<IngestedUniformRequest> {
   const { request, spec } = validateUniformRequest(input);
-  if (!input.references?.length) return { request, spec };
+  if (!input.references?.length) return { request, spec, [ingestedBrand]: true };
   const references: UniformReference[] = [];
   for (const p of input.references) {
     if (typeof p !== "string" || !p.trim())
@@ -276,7 +294,7 @@ export async function ingestUniformRequest(input: UniformGenerationRequest): Pro
     const loaded = await loadVerifiedReference({ path: p });
     references.push({ path: p, contentHash: sha256(loaded.bytes) });
   }
-  return { request: { ...request, references }, spec };
+  return { request: { ...request, references }, spec, [ingestedBrand]: true };
 }
 
 /**

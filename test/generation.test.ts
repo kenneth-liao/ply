@@ -412,6 +412,14 @@ describe("ingestUniformRequest — Reference ingestion at Job creation", () => {
     const ingested = await ingestUniformRequest(base);
     expect("references" in ingested.request).toBe(false);
   });
+
+  test("validate-only output cannot be executed — IngestedUniformRequest is branded (INT-1)", () => {
+    const validated = validateUniformRequest(base);
+    // @ts-expect-error — the brand makes validate-only output unexecutable;
+    // removing the brand makes this @ts-expect-error unused and tsc fails.
+    const notIngested: IngestedUniformRequest = validated;
+    expect(notIngested).toBeDefined();
+  });
 });
 
 /**
@@ -500,10 +508,12 @@ describe("executeUniformGeneration — verified Reference bytes", () => {
     const provider = fakeProvider();
     const raw = await ingestUniformRequest({ ...base, references: [path.join(root, "a.png")] }).catch(() => null);
     expect(raw).toBeNull(); // ingestion refuses; construct the bypass by hand instead
-    const handBuilt: IngestedUniformRequest = {
+    // A hostile hand-built ingested request — the cast is the point: the
+    // runtime capability gate must hold even for a caller who forges the shape.
+    const handBuilt = {
       request: { ...base, references: [{ path: path.join(root, "a.png"), contentHash: "a".repeat(64) }] },
       spec: resolveModel("flux"),
-    };
+    } as unknown as IngestedUniformRequest;
     await expect(
       executeUniformGeneration(jobRoot(), "gen-cap", handBuilt, { provider }),
     ).rejects.toThrow(/not qualified reference-capable/);

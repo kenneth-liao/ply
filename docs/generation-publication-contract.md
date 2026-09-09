@@ -101,11 +101,16 @@ Facts and their one home:
   `costMeasured: false` and states the basis in a warning; it never claims
   the text-only rate as measured.
 
-## 3. Request validation (one ingestion boundary)
+## 3. Request validation and ingestion (two steps, one boundary chain)
 
-`validateUniformRequest` (src/generation.ts) is the single ingestion point.
-Semantic validation happens there, before any provider call — a refused
-request costs nothing:
+`validateUniformRequest` (src/generation.ts) is the pure semantic/capability
+gate: no IO, no Reference identities, refused requests cost nothing.
+`ingestUniformRequest` is the one ingestion point — the only producer of the
+branded `IngestedUniformRequest` that `executeUniformGeneration` accepts; a
+validate-only request cannot be executed, so Generation can never silently run
+with zero attachments.
+
+Both steps run the following semantic checks before any provider call:
 
 - Non-empty prompt; intent is `full-canvas` or `isolated`; count 1–8.
 - Model resolution via the shared model registry (`src/models.ts`): registry
@@ -150,16 +155,17 @@ The CLI layer additionally classifies pure syntax problems as usage errors
 ## 4. Provider seam
 
 `UniformProvider` (src/generation.ts) is the seam the outbound request is
-captured at: `image({ model, prompt, images?, size?, aspectRatio? })` for
-size/aspect image models, `text({ model, prompt, images?, temperature? })` for
-multimodal models. `prompt` is the plain string when no References are
-attached, or `{ text, images: Uint8Array[] }` — the verified bytes in caller
-order — otherwise; `images` carries the verified bytes for multimodal calls.
-Image-kind requests are built through `buildImageRequestArgs` (src/generate.ts)
-— the one home of the image-kind provider request shape — so the uniform
-surface cannot drift from the legacy call shape. Legacy callers pass no
-explicit sizing and keep their exact request bytes (proven by
-test/image-request-args.test.ts).
+captured at: `image({ model, prompt, size?, aspectRatio? })` for size/aspect
+image models, `text({ model, prompt, images?, temperature? })` for multimodal
+models. On image-kind there is no top-level `images` field: `prompt` is the
+plain string when no References are attached, or `{ text, images:
+Uint8Array[] }` — the verified bytes in caller order — otherwise. On
+multimodal, the top-level `images` field carries the verified bytes in caller
+order (message parts on the production path). Image-kind requests are built
+through `buildImageRequestArgs` (src/generate.ts) — the one home of the
+image-kind provider request shape — so the uniform surface cannot drift from
+the legacy call shape. Legacy callers pass no explicit sizing and keep their
+exact request bytes (proven by test/image-request-args.test.ts).
 
 Missing-image responses are refused by name; provider errors surface verbatim.
 
