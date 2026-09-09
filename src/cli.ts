@@ -6,6 +6,7 @@ const commands = {
   composition: "composition-cli.ts",
   layer: "layer-cli.ts",
   generate: "generation-cli.ts",
+  matte: "matting-cli.ts",
   scene: "scene-cli.ts",
   library: "library-cli.ts",
   jobs: "job-cli.ts",
@@ -15,13 +16,15 @@ const [command, ...args] = process.argv.slice(2);
 if (!command || command === "--help" || command === "-h") {
   console.log(`Ply — local image composition
 
-Usage: ply <project|composition|layer|generate|scene|library|jobs> <command> [options]
+Usage: ply <project|composition|layer|generate|matte|scene|library|jobs> <command> [options]
 
   project        Create, select, and inspect self-contained Projects
   composition    Create, add layers, import, remove, reorder, inspect, render, replay, and list Compositions
   layer          Inspect and list Layers within a Project
   generate       Generate source images as Generation Jobs — one uniform operation,
                  full-canvas or isolated intent, no content policy (new surface)
+  matte          Matte a local image independently — one local true-alpha operation,
+                 no Generation Job, no network (new surface)
   scene          Author, inspect, and render Scenes locally (legacy)
   library        Inspect and maintain the current asset library (legacy)
   jobs           Generate and review source images (legacy)
