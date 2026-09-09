@@ -48,7 +48,7 @@ describe("composeMatte", () => {
     expect(png.px(6, 6)).toEqual([200, 30, 40, 255]);
     // Background: cut out, and the source colour is irrelevant once alpha is 0.
     expect(png.px(0, 0)[3]).toBe(0);
-    // The result satisfies the adoption gate — that is the whole point.
+    // The result satisfies the true-alpha gate — that is the whole point.
     const report = verifyTrueAlpha(matted, "cand.png");
     expect(report.opaquePx).toBe(64);
     expect(report.transparentPx).toBe(16 * 16 - 64);

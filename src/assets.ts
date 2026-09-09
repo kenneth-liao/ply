@@ -72,7 +72,7 @@ export interface CutoutMeta {
   editPrompt?: string;
   model?: string;
   adoptedFrom?: string;
-  /** Provenance carried from the generating job (creator adoption). */
+  /** Provenance carried from the generating job (pre-retirement job adoption). */
   subject?: string;
   fullPrompt?: string;
   /**
@@ -82,7 +82,7 @@ export interface CutoutMeta {
    * render may use it.
    */
   masks?: Record<string, string>;
-  /** How the cutout was isolated — job adoption only accepts a verified true-alpha matte. */
+  /** How the cutout was isolated — the retired job-adoption gate only accepted a verified true-alpha matte. */
   matting?: "true-alpha";
   /** The matting engine that produced it ("native-alpha" when the model returned one). */
   matteEngine?: string;
@@ -102,7 +102,7 @@ export interface ObjectMeta {
   fullPrompt?: string;
   model?: string;
   adoptedFrom?: string;
-  /** How the object was isolated — adoption only accepts verified true alpha. */
+  /** How the object was isolated — the retired adoption gate only accepted verified true alpha. */
   matting: "true-alpha";
   /** The matting engine that produced it ("native-alpha" when the model returned one). */
   matteEngine?: string;
@@ -281,7 +281,7 @@ export function extensionFor(mediaType: string): string {
  * Atomically reserve an asset id library-wide. The exclusive mkdir is the
  * claim: either this process owns the id for the duration of its write or the
  * id is taken. Held across the collision check and the kind-directory create
- * (which are themselves check-then-act), so concurrent adoptions of the same
+ * (which are themselves check-then-act), so concurrent writes of the same
  * id — across kinds — have exactly one winner.
  */
 async function reserveAssetId(root: string, id: string): Promise<string> {
@@ -291,22 +291,21 @@ async function reserveAssetId(root: string, id: string): Promise<string> {
     await mkdir(lockDir);
   } catch {
     throw new Error(
-      `"${id}" is reserved right now — another adoption holds it, or a crashed adoption left a stale reservation at ${lockDir} (remove it if no adoption is running)`,
+      `"${id}" is reserved right now — another write holds it, or a crashed write left a stale reservation at ${lockDir} (remove it if no write is running)`,
     );
   }
   return lockDir;
 }
 
 /**
- * The one canonical adoption write path, shared by every generated-asset kind:
- * the id must be valid, the id is reserved atomically library-wide, and the
- * asset directory is created exclusively (mkdir fails on an existing id), so
- * overwriting an adopted asset is unrepresentable — not merely detected.
- * Returns the image path.
+ * The one canonical library write path for masks: the id must be valid, the
+ * id is reserved atomically library-wide, and the asset directory is created
+ * exclusively (mkdir fails on an existing id), so overwriting an asset is
+ * unrepresentable — not merely detected. Returns the image path.
  */
 async function writeKindAsset(
   root: string,
-  kindDir: "plates" | "objects" | "cutouts" | "masks",
+  kindDir: "masks",
   fileBase: string,
   id: string,
   bytes: Uint8Array,
@@ -319,14 +318,14 @@ async function writeKindAsset(
   try {
     // An id is library-wide vocabulary: no asset of any kind may share it.
     // Re-checked under the reservation — the reservation is what makes this
-    // check-then-act pair atomic against concurrent adoptions.
+    // check-then-act pair atomic against concurrent writes.
     for (const kind of KIND_DIRS) {
       if (existsSync(path.join(root, kind, id)))
-        throw new Error(`"${id}" already exists in the library — adoption never overwrites an asset`);
+        throw new Error(`"${id}" already exists in the library — the write path never overwrites an asset`);
     }
     const kindRoot = path.join(root, kindDir);
     await mkdir(kindRoot, { recursive: true });
-    // Exclusive create: a second adoption of the same id throws here instead of
+    // Exclusive create: a second write of the same id throws here instead of
     // clobbering the first asset's bytes.
     const dir = path.join(kindRoot, id);
     await mkdir(dir);
@@ -337,17 +336,6 @@ async function writeKindAsset(
   } finally {
     await rm(reservation, { recursive: true, force: true });
   }
-}
-
-/** Write a new plate asset into the library (the plate-kind write path). */
-export async function writePlateAsset(
-  root: string,
-  id: string,
-  bytes: Uint8Array,
-  meta: PlateMeta,
-  mediaType = "image/png",
-): Promise<string> {
-  return writeKindAsset(root, "plates", "plate", id, bytes, meta, mediaType);
 }
 
 /**
@@ -366,48 +354,15 @@ export async function writeMaskAsset(
   return writeKindAsset(root, "masks", "mask", id, bytes, meta, "image/png");
 }
 
-/**
- * Write a new object asset into the library (the object-kind write path).
- * Callers must have verified true alpha first — this function records the
- * matting claim, it does not re-check the pixels. The media type is not a
- * parameter: adoption verifies the bytes are PNG, so the contract's
- * `object.png` is hardcoded here and a mislabeled candidate cannot produce a
- * differently-named asset.
- */
-export async function writeObjectAsset(
-  root: string,
-  id: string,
-  bytes: Uint8Array,
-  meta: ObjectMeta,
-): Promise<string> {
-  return writeKindAsset(root, "objects", "object", id, bytes, meta, "image/png");
-}
-
-/**
- * Write a generated creator candidate into the library as a Cutout Asset
- * (REQ-017). Callers must have verified true alpha first and must force
- * `approval: "trial"` — this function records the claims it is given, it does
- * not re-check pixels or approval. The media type is not a parameter:
- * adoption verifies the bytes are PNG, so the contract's `cutout.png` is
- * hardcoded here and a mislabeled candidate cannot produce a .jpg asset.
- */
-export async function writeCreatorAsset(
-  root: string,
-  id: string,
-  bytes: Uint8Array,
-  meta: CutoutMeta,
-): Promise<string> {
-  return writeKindAsset(root, "cutouts", "cutout", id, bytes, meta, "image/png");
-}
 
 // --- the Creator approval operation (REQ-018) --------------------------------
 //
-// The one promotion path from trial to approved. Adoption (src/jobs.ts) and
-// `library add-cutout` only ever write the state a source claims — adoption
-// forces "trial", and `--approval approved` imports an externally approved
-// source rather than promoting a trial. Promotion happens here and nowhere else:
-// it requires a recorded approver decision and refuses to re-decide an
-// already-approved asset.
+// The one promotion path from trial to approved. `library add-cutout` only
+// ever writes the state a source claims — the retired adoption (src/jobs.ts,
+// removed by #115) forced "trial", and `--approval approved` imports an
+// externally approved source rather than promoting a trial. Promotion happens
+// here and nowhere else: it requires a recorded approver decision and refuses
+// to re-decide an already-approved asset.
 
 /** The recorded human decision that promotes a trial Creator Asset. */
 export interface ApprovalDecision {
@@ -431,7 +386,7 @@ export async function approveCutout(
   decision: ApprovalDecision,
 ): Promise<CutoutMeta> {
   // The id names a path segment below the cutouts directory — the same shape
-  // adoption enforces, so a crafted id cannot reach outside the library.
+  // the write path enforces, so a crafted id cannot reach outside the library.
   if (!ASSET_ID_PATTERN.test(id))
     throw new Error(`Invalid asset id "${id}" — use lowercase letters/digits/hyphens`);
   if (!decision.approvedBy.trim())

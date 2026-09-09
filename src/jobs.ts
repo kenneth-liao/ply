@@ -1,27 +1,29 @@
 /**
  * Legacy Generation Job records (REQ-013/REQ-014) — the read-only record
- * surface and immutable Asset adoption for the retired plate/object/creator
- * lifecycle (#114, spec #102).
+ * surface for the retired plate/object/creator lifecycle (#114, #115, spec
+ * #102).
  *
  * A job is one directory under the jobs root (`out/jobs/<jobId>/`):
  *   job.json                 — the record: request, typed references, run lineage
  *   candidates/<sha-256>.png — content-addressed candidate bytes
  *
  * The category-specific entry points (`jobs plates`, `jobs objects`,
- * `jobs creators`) and kind-dispatched `jobs rerun` generation are retired:
- * this module no longer starts or extends jobs. What remains is the one
- * canonical reader shared by inspection (`jobs show/list/review`), review
- * evidence, and adoption — `adoptCandidate` copies a recorded candidate into
- * the asset library through the normal contract and can never overwrite an
- * existing asset (see `writePlateAsset` in assets.ts). Adoption never edits a
- * Scene or unrelated assets. New generation goes through the uniform
- * operation (src/generation.ts, `ply generate`).
+ * `jobs creators`), kind-dispatched `jobs rerun` generation, and candidate
+ * adoption (`jobs adopt`, `library adopt`) are all retired: this module no
+ * longer starts or extends jobs and no longer writes library assets. What
+ * remains is the one canonical reader shared by inspection (`jobs
+ * show/list/review`) and review evidence — `resolveIsolationEvidence` reads
+ * and verifies a recorded candidate and its recorded isolation evidence
+ * (the matte a pre-retirement run produced) without writing anything. New
+ * generation goes through the uniform operation (src/generation.ts, `ply
+ * generate`); isolated content is produced by the independent Matting
+ * operation (src/matting.ts, `ply matte`) and ingested as an ordinary
+ * Project Layer.
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { TextZone } from "./generate.js";
-import { writePlateAsset, writeObjectAsset, writeCreatorAsset } from "./assets.js";
 import { verifyTrueAlpha } from "./alpha.js";
 
 /**
@@ -97,8 +99,9 @@ export type JobRequest = PlateJobRequest | ObjectJobRequest | CreatorJobRequest;
  * The isolated form of a candidate (REQ-017): the true-alpha bytes the
  * matting pass produced, content-addressed beside the candidate that
  * generated them. This is the *only* home for a creator candidate's
- * adoptable bytes — adoption reads the matte, never the raw candidate, so
- * there is no second path by which opaque bytes could reach the library.
+ * adoptable bytes — the retired adoption read the matte, never the raw
+ * candidate, so there was no second path by which opaque bytes could reach
+ * the library.
  */
 export interface JobCandidateMatte {
   contentHash: string;
@@ -116,7 +119,7 @@ export interface JobCandidate {
   /**
    * Present when the matting pass ran and succeeded for this candidate.
    * Absent means the pass failed (the run records why) — the candidate is
-   * still reviewable evidence, but it cannot be adopted.
+   * still reviewable evidence, but it was never adoptable without one.
    */
   matte?: JobCandidateMatte;
 }
@@ -165,12 +168,12 @@ export interface JobSummary {
 /**
  * Load a job record; missing, corrupt, or contradictory records fail loudly.
  * The record's `kind` mirrors `request.kind`, but a hand-edited or tampered
- * file could disagree — adoption and review dispatch on the record while the
- * request types describe the recorded contract, so an unvalidated
- * contradiction would let one job adopt under a different contract than it
- * recorded (bypassing the object alpha gate). Both are validated equal here,
- * the single ingestion point, and v1 records are pinned to plate jobs (v2
- * introduced object jobs).
+ * file could disagree — inspection and review dispatch on the record while
+ * the request types describe the recorded contract, so an unvalidated
+ * contradiction would have let the retired adoption run under a different
+ * contract than the one recorded (bypassing the object alpha gate). Both are
+ * validated equal here, the single ingestion point, and v1 records are
+ * pinned to plate jobs (v2 introduced object jobs).
  */
 const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -195,7 +198,7 @@ export async function loadJob(jobRoot: string, jobId: string): Promise<Generatio
     const job = JSON.parse(raw) as GenerationJob;
     // The (schemaVersion, kind) matrix is the rollback boundary (PROD-1):
     // legacy records keep their versions and kinds on read, so an old record
-    // never silently gains new semantics on inspection or adoption. Newer
+    // never silently gains new semantics on inspection or review. Newer
     // contracts (v4 role-aware-Reference Plate/Object, v5 caller-ordered
     // Creator) were written by the retired generation entry points; this
     // binary no longer writes any legacy record, but records written before
@@ -271,24 +274,9 @@ export async function listJobs(jobRoot: string): Promise<JobSummary[]> {
   return jobs;
 }
 
-/** What adoption wrote, and where it came from. */
-export interface AdoptionResult {
-  assetId: string;
-  /**
-   * The content identity of the bytes actually written — the Asset's own
-   * identity (ADR-0002), which for a creator adoption is the matte's, not the
-   * candidate's. The candidate this came from is named by `adoptedFrom`;
-   * nothing stores either hash in the Asset's meta.
-   */
-  contentHash: string;
-  imagePath: string;
-  /** `job:<jobId>#<candidateHash>` — the lineage, the only home for it. */
-  adoptedFrom: string;
-}
-
 /**
  * The candidate's own bytes, verified against the record. Review displays
- * these directly; adoption writes them when the evidence says so.
+ * these directly.
  */
 export interface VerifiedCandidateBytes {
   file: string;
@@ -297,21 +285,22 @@ export interface VerifiedCandidateBytes {
 }
 
 /**
- * What adoption would write for one recorded candidate — or why it cannot:
+ * What a pre-retirement run recorded as the adoptable form of one candidate
+ * — or why it could not be adopted:
  *
- * - `"matte"` — the isolated form the matting pass produced; the bytes
- *   adoption writes for a creator candidate, and for an object candidate
- *   whose run recorded one (the identity reported is the matte's).
- * - `"candidate"` — the candidate's own verified bytes, adopted as-is: every
- *   plate (ADR-0011), and an object candidate with no recorded matte whose
- *   bytes pass the true-alpha gate (the defensive native-alpha route).
- * - `"none"` — recorded, legitimate non-adoptability, with the reason
- *   adoption raises and its precise cause: `"no-matte"` when no matte was
- *   recorded (a creator without one, or an object whose own bytes fail the
- *   gate), `"invalid-matte"` when a hash-matching recorded matte fails the
- *   true-alpha gate — present, but not an adoptable matte.
+ * - `"matte"` — the isolated form the matting pass produced; the bytes a
+ *   creator adoption wrote, and for an object candidate whose run recorded
+ *   one (the identity reported is the matte's).
+ * - `"candidate"` — the candidate's own verified bytes as-is: every plate
+ *   (ADR-0011), and an object candidate with no recorded matte whose bytes
+ *   pass the true-alpha gate (the defensive native-alpha route).
+ * - `"none"` — recorded, legitimate non-adoptability, with the reason the
+ *   retired adoption raised and its precise cause: `"no-matte"` when no
+ *   matte was recorded (a creator without one, or an object whose own bytes
+ *   fail the gate), `"invalid-matte"` when a hash-matching recorded matte
+ *   fails the true-alpha gate — present, but not an adoptable matte.
  */
-export type AdoptionEvidence =
+export type IsolationEvidence =
   | { from: "matte"; file: string; bytes: Buffer; contentHash: string; engine: string }
   | { from: "candidate"; file: string; bytes: Buffer; contentHash: string }
   | { from: "none"; cause: "no-matte" | "invalid-matte"; reason: string };
@@ -319,36 +308,37 @@ export type AdoptionEvidence =
 export interface ResolvedCandidateEvidence {
   /** The candidate's own bytes — read once, verified, never re-read. */
   candidate: VerifiedCandidateBytes;
-  /** What adoption would write for it — or why it cannot. */
-  evidence: AdoptionEvidence;
+  /** The candidate's recorded isolation evidence — or why there is none. */
+  evidence: IsolationEvidence;
 }
 
 /**
- * The one canonical reader shared by adoption and review (REQ-015, REQ-017,
- * US-022), so the two can never drift. Read-only: it only reads and verifies
- * recorded bytes, and hands back the verified buffers for both the candidate
- * and — when one is what adoption writes — its evidence, so callers never
- * re-read the same bytes. A tampered or missing recorded file is not
- * evidence of non-adoptability: reading and identity verification happen
- * here first, and throw — a loud failure for both callers, never a silent
- * downgrade or a partial render.
+ * The recovery guidance attached to a candidate that failed the true-alpha
+ * gate or has no matte: one home, so every surfaced reason states the same
+ * next step. Adoption is retired (#115) — the step is the replacement
+ * workflow, never the retired path.
  */
-/**
- * The adoption surface's recovery for a candidate that failed the true-alpha
- * gate. One home: the gate (src/alpha.ts) states only the why, so every
- * adoption call site attaches the same next step through this helper.
- */
-function adoptionRecovery(jobId: string): string {
+function isolationRecovery(): string {
   return (
-    `Adoption requires true alpha (a transparent-background PNG with a real matte) — ` +
+    `Isolated content requires true alpha (a transparent-background PNG with a real matte) — ` +
     `RGB chroma-key color distance alone cannot qualify an output (REQ-015, REQ-017). ` +
-    `Category-specific generation is retired: record a new uniform Generation Job with "bun run generate" ` +
-    `(use --intent isolated for isolated output), matte it explicitly with "bun run matte", and ingest it as a Layer — ` +
-    `or adopt a candidate of job "${jobId}" that has a recorded matte.`
+    `Generation and adoption are retired: record a uniform Generation Job with "bun run generate" ` +
+    `(use --intent isolated for isolated output), matte it explicitly with "bun run matte", ` +
+    `and ingest the verified result as an ordinary Project Layer ` +
+    `("ply composition add <comp> <name> --from-matte <matteId>").`
   );
 }
 
-export async function resolveAdoptionEvidence(
+/**
+ * The one canonical reader shared by inspection and review (REQ-015,
+ * REQ-017, US-022), so the two can never drift. Read-only: it only reads and
+ * verifies recorded bytes, and hands back the verified buffers for both the
+ * candidate and — when one is its isolation evidence — the matte, so callers
+ * never re-read the same bytes. A tampered or missing recorded file throws —
+ * a loud failure for both callers, never a silent downgrade or a partial
+ * render.
+ */
+export async function resolveIsolationEvidence(
   jobRoot: string,
   jobId: string,
   kind: JobKind,
@@ -357,37 +347,38 @@ export async function resolveAdoptionEvidence(
   const dir = jobDir(jobRoot, jobId);
   const bytes = await readFile(path.join(dir, cand.file)).catch(() => {
     throw new Error(
-      `Candidate file "${cand.file}" is missing — the job record cannot be adopted or rendered as review evidence`,
+      `Candidate file "${cand.file}" is missing — the job record cannot be rendered as review evidence`,
     );
   });
   const actual = sha256(bytes);
   if (actual !== cand.contentHash)
     throw new Error(
-      `Candidate file "${cand.file}" no longer matches its recorded identity (sha-256 ${cand.contentHash}, actual ${actual}) — it cannot be adopted or rendered as review evidence`,
+      `Candidate file "${cand.file}" no longer matches its recorded identity (sha-256 ${cand.contentHash}, actual ${actual}) — it cannot be rendered as review evidence`,
     );
   const candidate: VerifiedCandidateBytes = { file: cand.file, bytes, contentHash: cand.contentHash };
 
-  // A plate is adopted as-is, opaque by contract (ADR-0011).
+  // A plate carries no isolation evidence — its recorded bytes are the
+  // review evidence as-is (opaque by contract, ADR-0011).
   if (kind === "plate")
     return {
       candidate,
       evidence: { from: "candidate", file: cand.file, bytes, contentHash: cand.contentHash },
     };
 
-  // Creators and objects are adopted as their matte when one was recorded —
-  // re-verified against the identity the run recorded, then the true-alpha
-  // gate on the exact bytes that would enter the library.
+  // Creators and objects carry the matte a pre-retirement run's matting pass
+  // produced, when one was recorded — re-verified against the identity the
+  // run recorded, then through the true-alpha gate on those exact bytes.
   if (cand.matte) {
     const record = cand.matte;
     const matteBytes = await readFile(path.join(dir, record.file)).catch(() => {
       throw new Error(
-        `Matte file "${record.file}" is missing — the job record cannot be adopted or rendered as review evidence`,
+        `Matte file "${record.file}" is missing — the job record cannot be rendered as review evidence`,
       );
     });
     const matteActual = sha256(matteBytes);
     if (matteActual !== record.contentHash)
       throw new Error(
-        `Matte file "${record.file}" no longer matches its recorded identity (sha-256 ${record.contentHash}, actual ${matteActual}) — it cannot be adopted or rendered as review evidence`,
+        `Matte file "${record.file}" no longer matches its recorded identity (sha-256 ${record.contentHash}, actual ${matteActual}) — it cannot be rendered as review evidence`,
       );
     try {
       verifyTrueAlpha(matteBytes, record.file);
@@ -397,7 +388,7 @@ export async function resolveAdoptionEvidence(
         evidence: {
           from: "none",
           cause: "invalid-matte",
-          reason: `${(err as Error).message} ${adoptionRecovery(jobId)}`,
+          reason: `${(err as Error).message} ${isolationRecovery()}`,
         },
       };
     }
@@ -414,8 +405,9 @@ export async function resolveAdoptionEvidence(
   }
 
   if (kind === "creator")
-    // A creator candidate is adopted as its matte — the raw candidate is
-    // opaque by measurement, so there is no branch that could adopt it.
+    // A creator candidate's only adoptable form was its matte — the raw
+    // candidate is opaque by measurement, so there was never a branch that
+    // could adopt it.
     return {
       candidate,
       evidence: {
@@ -423,14 +415,12 @@ export async function resolveAdoptionEvidence(
         cause: "no-matte",
         reason:
           `Candidate "${cand.file}" carries no matte — the matting pass did not produce one for it (see the run's warnings). ` +
-          `Category-specific generation is retired: record a new uniform Generation Job with "bun run generate" ` +
-          `(use --intent isolated for isolated output) and matte it explicitly with "bun run matte", ` +
-          `or adopt a candidate of job "${jobId}" that has a recorded matte.`,
+          isolationRecovery(),
       },
     };
 
-  // An object without a matte qualifies only through its own bytes: the same
-  // true-alpha gate, so an opaque candidate is refused by name.
+  // An object without a matte qualified only through its own bytes: the same
+  // true-alpha gate, so an opaque candidate was refused by name.
   try {
     verifyTrueAlpha(bytes, cand.file);
   } catch (err) {
@@ -439,7 +429,7 @@ export async function resolveAdoptionEvidence(
       evidence: {
         from: "none",
         cause: "no-matte",
-        reason: `${(err as Error).message} ${adoptionRecovery(jobId)}`,
+        reason: `${(err as Error).message} ${isolationRecovery()}`,
       },
     };
   }
@@ -449,110 +439,3 @@ export async function resolveAdoptionEvidence(
   };
 }
 
-/**
- * Adopt a recorded candidate as a new immutable Asset — the kind follows the
- * job: a plate job adopts a Plate Asset; a creator job adopts the candidate's
- * verified matte as a trial Cutout Asset (REQ-017); an object job adopts the
- * candidate's verified matte when its run produced one, or the candidate's
- * own natively isolated bytes otherwise, as an Object Asset (REQ-015). Every
- * route reads through resolveAdoptionEvidence — the one canonical reader
- * shared with review — so the identity gates cannot drift apart.
- *
- * The candidate is addressed by exact content hash (a unique prefix is
- * accepted); its bytes are re-derived and verified before adoption, so a
- * tampered or missing file cannot enter the library under a stale identity.
- * Overwriting an existing asset is unrepresentable — the write path refuses
- * existing ids.
- */
-export async function adoptCandidate(
-  jobRoot: string,
-  jobId: string,
-  candidateRef: string,
-  assetId: string,
-  opts: { libraryRoot: string; name?: string; tags?: string[] },
-): Promise<AdoptionResult> {
-  const job = await loadJob(jobRoot, jobId);
-  // Uniqueness is on content identity: the same bytes recurring across runs
-  // collapse to one candidate, so ambiguity only means two distinct hashes.
-  const byHash = new Map<string, { cand: JobCandidate; run: JobRun }>();
-  for (const { cand, run } of job.runs.flatMap((run) =>
-    run.candidates.map((cand) => ({ cand, run })),
-  )) {
-    if (cand.contentHash.startsWith(candidateRef) && !byHash.has(cand.contentHash))
-      byHash.set(cand.contentHash, { cand, run });
-  }
-  if (byHash.size === 0)
-    throw new Error(`Job "${jobId}" has no candidate matching "${candidateRef}"`);
-  if (byHash.size > 1)
-    throw new Error(
-      `Candidate reference "${candidateRef}" is ambiguous — it matches ${byHash.size} distinct candidates; use a longer hash prefix`,
-    );
-  // A recurring hash resolves to its first recorded run — the earliest lineage.
-  const { cand, run } = byHash.values().next().value!;
-
-  // The one canonical read: the candidate's verified bytes plus the evidence
-  // of what adoption would write — or the recorded reason it cannot. Tampered
-  // or missing recorded evidence throws here, before anything is written.
-  const { evidence } = await resolveAdoptionEvidence(jobRoot, jobId, job.kind, cand);
-  if (evidence.from === "none") throw new Error(evidence.reason);
-
-  const adoptedFrom = `job:${jobId}#${cand.contentHash}`;
-  const provenance = {
-    ...(job.request.subject ? { subject: job.request.subject } : {}),
-    ...(run.fullPrompt ? { fullPrompt: run.fullPrompt } : {}),
-    model: run.model,
-    adoptedFrom,
-  };
-
-  if (job.kind === "creator") {
-    // A creator candidate is adopted as its matte — the isolated form the
-    // matting pass produced (REQ-017). The resolver never hands back the raw
-    // bytes for this kind, so the opaque candidate is unrepresentable here.
-    if (evidence.from !== "matte")
-      throw new Error("a creator candidate is only adoptable as its matte");
-    // Trial is forced — adoption is never an approval (REQ-017, DEC-004):
-    // only an explicit human decision promotes a Creator Asset through the library CLI.
-    const imagePath = await writeCreatorAsset(opts.libraryRoot, assetId, evidence.bytes, {
-      kind: "cutout",
-      id: assetId,
-      name: opts.name ?? assetId,
-      tags: opts.tags ?? [],
-      approval: "trial",
-      ...provenance,
-      matting: "true-alpha",
-      matteEngine: evidence.engine,
-    });
-    // The identity of what was written is the matte's, not the candidate's —
-    // the candidate lineage lives in `adoptedFrom` and nowhere else.
-    return { assetId, contentHash: evidence.contentHash, imagePath, adoptedFrom };
-  }
-
-  if (job.kind === "object") {
-    // An object candidate is adopted as its matte when the run's matting pass
-    // produced one (REQ-015's segmentation route) — the raw candidate is
-    // opaque by measurement. Without a matte the candidate's own verified
-    // bytes qualify only through the true-alpha gate, which the resolver has
-    // already applied — an opaque candidate is refused before any write.
-    const imagePath = await writeObjectAsset(opts.libraryRoot, assetId, evidence.bytes, {
-      kind: "object",
-      id: assetId,
-      name: opts.name ?? assetId,
-      tags: opts.tags ?? [],
-      ...provenance,
-      matting: "true-alpha",
-      ...(evidence.from === "matte" ? { matteEngine: evidence.engine } : {}),
-    });
-    // The identity of what was written is the matte's, not the candidate's —
-    // the candidate lineage lives in `adoptedFrom` and nowhere else.
-    return { assetId, contentHash: evidence.contentHash, imagePath, adoptedFrom };
-  }
-
-  const imagePath = await writePlateAsset(opts.libraryRoot, assetId, evidence.bytes, {
-    kind: "plate",
-    id: assetId,
-    name: opts.name ?? assetId,
-    tags: opts.tags ?? [],
-    ...provenance,
-  }, cand.mediaType);
-  return { assetId, contentHash: evidence.contentHash, imagePath, adoptedFrom };
-}

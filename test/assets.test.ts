@@ -9,8 +9,7 @@ import {
   resolveAsset,
   parseAssetRef,
   contentHash,
-  writeObjectAsset,
-  writePlateAsset,
+  writeMaskAsset,
 } from "../src/assets.js";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -159,61 +158,70 @@ describe("scanLibrary", () => {
   });
 });
 
-describe("writeObjectAsset", () => {
+describe("writeMaskAsset — the retained library write path", () => {
   const meta = {
-    kind: "object" as const,
-    id: "lamp",
-    name: "Desk Lamp",
-    tags: ["lamp"],
-    matting: "true-alpha" as const,
+    kind: "mask" as const,
+    id: "shirt-mask",
+    name: "Shirt Mask",
+    tags: ["shirt"],
   };
 
-  it("writes the object image and meta exclusively", async () => {
-    const imagePath = await writeObjectAsset(root, "lamp", new TextEncoder().encode("PNGBYTES"), meta);
-    expect(imagePath).toBe(path.resolve(root, "objects/lamp/object.png"));
+  // The retired plate/object writers were removed with adoption (#115); the
+  // library-integrity assertions transfer to the one retained writer. The
+  // guarantees live in the shared write path (writeKindAsset), not in any
+  // one kind's wrapper.
+
+  it("writes the mask image and meta exclusively", async () => {
+    const imagePath = await writeMaskAsset(root, "shirt-mask", new TextEncoder().encode("PNGBYTES"), meta);
+    expect(imagePath).toBe(path.resolve(root, "masks/shirt-mask/mask.png"));
     const lib = await scanLibrary(root);
-    expect(lib.objects[0]!.meta).toEqual(meta);
-    expect(lib.objects[0]!.hash).toBe(sha("PNGBYTES"));
+    expect(lib.masks[0]!.meta).toEqual(meta);
+    expect(lib.masks[0]!.hash).toBe(sha("PNGBYTES"));
   });
 
   it("never overwrites an existing asset of any kind", async () => {
-    await writeObjectAsset(root, "lamp", new TextEncoder().encode("FIRST"), meta);
-    await put(`logos/lamp/lamp.svg`, "<svg/>");
-    await put(`logos/lamp/meta.json`, JSON.stringify({ kind: "logo", id: "lamp", tags: [] }));
+    await writeMaskAsset(root, "shirt-mask", new TextEncoder().encode("FIRST"), meta);
+    await put(`logos/shirt-mask/shirt-mask.svg`, "<svg/>");
+    await put(`logos/shirt-mask/meta.json`, JSON.stringify({ kind: "logo", id: "shirt-mask", tags: [] }));
     await expect(
-      writeObjectAsset(root, "lamp", new TextEncoder().encode("SECOND"), meta),
+      writeMaskAsset(root, "shirt-mask", new TextEncoder().encode("SECOND"), meta),
     ).rejects.toThrow(/already exists/i);
     // Remove the conflicting logo fixture — the library itself forbids the
-    // cross-kind duplicate — then confirm the first adoption's bytes stand.
-    await rm(path.join(root, "logos/lamp"), { recursive: true });
+    // cross-kind duplicate — then confirm the first write's bytes stand.
+    await rm(path.join(root, "logos/shirt-mask"), { recursive: true });
     const lib = await scanLibrary(root);
-    expect(lib.objects[0]!.hash).toBe(sha("FIRST"));
+    expect(lib.masks[0]!.hash).toBe(sha("FIRST"));
   });
 
   it("rejects an invalid asset id", async () => {
-    expect(() => writeObjectAsset(root, "Bad_Id", new TextEncoder().encode("x"), meta)).toThrow(
+    expect(() => writeMaskAsset(root, "Bad_Id", new TextEncoder().encode("x"), meta)).toThrow(
       /asset id/i,
     );
   });
 
-  it("gives concurrent cross-kind adoptions of one id exactly one winner (atomic reservation)", async () => {
+  it("gives concurrent writes of one id exactly one winner (atomic reservation)", async () => {
+    // The meta's id must match its directory ("clash") — a mismatched id
+    // would trip the scanner when one branch wins the race, making the test
+    // flaky on which write wins rather than on the reservation.
+    const clashMeta = { ...meta, id: "clash" };
     const results = await Promise.allSettled([
-      // The object meta's id must match its directory ("clash") — a mismatched
-      // id would trip the scanner when this branch wins the race, making the
-      // test flaky on which adoption wins rather than on the reservation.
-      writeObjectAsset(root, "clash", new TextEncoder().encode("OBJ"), { ...meta, id: "clash" }),
-      writePlateAsset(root, "clash", new TextEncoder().encode("PLATE"), {
-        kind: "plate",
-        id: "clash",
-        name: "Clash",
-        tags: [],
-      }),
+      writeMaskAsset(root, "clash", new TextEncoder().encode("MASK-ONE"), clashMeta),
+      writeMaskAsset(root, "clash", new TextEncoder().encode("MASK-TWO"), clashMeta),
     ]);
     const winners = results.filter((r) => r.status === "fulfilled");
     expect(winners).toHaveLength(1);
-    // The library holds one asset for the id — never a plate AND an object.
+    // The library holds one asset for the id — the loser's bytes never land.
     const lib = await scanLibrary(root);
-    expect([...lib.plates, ...lib.objects]).toHaveLength(1);
+    expect(lib.masks).toHaveLength(1);
+    expect([sha("MASK-ONE"), sha("MASK-TWO")]).toContain(lib.masks[0]!.hash);
+  });
+
+  it("refuses an id another kind already holds — cross-kind ids are library-wide", async () => {
+    await put(`plates/taken/plate.png`, "PLATE");
+    await put(`plates/taken/meta.json`, JSON.stringify({ kind: "plate", id: "taken", name: "Taken", tags: [] }));
+    await expect(
+      writeMaskAsset(root, "taken", new TextEncoder().encode("MASK"), meta),
+    ).rejects.toThrow(/already exists/i);
   });
 });
 

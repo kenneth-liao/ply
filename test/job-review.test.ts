@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { loadJob, adoptCandidate } from "../src/jobs.js";
+import { loadJob } from "../src/jobs.js";
 import { reviewJob } from "../src/review.js";
 import { run as cliRun } from "../src/job-cli.js";
 import { composeMatte } from "../src/matte.js";
@@ -46,7 +46,7 @@ const MASK_PNG = encodePng(
   { colorType: 2 },
 );
 
-/** The matte the local pass composed — the recorded, adoptable isolation. */
+/** The matte the local pass composed — the recorded isolation evidence. */
 const MATTED_PNG = composeMatte(OPAQUE_PNG, MASK_PNG, "fixture");
 
 /** A plate record with distinct candidates, as a pre-retirement run wrote it. */
@@ -206,17 +206,17 @@ describe("reviewJob — plate", () => {
 });
 
 describe("reviewJob — object", () => {
-  test("shows the matte adoption would use, per candidate, and names the engine", async () => {
+  test("shows the recorded matte as isolation evidence, per candidate, and names the engine", async () => {
     await writeLegacyJob(jobRoot, mattedObjectJob("obj-matted"));
     const job = await loadJob(jobRoot, "obj-matted");
     const cand = job.runs[0]!.candidates[0]!;
 
     const result = await reviewJob(jobRoot, "obj-matted");
     expect(result.kind).toBe("object");
-    const adoption = result.candidates[0]!.adoption;
-    if (adoption.from !== "matte") throw new Error("expected the matte adoption would use");
-    expect(adoption.file).toBe(cand.matte!.file);
-    expect(adoption.engine).toBe("test/segmentation");
+    const isolation = result.candidates[0]!.isolation;
+    if (isolation.from !== "matte") throw new Error("expected the recorded matte");
+    expect(isolation.file).toBe(cand.matte!.file);
+    expect(isolation.engine).toBe("test/segmentation");
 
     const html = await readFile(result.reviewPath, "utf8");
     expect(html).toMatch(/isolation/i);
@@ -228,16 +228,16 @@ describe("reviewJob — object", () => {
     expect(html.match(/class="thumb"/g)).toHaveLength(1);
   });
 
-  test("clearly marks an object candidate without an adoptable matte", async () => {
+  test("clearly marks an object candidate without a recorded matte", async () => {
     await writeLegacyJob(jobRoot, noMatteObjectJob("obj-opaque-rev"));
     const result = await reviewJob(jobRoot, "obj-opaque-rev");
-    const adoption = result.candidates[0]!.adoption;
-    expect(adoption.from).toBe("none");
-    if (adoption.from !== "none") throw new Error("unreachable");
-    expect(adoption.cause).toBe("no-matte");
+    const isolation = result.candidates[0]!.isolation;
+    expect(isolation.from).toBe("none");
+    if (isolation.from !== "none") throw new Error("unreachable");
+    expect(isolation.cause).toBe("no-matte");
 
     const html = await readFile(result.reviewPath, "utf8");
-    expect(html).toContain("no matte — not adoptable");
+    expect(html).toContain("no matte recorded");
   });
 
   test("labels a matching-hash recorded matte that fails the true-alpha gate as invalid — with its refusal reason — never as missing", async () => {
@@ -252,24 +252,20 @@ describe("reviewJob — object", () => {
     await writeFile(file, JSON.stringify(rec, null, 2));
 
     const result = await reviewJob(jobRoot, "obj-invalid-matte");
-    const adoption = result.candidates[0]!.adoption;
-    expect(adoption.from).toBe("none");
-    if (adoption.from !== "none") throw new Error("unreachable");
-    expect(adoption.cause).toBe("invalid-matte");
-    expect(adoption.reason).toMatch(/cannot qualify/);
+    const isolation = result.candidates[0]!.isolation;
+    expect(isolation.from).toBe("none");
+    if (isolation.from !== "none") throw new Error("unreachable");
+    expect(isolation.cause).toBe("invalid-matte");
+    expect(isolation.reason).toMatch(/cannot qualify/);
 
     const html = await readFile(result.reviewPath, "utf8");
-    expect(html).toContain("invalid matte — not adoptable");
-    expect(html).not.toContain("no matte — not adoptable");
+    expect(html).toContain("invalid matte — refused by the true-alpha gate");
+    expect(html).not.toContain("no matte recorded");
     expect(html).toContain("cannot qualify");
-
-    // No drift: adoption of the same record refuses with the same recorded
-    // gate reason.
-    await expect(
-      adoptCandidate(jobRoot, "obj-invalid-matte", cand.contentHash, "forged-lamp", {
-        libraryRoot: path.join(root, "library"),
-      }),
-    ).rejects.toThrow(/chroma-key|alpha/i);
+    // The refusal's guidance points at the replacement workflow, never the
+    // retired adoption path.
+    expect(html).toMatch(/bun run matte/);
+    expect(html).not.toMatch(/jobs adopt|library adopt/);
   });
 
   test("a hostile matte path inside the invalid-matte refusal renders as inert escaped HTML", async () => {
@@ -283,10 +279,10 @@ describe("reviewJob — object", () => {
     await writeFile(file, JSON.stringify(rec, null, 2));
 
     const result = await reviewJob(jobRoot, "obj-hostile-matte");
-    const adoption = result.candidates[0]!.adoption;
-    expect(adoption.from).toBe("none");
-    if (adoption.from !== "none") throw new Error("unreachable");
-    expect(adoption.cause).toBe("invalid-matte");
+    const isolation = result.candidates[0]!.isolation;
+    expect(isolation.from).toBe("none");
+    if (isolation.from !== "none") throw new Error("unreachable");
+    expect(isolation.cause).toBe("invalid-matte");
 
     const html = await readFile(result.reviewPath, "utf8");
     // The refusal reason (which names the hostile path) is text, not markup:
@@ -294,13 +290,13 @@ describe("reviewJob — object", () => {
     expect(html).not.toContain("<img src=x");
     expect(html).not.toContain("onerror=alert(1)>");
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
-    expect(html).toContain("invalid matte — not adoptable");
+    expect(html).toContain("invalid matte — refused by the true-alpha gate");
   });
 
-  test("marks a natively isolated object candidate as adoptable as-is — the same bytes adoption writes", async () => {
+  test("marks a natively isolated object candidate — its own bytes are the evidence", async () => {
     // The defensive native route through a hand-built record: one object
-    // candidate, no recorded matte, true-alpha bytes on disk. Review and
-    // adoption must agree through the same resolver — no drift.
+    // candidate, no recorded matte, true-alpha bytes on disk. Review resolves
+    // it through the same canonical reader as every other candidate.
     const bytes = ALPHA_PNG;
     const hash = sha256(bytes);
     const file = path.join("candidates", `${hash}.png`);
@@ -328,21 +324,14 @@ describe("reviewJob — object", () => {
     await writeFile(path.join(dir, "job.json"), JSON.stringify(record, null, 2) + "\n");
 
     const result = await reviewJob(jobRoot, "obj-native-rev");
-    const adoption = result.candidates[0]!.adoption;
-    if (adoption.from !== "candidate") throw new Error("expected the native-alpha route");
-    expect(adoption.file).toBe(file);
+    const isolation = result.candidates[0]!.isolation;
+    if (isolation.from !== "candidate") throw new Error("expected the native-alpha route");
+    expect(isolation.file).toBe(file);
 
     const html = await readFile(result.reviewPath, "utf8");
-    expect(html).toContain("natively isolated — adoption writes these bytes as-is");
-    // The displayed adoptable bytes are the candidate's own verified bytes.
+    expect(html).toContain("natively isolated — the candidate's own true-alpha bytes");
+    // The displayed bytes are the candidate's own verified bytes.
     expect(embeddedHashes(html)).toContain(hash);
-
-    // No drift: adoption of the same record writes exactly these bytes under
-    // the candidate's identity.
-    const adopted = await adoptCandidate(jobRoot, "obj-native-rev", hash, "native-lamp", {
-      libraryRoot: path.join(root, "library"),
-    });
-    expect(adopted.contentHash).toBe(hash);
   });
 
   test("fails loudly when a recorded matte file no longer matches its identity", async () => {
@@ -358,7 +347,7 @@ describe("reviewJob — object", () => {
 });
 
 describe("jobs review — CLI", () => {
-  test("reviews a plate job: kind, review path, and adoptable candidates", async () => {
+  test("reviews a plate job: kind, review path, and isolation evidence per candidate", async () => {
     await writeLegacyJob(jobRoot, plateJob("plate-cli", 1));
     const res = await cliRun(["review", "plate-cli"], { jobsRoot: jobRoot });
     expect(res.exitCode).toBe(0);
@@ -366,16 +355,18 @@ describe("jobs review — CLI", () => {
     expect(out.ok).toBe(true);
     expect(out.kind).toBe("plate");
     expect(out.review).toBe(path.join(jobRoot, "plate-cli", "review.html"));
-    expect(out.candidates[0]!.adoptable).toBe(true);
+    // A plate's own verified bytes are its evidence; there is no adoptable
+    // cue — adoption is retired (#115).
+    expect(out.candidates[0]!.isolation).toBe("candidate");
     expect(out.anchors).toEqual([]);
   });
 
-  test("reports an object candidate without an adoptable matte as not adoptable", async () => {
+  test("reports an object candidate without a recorded matte as having none", async () => {
     await writeLegacyJob(jobRoot, noMatteObjectJob("obj-cli-opaque"));
     const res = await cliRun(["review", "obj-cli-opaque"], { jobsRoot: jobRoot });
     expect(res.exitCode).toBe(0);
     const out = res.output as Record<string, any>;
     expect(out.kind).toBe("object");
-    expect(out.candidates[0]!.adoptable).toBe(false);
+    expect(out.candidates[0]!.isolation).toBe("none");
   });
 });

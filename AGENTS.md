@@ -91,6 +91,7 @@ can be invisible in logs:
 - Generation has no subject categories, mandatory identity References, or
   likeness gates (ADR-0014, #114): those are caller policy, preserved in
   `.agents/skills/visual-authoring/SKILL.md` and the consuming repositories.
-  Legacy `jobs` records remain inspectable and adoptable; their adoption
-  retirement is separately scoped (#115).
+  Legacy generated-asset adoption is retired (#115, #114): legacy `jobs`
+  records remain inspectable and reviewable only, and generated or matted
+  content enters Projects as ordinary Layers, never the asset library.
 - Design decisions and their rationale: `docs/adr/`.

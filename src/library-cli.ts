@@ -9,7 +9,6 @@ import {
   scanLibrary,
   searchLibrary,
   resolveAsset,
-  writePlateAsset,
   writeMaskAsset,
   approveCutout,
   type Library,
@@ -22,15 +21,16 @@ library — the reusable asset library (plates + logos + cutouts + objects + mas
   bun run library list [query] [options]      Search the library. Empty query lists all.
   bun run library resolve <ref> [options]     Resolve an asset reference to its exact content identity.
   bun run library add-logo <file> --id <id>   Add a logo image to the library.
-  bun run library adopt <plate.png> --id <id> Adopt a generated plate (with its provenance).
   bun run library add-cutout <file> --id <id> Add a transparent-PNG cutout.
   bun run library add-mask <file> --id <id>   Add a named-mask PNG (alpha selects).
   bun run library approve <id> [options]      Promote a trial Creator Asset to approved —
                                               the only promotion path (REQ-018).
 
-Object Assets (REQ-015) enter the library only through Generation Job
-adoption — "bun run jobs adopt <jobId> <hash> --id <id>" — which verifies
-true alpha before writing; there is no manual object add path.
+Object and plate adoption is retired (spec #102, #115): generated or matted
+content enters Projects as ordinary Layers — "ply composition add <comp>
+<name> --from-generation <jobId>" or "--from-matte <matteId>" — not the asset
+library. Existing plates and objects remain listable, resolvable, and
+renderable.
 
 Asset references name exact content and work the same for library and
 project-local assets: "<id>" or "library:<id>" resolves a library asset
@@ -98,8 +98,8 @@ if (values.help || positionals.length === 0) {
 }
 
 const command = positionals[0]!;
-if (!["list", "resolve", "add-logo", "adopt", "add-cutout", "add-mask", "approve"].includes(command)) {
-  fail(`Unknown command "${command}". Options: list | resolve | add-logo | adopt | add-cutout | add-mask | approve`);
+if (!["list", "resolve", "add-logo", "add-cutout", "add-mask", "approve"].includes(command)) {
+  fail(`Unknown command "${command}". Options: list | resolve | add-logo | add-cutout | add-mask | approve`);
 }
 const csv = (s: string) => s.split(",").map((t) => t.trim()).filter(Boolean);
 
@@ -174,7 +174,7 @@ ${section(
       figure("plates", p.meta.id, path.basename(p.imagePath), `${p.meta.id} [${p.meta.tags.join(", ")}]`),
     )
     .join("\n"),
-  "(none — adopt one with bun run library adopt <plate.png> --id <name>)",
+  "(none — generated content enters Projects as Layers, not the library)",
 )}
 ${section(
   "objects",
@@ -183,7 +183,7 @@ ${section(
       figure("objects", o.meta.id, path.basename(o.imagePath), `${o.meta.id} [${o.meta.tags.join(", ")}] ${o.meta.matting}`),
     )
     .join("\n"),
-  "(none — adopt one with bun run jobs adopt <jobId> <hash> --id <name>)",
+  "(none — object adoption is retired; existing objects remain usable)",
 )}
 ${section(
   "cutouts",
@@ -227,7 +227,7 @@ if (command === "list") {
     console.log(`    ${l.meta.id.padEnd(22)} ${l.meta.name.padEnd(18)} [${l.meta.tags.join(", ")}]${color}${aliases}  @${l.hash.slice(0, 12)}`);
   }
   console.log(`\n  Plates (${found.plates.length})`);
-  if (found.plates.length === 0) console.log(`    (none — adopt one with: bun run library adopt out/<run>/plate-1.png --id <name>)`);
+  if (found.plates.length === 0) console.log(`    (none — generated content enters Projects as Layers, not the library)`);
   for (const p of found.plates) {
     const subject = p.meta.subject ? `  "${p.meta.subject.slice(0, 60)}${p.meta.subject.length > 60 ? "…" : ""}"` : "";
     console.log(`    ${p.meta.id.padEnd(22)} [${p.meta.tags.join(", ")}]${subject}  @${p.hash.slice(0, 12)}`);
@@ -320,7 +320,6 @@ if (command === "approve") {
 
 const KIND_OF: Record<string, "logos" | "plates" | "cutouts" | "masks"> = {
   "add-logo": "logos",
-  adopt: "plates",
   "add-cutout": "cutouts",
   "add-mask": "masks",
 };
@@ -336,10 +335,9 @@ if (
   fail(`"${id}" already exists in the library.`);
 }
 
-// adopt and add-mask write through writePlateAsset / writeMaskAsset, which
-// create their asset directories exclusively; add-logo / add-cutout still
-// own their directory creation here.
-if (command !== "adopt" && command !== "add-mask") await mkdir(dir, { recursive: true });
+// add-mask writes through writeMaskAsset, which creates its asset directory
+// exclusively; add-logo / add-cutout still own their directory creation here.
+if (command !== "add-mask") await mkdir(dir, { recursive: true });
 try {
   if (command === "add-logo") {
     const src = path.resolve(positionals[1] ?? "");
@@ -373,42 +371,6 @@ try {
       ),
     );
     console.log(`  logo     ${id} → ${path.relative(process.cwd(), destFile)}`);
-  } else if (command === "adopt") {
-    // Adopt a generated plate through the one canonical write path
-    // (writePlateAsset): exclusive create, cross-kind id, media-type-correct
-    // filename — provenance carried forward from run.json.
-    const src = path.resolve(positionals[1] ?? "");
-    if (!src) fail("adopt needs a plate PNG path");
-    let prior: { subject?: string; fullPrompt?: string; model?: string };
-    try {
-      prior = JSON.parse(await readFile(path.join(path.dirname(src), "run.json"), "utf8"));
-    } catch {
-      prior = {};
-    }
-    const ext = path.extname(src).toLowerCase().replace(".", "");
-    const mediaType = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp" }[ext] ?? "image/png";
-    const imagePath = await writePlateAsset(
-      LIBRARY_ROOT,
-      id,
-      await readFile(src),
-      {
-        kind: "plate",
-        id,
-        name: values.name ?? values.id!,
-        tags: csv(values.tags!),
-        ...(prior.subject ? { subject: prior.subject } : {}),
-        ...(prior.fullPrompt ? { fullPrompt: prior.fullPrompt } : {}),
-        ...(prior.model ? { model: prior.model } : {}),
-        adoptedFrom: src,
-      },
-      mediaType,
-    );
-    console.log(`  plate    ${id} → ${path.relative(process.cwd(), imagePath)}`);
-    if (prior.subject) {
-      console.log(`  from     "${prior.subject.slice(0, 68)}${prior.subject.length > 68 ? "…" : ""}"`);
-    } else {
-      console.log(`  note     no sibling run.json — provenance not carried`);
-    }
   } else if (command === "add-mask") {
     // Add a named mask (REQ-019): a PNG whose alpha selects pixels of the
     // Creator Asset that references it. Written through writeMaskAsset —

@@ -2,12 +2,14 @@
  * Legacy plate/object/creator Generation Job record fixtures.
  *
  * The record writers were retired with the category-specific generation entry
- * points (#114). The retained read-only surfaces — `loadJob`/`listJobs`,
- * `jobs review`, and candidate adoption — still serve records written before
- * the retirement, and these fixtures are exactly such records: they write the
- * same on-disk shape the retired writers produced (schemaVersion 4/5,
- * content-addressed candidates and mattes, typed references with derived
- * identities) directly under a jobs root.
+ * points (#114), and the adoption write path with them (#115). The retained
+ * read-only surfaces — `loadJob`/`listJobs` and `jobs review` — still serve
+ * records written before the retirement, and these fixtures are exactly such
+ * records: they write the same on-disk shape the retired writers produced
+ * (schemaVersion 4/5, content-addressed candidates and mattes, typed
+ * references with derived identities) directly under a jobs root. The library
+ * fixture helper seeds asset records the same way — as the retired adoption
+ * wrote them — for the retained Scene/library readers.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -141,4 +143,26 @@ export async function writeLegacyJob(jobRoot: string, spec: LegacyJobSpec): Prom
   };
   await writeFile(path.join(dir, "job.json"), JSON.stringify(job, null, 2) + "\n");
   return job;
+}
+
+/**
+ * Seed one library asset directly on disk — the exact record shape the
+ * retired adoption write path produced (image + meta.json under its kind
+ * directory). The adoption entry points are retired (#115); the retained
+ * Scene/library readers still resolve these assets, so Scene-level tests seed
+ * them this way instead of writing through a production path that no longer
+ * exists.
+ */
+export async function writeLegacyLibraryAsset(
+  libraryRoot: string,
+  kindDir: "plates" | "objects" | "cutouts",
+  id: string,
+  fileName: string,
+  bytes: Uint8Array,
+  meta: Record<string, unknown>,
+): Promise<void> {
+  const dir = path.join(libraryRoot, kindDir, id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, fileName), bytes);
+  await writeFile(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2) + "\n");
 }
