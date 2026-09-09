@@ -178,6 +178,11 @@ darwinOnly("network isolation negative control: local listener is reachable outs
 // 2. Integrated A -> B -> C mixed workflow with shared edits, fork, and replay
 // ---------------------------------------------------------------------------
 
+/** Explicit per-test timeouts: the multi-render phases cost ~5s+ per test,
+ * above Bun's 5s default — without these the long phases are killed by the
+ * runner's timeout and reported as failures (observed 2026-09, Bun 1.4.0). */
+const LONG = 240_000;
+
 test.skipIf(process.platform !== "darwin")("integrated mixed image/text A -> B -> C workflow with reuse, interleave, propagation, fork, and historical replay offline", async () => {
   const projA = path.join(tempDir, "projA");
   const initA = await invokeOffline(["project", "init", projA, "--name", "Project A", "--json"]);
@@ -477,7 +482,7 @@ test.skipIf(process.platform !== "darwin")("integrated mixed image/text A -> B -
   expect(replayA.code).toBe(0);
   const replayedABytes = await readFile(replayedAPath);
   expect(replayedABytes.equals(pngABytes)).toBe(true);
-});
+}, LONG);
 
 // ---------------------------------------------------------------------------
 // 3. Cross-Project copy, complete source deletion, relocation & offline usability
@@ -727,7 +732,7 @@ test.skipIf(process.platform !== "darwin")("cross-Project copy, complete source/
   expect(replayDest.code).toBe(0);
   const replayedDestBytes = await readFile(replayedDestPath);
   expect(replayedDestBytes.equals(destPngBytes)).toBe(true);
-});
+}, LONG);
 
 // ---------------------------------------------------------------------------
 // 4. Introduced CLI commands and help surface under network denial
