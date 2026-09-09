@@ -115,8 +115,11 @@ describe("independent Matting (live engine, #112)", () => {
     "the public command mattes an opaque fixture with the real pinned weights, offline, to a usable true alpha",
     async () => {
       // One home for "where the weights are": the ambient override if set,
-      // otherwise the repo-root cache beside this test file.
-      const models = process.env.PLY_MODEL_DIR ?? path.resolve(import.meta.dir, "../models");
+      // otherwise the repo-root cache beside this test file. Resolved to an
+      // absolute path once, here: the prerequisite check runs against the
+      // parent's cwd, but the child CLI runs under the temporary root and
+      // would resolve a relative override there instead (INT-1).
+      const models = path.resolve(process.env.PLY_MODEL_DIR ?? path.join(import.meta.dir, "../models"));
       if (!(await stat(path.join(models, SUBJECT_SEGMENTER.file)).catch(() => null))) {
         console.log("skipped: local matting weights are not on this machine — no qualification is claimed");
         return;
