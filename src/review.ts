@@ -254,7 +254,7 @@ function renderReviewSheet(
   const isolationSection =
     kind === "plate"
       ? ""
-      : `<h2>isolation — the recorded matte (checkerboard shows the alpha)</h2>
+      : `<h2>isolation — recorded matte or native alpha (checkerboard shows the alpha)</h2>
 <div class="g">${isolation || "<p>no candidates</p>"}</div>`;
   const faceSection =
     kind !== "creator"

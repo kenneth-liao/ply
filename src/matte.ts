@@ -1,9 +1,11 @@
 /**
- * The matting pass (REQ-017) — the stage that turns a generated creator
- * candidate into an adoptable isolated asset.
+ * The matting pass (REQ-017) — the stage that turns an opaque candidate into
+ * an isolated, true-alpha form. The retired adoption gate required these
+ * bytes; the independent Matting operation produces them for its own
+ * published output.
  *
  * Why it exists: image providers return opaque RGB for this workflow, and
- * the adoption gate refuses opaque bytes by design. Isolation therefore cannot be a prompt
+ * the true-alpha gate refuses opaque bytes by design. Isolation therefore cannot be a prompt
  * instruction and cannot be RGB chroma-key distance; it is a segmentation
  * pass that predicts a subject matte and applies it as a real alpha channel.
  *
@@ -13,7 +15,7 @@
  *   - `matteCandidate` — the policy: a candidate that already carries a real
  *     matte is kept as-is (the native-alpha route, no inference at all);
  *     anything else goes through the injected engine, and the result is
- *     verified against the adoption gate *here*, at the boundary, so a
+ *     verified against the true-alpha gate *here*, at the boundary, so a
  *     degenerate matte can never be recorded as one.
  *
  * The engine is a seam. The shipped one runs a BiRefNet ONNX segmenter
@@ -30,7 +32,7 @@ export const NATIVE_ALPHA = "native-alpha" as const;
 /** What an engine returns: the matted bytes and how they were produced. */
 export interface MatteEngineResult {
   bytes: Uint8Array;
-  /** The engine that produced the matte — recorded on the candidate and the adopted Asset. */
+  /** The engine that produced the matte — recorded on the candidate and, pre-retirement, on the adopted Asset. */
   engine: string;
   /** Anything worth recording on the run (e.g. the segmenter fell back to CPU). */
   warnings?: string[];
@@ -38,9 +40,9 @@ export interface MatteEngineResult {
 
 /**
  * The engine ran, but its output cannot qualify as a matte. A type, not a
- * message shape: callers attach their own recovery (adoption directs to the
- * replacement workflow, independent Matting says ply matte) without
- * string-matching the why.
+ * message shape: callers attach their own recovery (the legacy review reader
+ * attaches its replacement-workflow guidance, independent Matting says ply
+ * matte) without string-matching the why.
  */
 export class UnusableMatteError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -149,15 +151,15 @@ function read(bytes: Uint8Array, what: string) {
 }
 
 /**
- * Produce the adoptable matte for one candidate.
+ * Produce the true-alpha matte for one candidate.
  *
  * Native alpha first: when a model does return a real matte, that matte is
  * the candidate's own bytes — no inference at all, and the exact bytes the
  * human reviewed. Otherwise the engine runs, and its output must
- * pass the same true-alpha gate adoption applies. Verifying here means a
+ * pass the true-alpha gate here. Verifying here means a
  * matte that cuts away everything (or nothing) fails at the pass that
  * produced it, naming the engine, instead of surfacing later as a confusing
- * adoption refusal.
+ * downstream refusal.
  */
 export async function matteCandidate(
   bytes: Uint8Array,

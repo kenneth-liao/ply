@@ -120,15 +120,9 @@ describe("the job schema-version matrix is the rollback boundary (PROD-1, #56)",
 
     // Pure legacy read: the record loads as v1, with no rewrite on read.
     expect((await loadJob(jobRoot, "plate-legacy-v1")).schemaVersion).toBe(1);
-
     const record = JSON.parse(await readFile(path.join(jobRoot, "plate-legacy-v1", "job.json"), "utf8"));
     expect(record.schemaVersion).toBe(1);
     expect(record.runs).toHaveLength(1);
-    // Inspection and review never re-persist or re-version a record they
-    // only read.
-    expect(
-      JSON.parse(await readFile(path.join(jobRoot, "plate-legacy-v1", "job.json"), "utf8")).schemaVersion,
-    ).toBe(1);
   });
 
   test("refuses a v2 record claiming kind plate — an older binary would misread it", async () => {
