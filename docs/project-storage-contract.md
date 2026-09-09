@@ -408,6 +408,24 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
   - Replay a retained Render manifest from pinned history; requires the exact capturing environment (#87).
 - `ply composition list [options] [--json]`
 - `ply layer inspect <layer-id> [options] [--json]`
+- `ply layer review <layer-id> --out <path> [options] [--json]`
+  - Builds the offline evidence review sheet for a generated or matted Layer
+    (#109) from retained Project evidence: the Layer's hash-verified current
+    revision bytes as the candidate, the retained matte record (engine, alpha
+    report) and retained Generation Job record (request facts, ordered
+    Reference identities) resolved through the one canonical lineage readers
+    (ambiguity and unreadable records fail closed), and caller References
+    displayed only when their recorded paths still verify — unavailable
+    References are labeled with their recorded identity, never substituted
+    and never invented. A Layer whose current revision no retained record
+    claims (an ordinary image, or one edited away from its lineage) is
+    refused clearly; no approval or promotion is implied. `--out` is
+    required (parent must exist; reserved Project storage is protected and
+    an existing in-Project file is never overwritten — outside the Project
+    an existing file is the documented overwrite case, since the sheet is
+    derived evidence, regenerable at any time). A matted generated Layer
+    states that the pre-matte candidate pixels are retained as an identity
+    only.
 - `ply layer edit <layer-id> [--in-place | --fork --composition <comp> --use <local-name>] [--image <path> | --from-generation <job-id> [--output <n|sha256>] | --from-matte <matte-id> | --text <str> [--font <family>] [--font-size <px>] [--color <hex>]] [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
   - `--from-generation` explicitly replaces an image Layer's content with one selected output of a published Generation Job without generating again, retaining the record verbatim (#107). Mutually exclusive with `--image`/`--text`/`--from-matte`; refused on text Layers (kind stability). In-place blast-radius guards and fork semantics apply unchanged; earlier retained provenance is immutable.
   - `--from-matte` explicitly replaces an image Layer's content with the verified output of a published matte without running inference again, retaining the matte record verbatim (#108) — plus the predecessor job record when the matte's source was generated. Mutually exclusive with `--image`/`--text`/`--from-generation`; refused on text Layers (kind stability). In-place blast-radius guards and fork semantics apply unchanged; earlier retained provenance is immutable.

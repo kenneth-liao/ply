@@ -16,8 +16,12 @@
  *
  * Records live under <cwd>/out/generation/<jobId>/ (see
  * docs/generation-publication-contract.md); the legacy out/jobs/ surface is
- * untouched. show and list are pure local reads — they never invoke
- * generation and work offline.
+ * untouched. show, list, and review are pure local reads — they never invoke
+ * generation and work offline. review verifies every displayed input against
+ * its recorded content identity first: a missing or changed Reference, a
+ * corrupt or missing output, or ambiguous matte lineage fails the review and
+ * writes no sheet. The sheet is evidence for the caller's own likeness/matte
+ * review — it never implies approval or promotion (ADR-0014).
  */
 import { parseArgs } from "node:util";
 import path from "node:path";
@@ -30,6 +34,7 @@ import {
   type UniformProvider,
   type UniformSizing,
 } from "./generation.js";
+import { reviewPublishedGeneration } from "./evidence-review.js";
 import { MODELS, DEFAULT_MODEL } from "./models.js";
 
 const HELP = `
@@ -41,6 +46,9 @@ ply generate — one uniform source-image generation operation (Generation Jobs)
                                         request, outputs, and provenance
   bun run generate show <jobId>         Print one published record (offline)
   bun run generate list                 Summarize published jobs (offline)
+  bun run generate review <jobId>       Build the evidence review sheet for one
+                                        job — ordered References, outputs, and
+                                        associated matte (offline)
 
 options
   --ref <path>          Attach a local Reference image, in the order given (repeat
@@ -84,6 +92,8 @@ export interface GenerationCliDeps {
   provider: UniformProvider;
   /** Where job records live (default: <cwd>/out/generation). */
   jobsRoot: string;
+  /** Where matte records live (default: <cwd>/out/matting) — review's matte scan. */
+  matteRoot: string;
 }
 
 /** The real provider paths: the AI SDK call shapes the seam forwards to. */
@@ -134,6 +144,7 @@ type Parsed =
   | { kind: "help" }
   | { kind: "show"; jobId?: string }
   | { kind: "list" }
+  | { kind: "review"; jobId?: string }
   | {
       kind: "generate";
       prompt: string;
@@ -206,7 +217,7 @@ function parse(args: string[]): Parsed {
   const [first, ...restPositionals] = parsed.positionals;
 
   // Inspection subcommands: pure local reads, no generation flags.
-  if (first === "show" || first === "list") {
+  if (first === "show" || first === "list" || first === "review") {
     if (refs.length > 0)
       return usage(`"generate ${first}" is an offline inspection command — it takes no generation flags (--ref)`);
     for (const flag of ["intent", "size", "aspect", "model", "count", "temperature", "job"] as const) {
@@ -215,9 +226,11 @@ function parse(args: string[]): Parsed {
     }
     if (first === "list" && restPositionals.length > 0)
       return usage('"generate list" takes no arguments');
-    if (first === "show" && restPositionals.length > 1)
-      return usage('"generate show" takes exactly one <jobId>');
-    return first === "show" ? { kind: "show", jobId: restPositionals[0] } : { kind: "list" };
+    if ((first === "show" || first === "review") && restPositionals.length > 1)
+      return usage(`"generate ${first}" takes exactly one <jobId>`);
+    if (first === "show") return { kind: "show", jobId: restPositionals[0] };
+    if (first === "review") return { kind: "review", jobId: restPositionals[0] };
+    return { kind: "list" };
   }
 
   const prompt = parsed.positionals.join(" ").trim();
@@ -322,6 +335,7 @@ export async function run(
   const resolved: GenerationCliDeps = {
     provider: deps?.provider ?? PRODUCTION_UNIFORM_PROVIDER,
     jobsRoot: deps?.jobsRoot ?? path.resolve("out", "generation"),
+    matteRoot: deps?.matteRoot ?? path.resolve("out", "matting"),
   };
 
   try {
@@ -344,6 +358,36 @@ export async function run(
         ? jobs.map((j) => `${j.jobId}  ${j.intent}  ${j.model}  ${j.outputs} output(s)`).join("\n")
         : "no Generation Jobs";
       return { exitCode: 0, text, json: { ok: true, jobs } };
+    }
+
+    if (parsed.kind === "review") {
+      if (!parsed.jobId) return usageResult('"generate review" takes exactly one <jobId>');
+      const review = await reviewPublishedGeneration(resolved.jobsRoot, resolved.matteRoot, parsed.jobId);
+      const lines = [
+        `Evidence review ${review.jobId}`,
+        ...review.references.map((r) => `  ref: ${r.path} (${r.contentHash.slice(0, 12)}) · verified`),
+        ...review.outputs.map((o) =>
+          `  output: ${o.file} (${o.contentHash.slice(0, 12)})` +
+          (o.matte ? ` · matte ${o.matte.matteId} (${o.matte.engine})` : " · no matte"),
+        ),
+        `  review: ${review.reviewPath}`,
+        "  evidence only — no approval or promotion is implied",
+      ];
+      return {
+        exitCode: 0,
+        text: lines.join("\n"),
+        json: {
+          ok: true,
+          jobId: review.jobId,
+          review: review.reviewPath,
+          references: review.references.map((r) => ({ path: r.path, contentHash: r.contentHash })),
+          outputs: review.outputs.map((o) => ({
+            contentHash: o.contentHash,
+            file: o.file,
+            ...(o.matte ? { matte: { matteId: o.matte.matteId, engine: o.matte.engine, contentHash: o.matte.contentHash } } : { matte: null }),
+          })),
+        },
+      };
     }
 
     const jobId = parsed.jobId || autoJobId();

@@ -4,6 +4,27 @@
 
 ### Added
 
+- Added offline evidence review for the new workflow (#109, #102):
+  `ply generate review <job-id>` builds a self-contained evidence sheet beside
+  the published record — the exact ordered References (verified against the
+  identities recorded at Job creation), every generated output
+  (content-identity verified), and the associated matte where one exists
+  (found by the derived source-identity linkage over `out/matting`; an
+  ambiguous match fails closed). `ply layer review <layer-id> --out <path>`
+  builds the same kind of sheet from retained Project evidence — the Layer's
+  hash-verified bytes, the retained matte/generation lineage, and caller
+  References shown only when their recorded paths still verify (unavailable
+  ones are labeled with their recorded identity, never substituted, never
+  invented) — so review stays usable offline after the external temporary
+  generation/Matting files are removed and the Project is relocated. Every
+  displayed image is verified before display; missing, corrupt, ambiguous,
+  or unreadable evidence fails the review with an actionable error and
+  writes no sheet. The sheet embeds verified bytes as data URLs under a
+  restrictive CSP, shows full-size, 168px, and fixed-crop views plus matte
+  alpha on a checkerboard, and is evidence only — nothing in it implies
+  likeness approval or cutout promotion (ADR-0014). Both commands are pure
+  local reads: offline, no engine, no provider, no library adoption. The
+  legacy `jobs review` surface is untouched.
 - Added matted-content ingestion with retained Matting lineage (#108, #102):
   `ply composition add --from-matte <matte-id>` adds the verified output of a
   published matte (under `out/matting`) as an ordinary image Layer, and

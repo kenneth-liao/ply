@@ -30,7 +30,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { JOB_ID_PATTERN, parseGenerationJobRecord, type GenerationJobRecord, type UniformOutput } from "./generation.js";
+import { JOB_ID_PATTERN, parseGenerationJobRecord, loadGenerationJob, type GenerationJobRecord, type UniformOutput } from "./generation.js";
 import { atomicCreate } from "./project-lock.js";
 import { outsideDir, escapesDirReal } from "./paths.js";
 import { MAX_ENCODED_BYTES } from "./png.js";
@@ -53,38 +53,16 @@ export interface SelectedGenerationOutput {
 }
 
 /**
- * Resolve the external source of one generated output: load the published
- * record, select one output explicitly, read its file, and verify its bytes
- * against the recorded sha-256 identity. A record with more than one output
- * is refused without an explicit selection — no output is ever picked
- * implicitly. No Project state is read or written here.
+ * Read one recorded output's file and verify its bytes against the recorded
+ * sha-256 identity — the one verification home shared by ingestion (one
+ * selected output) and review (every output), so the two boundaries can never
+ * drift. Everything that can refuse the source runs before the full read,
+ * like the file-ingestion bound: lexical containment (the path's shape),
+ * size on the open handle, then realpath containment (the file exists, so an
+ * alias that resolves outside the job directory cannot dodge the gate).
  */
-export async function selectGenerationOutput(
-  jobRoot: string,
-  jobId: string,
-  selection: GenerationOutputSelection = {},
-): Promise<SelectedGenerationOutput> {
-  // Validate the id before any path is constructed from it — an invalid id
-  // must not name a read outside the job root.
-  if (!JOB_ID_PATTERN.test(jobId))
-    throw new Error(`Invalid job id "${jobId}" — use lowercase letters/digits/hyphens`);
-  const recordFile = path.join(jobRoot, jobId, "job.json");
-  let recordBytes: Buffer;
-  try {
-    recordBytes = await readFile(recordFile);
-  } catch {
-    throw new Error(`No generation job "${jobId}" under ${jobRoot}`);
-  }
-  const job = parseGenerationJobRecord(recordBytes.toString("utf8"), jobId);
-  const outputs = job.run.outputs;
-
-  const output = chooseOutput(jobId, outputs, selection.output);
-  const jobDir = path.join(jobRoot, jobId);
+async function readVerifiedJobOutput(jobDir: string, jobId: string, output: UniformOutput): Promise<Buffer> {
   const outputFile = path.join(jobDir, output.file);
-  // Everything that can refuse the source runs before the full read, like the
-  // file-ingestion bound: lexical containment (the path's shape), size on the
-  // open handle, then realpath containment (the file exists, so an alias that
-  // resolves outside the job directory cannot dodge the gate).
   if (outsideDir(jobDir, outputFile)) {
     throw new Error(
       `Generation Job "${jobId}" output path "${output.file}" escapes the job directory — the record cannot be trusted`,
@@ -120,6 +98,59 @@ export async function selectGenerationOutput(
       `Generation Job "${jobId}" output "${output.file}" does not match its recorded content identity ${output.contentHash.slice(0, 12)} (actual ${actualHash.slice(0, 12)}) — the source is corrupted or mismatched; refusing to ingest`,
     );
   }
+  return bytes;
+}
+
+/**
+ * Every recorded output of one published Generation Job, each read and
+ * verified against its recorded content identity — the review boundary's
+ * evidence read (#109): a missing or corrupt output fails the whole review
+ * instead of displaying unverified bytes. No Project state is touched.
+ */
+export async function loadVerifiedGenerationOutputs(
+  jobRoot: string,
+  jobId: string,
+): Promise<{ job: GenerationJobRecord; outputs: { output: UniformOutput; bytes: Buffer }[] }> {
+  if (!JOB_ID_PATTERN.test(jobId))
+    throw new Error(`Invalid job id "${jobId}" — use lowercase letters/digits/hyphens`);
+  const job = await loadGenerationJob(jobRoot, jobId);
+  const jobDir = path.join(jobRoot, jobId);
+  const outputs: { output: UniformOutput; bytes: Buffer }[] = [];
+  for (const output of job.run.outputs) {
+    outputs.push({ output, bytes: await readVerifiedJobOutput(jobDir, jobId, output) });
+  }
+  return { job, outputs };
+}
+
+/**
+ * Resolve the external source of one generated output: load the published
+ * record, select one output explicitly, read its file, and verify its bytes
+ * against the recorded sha-256 identity. A record with more than one output
+ * is refused without an explicit selection — no output is ever picked
+ * implicitly. No Project state is read or written here.
+ */
+export async function selectGenerationOutput(
+  jobRoot: string,
+  jobId: string,
+  selection: GenerationOutputSelection = {},
+): Promise<SelectedGenerationOutput> {
+  // Validate the id before any path is constructed from it — an invalid id
+  // must not name a read outside the job root.
+  if (!JOB_ID_PATTERN.test(jobId))
+    throw new Error(`Invalid job id "${jobId}" — use lowercase letters/digits/hyphens`);
+  const recordFile = path.join(jobRoot, jobId, "job.json");
+  let recordBytes: Buffer;
+  try {
+    recordBytes = await readFile(recordFile);
+  } catch {
+    throw new Error(`No generation job "${jobId}" under ${jobRoot}`);
+  }
+  const job = parseGenerationJobRecord(recordBytes.toString("utf8"), jobId);
+  const outputs = job.run.outputs;
+
+  const output = chooseOutput(jobId, outputs, selection.output);
+  const jobDir = path.join(jobRoot, jobId);
+  const bytes = await readVerifiedJobOutput(jobDir, jobId, output);
   return { job, output, bytes, recordBytes };
 }
 

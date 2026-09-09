@@ -73,6 +73,7 @@ ply generate "a presenter portrait" --intent isolated --model nano-2
 ply generate "restyle this room" --ref room.png --ref palette.png
 ply generate show <jobId>   # offline inspection of the published record
 ply generate list
+ply generate review <jobId>   # offline evidence sheet: References, outputs, matte
 ```
 
 Isolated intent is a generation request, not a matte: it never runs Matting
@@ -104,6 +105,26 @@ ply matte out/generation/<jobId>/outputs/<sha256>.png --id my-cutout
 
 The input is PNG only — convert other formats locally with an offline tool
 first. Matting never generates content and never touches Projects or Layers.
+
+## Evidence review (new surface)
+
+`ply generate review <jobId>` writes a self-contained HTML sheet beside the
+published record — `<jobDir>/review.html` — showing the exact ordered
+References, every generated output, and the associated matte where one
+exists, each verified against its recorded sha-256 identity before display.
+After ingestion, `ply layer review <layerId> --out <path>` builds the same
+kind of sheet from retained Project evidence, so review keeps working
+offline after the external `out/` files are gone and the Project has moved:
+
+```bash
+ply generate review <jobId>
+ply layer review <layerId> --out review.html
+```
+
+Unavailable Reference files are labeled with their recorded identity — never
+substituted, never invented. The sheets are evidence for your own
+likeness/matte review; nothing in them implies approval or promotion
+(ADR-0014).
 
 Both new results become ordinary Project Layers through the composer surface:
 `ply composition add --from-matte <matteId>` and
