@@ -6,13 +6,13 @@ extended by #105 (References). Dependent tickets (#105, #107, #108, #109)
 consume and adhere to this contract — no dependent delivery guesses a private
 schema.
 
-The uniform operation is one prompt-only source-image Generation Job: a caller
-prompt, an output intent (full-canvas or isolated — a request parameter, not a
-subject category), caller-selected sizing, and a count. Ply adds no subject
-policy: no text/logo ban, no mandatory identity Reference, no approval gate
-(ADR-0014). Matting is not part of this operation (ADR-0015) — generation does
-not require Matting weights, and isolated intent is never reported as verified
-alpha.
+The uniform operation is one source-image Generation Job: a caller prompt, an
+output intent (full-canvas or isolated — a request parameter, not a subject
+category), caller-selected sizing, a count, and (optionally, #105) ordered
+local References. Ply adds no subject policy: no text/logo ban, no mandatory
+identity Reference, no approval gate, no Reference roles (ADR-0014). Matting is
+not part of this operation (ADR-0015) — generation does not require Matting
+weights, and isolated intent is never reported as verified alpha.
 
 ## 1. Directory layout
 
@@ -55,7 +55,10 @@ facts elsewhere.
     "sizing": { "kind": "size", "width": 1080, "height": 1080 }
             | { "kind": "aspectRatio", "ratio": "4:5" },
     "count": 1,
-    "temperature": 0.7
+    "temperature": 0.7,
+    "references": [
+      { "path": "caller-supplied path as written", "contentHash": "sha-256 derived at Job creation" }
+    ]
   },
   "run": {
     "ranAt": "2026-09-08T12:00:05.000Z",
@@ -84,15 +87,30 @@ Facts and their one home:
   prompt verbatim, plus (isolated intent only) the fixed isolation-format
   line, plus (aspect-shaped models only) the `Output aspect ratio: W:H.` line.
   Nothing else is added — no zone guidance, no subject bans, no identity
-  recipe (ADR-0014). Isolated intent's framing line requests margins, a plain
-  uniform background, and crisp edges; it never requests transparency, a
-  painted checkerboard, or true alpha (ADR-0015).
+  recipe, no Reference manifest (ADR-0014). Isolated intent's framing line
+  requests margins, a plain uniform background, and crisp edges; it never
+  requests transparency, a painted checkerboard, or true alpha (ADR-0015).
+- **`request.references` (optional, #105)** records each caller-supplied local
+  Reference in caller order: the path as the caller wrote it and the sha-256
+  identity derived once at Job creation. Records from requests without
+  References omit the key entirely — the zero-Reference record shape is
+  byte-identical to the pre-#105 schema.
+- **`run.costUsd`/`costMeasured` stay honest about the call shape** (TEST-012,
+  mirroring the legacy job records): a Reference call on a model whose
+  measured rate covers text-only calls only records the cost as `null` with
+  `costMeasured: false` and states the basis in a warning; it never claims
+  the text-only rate as measured.
 
-## 3. Request validation (one ingestion boundary)
+## 3. Request validation and ingestion (two steps, one boundary chain)
 
-`validateUniformRequest` (src/generation.ts) is the single ingestion point.
-Semantic validation happens there, before any provider call — a refused
-request costs nothing:
+`validateUniformRequest` (src/generation.ts) is the pure semantic/capability
+gate: no IO, no Reference identities, refused requests cost nothing.
+`ingestUniformRequest` is the one ingestion point — the only producer of the
+branded `IngestedUniformRequest` that `executeUniformGeneration` accepts; a
+validate-only request cannot be executed, so Generation can never silently run
+with zero attachments.
+
+Both steps run the following semantic checks before any provider call:
 
 - Non-empty prompt; intent is `full-canvas` or `isolated`; count 1–8.
 - Model resolution via the shared model registry (`src/models.ts`): registry
@@ -104,6 +122,32 @@ request costs nothing:
   defaulted. Caller-selected sizes pass through as given; whether a provider
   accepts a particular size/ratio is the provider's own explicit validation.
 - `--temperature` is multimodal-only.
+- **References (`--ref <path>`, repeatable, #105)**: a model without a
+  qualified reference-capable claim (including raw gateway ids) is refused
+  with the canonical capability message before any Reference byte is read;
+  the qualified list comes from the one registry reader (DEC-018/020). Each
+  Reference path must be a non-empty string. No remote fetching exists
+  (OOS-006): a Reference is a local file or the request is refused.
+
+Reference integrity (DEC-003, one input-integrity contract):
+
+1. **Ingestion (`ingestUniformRequest`)** — validate + derive identities: each
+   Reference file is read exactly once at Job creation and its sha-256 becomes
+   the recorded identity, in caller order. A missing file is refused here,
+   before any provider call.
+2. **Execution (`executeUniformGeneration`)** — each Reference is read once
+   more and hash-verified against the recorded identity (the shared
+   read-and-verify home, `loadVerifiedReference`); the verified bytes are what
+   every candidate's provider call receives, attached in caller order. There
+   is no alternate unverified attachment path. A file that went missing or
+   changed between capture and execution is refused with a diagnostic naming
+   the recorded and actual identity — nothing is published, no provider is
+   called, and no existing state is mutated.
+3. **No reordering** — attachment order is caller order by construction; no
+   category-specific or model-specific reordering logic exists.
+4. **No mandatory identity** — roles, likeness policy, and approval gates are
+   not part of this surface; a likeness prompt with zero References remains
+   valid (ADR-0014). Role presentation is #109's ownership.
 
 The CLI layer additionally classifies pure syntax problems as usage errors
 (exit 2); domain refusals exit 1 with an actionable message.
@@ -112,13 +156,16 @@ The CLI layer additionally classifies pure syntax problems as usage errors
 
 `UniformProvider` (src/generation.ts) is the seam the outbound request is
 captured at: `image({ model, prompt, size?, aspectRatio? })` for size/aspect
-image models, `text({ model, prompt, temperature? })` for multimodal models.
-Image-kind requests are built through `buildImageRequestArgs` (src/generate.ts)
-— the one home of the image-kind provider request shape — so the uniform
-surface cannot drift from the legacy call shape. Legacy callers pass no
-explicit sizing and keep their exact request bytes (proven by
-test/image-request-args.test.ts). `#105` extends these shapes with References;
-the record's `request` grows accordingly.
+image models, `text({ model, prompt, images?, temperature? })` for multimodal
+models. On image-kind there is no top-level `images` field: `prompt` is the
+plain string when no References are attached, or `{ text, images:
+Uint8Array[] }` — the verified bytes in caller order — otherwise. On
+multimodal, the top-level `images` field carries the verified bytes in caller
+order (message parts on the production path). Image-kind requests are built
+through `buildImageRequestArgs` (src/generate.ts) — the one home of the
+image-kind provider request shape — so the uniform surface cannot drift from
+the legacy call shape. Legacy callers pass no explicit sizing and keep their
+exact request bytes (proven by test/image-request-args.test.ts).
 
 Missing-image responses are refused by name; provider errors surface verbatim.
 
@@ -149,8 +196,11 @@ request, not a matte. The independent matting operation is #106's ownership.
   `ply generate list` — see the module help for the full syntax.
 - Default output is compact human text; `--json` emits `{ok: true, jobId,
   jobDir, job}` / `{ok: false, error}`. Exit codes: 0 ok, 1 failure, 2 usage.
+  Compact text lists each Reference in order (`ref N: <path> (<hash12>)`)
+  when present.
 - `show` and `list` are pure local reads: they never invoke generation and
-  work offline. Richer evidence presentation (review sheets, candidate
-  comparison) is #109's ownership.
+  work offline, and they refuse generation flags including `--ref`. Richer
+  evidence presentation (review sheets, candidate comparison) is #109's
+  ownership.
 - `--json` payloads carry the full published record, so an agent inspects the
   effective request, outputs, and provenance without a second read.

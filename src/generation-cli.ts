@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * The uniform generation CLI (spec #102 ticket #104) — one source-image
+ * The uniform generation CLI (spec #102 tickets #104/#105) — one source-image
  * generation operation with no subject category (ADR-0014):
  *
  *   ply generate <prompt> [options]   Start a Generation Job and publish its
@@ -35,13 +35,20 @@ import { MODELS, DEFAULT_MODEL } from "./models.js";
 const HELP = `
 ply generate — one uniform source-image generation operation (Generation Jobs)
 
-  bun run generate <prompt> [options]   Generate source images and publish a
+  bun run generate <prompt> [options]   Generate source images — optionally from
+                                        ordered local References — and publish a
                                         Generation Job record with the effective
                                         request, outputs, and provenance
   bun run generate show <jobId>         Print one published record (offline)
   bun run generate list                 Summarize published jobs (offline)
 
 options
+  --ref <path>          Attach a local Reference image, in the order given (repeat
+                        to attach several: --ref a.png --ref b.png). The model must
+                        be qualified reference-capable; Reference identities are
+                        derived at Job creation and the bytes are verified against
+                        them at generation. No roles, no mandatory identity — a
+                        request without References stays fully valid (ADR-0014).
   --intent <i>          full-canvas (default) | isolated — the output shape as a
                         request parameter. Isolated is a generation request, NOT
                         verified alpha: invoke Matting explicitly (ADR-0015) for
@@ -65,8 +72,11 @@ options
 Every output is content-addressed under <jobDir>/outputs/ with its sha-256 in
 the record; a duplicate --job id is refused. Malformed requests, provider
 errors, missing-image responses, and publication failures exit nonzero and
-leave nothing published. This command never touches Projects or Layers, and it
-never runs Matting — the independent matting operation is separate.
+leave nothing published. Reference identities are derived at Job creation and
+the bytes are verified against them at generation — missing or changed
+Reference files fail before any provider call. This command never touches
+Projects or Layers, and it never runs Matting — the independent matting
+operation is separate.
 `;
 
 export interface GenerationCliDeps {
@@ -90,7 +100,21 @@ export const PRODUCTION_UNIFORM_PROVIDER: UniformProvider = {
   async text(args) {
     const result = await generateText({
       model: args.model,
-      prompt: args.prompt,
+      // Reference bytes arrive already verified at the domain boundary; they
+      // attach here as image message parts in caller order.
+      ...(args.images?.length
+        ? {
+            messages: [
+              {
+                role: "user" as const,
+                content: [
+                  { type: "text" as const, text: args.prompt },
+                  ...args.images.map((image) => ({ type: "image" as const, image })),
+                ],
+              },
+            ],
+          }
+        : { prompt: args.prompt }),
       ...(args.temperature !== undefined ? { temperature: args.temperature } : {}),
     });
     return { files: result.files, text: result.text, warnings: result.warnings ?? [] };
@@ -118,6 +142,7 @@ type Parsed =
       model?: string;
       count?: number;
       temperature?: number;
+      references?: string[];
       jobId?: string;
       json: boolean;
     };
@@ -131,6 +156,27 @@ const ASPECT_PATTERN = /^(\d+):(\d+)$/;
  */
 function parse(args: string[]): Parsed {
   const json = args.includes("--json");
+  // parseArgs keeps only the last value of a repeated flag, so --ref is
+  // collected first — each occurrence is one ordered Reference. Both the
+  // "--ref <value>" and "--ref=<value>" forms are accepted.
+  const refs: string[] = [];
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--ref") {
+      const value = args[i + 1];
+      if (value === undefined) return usage("--ref takes a path to a local image file");
+      if (!value.trim()) return usage("--ref takes a path to a local image file (got an empty value)");
+      refs.push(value);
+      i++;
+    } else if (arg.startsWith("--ref=")) {
+      const value = arg.slice("--ref=".length);
+      if (!value.trim()) return usage("--ref takes a path to a local image file (got an empty value)");
+      refs.push(value);
+    } else {
+      rest.push(arg);
+    }
+  }
   let parsed: ReturnType<typeof doParse>;
   function doParse(rawArgs: string[]) {
     return parseArgs({
@@ -150,7 +196,7 @@ function parse(args: string[]): Parsed {
     });
   }
   try {
-    parsed = doParse(args);
+    parsed = doParse(rest);
   } catch (err) {
     return usage((err as Error).message);
   }
@@ -161,6 +207,8 @@ function parse(args: string[]): Parsed {
 
   // Inspection subcommands: pure local reads, no generation flags.
   if (first === "show" || first === "list") {
+    if (refs.length > 0)
+      return usage(`"generate ${first}" is an offline inspection command — it takes no generation flags (--ref)`);
     for (const flag of ["intent", "size", "aspect", "model", "count", "temperature", "job"] as const) {
       if (parsed.values[flag] !== undefined)
         return usage(`"generate ${first}" is an offline inspection command — it takes no generation flags (--${flag})`);
@@ -221,6 +269,7 @@ function parse(args: string[]): Parsed {
     model: parsed.values.model,
     count,
     temperature,
+    ...(refs.length ? { references: refs } : {}),
     jobId: parsed.values.job,
     json,
   };
@@ -233,7 +282,7 @@ function usage(message: string): { kind: "usage"; message: string; error: string
 /** Build the compact default text for a published/loaded job. */
 function jobText(job: {
   jobId: string;
-  request: { intent: string; prompt: string };
+  request: { intent: string; prompt: string; references?: { path: string; contentHash: string }[] };
   run: { model: string; outputs: { file: string; contentHash: string }[]; warnings: string[] };
 }): string {
   const lines = [
@@ -241,6 +290,9 @@ function jobText(job: {
     `  prompt: ${job.request.prompt}`,
     `  intent: ${job.request.intent} · model: ${job.run.model} · outputs: ${job.run.outputs.length}`,
   ];
+  (job.request.references ?? []).forEach((r, i) =>
+    lines.push(`  ref ${i + 1}: ${r.path} (${r.contentHash.slice(0, 12)})`),
+  );
   for (const o of job.run.outputs) lines.push(`  output: ${o.file} (${o.contentHash.slice(0, 12)})`);
   for (const w of job.run.warnings) lines.push(`  warning: ${w}`);
   return lines.join("\n");
@@ -308,6 +360,7 @@ export async function run(
         ...(sizing ? { sizing } : {}),
         count: parsed.count ?? 1,
         ...(parsed.temperature !== undefined ? { temperature: parsed.temperature } : {}),
+        ...(parsed.references?.length ? { references: parsed.references } : {}),
       },
       { provider: resolved.provider },
     );

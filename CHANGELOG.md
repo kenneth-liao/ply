@@ -8,6 +8,24 @@
 
 ### Added
 
+- Added ordered local References to the uniform generation surface (#105,
+  #102): `ply generate <prompt> --ref <path>` (repeatable) attaches local
+  images in caller order with no roles and no mandatory identity — a request
+  without References stays fully valid (ADR-0014). Reference identities
+  (sha-256) are derived once at Job creation and the bytes are verified against
+  them once at generation; the verified bytes in caller order are the only
+  attachment path to the provider (image-kind via `buildImageRequestArgs`,
+  multimodal as ordered message image parts). Missing or changed Reference
+  files and unqualified-model capability are refused before any provider call
+  with actionable diagnostics and no published record. The record's
+  `request.references` (optional; omitted entirely for zero-Reference
+  requests, keeping that record shape byte-identical) carries the ordered
+  paths and identities; a Reference call on a text-only measured rate records
+  the cost as unknown with its basis stated (mirroring the legacy job
+  records, TEST-012). Compact text lists each Reference in order, `--json`
+  carries the record, `show`/`list` remain offline reads that refuse
+  generation flags, and help documents the new option. Contract extended in
+  docs/generation-publication-contract.md for #107/#108/#109.
 - Added the uniform generation surface (#104, #102): `ply generate <prompt>` — one
   prompt-only source-image Generation Job operation with no subject category
   (ADR-0014). Full-canvas or isolated output intent is a request parameter;

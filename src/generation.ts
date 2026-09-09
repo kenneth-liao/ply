@@ -28,10 +28,11 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path";
 import {
   resolveModel,
+  referenceIncompatibilityError,
   type ModelSpec,
 } from "./models.js";
 import { extensionFor } from "./assets.js";
-import { buildImageRequestArgs, describeWarning } from "./generate.js";
+import { buildImageRequestArgs, describeWarning, loadVerifiedReference } from "./generate.js";
 
 /** Output intent — a generation request parameter, not a content category. */
 export type GenerationIntent = "full-canvas" | "isolated";
@@ -40,6 +41,12 @@ export type GenerationIntent = "full-canvas" | "isolated";
 export type UniformSizing =
   | { kind: "size"; width: number; height: number }
   | { kind: "aspectRatio"; ratio: string };
+
+/** A Reference after ingestion: caller path and the identity derived once at Job creation. */
+export interface UniformReference {
+  path: string;
+  contentHash: string;
+}
 
 export interface UniformGenerationRequest {
   /** The caller's prompt, normalized (trimmed) at this one boundary. */
@@ -56,10 +63,16 @@ export interface UniformGenerationRequest {
   count: number;
   /** Multimodal models only. */
   temperature?: number;
+  /** Caller-supplied local Reference paths, in caller order (no roles, no mandatory identity — ADR-0014). */
+  references?: string[];
 }
 
 /** A request after validateUniformRequest: sizing is normalized and always present. */
-export type NormalizedUniformRequest = UniformGenerationRequest & { sizing: UniformSizing };
+export type NormalizedUniformRequest = Omit<UniformGenerationRequest, "references"> & {
+  sizing: UniformSizing;
+  /** References after ingestion: ordered identities derived once at Job creation. */
+  references?: UniformReference[];
+};
 
 /** One generated output: content identity and its job-relative file. */
 export interface UniformOutput {
@@ -108,7 +121,8 @@ export interface GenerationJobSummary {
  */
 export interface ProviderImageRequest {
   model: string;
-  prompt: string;
+  /** Plain string when no References are attached; verified bytes in caller order otherwise. */
+  prompt: string | { text: string; images: Uint8Array[] };
   /** Explicit pixel size — models that take a size. */
   size?: `${number}x${number}`;
   /** Aspect ratio — models that take an aspect ratio. */
@@ -118,6 +132,8 @@ export interface ProviderImageRequest {
 export interface ProviderTextRequest {
   model: string;
   prompt: string;
+  /** Verified Reference bytes in caller order (message parts on the production path). */
+  images?: Uint8Array[];
   /** Multimodal models only. */
   temperature?: number;
 }
@@ -163,11 +179,30 @@ export interface ValidatedUniformRequest {
 }
 
 /**
- * The one ingestion point for uniform generation requests: external input
- * becomes the canonical normalized shape here, so every downstream reader can
- * assume it. All semantic validation happens before any provider call — a
- * refused request costs nothing. The returned request carries the effective
- * (default-filled, normalized) sizing the record will publish.
+ * Compile-time brand: only ingestUniformRequest produces an
+ * IngestedUniformRequest. executeUniformGeneration therefore cannot accept
+ * validateUniformRequest() output — a validated request carries no Reference
+ * identities, so executing it would silently generate with zero attachments
+ * (INT-1). The brand is a runtime symbol, so it never serializes into
+ * records (JSON.stringify skips symbol keys) and never reaches a provider.
+ */
+const ingestedBrand = Symbol("ingestedUniformRequest");
+
+/** A request after ingestion (validateUniformRequest + Reference identity derivation) — the only shape Generation executes. */
+export interface IngestedUniformRequest {
+  request: NormalizedUniformRequest;
+  spec: ReturnType<typeof resolveModel>;
+  [ingestedBrand]: true;
+}
+
+/**
+ * The pure semantic/capability gate for uniform generation requests: external
+ * input is checked here before any provider call and before any Reference
+ * byte is read — a refused request costs nothing. It performs no IO and
+ * derives no identities; the returned request carries the effective
+ * (default-filled, normalized) sizing. Reference identity derivation is
+ * ingestUniformRequest's job — that is the ingestion boundary, and only its
+ * output may be executed.
  */
 export function validateUniformRequest(input: UniformGenerationRequest): ValidatedUniformRequest {
   if (!input.prompt.trim())
@@ -180,6 +215,12 @@ export function validateUniformRequest(input: UniformGenerationRequest): Validat
     throw new Error("--count must be an integer between 1 and 8");
 
   const spec = resolveModel(input.model);
+
+  // Capability gate, ahead of every other shape check and ahead of any
+  // Reference byte being read: a model without a qualified reference claim is
+  // refused here, naming the qualified alternatives (DEC-018/DEC-020).
+  if (input.references?.length && !spec.supportsRef)
+    throw new Error(referenceIncompatibilityError(spec));
 
   const sizing = normalizeSizing(input.sizing, spec);
   // Sizing must match the model's provider call shape — a mismatch is refused
@@ -234,6 +275,29 @@ function normalizeSizing(
 }
 
 /**
+ * Ingest a caller request into the canonical shape Generation executes against:
+ * semantic validation plus Reference identity derivation (DEC-003) — each
+ * Reference file is read exactly once here, at Job creation, and its sha-256
+ * becomes the recorded identity in caller order. Missing files and
+ * unsupported model capability are refused before any provider call. This is
+ * the one ingestion point and the only producer of IngestedUniformRequest;
+ * validateUniformRequest's output cannot be executed.
+ */
+export async function ingestUniformRequest(input: UniformGenerationRequest): Promise<IngestedUniformRequest> {
+  const { request, spec } = validateUniformRequest(input);
+  if (!input.references?.length) return { request, spec, [ingestedBrand]: true };
+  const references: UniformReference[] = [];
+  for (const p of input.references) {
+    if (typeof p !== "string" || !p.trim())
+      throw new Error("Reference paths must be non-empty strings (--ref <path>)");
+    // One read per Reference here: its bytes become the recorded identity.
+    const loaded = await loadVerifiedReference({ path: p });
+    references.push({ path: p, contentHash: sha256(loaded.bytes) });
+  }
+  return { request: { ...request, references }, spec, [ingestedBrand]: true };
+}
+
+/**
  * Read one published record. Missing, corrupt, or contradictory records fail
  * loudly here — the single ingestion point for record readers (show, list,
  * and the dependent tickets' consumers).
@@ -265,6 +329,21 @@ export async function loadGenerationJob(jobRoot: string, jobId: string): Promise
       throw new Error(
         `Job "${jobId}" is unreadable: its request sizing is not a valid uniform sizing`,
       );
+    if (job.request.references !== undefined) {
+      const refs = job.request.references;
+      const valid =
+        Array.isArray(refs) &&
+        refs.every(
+          (r) =>
+            r !== null && typeof r === "object" && typeof (r as UniformReference).path === "string" &&
+            typeof (r as UniformReference).contentHash === "string" &&
+            /^[a-f0-9]{64}$/.test((r as UniformReference).contentHash),
+        );
+      if (!valid)
+        throw new Error(
+          `Job "${jobId}" is unreadable: its request references are not a valid ordered Reference record`,
+        );
+    }
     if (!Array.isArray(job.run?.outputs))
       throw new Error(`Job "${jobId}" is unreadable: its run has no outputs record`);
     return job;
@@ -311,7 +390,10 @@ export async function listGenerationJobs(jobRoot: string): Promise<GenerationJob
  * call shape has no sizing parameter. Nothing else is added: no zone, no
  * subject bans, no identity recipe (ADR-0014).
  */
-export function buildUniformPrompt(request: NormalizedUniformRequest, spec: ModelSpec): string {
+export function buildUniformPrompt(
+  request: Omit<UniformGenerationRequest, "references"> & { sizing: UniformSizing },
+  spec: ModelSpec,
+): string {
   const lines = [request.prompt];
   if (request.intent === "isolated") lines.push("", ISOLATED_FORMAT_LINE);
   if (spec.kind === "multimodal" && request.sizing.kind === "aspectRatio")
@@ -322,26 +404,27 @@ export function buildUniformPrompt(request: NormalizedUniformRequest, spec: Mode
 /** The provider request for one candidate of a validated request. Image-kind
  * requests are built through buildImageRequestArgs — the one home of the
  * image-kind provider request shape — so the uniform surface can never drift
- * from the legacy call shape.
+ * from the legacy call shape. Reference bytes (when present) are the already
+ * verified bytes in caller order; there is no alternate attachment path.
  */
 function buildProviderRequest(
   request: NormalizedUniformRequest,
   spec: ModelSpec,
   fullPrompt: string,
+  refBytes: Uint8Array[],
 ): ProviderImageRequest | ProviderTextRequest {
   if (spec.kind === "multimodal") {
     return {
       model: spec.id,
       prompt: fullPrompt,
+      ...(refBytes.length ? { images: refBytes } : {}),
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     };
   }
-  // No References on this surface (prompt-only), so the built prompt is the
-  // plain string form by construction.
   return buildImageRequestArgs(
     spec,
     fullPrompt,
-    [],
+    refBytes,
     request.sizing.kind === "size"
       ? { size: `${request.sizing.width}x${request.sizing.height}` }
       : { aspectRatio: `${request.sizing.ratio}` as `${number}:${number}` },
@@ -353,15 +436,39 @@ function sha256(bytes: Uint8Array): string {
 }
 
 /**
- * Execute a validated request and publish the Generation Job. Outputs are
- * persisted first (content-addressed), the record written last; any caught
- * failure removes the freshly created job directory, so nothing is left that
- * reports success — and no existing Project state is ever touched.
+ * The single public operation: ingest (validate + derive Reference identities
+ * at Job creation) and execute (verify/read those identities, generate,
+ * publish). Preflight (job id validity and no-overwrite) precedes ingestion,
+ * so a duplicate job id is refused before any Reference byte is read.
  */
 export async function runUniformGeneration(
   jobRoot: string,
   jobId: string,
   input: UniformGenerationRequest,
+  deps: { provider: UniformProvider },
+): Promise<GenerationJobRecord> {
+  if (!JOB_ID_PATTERN.test(jobId))
+    throw new Error(`Invalid job id "${jobId}" — use lowercase letters/digits/hyphens`);
+  if (existsSync(path.join(jobDir(jobRoot, jobId), "job.json")))
+    throw new Error(
+      `Generation Job "${jobId}" already exists — pick a new id to record a new request (a Job's lineage is never overwritten)`,
+    );
+  return executeUniformGeneration(jobRoot, jobId, await ingestUniformRequest(input), deps);
+}
+
+/**
+ * Execute an ingested request and publish the Generation Job. Each Reference
+ * is read once more here and hash-verified against the identity recorded at
+ * Job creation — the canonical verified representation; missing or changed
+ * Reference bytes are refused before any provider call (DEC-003). Outputs are
+ * persisted first (content-addressed), the record written last; any caught
+ * failure removes the freshly created job directory, so nothing is left that
+ * reports success — and no existing Project state is ever touched.
+ */
+export async function executeUniformGeneration(
+  jobRoot: string,
+  jobId: string,
+  ingested: IngestedUniformRequest,
   deps: { provider: UniformProvider },
 ): Promise<GenerationJobRecord> {
   if (!JOB_ID_PATTERN.test(jobId))
@@ -372,9 +479,20 @@ export async function runUniformGeneration(
       `Generation Job "${jobId}" already exists — pick a new id to record a new request (a Job's lineage is never overwritten)`,
     );
 
-  const { request, spec } = validateUniformRequest(input);
+  const { request, spec } = ingested;
+  // Defense in depth behind the ingestion boundary: a tampered or hand-built
+  // ingested request cannot carry References onto an unqualified model.
+  if (request.references?.length && !spec.supportsRef)
+    throw new Error(referenceIncompatibilityError(spec));
+  // Verify/read every Reference once, in caller order — these exact bytes are
+  // what the provider receives for every candidate.
+  const refBytes: Uint8Array[] = [];
+  for (const r of request.references ?? []) {
+    const loaded = await loadVerifiedReference({ path: r.path, contentHash: r.contentHash });
+    refBytes.push(loaded.bytes);
+  }
   const fullPrompt = buildUniformPrompt(request, spec);
-  const providerRequest = buildProviderRequest(request, spec, fullPrompt);
+  const providerRequest = buildProviderRequest(request, spec, fullPrompt, refBytes);
   const now = new Date().toISOString();
 
   try {
@@ -403,9 +521,23 @@ export async function runUniformGeneration(
         ranAt: now,
         model: spec.id,
         fullPrompt,
-        costUsd: spec.approxCost * outputs.length,
-        costMeasured: spec.costMeasured,
-        warnings: [...new Set(warnings)],
+        // The cost is recorded only when the rate describes the call shape: a
+        // Reference call on a text-only rate records unknown with its basis
+        // stated, never the text-only rate claimed as measured (TEST-012).
+        costUsd:
+          refBytes.length === 0 || spec.costCoversRefs ? spec.approxCost * outputs.length : null,
+        costMeasured: spec.costMeasured && (refBytes.length === 0 || spec.costCoversRefs),
+        warnings: [
+          ...new Set([
+            ...warnings,
+            ...(refBytes.length > 0 && !spec.costCoversRefs
+              ? [
+                  `cost: reference-call cost recorded as unknown — the measured rate for ${spec.id} covers text-only calls; ` +
+                  `a reference call bills the image as extra input tokens (basis in the model note)`,
+                ]
+              : []),
+          ]),
+        ],
         outputs,
       },
     };

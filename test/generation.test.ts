@@ -16,14 +16,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   buildUniformPrompt,
+  executeUniformGeneration,
   GENERATION_JOB_SCHEMA_VERSION,
+  ingestUniformRequest,
   listGenerationJobs,
   loadGenerationJob,
   runUniformGeneration,
   validateUniformRequest,
-  type NormalizedUniformRequest,
+  type IngestedUniformRequest,
+  type UniformGenerationRequest,
   type UniformProvider,
+  type UniformSizing,
 } from "../src/generation.js";
+import { resolveModel } from "../src/models.js";
 
 let root: string;
 
@@ -65,7 +70,7 @@ function fakeProvider(
   };
 }
 
-const base: NormalizedUniformRequest = {
+const base: UniformGenerationRequest & { sizing: UniformSizing } = {
   prompt: "a lighthouse at dusk",
   intent: "full-canvas",
   model: "gpt-image",
@@ -161,7 +166,7 @@ describe("buildUniformPrompt", () => {
   });
 
   test("isolated intent adds isolation framing only — never a transparency request", () => {
-    const req: NormalizedUniformRequest = { ...base, intent: "isolated" };
+    const req: UniformGenerationRequest & { sizing: UniformSizing } = { ...base, intent: "isolated" };
     const prompt = buildUniformPrompt(req, validateUniformRequest(req).spec);
     expect(prompt).toContain("a lighthouse at dusk");
     expect(prompt).toContain("isolated");
@@ -183,7 +188,7 @@ describe("buildUniformPrompt", () => {
   });
 
   test("multimodal models with an aspect selection carry the ratio in the effective prompt", () => {
-    const req: NormalizedUniformRequest = {
+    const req: UniformGenerationRequest & { sizing: UniformSizing } = {
       ...base,
       model: "nano-2",
       sizing: { kind: "aspectRatio", ratio: "4:5" },
@@ -194,7 +199,7 @@ describe("buildUniformPrompt", () => {
   });
 
   test("full-canvas multimodal records the aspect in the effective prompt, including the 1:1 default", () => {
-    const req: NormalizedUniformRequest = {
+    const req: UniformGenerationRequest & { sizing: UniformSizing } = {
       ...base,
       model: "nano-2",
       sizing: { kind: "aspectRatio", ratio: "1:1" },
@@ -220,7 +225,7 @@ describe("runUniformGeneration", () => {
 
     expect(job.schemaVersion).toBe(GENERATION_JOB_SCHEMA_VERSION);
     expect(job.kind).toBe("generation");
-    expect(job.request).toEqual({ ...base, count: 2 });
+    expect(job.request).toEqual({ ...base, count: 2 } as typeof job.request);
     expect(job.run.model).toBe("openai/gpt-image-2");
     expect(job.run.fullPrompt).toBe("a lighthouse at dusk");
     expect(job.run.outputs).toHaveLength(2);
@@ -255,7 +260,7 @@ describe("runUniformGeneration", () => {
 
   test("multimodal requests go through the text seam with the ratio line", async () => {
     const provider = fakeProvider();
-    const req: NormalizedUniformRequest = {
+    const req: UniformGenerationRequest & { sizing: UniformSizing } = {
       ...base,
       model: "nano-2",
       sizing: { kind: "aspectRatio", ratio: "4:5" },
@@ -354,6 +359,215 @@ describe("loadGenerationJob and listGenerationJobs", () => {
     expect(jobs.map((j) => j.jobId)).toEqual(["gen-a", "gen-b"]);
     expect(jobs[0]).toMatchObject({ intent: "full-canvas", outputs: 1 });
     expect(jobs[1]).toMatchObject({ intent: "isolated", outputs: 1 });
+  });
+});
+
+/**
+ * US-001 Reference ingestion (ticket #105): identities derived once at Job
+ * creation, in caller order; unsupported capability and missing files refused
+ * before any provider call.
+ */
+describe("ingestUniformRequest — Reference ingestion at Job creation", () => {
+  async function ref(name: string, bytes: string): Promise<string> {
+    const p = path.join(root, name);
+    await writeFile(p, bytes);
+    return p;
+  }
+
+  test("derives ordered sha-256 identities from the caller's paths", async () => {
+    const a = await ref("a.png", "reference-bytes-a");
+    const b = await ref("b.png", "reference-bytes-b");
+    const c = await ref("c.png", "reference-bytes-c");
+    const ingested = await ingestUniformRequest({ ...base, references: [a, b, c] });
+    expect(ingested.request.references).toEqual([
+      { path: a, contentHash: createHash("sha256").update("reference-bytes-a").digest("hex") },
+      { path: b, contentHash: createHash("sha256").update("reference-bytes-b").digest("hex") },
+      { path: c, contentHash: createHash("sha256").update("reference-bytes-c").digest("hex") },
+    ]);
+  });
+
+  test("attachment order follows caller order, not any category reorder", async () => {
+    const a = await ref("first.png", "one");
+    const b = await ref("second.png", "two");
+    const reversed = await ingestUniformRequest({ ...base, references: [b, a] });
+    expect(reversed.request.references!.map((r) => r.path)).toEqual([b, a]);
+  });
+
+  test("a missing Reference file is refused before any provider call", async () => {
+    await expect(
+      ingestUniformRequest({ ...base, references: [path.join(root, "absent.png")] }),
+    ).rejects.toThrow(/absent\.png.*missing|missing.*absent\.png/i);
+  });
+
+  test("a model without a qualified reference claim is refused before any byte is read", async () => {
+    const a = await ref("a.png", "bytes");
+    for (const model of ["flux", "bytedance/unregistered-raw-id"]) {
+      await expect(
+        ingestUniformRequest({ ...base, model, references: [a] }),
+      ).rejects.toThrow(/not qualified reference-capable/);
+    }
+  });
+
+  test("a zero-Reference request ingests without a references field", async () => {
+    const ingested = await ingestUniformRequest(base);
+    expect("references" in ingested.request).toBe(false);
+  });
+
+  test("validate-only output cannot be executed — IngestedUniformRequest is branded (INT-1)", () => {
+    const validated = validateUniformRequest(base);
+    // @ts-expect-error — the brand makes validate-only output unexecutable;
+    // removing the brand makes this @ts-expect-error unused and tsc fails.
+    const notIngested: IngestedUniformRequest = validated;
+    expect(notIngested).toBeDefined();
+  });
+});
+
+/**
+ * US-001 execution (ticket #105): the canonical verified representation —
+ * recorded identities — is verified against the files at generation, and the
+ * exact verified bytes reach the provider in caller order. No alternate
+ * unverified attachment path exists.
+ */
+describe("executeUniformGeneration — verified Reference bytes", () => {
+  async function ingestedWithRefs(): Promise<{ ingested: IngestedUniformRequest; paths: string[] }> {
+    const paths = [
+      path.join(root, "r1.png"),
+      path.join(root, "r2.png"),
+      path.join(root, "r3.png"),
+    ];
+    await writeFile(paths[0], "reference-alpha");
+    await writeFile(paths[1], "reference-beta");
+    await writeFile(paths[2], "reference-gamma");
+    const ingested = await ingestUniformRequest({ ...base, references: paths });
+    return { ingested, paths };
+  }
+
+  test("image-kind requests receive the verified bytes in caller order", async () => {
+    const provider = fakeProvider();
+    const { ingested, paths } = await ingestedWithRefs();
+    await executeUniformGeneration(jobRoot(), "gen-test", ingested, { provider });
+    expect(provider.imageCalls).toHaveLength(1);
+    const call = provider.imageCalls[0] as { prompt: { text: string; images: Uint8Array[] } };
+    expect(call.prompt.images).toEqual([
+      Buffer.from("reference-alpha"),
+      Buffer.from("reference-beta"),
+      Buffer.from("reference-gamma"),
+    ]);
+    expect(call.prompt.text).toBe("a lighthouse at dusk");
+    expect(paths).toHaveLength(3);
+  });
+
+  test("multimodal requests carry the verified bytes in caller order on the text seam", async () => {
+    const provider = fakeProvider();
+    const { ingested } = await ingestedWithRefs();
+    const multi: IngestedUniformRequest = {
+      ...ingested,
+      request: {
+        ...ingested.request,
+        model: "nano-2",
+        sizing: { kind: "aspectRatio", ratio: "1:1" },
+      },
+      spec: validateUniformRequest({ ...base, model: "nano-2", sizing: { kind: "aspectRatio", ratio: "1:1" } }).spec,
+    };
+    await executeUniformGeneration(jobRoot(), "gen-multi", multi, { provider });
+    expect(provider.textCalls).toHaveLength(1);
+    expect((provider.textCalls[0] as { images?: Uint8Array[] }).images).toEqual([
+      Buffer.from("reference-alpha"),
+      Buffer.from("reference-beta"),
+      Buffer.from("reference-gamma"),
+    ]);
+    expect(provider.imageCalls).toHaveLength(0);
+  });
+
+  test("a file changed between request capture and execution is refused — no provider call, no publication", async () => {
+    const provider = fakeProvider();
+    const { ingested, paths } = await ingestedWithRefs();
+    await writeFile(paths[1], "mutated-after-capture");
+    await expect(
+      executeUniformGeneration(jobRoot(), "gen-drift", ingested, { provider }),
+    ).rejects.toThrow(/changed content identity/);
+    expect(provider.imageCalls).toHaveLength(0);
+    expect(provider.textCalls).toHaveLength(0);
+    await expectNoPublication();
+  });
+
+  test("a Reference deleted after capture is refused with no publication", async () => {
+    const provider = fakeProvider();
+    const { ingested, paths } = await ingestedWithRefs();
+    await rm(paths[2]);
+    await expect(
+      executeUniformGeneration(jobRoot(), "gen-gone", ingested, { provider }),
+    ).rejects.toThrow(/missing/i);
+    expect(provider.imageCalls).toHaveLength(0);
+    await expectNoPublication();
+  });
+
+  test("an unsupported model caught only at execution still refuses before the provider call", async () => {
+    // Defense in depth: a tampered ingested request cannot smuggle References
+    // onto an unqualified model past the execution boundary.
+    const provider = fakeProvider();
+    const raw = await ingestUniformRequest({ ...base, references: [path.join(root, "a.png")] }).catch(() => null);
+    expect(raw).toBeNull(); // ingestion refuses; construct the bypass by hand instead
+    // A hostile hand-built ingested request — the cast is the point: the
+    // runtime capability gate must hold even for a caller who forges the shape.
+    const handBuilt = {
+      request: { ...base, references: [{ path: path.join(root, "a.png"), contentHash: "a".repeat(64) }] },
+      spec: resolveModel("flux"),
+    } as unknown as IngestedUniformRequest;
+    await expect(
+      executeUniformGeneration(jobRoot(), "gen-cap", handBuilt, { provider }),
+    ).rejects.toThrow(/not qualified reference-capable/);
+    expect(provider.imageCalls).toHaveLength(0);
+  });
+
+  test("published provenance records the ordered identities and honest cost for a text-only rate", async () => {
+    const provider = fakeProvider();
+    const { ingested } = await ingestedWithRefs();
+    const job = await executeUniformGeneration(jobRoot(), "gen-refs", ingested, { provider });
+    expect(job.request.references).toEqual(ingested.request.references);
+    expect(job.request.references?.map((r) => r.path)).toEqual(ingested.request.references!.map((r) => r.path));
+    // gpt-image's measured rate covers text-only calls (costCoversRefs: false):
+    // a reference call records unknown cost with its basis stated.
+    expect(job.run.costUsd).toBeNull();
+    expect(job.run.costMeasured).toBe(false);
+    expect(job.run.warnings.join("\n")).toMatch(/reference-call cost recorded as unknown/);
+    const onDisk = JSON.parse(await readFile(path.join(jobRoot(), "gen-refs", "job.json"), "utf8"));
+    expect(onDisk).toEqual(job);
+  });
+
+  test("a reference-capable model with a ref-covering rate keeps the measured cost", async () => {
+    const provider = fakeProvider();
+    const p = path.join(root, "a.png");
+    await writeFile(p, "bytes");
+    const ingested = await ingestUniformRequest({
+      ...base,
+      model: "nano-2",
+      sizing: { kind: "aspectRatio", ratio: "1:1" },
+      references: [p],
+    });
+    const job = await executeUniformGeneration(jobRoot(), "gen-covered", ingested, { provider });
+    expect(job.run.costMeasured).toBe(true);
+    expect(job.run.costUsd).toBeCloseTo(0.067, 10);
+  });
+});
+
+describe("loadGenerationJob — Reference record validation", () => {
+  test("contradictory references shapes are refused loudly", async () => {
+    const provider = fakeProvider();
+    await runUniformGeneration(jobRoot(), "gen-ok", base, { provider });
+    const raw = JSON.parse(await readFile(path.join(jobRoot(), "gen-ok", "job.json"), "utf8"));
+    raw.request.references = "not an array";
+    await writeFile(path.join(jobRoot(), "gen-ok", "job.json"), JSON.stringify(raw));
+    await expect(loadGenerationJob(jobRoot(), "gen-ok")).rejects.toThrow(/references/i);
+  });
+
+  test("a references entry without a valid sha-256 identity is refused", async () => {
+    const provider = fakeProvider();
+    await runUniformGeneration(jobRoot(), "gen-ok", base, { provider });
+    const raw = JSON.parse(await readFile(path.join(jobRoot(), "gen-ok", "job.json"), "utf8"));
+    raw.request.references = [{ path: "x.png", contentHash: "not-a-hash" }];
+    await writeFile(path.join(jobRoot(), "gen-ok", "job.json"), JSON.stringify(raw));
+    await expect(loadGenerationJob(jobRoot(), "gen-ok")).rejects.toThrow(/references/i);
   });
 });
 
