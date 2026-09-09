@@ -117,5 +117,9 @@ Facts and their one home:
 - Default output is compact human text; `--json` emits `{ok: true, matteId,
   matteDir, matte}` / `{ok: false, error}`. Exit codes: 0 ok, 1 failure,
   2 usage.
-- Richer evidence presentation is #109's ownership; no show/list subcommand is
-  introduced here.
+- Richer evidence presentation is #109's ownership, delivered as
+  `ply generate review <job-id>` (docs/generation-publication-contract.md
+  §7) for published evidence — it associates a matte by the same derived
+  sha-256 source linkage this record defines — and `ply layer review
+  <layer-id> --out <path>` (docs/project-storage-contract.md §7) for
+  retained Project evidence. No show/list subcommand exists on this surface.

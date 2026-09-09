@@ -203,7 +203,8 @@ request, not a matte. The independent matting operation is #106's ownership.
 ## 7. Command contract (US-005)
 
 - `ply generate <prompt> [options]`, `ply generate show <jobId>`,
-  `ply generate list` — see the module help for the full syntax.
+  `ply generate list`, `ply generate review <jobId>` — see the module help
+  for the full syntax.
 - Default output is compact human text; `--json` emits `{ok: true, jobId,
   jobDir, job}` / `{ok: false, error}`. Exit codes: 0 ok, 1 failure, 2 usage.
   Compact text lists each Reference in order (`ref N: <path> (<hash12>)`)
@@ -212,5 +213,22 @@ request, not a matte. The independent matting operation is #106's ownership.
   work offline, and they refuse generation flags including `--ref`. Richer
   evidence presentation (review sheets, candidate comparison) is #109's
   ownership.
+- `ply generate review <jobId>` (#109) builds an offline evidence sheet at
+  `<jobDir>/review.html` from the published evidence: every output is read
+  and hash-verified against its recorded content identity first, each
+  Reference is read from its recorded caller path and verified against the
+  identity derived at Job creation (a missing or changed Reference — a
+  "newer Reference" — fails the whole review, naming recorded and actual
+  identities), and the associated matte is found by the derived sha-256
+  source linkage over `out/matting` (zero matches review as "no matte";
+  more than one is ambiguous lineage and fails closed; the matched matte's
+  output is verified before display). The sheet is self-contained: embedded
+  data URLs of the verified bytes under a restrictive CSP, full-size, 168px,
+  and fixed-crop views, matte alpha on a checkerboard, and the explicit
+  statement that review evidence never implies likeness approval or cutout
+  promotion (ADR-0014). A failed review writes no sheet. Like `show`/`list`,
+  review is a pure local read: offline, no engine, no provider, no Project
+  state, no library adoption — the retained-Project counterpart is
+  `ply layer review` (docs/project-storage-contract.md §7).
 - `--json` payloads carry the full published record, so an agent inspects the
   effective request, outputs, and provenance without a second read.

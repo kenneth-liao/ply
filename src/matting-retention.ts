@@ -274,6 +274,52 @@ export async function findGenerationPredecessor(
   return predecessors[0]!;
 }
 
+/**
+ * Find the published matte(s) whose source matches one content identity — the
+ * inverse of `findGenerationPredecessor`: a generated candidate's associated
+ * matte is found by the same derived sha-256 linkage, never by a stored
+ * pointer (#109). Zero matches means no matte is associated with these bytes;
+ * more than one match is ambiguous lineage and fails closed rather than
+ * display a possibly wrong matte. An unreadable record also fails closed.
+ */
+export async function findMatteForSource(
+  matteRoot: string,
+  sourceContentHash: string,
+): Promise<{ matte: MattingRecord; recordBytes: Buffer } | null> {
+  let entries: string[];
+  try {
+    entries = await readdir(matteRoot);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  const matches: { matte: MattingRecord; recordBytes: Buffer }[] = [];
+  for (const entry of entries.sort()) {
+    if (!MATTE_ID_PATTERN.test(entry)) continue; // not a matte directory (temp files, partial writes)
+    const recordPath = path.join(matteRoot, entry, "matte.json");
+    let raw: Buffer;
+    try {
+      raw = await readFile(recordPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue; // not a published matte (no record)
+      throw err;
+    }
+    const matte = parseMattingRecord(raw.toString("utf8"), entry);
+    if (matte.request.source.contentHash === sourceContentHash) {
+      matches.push({ matte, recordBytes: raw });
+    }
+  }
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error(
+      `The candidate (${sourceContentHash.slice(0, 12)}) is the source of mattes ${matches
+        .map((m) => `"${m.matte.matteId}"`)
+        .join(", ")} — the associated matte is ambiguous; refusing to display possibly wrong evidence`,
+    );
+  }
+  return matches[0]!;
+}
+
 export interface RetainedMatteGenerationLineage {
   matting: RetainedMattingProvenance;
   /** The retained predecessor Generation Job, when the matte's source was generated. */
