@@ -163,7 +163,7 @@ const ISOLATED_FORMAT_LINE =
 export const ISOLATED_INTENT_WARNING =
   "isolated: isolated intent is a generation request, not a matte — the output is not verified alpha; invoke Matting explicitly (ADR-0015) for verified true alpha";
 
-const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+export const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function jobDir(jobRoot: string, jobId: string): string {
   return path.join(jobRoot, jobId);
@@ -298,19 +298,13 @@ export async function ingestUniformRequest(input: UniformGenerationRequest): Pro
 }
 
 /**
- * Read one published record. Missing, corrupt, or contradictory records fail
- * loudly here — the single ingestion point for record readers (show, list,
- * and the dependent tickets' consumers).
+ * Parse and validate one published record's text. The single validation home
+ * for record readers (show, list, and the dependent tickets' consumers):
+ * missing, corrupt, or contradictory records fail loudly here.
  */
-export async function loadGenerationJob(jobRoot: string, jobId: string): Promise<GenerationJobRecord> {
+export function parseGenerationJobRecord(raw: string, jobId: string): GenerationJobRecord {
   if (!JOB_ID_PATTERN.test(jobId))
     throw new Error(`Invalid job id "${jobId}" — use lowercase letters/digits/hyphens`);
-  let raw: string;
-  try {
-    raw = await readFile(path.join(jobDir(jobRoot, jobId), "job.json"), "utf8");
-  } catch {
-    throw new Error(`No generation job "${jobId}" under ${jobRoot}`);
-  }
   try {
     const job = JSON.parse(raw) as GenerationJobRecord;
     if (job.schemaVersion !== GENERATION_JOB_SCHEMA_VERSION)
@@ -346,6 +340,17 @@ export async function loadGenerationJob(jobRoot: string, jobId: string): Promise
     }
     if (!Array.isArray(job.run?.outputs))
       throw new Error(`Job "${jobId}" is unreadable: its run has no outputs record`);
+    const outputsValid =
+      Array.isArray(job.run.outputs) &&
+      job.run.outputs.every(
+        (o) =>
+          o !== null && typeof o === "object" &&
+          typeof (o as UniformOutput).contentHash === "string" && /^[a-f0-9]{64}$/.test((o as UniformOutput).contentHash) &&
+          typeof (o as UniformOutput).file === "string" && (o as UniformOutput).file !== "" &&
+          typeof (o as UniformOutput).mediaType === "string" && (o as UniformOutput).mediaType.startsWith("image/"),
+      );
+    if (!outputsValid)
+      throw new Error(`Job "${jobId}" is unreadable: its run outputs are not a valid content-addressed output record`);
     return job;
   } catch (err) {
     // JSON.parse failure is the one case this catch wraps; the shape checks
@@ -354,6 +359,17 @@ export async function loadGenerationJob(jobRoot: string, jobId: string): Promise
       throw new Error(`Job "${jobId}" has an unreadable record: ${(err as Error).message}`);
     throw err;
   }
+}
+
+/** Read one published record from disk. */
+export async function loadGenerationJob(jobRoot: string, jobId: string): Promise<GenerationJobRecord> {
+  let raw: string;
+  try {
+    raw = await readFile(path.join(jobDir(jobRoot, jobId), "job.json"), "utf8");
+  } catch {
+    throw new Error(`No generation job "${jobId}" under ${jobRoot}`);
+  }
+  return parseGenerationJobRecord(raw, jobId);
 }
 
 /** Summaries of every readable published job, sorted by id. */

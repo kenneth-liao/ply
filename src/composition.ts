@@ -16,12 +16,14 @@ import {
   generateLayerId,
   computeRevisionHash,
   validateAndIngestImage,
+  validateImageBytes,
   validateTextContent,
   storeContentBlob,
   readLayerInternal,
   readLayerInternalFull,
 } from "./layer.js";
 import { resolveFace, fontAssetBytes } from "./fonts.js";
+import { selectGenerationOutput, retainGenerationRecord, type GenerationOutputSelection } from "./generation-retention.js";
 
 export const COMPOSITION_SCHEMA_VERSION = 1;
 
@@ -413,6 +415,78 @@ export async function addTextLayerToComposition(
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
+    }));
+  });
+}
+
+/** A selected Generation Job output for ingestion (#107): the job id and, for
+ * multi-output records, the explicit 1-based index or sha-256 selection. */
+export interface GenerationLayerSource extends GenerationOutputSelection {
+  jobId: string;
+  /** Root of the published Generation Job records (default: <cwd>/out/generation). */
+  jobRoot: string;
+}
+
+export interface GeneratedLayerResult {
+  composition: string;
+  use: CompositionLayerUse;
+  layer: ResolvedLayer;
+  generatedFrom: { jobId: string; contentHash: string };
+}
+
+/**
+ * Add one selected generated output as an ordinary image Layer (#107, US-003)
+ * through the exact image publication protocol: same identity/revision/use
+ * staging, same lock, same rollback. The output's bytes are verified against
+ * the record's content identity, retained into the content store, and the
+ * record is retained verbatim under the Project's generation/ directory — the
+ * one canonical retained provenance representation, resolvable by the
+ * revision's contentHash after the external generation files are removed.
+ * No generated-Layer identity, category, or approval fields exist; this is
+ * an ordinary image Layer from a caller-declared source.
+ */
+export async function addGeneratedLayerToComposition(
+  projectPath: string,
+  compName: string,
+  localName: string,
+  source: GenerationLayerSource,
+  options: AddLayerOptions = {},
+): Promise<GeneratedLayerResult> {
+  const sanitizedComp = sanitizeName(compName);
+  const sanitizedLocalName = sanitizeName(localName);
+
+  const { x, y, opacity } = parsePlacement(options);
+
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
+
+    return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
+      // Verify the generated output against its recorded identity, then
+      // retain pixels and provenance before any revision staging — the
+      // established ingestion-then-publish order under the Project lock.
+      const selected = await selectGenerationOutput(source.jobRoot, source.jobId, { output: source.output });
+      const validated = await validateImageBytes(
+        selected.bytes,
+        `Generation Job "${selected.job.jobId}" output "${selected.output.file}"`,
+      );
+      await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
+      await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
+      return {
+        schemaVersion: LAYER_SCHEMA_VERSION,
+        layerId,
+        createdAt,
+        kind: "image",
+        contentHash: validated.contentHash,
+        x,
+        y,
+        opacity,
+      };
+    }).then(({ layerId, layer }) => ({
+      composition: sanitizedComp,
+      use: { name: sanitizedLocalName, layerId },
+      layer,
+      generatedFrom: { jobId: source.jobId, contentHash: layer.currentRevision.contentHash },
     }));
   });
 }

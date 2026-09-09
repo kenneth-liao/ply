@@ -6,6 +6,7 @@ import {
   createComposition,
   addLayerToComposition,
   addTextLayerToComposition,
+  addGeneratedLayerToComposition,
   importComposition,
   importCompositionCrossProject,
   removeLayerFromComposition,
@@ -75,7 +76,16 @@ Options:
   --width <int>         Canvas width in pixels (required for create)
   --height <int>        Canvas height in pixels (required for create)
   --image <path>        Path to local source image file (required for add
-                        unless --text is used)
+                        unless --text or --from-generation is used)
+  --from-generation <jobId>
+                        Add the selected output of a published Generation Job
+                        (see ply generate) as an ordinary image Layer. The
+                        job's provenance is retained inside the Project and
+                        resolvable offline. Mutually exclusive with --image
+                        and --text. The output is selected explicitly with
+                        --output; a multi-output job without it is refused.
+  --output <n|sha256>   Which output of the --from-generation job to ingest:
+                        a 1-based index or the full sha-256 content identity.
   --text <str>          Text content for a text Layer (mutually exclusive
                         with --image; requires --font)
   --font <family>       Bundled font family name (required with --text;
@@ -130,6 +140,8 @@ let values: {
   order?: string;
   out?: string;
   "from-project"?: string;
+  "from-generation"?: string;
+  output?: string;
   x?: string;
   y?: string;
   opacity?: string;
@@ -154,6 +166,8 @@ try {
       order: { type: "string" },
       out: { type: "string" },
       "from-project": { type: "string" },
+      "from-generation": { type: "string" },
+      output: { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
       opacity: { type: "string" },
@@ -222,7 +236,7 @@ async function run() {
       const compName = positionals[1];
       const localName = positionals[2];
       if (!compName || !localName) {
-        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family>)" }, isJson);
+        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --from-generation <jobId>)" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -231,13 +245,36 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      // Generated-content ingestion (#107): --from-generation is a third,
+      // mutually exclusive content kind; --output selects one output of the
+      // referenced Generation Job and is meaningless without it.
+      if (values["from-generation"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined)) {
+        output({ ok: false, error: "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.output !== undefined && values["from-generation"] === undefined) {
+        output({ ok: false, error: "--output is only valid together with --from-generation <jobId>." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values["from-generation"] !== undefined && !values["from-generation"].trim()) {
+        output({ ok: false, error: "--from-generation takes a Generation Job id (see ply generate list)." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.output !== undefined && !/^([1-9]\d*|[0-9a-f]{64})$/.test(values.output)) {
+        output({ ok: false, error: `--output takes a 1-based output index or the full sha-256 output identity (got "${values.output}")` }, isJson);
+        process.exitCode = 2;
+        return;
+      }
       if (values.text === undefined && (values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined)) {
         output({ ok: false, error: "--font, --font-size, and --color require --text <str>." }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (!values.image && values.text === undefined) {
-        output({ ok: false, error: "Missing required content: --image <path> or --text <str> (with --font <family>)" }, isJson);
+      if (!values.image && values.text === undefined && values["from-generation"] === undefined) {
+        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family>), or --from-generation <jobId>" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -258,6 +295,31 @@ async function run() {
       }
 
       try {
+        if (values["from-generation"] !== undefined) {
+          const res = await addGeneratedLayerToComposition(
+            targetProj, compName, localName,
+            { jobRoot: path.resolve("out", "generation"), jobId: values["from-generation"].trim(), output: values.output },
+            { x, y, opacity },
+          );
+          mutationCommitted = true;
+          output(
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer, generatedFrom: res.generatedFrom },
+            isJson,
+            () => {
+              const rev = res.layer.currentRevision;
+              const detail =
+                rev.kind === "text"
+                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
+                  : `${rev.width}×${rev.height} ${rev.format}`;
+              console.log(
+                `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
+                  `[${detail}] from Generation Job ${res.generatedFrom.jobId} ` +
+                  `(${res.generatedFrom.contentHash.slice(0, 12)}; provenance retained)`,
+              );
+            },
+          );
+          return;
+        }
         if (values.text !== undefined) {
           if (!values.font) {
             output({ ok: false, error: "Missing required option: --font <family> (required with --text)" }, isJson);

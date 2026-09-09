@@ -32,6 +32,14 @@ Options:
   --composition <name>  Target Composition for --fork (required with --fork)
   --use <local-name>    Target use local name for --fork (required with --fork)
   --image <path>        New source image file for an image Layer
+  --from-generation <jobId>
+                        Replace an image Layer's content with the selected
+                        output of a published Generation Job (see ply
+                        generate) without generating again; the job's
+                        provenance is retained with the Project. Mutually
+                        exclusive with --image/--text; invalid on text Layers.
+  --output <n|sha256>   Which output of the --from-generation job to ingest:
+                        a 1-based index or the full sha-256 content identity.
   --text <str>          New text content for a text Layer
   --font <family>       Bundled font family name for a text Layer
   --font-size <num>     Font size in px for a text Layer
@@ -78,6 +86,8 @@ let values: {
   composition?: string;
   use?: string;
   image?: string;
+  "from-generation"?: string;
+  output?: string;
   text?: string;
   font?: string;
   "font-size"?: string;
@@ -101,6 +111,8 @@ try {
       composition: { type: "string" },
       use: { type: "string" },
       image: { type: "string" },
+      "from-generation": { type: "string" },
+      output: { type: "string" },
       text: { type: "string" },
       font: { type: "string" },
       "font-size": { type: "string" },
@@ -137,6 +149,7 @@ async function run() {
 
       const hasEditOption =
         values.image !== undefined ||
+        values["from-generation"] !== undefined ||
         values.text !== undefined ||
         values.font !== undefined ||
         values["font-size"] !== undefined ||
@@ -213,6 +226,42 @@ async function run() {
         return;
       }
 
+      // Generated-content ingestion (#107): --from-generation is an image
+      // content option, mutually exclusive with --image and the text options;
+      // --output selects one output of the job and is meaningless without it.
+      if (values["from-generation"] !== undefined && !values["from-generation"].trim()) {
+        output(
+          { ok: false, error: "--from-generation takes a Generation Job id (see ply generate list)." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      if (values["from-generation"] !== undefined && values.image !== undefined) {
+        output(
+          { ok: false, error: "--from-generation and --image are mutually exclusive content options." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      if (values.output !== undefined && values["from-generation"] === undefined) {
+        output(
+          { ok: false, error: "--output is only valid together with --from-generation <jobId>." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      if (values.output !== undefined && !/^([1-9]\d*|[0-9a-f]{64})$/.test(values.output)) {
+        output(
+          { ok: false, error: `--output takes a 1-based output index or the full sha-256 output identity (got "${values.output}")` },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+
       const x = values.x !== undefined ? parseNumericArgument(values.x) : undefined;
       const y = values.y !== undefined ? parseNumericArgument(values.y) : undefined;
       const opacity = values.opacity !== undefined ? parseNumericArgument(values.opacity) : undefined;
@@ -246,6 +295,10 @@ async function run() {
           composition: values.composition,
           use: values.use,
           image: values.image,
+          fromGeneration:
+            values["from-generation"] !== undefined
+              ? { jobRoot: path.resolve("out", "generation"), jobId: values["from-generation"].trim(), output: values.output }
+              : undefined,
           text: values.text,
           font: values.font,
           fontSize,
@@ -264,6 +317,9 @@ async function run() {
         if (res.fork) {
           resultBody.fork = res.fork;
         }
+        if (res.generatedFrom) {
+          resultBody.generatedFrom = res.generatedFrom;
+        }
 
         output(
           resultBody,
@@ -273,13 +329,16 @@ async function run() {
               res.referrersCount === 0
                 ? "not referenced by any Composition"
                 : `referenced by ${res.referrersCount} Composition${res.referrersCount === 1 ? "" : "s"} (${res.referringCompositions.map((n) => `"${n}"`).join(", ")})`;
+            const generated = res.generatedFrom
+              ? `; from Generation Job ${res.generatedFrom.jobId} (${res.generatedFrom.contentHash.slice(0, 12)}, provenance retained)`
+              : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}`);
             }
           },
         );
