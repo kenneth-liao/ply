@@ -15,7 +15,17 @@ import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
 import { resolveFace, fontAssetBytes } from "./fonts.js";
-import { selectGenerationOutput, retainGenerationRecord, type GenerationOutputSelection } from "./generation-retention.js";
+import {
+  selectGenerationOutput,
+  retainGenerationRecord,
+  type GenerationOutputSelection,
+  type RetainedProvenance as RetainedGenerationProvenance,
+} from "./generation-retention.js";
+import {
+  selectMatteOutput,
+  retainMattingRecord,
+  findGenerationPredecessor,
+} from "./matting-retention.js";
 
 export const LAYER_SCHEMA_VERSION = 1;
 
@@ -609,6 +619,15 @@ export interface EditLayerOptions {
    * on image Layers (kind stability applies unchanged).
    */
   fromGeneration?: GenerationOutputSelection & { jobRoot: string; jobId: string };
+  /**
+   * Matting-content ingestion (#108): explicitly replace an image Layer's
+   * content with the verified output of a published matte, retaining the
+   * matte's provenance — and, derived from the source identity, any
+   * predecessor generation provenance — with the Project. Mutually exclusive
+   * with `image` and `fromGeneration`; only valid on image Layers (kind
+   * stability applies unchanged). No engine runs and nothing generates.
+   */
+  fromMatte?: { matteRoot: string; matteId: string; generationRoot: string };
 }
 
 /** Canonical normalized edit intent (#85, DEC-003): the only shape the edit
@@ -653,6 +672,8 @@ export interface EditLayerResult {
   fork?: ForkInfo;
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
+  /** Present only when the edit ingested matted content (#108). */
+  mattedFrom?: { matteId: string; engine: string; contentHash: string };
 }
 
 /**
@@ -752,7 +773,14 @@ async function buildEditedRevision(
   createdAt: string,
   options: EditLayerOptions,
   placement: { x: number; y: number; opacity: number },
-): Promise<{ revision: LayerRevision; unchanged: boolean }> {
+): Promise<{
+  revision: LayerRevision;
+  unchanged: boolean;
+  /** Present when this edit ingested matted content (#108). */
+  mattedFrom?: EditLayerResult["mattedFrom"];
+  /** Present when the ingested matte's source was a retained generation output (#108). */
+  retainedGeneration: RetainedGenerationProvenance | null;
+}> {
   const { x, y, opacity } = placement;
 
   if (prevRev.kind === "image") {
@@ -767,6 +795,8 @@ async function buildEditedRevision(
     }
 
     let contentHash = prevRev.contentHash;
+    let mattedFrom: EditLayerResult["mattedFrom"];
+    let retainedGeneration: RetainedGenerationProvenance | null = null;
     if (options.fromGeneration !== undefined) {
       // Generated-content ingestion (#107): verify the selected output's bytes
       // against the recorded identity, retain the pixels in the content store,
@@ -785,6 +815,41 @@ async function buildEditedRevision(
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
       contentHash = validated.contentHash;
+    } else if (options.fromMatte !== undefined) {
+      // Matted-content ingestion (#108): verify the matte's output bytes
+      // against the recorded identity, retain the pixels in the content
+      // store, and retain the matte record verbatim — all before any revision
+      // staging, under the same publication protocol and rollback discipline
+      // as every other content source. When the matte's source was a
+      // published generation output, that job's record is retained verbatim
+      // too (derived linkage; no second copy of the request facts). No
+      // engine runs and nothing generates: this reads an existing result.
+      const selected = await selectMatteOutput(options.fromMatte.matteRoot, options.fromMatte.matteId);
+      const validated = await validateImageBytes(
+        selected.bytes,
+        `Matte "${selected.matte.matteId}" output "${selected.output.file}"`,
+      );
+      // Everything that can refuse the source (record parse, output hash,
+      // decode, predecessor ambiguity) runs before any Project write, so a
+      // refusal leaves no partial retention.
+      const predecessor = await findGenerationPredecessor(
+        options.fromMatte.generationRoot,
+        selected.matte.request.source.contentHash,
+      );
+      await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
+      await retainMattingRecord(resolvedRoot, selected.matte.matteId, selected.recordBytes);
+      if (predecessor) {
+        await retainGenerationRecord(resolvedRoot, predecessor.job.jobId, predecessor.recordBytes);
+        retainedGeneration = {
+          jobId: predecessor.job.jobId,
+          job: predecessor.job,
+          output: predecessor.job.run.outputs.find(
+            (o) => o.contentHash === selected.matte.request.source.contentHash,
+          )!,
+        };
+      }
+      contentHash = validated.contentHash;
+      mattedFrom = { matteId: selected.matte.matteId, engine: selected.matte.result.engine, contentHash: validated.contentHash };
     } else if (options.image !== undefined) {
       const ingested = await validateAndIngestImage(options.image);
       await storeContentBlob(resolvedRoot, ingested.contentHash, ingested.bytes);
@@ -803,7 +868,7 @@ async function buildEditedRevision(
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity;
-    return { revision, unchanged };
+    return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
   if (prevRev.kind === "text") {
@@ -811,6 +876,11 @@ async function buildEditedRevision(
     if (options.fromGeneration !== undefined) {
       throw new Error(
         `Cannot replace content from a Generation Job on a text Layer. Layer "${layerId}" is a text Layer.`,
+      );
+    }
+    if (options.fromMatte !== undefined) {
+      throw new Error(
+        `Cannot replace content from a matte on a text Layer. Layer "${layerId}" is a text Layer.`,
       );
     }
     if (options.image !== undefined) {
@@ -854,7 +924,7 @@ async function buildEditedRevision(
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity;
-    return { revision, unchanged };
+    return { revision, unchanged, retainedGeneration: null };
   }
 
   throw new Error(`Unsupported Layer kind on layer "${layerId}".`);
@@ -976,10 +1046,17 @@ export async function editLayerInternal(
   const current = await readLayerInternalFull(resolvedRoot, layerId);
   const prevRev = current.currentRevision;
 
-  // Generated-content ingestion (#107) and file ingestion are mutually
-  // exclusive content options — one edit replaces content from one source.
+  // Generated-content (#107) and matted-content (#108) ingestion and file
+  // ingestion are mutually exclusive content options — one edit replaces
+  // content from one source.
   if (options.image !== undefined && options.fromGeneration !== undefined) {
     throw new Error("--image and --from-generation are mutually exclusive content options.");
+  }
+  if (options.image !== undefined && options.fromMatte !== undefined) {
+    throw new Error("--image and --from-matte are mutually exclusive content options.");
+  }
+  if (options.fromGeneration !== undefined && options.fromMatte !== undefined) {
+    throw new Error("--from-generation and --from-matte are mutually exclusive content options.");
   }
 
   // Normalize intent once into the canonical discriminated shape (#85).
@@ -1014,7 +1091,7 @@ export async function editLayerInternal(
     // New identity + edited revision through the shared canonical builder.
     const newLayerId = generateLayerId();
     const createdAt = new Date().toISOString();
-    const { revision } = await buildEditedRevision(
+    const { revision, mattedFrom, retainedGeneration } = await buildEditedRevision(
       resolvedRoot,
       prevRev,
       newLayerId,
@@ -1031,11 +1108,19 @@ export async function editLayerInternal(
     });
     return options.fromGeneration !== undefined
       ? { ...forkResult, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
-      : forkResult;
+      : mattedFrom !== undefined
+        ? {
+            ...forkResult,
+            mattedFrom,
+            ...(retainedGeneration
+              ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
+              : {}),
+          }
+        : forkResult;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
-  const { revision, unchanged } = await buildEditedRevision(
+  const { revision, unchanged, mattedFrom, retainedGeneration } = await buildEditedRevision(
     resolvedRoot,
     prevRev,
     layerId,
@@ -1053,6 +1138,14 @@ export async function editLayerInternal(
       referrersCount,
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+        : {}),
+      ...(mattedFrom !== undefined
+        ? {
+            mattedFrom,
+            ...(retainedGeneration
+              ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
+              : {}),
+          }
         : {}),
     };
   }
@@ -1093,6 +1186,14 @@ export async function editLayerInternal(
     referrersCount,
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      : {}),
+    ...(mattedFrom !== undefined
+      ? {
+          mattedFrom,
+          ...(retainedGeneration
+            ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
+            : {}),
+        }
       : {}),
   };
 }

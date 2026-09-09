@@ -167,3 +167,57 @@ export async function runMatting(
     );
   }
 }
+
+/**
+ * Parse and validate one published matte record's text. The single
+ * validation home for matte-record readers (#108's Project ingestion and
+ * resolution): a missing, corrupt, or contradictory record fails loudly
+ * here. The record is the single authoritative home for the Matting facts —
+ * source path and identity, engine, alpha report, warnings, and output —
+ * so an unreadable record is lineage that cannot be trusted.
+ */
+export function parseMattingRecord(raw: string, matteId: string): MattingRecord {
+  if (!MATTE_ID_PATTERN.test(matteId))
+    throw new Error(`Invalid matte id "${matteId}" — use lowercase letters/digits/hyphens`);
+  let record: MattingRecord;
+  try {
+    record = JSON.parse(raw) as MattingRecord;
+  } catch (err) {
+    throw new Error(`Matte "${matteId}" has an unreadable record: ${(err as Error).message}`);
+  }
+  if (record.schemaVersion !== MATTING_SCHEMA_VERSION)
+    throw new Error(
+      `Matte "${matteId}" has unsupported schemaVersion ${JSON.stringify(record.schemaVersion)} — this tool reads version ${MATTING_SCHEMA_VERSION} only`,
+    );
+  if (record.kind !== "matting")
+    throw new Error(
+      `Matte "${matteId}" is contradictory: kind ${JSON.stringify(record.kind)} is not a Matting record — it cannot be trusted`,
+    );
+  if (record.matteId !== matteId)
+    throw new Error(`Matte "${matteId}" is contradictory: the record names matte ${JSON.stringify(record.matteId)}`);
+  if (typeof record.createdAt !== "string" || Number.isNaN(Date.parse(record.createdAt)))
+    throw new Error(`Matte "${matteId}" is unreadable: its creation timestamp is not a valid UTC ISO date`);
+  const source = record.request?.source;
+  if (
+    source === null || typeof source !== "object" ||
+    typeof source.path !== "string" || source.path === "" ||
+    typeof source.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(source.contentHash)
+  )
+    throw new Error(`Matte "${matteId}" is unreadable: its request source is not a valid content-identified source record`);
+  const result = record.result;
+  if (result === null || typeof result !== "object" || typeof result.engine !== "string" || result.engine === "")
+    throw new Error(`Matte "${matteId}" is unreadable: its result does not record the engine that produced the matte`);
+  if (!Array.isArray(result.outputs) || result.outputs.length !== 1)
+    throw new Error(
+      `Matte "${matteId}" is unreadable: a Matting record publishes exactly one verified output`,
+    );
+  const output = result.outputs[0]!;
+  if (
+    output === null || typeof output !== "object" ||
+    typeof output.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(output.contentHash) ||
+    typeof output.file !== "string" || output.file === "" ||
+    output.mediaType !== "image/png"
+  )
+    throw new Error(`Matte "${matteId}" is unreadable: its output is not a valid content-addressed PNG record`);
+  return record;
+}

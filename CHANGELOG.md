@@ -4,6 +4,26 @@
 
 ### Added
 
+- Added matted-content ingestion with retained Matting lineage (#108, #102):
+  `ply composition add --from-matte <matte-id>` adds the verified output of a
+  published matte (under `out/matting`) as an ordinary image Layer, and
+  `ply layer edit <layer-id> --from-matte <matte-id>` explicitly replaces an
+  image Layer's content through the existing edit contract (blast-radius guard,
+  fork, kind stability unchanged) — no inference runs and nothing generates.
+  The matte record is retained verbatim under `<project>/matting/<matte-id>/
+  matte.json` — the one retained representation of the source identity, output
+  identity, engine, and operation provenance — and the pixels are retained in
+  `content/<sha256>`, so the Layer renders, edits, forks, and replays offline
+  after the external Matting files and the original source are removed and the
+  Project is relocated. When the matte's source was itself a published
+  Generation Job output (derived linkage by content identity, no caller flag
+  and no second copy of request facts), that job's record is retained verbatim
+  through the existing #107 machinery; an ambiguous predecessor or ambiguous
+  resolution fails closed. Missing, corrupt, or mismatched lineage is refused
+  before any live incomplete Layer. Contract documented in
+  docs/project-storage-contract.md and pointed from
+  docs/matting-publication-contract.md.
+
 - Added generated-content ingestion with retained provenance (#107, #102):
   `ply composition add --from-generation <job-id>` adds one selected output of
   a published Generation Job as an ordinary image Layer, and

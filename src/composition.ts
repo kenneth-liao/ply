@@ -23,7 +23,17 @@ import {
   readLayerInternalFull,
 } from "./layer.js";
 import { resolveFace, fontAssetBytes } from "./fonts.js";
-import { selectGenerationOutput, retainGenerationRecord, type GenerationOutputSelection } from "./generation-retention.js";
+import {
+  selectGenerationOutput,
+  retainGenerationRecord,
+  type GenerationOutputSelection,
+  type RetainedProvenance as RetainedGenerationProvenance,
+} from "./generation-retention.js";
+import {
+  selectMatteOutput,
+  retainMattingRecord,
+  findGenerationPredecessor,
+} from "./matting-retention.js";
 
 export const COMPOSITION_SCHEMA_VERSION = 1;
 
@@ -434,6 +444,24 @@ export interface GeneratedLayerResult {
   generatedFrom: { jobId: string; contentHash: string };
 }
 
+/** A published matte for ingestion (#108): the matte id under the matte root. */
+export interface MattingLayerSource {
+  matteId: string;
+  /** Root of the published matte records (default: <cwd>/out/matting). */
+  matteRoot: string;
+  /** Root of the published Generation Job records, for derived predecessor lineage (default: <cwd>/out/generation). */
+  generationRoot: string;
+}
+
+export interface MattedLayerResult {
+  composition: string;
+  use: CompositionLayerUse;
+  layer: ResolvedLayer;
+  mattedFrom: { matteId: string; engine: string; contentHash: string };
+  /** Present when the matte's source was itself a published generation output — the retained predecessor provenance. */
+  generatedFrom?: { jobId: string; contentHash: string };
+}
+
 /**
  * Add one selected generated output as an ordinary image Layer (#107, US-003)
  * through the exact image publication protocol: same identity/revision/use
@@ -487,6 +515,95 @@ export async function addGeneratedLayerToComposition(
       use: { name: sanitizedLocalName, layerId },
       layer,
       generatedFrom: { jobId: source.jobId, contentHash: layer.currentRevision.contentHash },
+    }));
+  });
+}
+
+/**
+ * Add one published matte's verified output as an ordinary image Layer (#108,
+ * US-003) through the exact image publication protocol: same
+ * identity/revision/use staging, same lock, same rollback as #107's
+ * generated-content ingestion. The matte record is read through the one
+ * published-record parser, its single output's bytes are verified against
+ * the recorded content identity, the pixels are retained into the content
+ * store, the matte record is retained verbatim under the Project's matting/
+ * directory, and — derived linkage — when the matte's source was itself a
+ * published Generation Job output, that job's record is retained verbatim
+ * too. All verification and retention happens before any revision staging,
+ * so no failure leaves a live incomplete Layer. No matted-Layer identity,
+ * category, or approval fields exist; this is an ordinary image Layer from a
+ * caller-declared source. No engine runs and nothing generates: ingestion
+ * reads an existing published result.
+ */
+export async function addMattedLayerToComposition(
+  projectPath: string,
+  compName: string,
+  localName: string,
+  source: MattingLayerSource,
+  options: AddLayerOptions = {},
+): Promise<MattedLayerResult> {
+  const sanitizedComp = sanitizeName(compName);
+  const sanitizedLocalName = sanitizeName(localName);
+
+  const { x, y, opacity } = parsePlacement(options);
+
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
+
+    let selected: Awaited<ReturnType<typeof selectMatteOutput>> | undefined;
+    let retainedGeneration: RetainedGenerationProvenance | null = null;
+    return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
+      // Verify the matte's output against its recorded identity, then retain
+      // pixels and provenance before any revision staging — the established
+      // ingestion-then-publish order under the Project lock.
+      const selectedOutput = await selectMatteOutput(source.matteRoot, source.matteId);
+      selected = selectedOutput;
+      const validated = await validateImageBytes(
+        selectedOutput.bytes,
+        `Matte "${selectedOutput.matte.matteId}" output "${selectedOutput.output.file}"`,
+      );
+      // Everything that can refuse the source (record parse, output hash,
+      // decode, predecessor ambiguity) runs before any Project write, so a
+      // refusal leaves no partial retention.
+      const predecessor = await findGenerationPredecessor(
+        source.generationRoot,
+        selectedOutput.matte.request.source.contentHash,
+      );
+      await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
+      await retainMattingRecord(resolvedRoot, selectedOutput.matte.matteId, selectedOutput.recordBytes);
+      if (predecessor) {
+        await retainGenerationRecord(resolvedRoot, predecessor.job.jobId, predecessor.recordBytes);
+        retainedGeneration = {
+          jobId: predecessor.job.jobId,
+          job: predecessor.job,
+          output: predecessor.job.run.outputs.find(
+            (o) => o.contentHash === selectedOutput.matte.request.source.contentHash,
+          )!,
+        };
+      }
+      return {
+        schemaVersion: LAYER_SCHEMA_VERSION,
+        layerId,
+        createdAt,
+        kind: "image" as const,
+        contentHash: validated.contentHash,
+        x,
+        y,
+        opacity,
+      };
+    }).then(({ layerId, layer }) => ({
+      composition: sanitizedComp,
+      use: { name: sanitizedLocalName, layerId },
+      layer,
+      mattedFrom: {
+        matteId: selected!.matte.matteId,
+        engine: selected!.matte.result.engine,
+        contentHash: layer.currentRevision.contentHash,
+      },
+      ...(retainedGeneration
+        ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: layer.currentRevision.contentHash } }
+        : {}),
     }));
   });
 }
