@@ -27,7 +27,8 @@ Usage: ply <project|composition|layer|generate|matte|scene|library|jobs> <comman
                  no Generation Job, no network (new surface)
   scene          Author, inspect, and render Scenes locally (legacy)
   library        Inspect and maintain the current asset library (legacy)
-  jobs           Generate and review source images (legacy)
+  jobs           Inspect and adopt the legacy Generation Job records —
+                 category-specific generation is retired; generate with 'generate'
 
 Run ply <module> --help for module commands.`);
 } else if (!Object.hasOwn(commands, command)) {

@@ -126,14 +126,6 @@ export const MODELS: Record<string, ModelSpec> = {
 export const DEFAULT_MODEL = "gpt-image";
 
 /**
- * The creator-job default — a kind-specific likeness preference, not a
- * capability derivation: the measured likeness workhorse. It flows through the same
- * reference-capability gate as every other selection, so a drift in its
- * qualification fails loudly instead of spending on a refused call.
- */
-export const CREATOR_DEFAULT_MODEL = "nano-2";
-
-/**
  * The canonical qualified reference-capable list (DEC-018): every registry
  * model the recorded evidence marks as accepting typed References. Default
  * selection, explicit validation, help, and recovery messages all read this

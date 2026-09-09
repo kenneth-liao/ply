@@ -1,22 +1,18 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile, readdir, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
-  runPlateJob,
-  rerunPlateJob,
   loadJob,
   listJobs,
   adoptCandidate,
-  parseTypedRef,
   PLATE_JOB_SCHEMA_VERSION,
   OBJECT_JOB_SCHEMA_VERSION,
   CREATOR_JOB_SCHEMA_VERSION,
-  type PlateGenerator,
-  type PlateJobRequest,
 } from "../src/jobs.js";
 import { scanLibrary } from "../src/assets.js";
+import { writeLegacyJob, type LegacyJobSpec } from "./legacy-jobs.js";
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
@@ -35,162 +31,24 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** Distinct bytes per call so every candidate has a unique content identity. */
-let genCounter = 0;
-const fakeGen: PlateGenerator = async (req) => ({
-  candidates: Array.from({ length: req.count }, (_, i) => ({
-    bytes: Buffer.from(`fake-${req.subject}-${req.zone}-${genCounter++}-${i}`),
-    mediaType: "image/png",
-  })),
-  warnings: ["gpt-image: unsupported setting"],
-  fullPrompt: `PROMPT<${req.subject} zone=${req.zone}>`,
-});
-
-const baseRequest = (): PlateJobRequest => ({
+/** A two-candidate plate record, as a pre-retirement binary would have written it. */
+const plateJob = (jobId: string, extra?: Partial<LegacyJobSpec>): LegacyJobSpec => ({
+  jobId,
   kind: "plate",
   subject: "neon server room",
-  zone: "left",
-  model: "gpt-image",
-  count: 2,
-  refs: [],
-});
-
-describe("parseTypedRef", () => {
-  test("parses role:path and derives the content identity from the bytes", async () => {
-    const bytes = Buffer.from("reference-image-bytes");
-    const file = path.join(root, "style-ref.png");
-    await writeFile(file, bytes);
-    const ref = await parseTypedRef(`style:${file}`);
-    expect(ref.role).toBe("style");
-    expect(ref.path).toBe(file);
-    expect(ref.contentHash).toBe(sha256(bytes));
-  });
-
-  test("rejects untyped or malformed refs", () => {
-    expect(parseTypedRef("just-a-path.png")).rejects.toThrow(/role.*path/);
-    expect(parseTypedRef(":path.png")).rejects.toThrow(/role/);
-    expect(parseTypedRef("Bad Role:path.png")).rejects.toThrow(/role/);
-  });
-});
-
-describe("runPlateJob", () => {
-  test("creates a job record with model, full effective prompt, typed refs, cost, warnings, and candidates", async () => {
-    const bytes = Buffer.from("style-ref-bytes");
-    const refFile = path.join(root, "style.png");
-    await writeFile(refFile, bytes);
-    const ref = await parseTypedRef(`style:${refFile}`);
-
-    const request = { ...baseRequest(), refs: [ref] };
-    const job = await runPlateJob(jobRoot, "plate-test-1", request, fakeGen);
-
-    expect(job.schemaVersion).toBe(4); // the role-aware-Reference prompt contract (#56, PROD-1)
-    expect(job.jobId).toBe("plate-test-1");
-    expect(job.kind).toBe("plate");
-    expect(job.request).toEqual(request);
-    expect(job.runs).toHaveLength(1);
-
-    const run = job.runs[0]!;
-    expect(run.fullPrompt).toBe("PROMPT<neon server room zone=left>");
-    expect(run.model).toBe("openai/gpt-image-2");
-    // A reference call on gpt-image's text-only measured rate records unknown:
-    // the rate does not describe the call shape, and no per-generation billing
-    // lookup succeeded for reference calls (TEST-012).
-    expect(run.costUsd).toBeNull();
-    expect(run.costMeasured).toBe(false);
-    expect(run.warnings).toEqual([
-      "gpt-image: unsupported setting",
-      expect.stringMatching(/reference-call cost recorded as unknown/),
-    ]);
-    expect(run.candidates).toHaveLength(2);
-
-    // Candidates are content-addressed on disk with matching identities.
-    for (const cand of run.candidates) {
-      const stored = await readFile(path.join(jobRoot, "plate-test-1", cand.file));
-      expect(sha256(stored)).toBe(cand.contentHash);
-      expect(cand.file).toMatch(/^candidates\//);
-    }
-    // The recorded job round-trips from disk.
-    const loaded = await loadJob(jobRoot, "plate-test-1");
-    expect(loaded).toEqual(job);
-  });
-
-  test("rejects an invalid job id", () => {
-    expect(runPlateJob(jobRoot, "Bad_Id", baseRequest(), fakeGen)).rejects.toThrow(/job id/i);
-  });
-
-  test("refuses to create over an existing job — rerun is the only append path", async () => {
-    await runPlateJob(jobRoot, "plate-dup", baseRequest(), fakeGen);
-    expect(runPlateJob(jobRoot, "plate-dup", baseRequest(), fakeGen)).rejects.toThrow(/rerun/i);
-  });
-
-  test("a failed generation records no run and leaves the job absent", async () => {
-    const boom: PlateGenerator = async () => {
-      throw new Error("gateway down");
-    };
-    await expect(runPlateJob(jobRoot, "plate-fail", baseRequest(), boom)).rejects.toThrow(
-      /gateway down/,
-    );
-    await expect(loadJob(jobRoot, "plate-fail")).rejects.toThrow();
-  });
-});
-
-describe("rerunPlateJob", () => {
-  test("appends a new run under the job lineage, preserving prior candidates", async () => {
-    const request = baseRequest();
-    const first = await runPlateJob(jobRoot, "plate-lineage", request, fakeGen);
-
-    const seen: PlateJobRequest[] = [];
-    const spyGen: PlateGenerator = async (req) => {
-      seen.push(structuredClone(req));
-      return fakeGen(req);
-    };
-    const second = await rerunPlateJob(jobRoot, "plate-lineage", spyGen);
-
-    expect(second.runs).toHaveLength(2);
-    expect(second.runs[0]).toEqual(first.runs[0]);
-    // The rerun reuses the recorded request — the generator sees the same facts.
-    expect(seen).toHaveLength(1);
-    expect(seen[0]).toEqual(request);
-    // New candidates, all still addressable on disk.
-    const hashes = new Set(second.runs.flatMap((r) => r.candidates.map((c) => c.contentHash)));
-    expect(hashes.size).toBe(4);
-    for (const run of second.runs)
-      for (const cand of run.candidates) {
-        const stored = await readFile(path.join(jobRoot, "plate-lineage", cand.file));
-        expect(sha256(stored)).toBe(cand.contentHash);
-      }
-    expect(await loadJob(jobRoot, "plate-lineage")).toEqual(second);
-  });
-
-  test("fails loudly when a recorded reference's content has drifted", async () => {
-    const refFile = path.join(root, "style.png");
-    await writeFile(refFile, "original-bytes");
-    const request = {
-      ...baseRequest(),
-      refs: [await parseTypedRef(`style:${refFile}`)],
-    };
-    await runPlateJob(jobRoot, "plate-drift", request, fakeGen);
-
-    await writeFile(refFile, "changed-bytes");
-    await expect(rerunPlateJob(jobRoot, "plate-drift", fakeGen)).rejects.toThrow(
-      /content identity/i,
-    );
-    // The failed rerun left the lineage untouched.
-    expect((await loadJob(jobRoot, "plate-drift")).runs).toHaveLength(1);
-  });
-
-  test("fails loudly when a recorded reference file is missing", async () => {
-    const refFile = path.join(root, "gone.png");
-    await writeFile(refFile, "bytes");
-    await runPlateJob(jobRoot, "plate-gone", { ...baseRequest(), refs: [await parseTypedRef(`style:${refFile}`)] }, fakeGen);
-    await rm(refFile);
-    await expect(rerunPlateJob(jobRoot, "plate-gone", fakeGen)).rejects.toThrow(/gone\.png/);
-  });
+  runs: [{
+    candidates: [
+      { bytes: Buffer.from(`${jobId}-candidate-one`) },
+      { bytes: Buffer.from(`${jobId}-candidate-two`) },
+    ],
+    warnings: ["gpt-image: unsupported setting"],
+  }],
+  ...extra,
 });
 
 describe("adoptCandidate", () => {
   test("adopts a candidate as a new immutable Plate Asset with job provenance", async () => {
-    const job = await runPlateJob(jobRoot, "plate-adopt", baseRequest(), fakeGen);
+    const job = await writeLegacyJob(jobRoot, plateJob("plate-adopt"));
     const cand = job.runs[0]!.candidates[0]!;
 
     const result = await adoptCandidate(jobRoot, "plate-adopt", cand.contentHash, "neon-room", {
@@ -212,7 +70,7 @@ describe("adoptCandidate", () => {
   });
 
   test("never overwrites an existing adopted asset", async () => {
-    const job = await runPlateJob(jobRoot, "plate-overwrite", baseRequest(), fakeGen);
+    const job = await writeLegacyJob(jobRoot, plateJob("plate-overwrite"));
     const cand = job.runs[0]!.candidates[0]!;
     await adoptCandidate(jobRoot, "plate-overwrite", cand.contentHash, "taken-id", { libraryRoot });
 
@@ -228,7 +86,7 @@ describe("adoptCandidate", () => {
   });
 
   test("resolves a unique hash prefix and rejects ambiguous or unknown ones", async () => {
-    const job = await runPlateJob(jobRoot, "plate-prefix", baseRequest(), fakeGen);
+    const job = await writeLegacyJob(jobRoot, plateJob("plate-prefix"));
     const [a, b] = job.runs[0]!.candidates;
     const common = longestCommonPrefix(a!.contentHash, b!.contentHash);
 
@@ -247,19 +105,23 @@ describe("adoptCandidate", () => {
   });
 
   test("adopts a content identity that recurs across runs — ambiguity is about distinct hashes", async () => {
-    const dupGen: PlateGenerator = async () => ({
-      candidates: [{ bytes: Buffer.from("same-bytes-every-run"), mediaType: "image/png" }],
-      warnings: [],
-      fullPrompt: "identical output",
+    // The same bytes recorded in two runs (as a pre-retirement rerun could):
+    // one distinct identity, adoptable even by a short prefix, with its
+    // provenance resolved to the earliest run that produced it.
+    await writeLegacyJob(jobRoot, {
+      jobId: "plate-recur",
+      kind: "plate",
+      runs: [
+        { candidates: [{ bytes: Buffer.from("same-bytes-every-run") }], fullPrompt: "identical output" },
+        { candidates: [{ bytes: Buffer.from("same-bytes-every-run") }], fullPrompt: "identical output" },
+      ],
     });
-    await runPlateJob(jobRoot, "plate-recur", { ...baseRequest(), count: 1 }, dupGen);
-    const second = await rerunPlateJob(jobRoot, "plate-recur", dupGen);
-    expect(second.runs).toHaveLength(2);
-    expect(second.runs[1]!.candidates[0]!.contentHash).toBe(second.runs[0]!.candidates[0]!.contentHash);
 
-    // The recurring identity is adoptable — even by a short prefix — and its
-    // provenance resolves to the earliest run that produced it.
-    const hash = second.runs[1]!.candidates[0]!.contentHash;
+    const record = await loadJob(jobRoot, "plate-recur");
+    expect(record.runs).toHaveLength(2);
+    expect(record.runs[1]!.candidates[0]!.contentHash).toBe(record.runs[0]!.candidates[0]!.contentHash);
+
+    const hash = record.runs[1]!.candidates[0]!.contentHash;
     const result = await adoptCandidate(jobRoot, "plate-recur", hash.slice(0, 10), "recur-id", { libraryRoot });
     expect(result.contentHash).toBe(hash);
     const lib = await scanLibrary(libraryRoot);
@@ -267,7 +129,7 @@ describe("adoptCandidate", () => {
   });
 
   test("fails loudly when the candidate file no longer matches its recorded identity", async () => {
-    const job = await runPlateJob(jobRoot, "plate-tamper", baseRequest(), fakeGen);
+    const job = await writeLegacyJob(jobRoot, plateJob("plate-tamper"));
     const cand = job.runs[0]!.candidates[0]!;
     await writeFile(path.join(jobRoot, "plate-tamper", cand.file), "tampered");
     await expect(
@@ -276,19 +138,20 @@ describe("adoptCandidate", () => {
   });
 
   test("adopts a non-PNG candidate under its real media type", async () => {
-    const jpegGen: PlateGenerator = async () => ({
-      candidates: [{ bytes: Buffer.from("jpeg-candidate-bytes"), mediaType: "image/jpeg" }],
-      warnings: [],
-      fullPrompt: "p",
+    await writeLegacyJob(jobRoot, {
+      jobId: "plate-jpeg",
+      kind: "plate",
+      runs: [{ candidates: [{ bytes: Buffer.from("jpeg-candidate-bytes"), mediaType: "image/jpeg" }] }],
     });
-    const job = await runPlateJob(jobRoot, "plate-jpeg", { ...baseRequest(), count: 1 }, jpegGen);
+    const job = await loadJob(jobRoot, "plate-jpeg");
     const hash = job.runs[0]!.candidates[0]!.contentHash;
 
     await adoptCandidate(jobRoot, "plate-jpeg", hash, "jpeg-id", { libraryRoot });
     const stored = await readFile(path.join(libraryRoot, "plates", "jpeg-id", "plate.jpg"));
     expect(sha256(stored)).toBe(hash);
     // A duplicate-id adoption of the other media type still cannot overwrite.
-    const pngJob = await runPlateJob(jobRoot, "plate-png", baseRequest(), fakeGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-png"));
+    const pngJob = await loadJob(jobRoot, "plate-png");
     await expect(
       adoptCandidate(jobRoot, "plate-png", pngJob.runs[0]!.candidates[0]!.contentHash, "jpeg-id", { libraryRoot }),
     ).rejects.toThrow(/already exists/i);
@@ -304,9 +167,20 @@ describe("loadJob and listJobs", () => {
   });
 
   test("listJobs summarizes every recorded job", async () => {
-    await runPlateJob(jobRoot, "plate-a", baseRequest(), fakeGen);
-    await rerunPlateJob(jobRoot, "plate-a", fakeGen);
-    await runPlateJob(jobRoot, "plate-b", { ...baseRequest(), count: 1 }, fakeGen);
+    await writeLegacyJob(jobRoot, {
+      jobId: "plate-a",
+      kind: "plate",
+      subject: "neon server room",
+      runs: [
+        { candidates: [{ bytes: Buffer.from("a1") }, { bytes: Buffer.from("a2") }] },
+        { candidates: [{ bytes: Buffer.from("a3") }, { bytes: Buffer.from("a4") }] },
+      ],
+    });
+    await writeLegacyJob(jobRoot, {
+      jobId: "plate-b",
+      kind: "plate",
+      runs: [{ candidates: [{ bytes: Buffer.from("b1") }] }],
+    });
 
     const jobs = await listJobs(jobRoot);
     expect(jobs).toHaveLength(2);
@@ -326,10 +200,10 @@ async function reversion(jobId: string, schemaVersion: number): Promise<void> {
 }
 
 describe("the job schema-version matrix is the rollback boundary (PROD-1, #56)", () => {
-  test("current prompt contracts have rollback-safe schema versions", () => {
+  test("the reader's known prompt contracts have rollback-safe schema versions", () => {
     // Released binaries (≤ 0.29.2) accept any of {1,2,3} with a plate or
     // object kind — reusing those numbers would let an older binary silently
-    // rerun a role-aware job with path-only prompt behavior. The role-aware
+    // misread a role-aware job with path-only prompt behavior. The role-aware
     // Plate/Object role semantics ride v4 and caller-ordered Creator
     // references ride v5. Older binaries reject both versions they do not
     // understand; this binary still reads legacy v1/v2/v3 records.
@@ -338,57 +212,35 @@ describe("the job schema-version matrix is the rollback boundary (PROD-1, #56)",
     expect(CREATOR_JOB_SCHEMA_VERSION).toBe(5);
   });
 
-  test("a legacy v1 plate record reruns into the role-aware contract — re-persisted as v4 with the new lineage", async () => {
-    await runPlateJob(jobRoot, "plate-legacy-v1", baseRequest(), fakeGen);
-    await reversion("plate-legacy-v1", 1); // what a pre-role-aware binary wrote
+  test("a legacy v1 plate record stays readable as v1 — and adoptable unchanged", async () => {
+    await writeLegacyJob(jobRoot, plateJob("plate-legacy-v1", { schemaVersion: 1 }));
 
-    // Pure legacy read: the record loads as v1 before any new lineage.
+    // Pure legacy read: the record loads as v1, with no rewrite on read.
     expect((await loadJob(jobRoot, "plate-legacy-v1")).schemaVersion).toBe(1);
 
-    const rerun = await rerunPlateJob(jobRoot, "plate-legacy-v1", fakeGen);
-    expect(rerun.runs).toHaveLength(2);
-    // The new lineage was produced under the role-aware prompt contract, so
-    // the record is persisted as v4 with the lineage — never left under v1,
-    // where an older binary would append weaker path-only lineage to it.
     const record = JSON.parse(await readFile(path.join(jobRoot, "plate-legacy-v1", "job.json"), "utf8"));
-    expect(record.schemaVersion).toBe(PLATE_JOB_SCHEMA_VERSION);
-    expect(record.schemaVersion).toBe(4);
-    expect(record.runs).toHaveLength(2);
+    expect(record.schemaVersion).toBe(1);
+    expect(record.runs).toHaveLength(1);
 
-    // The upgraded record loads under the v4 matrix and adopts unchanged.
-    await loadJob(jobRoot, "plate-legacy-v1");
+    // The legacy record adopts unchanged — inspection and adoption never
+    // re-persist or re-version a record they only read.
     const hash = record.runs[0]!.candidates[0]!.contentHash;
     const out = await adoptCandidate(jobRoot, "plate-legacy-v1", hash, "legacy-plate", { libraryRoot });
     expect(out.adoptedFrom).toBe(`job:plate-legacy-v1#${hash}`);
   });
 
-  test("a failed rerun leaves a legacy v1 plate record untouched — still rollback-readable as v1", async () => {
-    await runPlateJob(jobRoot, "plate-legacy-fail", baseRequest(), fakeGen);
-    await reversion("plate-legacy-fail", 1);
-    const failingGen: PlateGenerator = async () => {
-      throw new Error("provider down");
-    };
-    await expect(rerunPlateJob(jobRoot, "plate-legacy-fail", failingGen)).rejects.toThrow(/provider down/);
-    const record = JSON.parse(await readFile(path.join(jobRoot, "plate-legacy-fail", "job.json"), "utf8"));
-    expect(record.schemaVersion).toBe(1);
-    expect(record.runs).toHaveLength(1); // only the original run — no new lineage, no version change
-  });
-
   test("refuses a v2 record claiming kind plate — an older binary would misread it", async () => {
-    await runPlateJob(jobRoot, "plate-forged-v2", baseRequest(), fakeGen);
-    await reversion("plate-forged-v2", 2);
+    await writeLegacyJob(jobRoot, plateJob("plate-forged-v2", { schemaVersion: 2 }));
     await expect(loadJob(jobRoot, "plate-forged-v2")).rejects.toThrow(/schemaVersion 2/);
   });
 
   test("refuses a v3 record claiming kind plate — creator is v3 alone", async () => {
-    await runPlateJob(jobRoot, "plate-forged-v3", baseRequest(), fakeGen);
-    await reversion("plate-forged-v3", 3);
+    await writeLegacyJob(jobRoot, plateJob("plate-forged-v3", { schemaVersion: 3 }));
     await expect(loadJob(jobRoot, "plate-forged-v3")).rejects.toThrow(/schemaVersion 3/);
   });
 
   test("refuses an unknown schemaVersion outright — the fail-closed default", async () => {
-    await runPlateJob(jobRoot, "plate-forged-v9", baseRequest(), fakeGen);
-    await reversion("plate-forged-v9", 9);
+    await writeLegacyJob(jobRoot, plateJob("plate-forged-v9", { schemaVersion: 9 }));
     await expect(loadJob(jobRoot, "plate-forged-v9")).rejects.toThrow(/unsupported job schemaVersion/);
   });
 });

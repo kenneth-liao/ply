@@ -17,10 +17,12 @@ copies. Rendering is local and deterministic.
 The preserved legacy workflow uses a versioned **Scene** for 1280×720 images:
 an ordered list of image, text, shape, connector, and group Layers.
 
-Models are optional source-asset producers. **Generation Jobs** can create
-background Plates, isolated Objects, and Creator candidates. Final text and
-final composition currently stay local. ADR-0014 supersedes the text/content
-policy for the target design; this rename does not remove existing gates.
+Models are optional source-asset producers. **Generation** is one uniform
+operation (`ply generate`) with no subject category (ADR-0014): full-canvas or
+isolated output intent is a request parameter, and no content policy is imposed
+on the prompt. Final text and final composition stay local. The legacy
+category-specific generation commands (`jobs plates|objects|creators|rerun`)
+are retired; their records remain inspectable and adoptable (see below).
 
 The legacy workflow is:
 
@@ -82,8 +84,8 @@ caller-invoked (ADR-0015). References (`--ref <path>`, repeatable) are local
 files attached in caller order: identities are derived at Job creation, bytes
 are verified against them at generation, and missing or changed files fail
 before any provider call — no remote fetching, no mandatory identity
-Reference, no roles. The legacy `jobs plates|objects|creators` pipeline below
-keeps working until its separately approved retirement.
+Reference, no roles. The retired `jobs plates|objects|creators` pipeline no
+longer exists; `jobs` now only inspects and adopts its existing records.
 
 ## Independent Matting (new surface)
 
@@ -155,10 +157,10 @@ relocates cached matting weights. Update existing environment configuration
 to these names. No global Project database or new Project directory layout
 is introduced by the rename.
 
-Add a Vercel AI Gateway key to `.env.local` only if you use Generation Jobs.
-Scene, library, review, and render operations work offline.
+Add a Vercel AI Gateway key to `.env.local` only if you use generation.
+Scene, library, review, Matting, and render operations work offline.
 
-Object and Creator generation also needs the local BiRefNet HR matting model:
+Matting needs the local BiRefNet HR model:
 
 ```bash
 mkdir -p models
@@ -170,13 +172,7 @@ The weights are gitignored and pinned by sha-256 in `src/segment.ts`.
 
 ## Quick start
 
-Generate and adopt a Plate:
-
-```bash
-bun run jobs plates "a dramatic studio desk with blue rim light" --count 2
-bun run jobs review <jobId>
-bun run jobs adopt <jobId> <candidateHash> --id studio-desk
-```
+Generate source content and matte it:
 
 Create and render a Scene:
 
@@ -187,8 +183,9 @@ bun run scene validate thumbnail.scene.json
 bun run scene render thumbnail.scene.json
 ```
 
-Every `scene` and `jobs` command writes machine-readable JSON to stdout.
-Successful renders are exactly 1280×720 and include a portable manifest.
+Every `scene`, `generate`, `matte`, and `jobs` command writes
+machine-readable JSON to stdout. Successful renders are exactly 1280×720 and
+include a portable manifest.
 
 ## Scenes
 
@@ -280,80 +277,43 @@ Rendering keeps the 1280×720 dimensions and enforces the 2 MB output limit.
 Oversized PNGs are optimized locally. Each final Render gets a manifest with
 the exact Scene and Asset identities needed for offline rerendering.
 
-## Generation Jobs
+## Generation Jobs (legacy records)
 
-Generation is the only online operation:
+Category-specific generation is retired (spec #102, #114): the one generation
+operation is `ply generate` (see above), and isolation is `ply matte`. The
+`jobs` module now only inspects and adopts the Generation Job records written
+under `out/jobs/<jobId>/` before the retirement — by the pre-retirement
+`jobs plates|objects|creators|rerun` commands or other writer binaries:
 
 ```bash
-bun run jobs --help
-bun run jobs plates <subject> [options]
-bun run jobs objects <subject> [options]
-bun run jobs creators <subject> [options]
-bun run jobs review <jobId>
-bun run jobs rerun <jobId>
+bun run jobs show <jobId>                 # full record: request, references, runs
+bun run jobs list                         # summarize recorded jobs
+bun run jobs review <jobId>               # offline evidence sheet (see below)
 bun run jobs adopt <jobId> <hash> --id <assetId>
 ```
 
-Jobs live under `out/jobs/<jobId>/`. Reruns append to lineage; they do not
-replace prior candidates. Adoption creates a new immutable Asset and never
-overwrites an existing one.
+No command here starts or extends a job. Adoption creates a new immutable
+Asset of the record's kind and never overwrites an existing one; object and
+creator candidates with a recorded matte are adopted as that matte (verified
+true alpha), and creator adoption always enters the library as trial.
 
 ### Arbitrary reference files
 
-Callers pass references directly. Ply does not discover, index, rank, or
-choose reference images.
-
-```bash
-bun run jobs plates "simplify this interface into a bold background" \
-  --ref edit:./references/interface.png \
-  --ref style:./references/palette.jpg
-```
-
-Each `--ref` value is `<role>:<path>`. Ply:
-
-- preserves command-line order;
-- reads and hashes the file when the Job request is created;
-- records the role, path, and sha-256 identity;
-- verifies and reads the bytes once at generation;
-- sends those exact bytes to every candidate call in the same order; and
-- role-assigns each image in the effective prompt without sending local paths
-  in prompt text.
-
-A reference-capable model is required when references are present. An
+The uniform surface replaces the old typed-reference syntax. Callers pass
+references directly with `ply generate --ref <path>`, repeatable, in caller
+order: identities are derived at Job creation, bytes are verified against
+them at generation, and those exact bytes go to every candidate call. There
+are no roles — declare each image's purpose in the prompt text. A
+reference-capable model is required when references are present; an
 incompatible model is rejected before spend.
 
 Reference URLs are not fetched by Ply. Download or authenticate outside the
 tool, then pass a local file. This keeps fetching, credentials, caching, and
 mutable remote content outside the composition boundary.
 
-### Plates and Objects
+### Legacy records and the library
 
-A Plate is a flattened full-canvas background. The subject can request UI,
-products, devices, or environmental details. The model prompt still forbids
-final editorial text and exact logos.
-
-An Object Job requests one isolated non-text object. Generated Object
-candidates pass through local matting; adoption requires verified true alpha.
-Use a separate Object Asset when movement, resizing, recoloring, replacement,
-reuse, provenance, or Variants benefit from independent control.
-
-### Creator candidates
-
-Creator generation requires at least one caller-supplied `identity` reference:
-
-```bash
-bun run jobs creators "presenter pointing left, confident expression" \
-  --ref identity:./references/person-front.jpg \
-  --ref pose:./references/pointing-pose.jpg \
-  --count 4
-```
-
-Accepted roles are `identity`, `pose`, `expression`, `outfit`, `style`, and
-`edit`. References reach the provider in caller order. A likeness is never
-generated from text alone.
-
-Candidates pass through the local matting model. Adoption creates a trial
-Creator Asset:
+Existing plate/object/creator records stay reviewable and adoptable:
 
 ```bash
 bun run jobs review <jobId>
@@ -366,9 +326,11 @@ rendering rejects trial assets. `scene render --experimental` is the explicit
 non-final override and marks its output accordingly.
 
 Placement, size, mirror, visibility, and effects are local Layer edits. A named
-Mask can recolor a fixed region locally. Pose, expression, outfit shape, and
-style are intrinsic changes: generate and approve a new Creator Asset, then
-swap the Layer's Asset reference (ADR-0008).
+Mask can recolor a fixed region locally. For new content, generate a
+replacement with the uniform surface, matte it, and swap the Layer's content
+through the explicit edit contract; caller workflow guidance (real-photo
+selection, identity anchors, approval practice) lives in the consuming
+repositories' own instructions.
 
 ## Asset library
 
@@ -400,8 +362,10 @@ bun run library add-cutout ./person.png --id presenter --source "source URL + da
 bun run library add-mask ./shirt-mask.png --id presenter-shirt
 ```
 
-Generated Plates, Objects, and Creator candidates should enter through
-`jobs adopt` so their generation provenance stays attached.
+Legacy Generation Job records adopted through `jobs adopt` keep their
+generation provenance attached. New generated and matted content enters
+through the composer surface (`ply composition add --from-generation` /
+`--from-matte`).
 
 A Scene Asset reference can be:
 
@@ -416,8 +380,8 @@ A Scene Asset reference can be:
 | `src/scene.ts`, `src/scene-schema.ts` | Scene loading, validation, and schema |
 | `src/scene-render.ts` | Local Chromium renderer |
 | `src/scene-cli.ts`, `src/scene-author.ts` | Scene commands and live authoring |
-| `src/jobs.ts`, `src/job-cli.ts` | Generation Job lifecycle |
-| `src/generate.ts`, `src/models.ts` | Provider prompts, calls, and model registry |
+| `src/jobs.ts`, `src/job-cli.ts` | Legacy Generation Job records: read-only inspection and adoption |
+| `src/generate.ts`, `src/models.ts` | Shared provider call shape, Reference verification, and model registry |
 | `src/assets.ts`, `src/library-cli.ts` | Immutable Asset library and approval |
 | `src/matte.ts`, `src/segment.ts` | Local subject isolation |
 | `src/matting.ts`, `src/matting-cli.ts` | Independent local Matting operation and command |

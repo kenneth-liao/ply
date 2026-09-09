@@ -3,11 +3,12 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { runCreatorJob, loadJob, rerunCreatorJob, type CreatorGenerator, type CreatorJobRequest, type JobGenerator } from "../src/jobs.js";
+import { loadJob } from "../src/jobs.js";
 import { reviewJob } from "../src/review.js";
 import { run as cliRun } from "../src/job-cli.js";
-import { composeMatte, type MatteEngine } from "../src/matte.js";
+import { composeMatte } from "../src/matte.js";
 import { encodePng } from "./png.js";
+import { writeLegacyJob, type LegacyJobSpec } from "./legacy-jobs.js";
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
@@ -33,7 +34,7 @@ const ALPHA_PNG = encodePng(16, 16, (x, y) =>
   x < 4 && y < 4 ? [255, 0, 0, 255] : [0, 0, 0, 0],
 );
 
-/** What the model actually returns: opaque RGB. The matting pass isolates it. */
+/** What the model actually returned: opaque RGB. The matting pass isolated it. */
 const OPAQUE_PNG = encodePng(
   16,
   16,
@@ -47,64 +48,77 @@ const MASK_PNG = encodePng(
   { colorType: 2 },
 );
 
-const fakeMatte: MatteEngine = async ({ bytes, label }) => ({
-  bytes: composeMatte(bytes, MASK_PNG, label),
-  engine: "test/segmentation",
-});
+/** The matte the local pass composed and the run recorded. */
+const MATTED_PNG = composeMatte(OPAQUE_PNG, MASK_PNG, "fixture");
 
-let genCounter = 0;
-const distinctGen: JobGenerator = async (req) => ({
-  candidates: Array.from({ length: req.count }, () => ({
-    bytes: Buffer.concat([OPAQUE_PNG, Buffer.from(`-${genCounter++}`)]),
-    mediaType: "image/png",
-  })),
-  warnings: [],
-  fullPrompt: `CREATOR<${req.subject}>`,
-});
-
+/** Anchor files the recorded request points at — review verifies their bytes. */
 async function seedAnchors(names: string[]): Promise<void> {
   for (const name of names) {
     await writeFile(path.join(root, name), `anchor-bytes-${name}`);
   }
 }
 
-const anchorRef = async (name: string): Promise<{ role: "identity"; path: string; contentHash: string }> => ({
-  role: "identity",
-  path: path.join(root, name),
-  contentHash: sha256(Buffer.from(`anchor-bytes-${name}`)),
-});
-
-const baseRequest = (anchors: string[]): CreatorJobRequest => ({
+/** A creator record as a pre-retirement binary wrote it: opaque candidates + recorded mattes. */
+const creatorJob = (
+  jobId: string,
+  anchors: string[],
+  candidates: { bytes: Uint8Array; matteBytes?: Uint8Array }[],
+  extra?: Partial<LegacyJobSpec>,
+): LegacyJobSpec => ({
+  jobId,
   kind: "creator",
   subject: "arms crossed, explaining to camera",
-  model: "nano-2",
-  count: 2,
   refs: anchors.map((a) => ({
-    role: "identity" as const,
+    role: "identity",
     path: path.join(root, a),
-    contentHash: sha256(Buffer.from(`anchor-bytes-${a}`)),
+    bytes: Buffer.from(`anchor-bytes-${a}`),
   })),
+  runs: [{
+    model: "google/gemini-3.1-flash-image",
+    fullPrompt: "CREATOR<arms crossed, explaining to camera>",
+    candidates: candidates.map((c) => ({
+      bytes: c.bytes,
+      ...(c.matteBytes ? { matteBytes: c.matteBytes, matteEngine: "test/segmentation" } : {}),
+    })),
+  }],
+  ...extra,
 });
+
+/** Distinct opaque candidates, matted — the default recorded shape. */
+const mattedCandidates = (jobId: string, count: number) =>
+  Array.from({ length: count }, (_, i) => ({
+    bytes: Buffer.concat([OPAQUE_PNG, Buffer.from(`-${jobId}-${i}`)]),
+    matteBytes: MATTED_PNG,
+  }));
 
 describe("reviewJob", () => {
   test("writes a review sheet listing every distinct candidate across runs, against the identity anchors", async () => {
     await seedAnchors(["anchor-a.png", "anchor-b.png"]);
-    await runCreatorJob(jobRoot, "creator-review", baseRequest(["anchor-a.png", "anchor-b.png"]), distinctGen, fakeMatte);
-    // A rerun of the SAME job adds candidates the sheet must also show — the
-    // advertised all-runs behavior is exercised through the real lineage.
-    const second = await rerunCreatorJob(jobRoot, "creator-review", distinctGen, fakeMatte);
-    expect(second.runs).toHaveLength(2);
+    // Two runs of the same job — the sheet must show candidates from every
+    // run, with distinct bytes per run so the second run's hashes are genuine
+    // second-run evidence.
+    await writeLegacyJob(jobRoot, {
+      ...creatorJob("creator-review", ["anchor-a.png", "anchor-b.png"], mattedCandidates("creator-review-r0", 2)),
+      runs: [
+        {
+          model: "google/gemini-3.1-flash-image",
+          candidates: mattedCandidates("creator-review-r0", 2),
+        },
+        {
+          model: "google/gemini-3.1-flash-image",
+          candidates: mattedCandidates("creator-review-r1", 2),
+        },
+      ],
+    });
 
     const result = await reviewJob(jobRoot, "creator-review");
     expect(result.kind).toBe("creator");
     expect(result.reviewPath).toBe(path.join(jobRoot, "creator-review", "review.html"));
 
     const html = await readFile(result.reviewPath, "utf8");
-    // Every candidate from every run is referenced. The rerun produced distinct
-    // candidates (distinctGen emits unique bytes), so its hashes are genuine
-    // second-run evidence — assert them directly, not as re-read first-run hashes.
-    const firstRunHashes = new Set(second.runs[0]!.candidates.map((c) => c.contentHash.slice(0, 12)));
-    const secondRunHashes = second.runs[1]!.candidates.map((c) => c.contentHash.slice(0, 12));
+    const record = await loadJob(jobRoot, "creator-review");
+    const firstRunHashes = new Set(record.runs[0]!.candidates.map((c) => c.contentHash.slice(0, 12)));
+    const secondRunHashes = record.runs[1]!.candidates.map((c) => c.contentHash.slice(0, 12));
     expect(secondRunHashes.some((h) => !firstRunHashes.has(h))).toBe(true);
     for (const hash of [...firstRunHashes, ...secondRunHashes]) {
       expect(html).toContain(hash);
@@ -128,14 +142,14 @@ describe("reviewJob", () => {
 
   test("deduplicates a candidate hash recurring across runs to its first run", async () => {
     await seedAnchors(["anchor-a.png"]);
-    const same: CreatorGenerator = async (req) => ({
-      candidates: [{ bytes: OPAQUE_PNG, mediaType: "image/png" }],
-      warnings: [],
-      fullPrompt: `CREATOR<${req.subject}>`,
+    const recurring = { bytes: OPAQUE_PNG, matteBytes: MATTED_PNG };
+    await writeLegacyJob(jobRoot, {
+      ...creatorJob("creator-dup", ["anchor-a.png"], [recurring]),
+      runs: [
+        { model: "google/gemini-3.1-flash-image", candidates: [recurring] },
+        { model: "google/gemini-3.1-flash-image", candidates: [recurring] },
+      ],
     });
-    const job = await runCreatorJob(jobRoot, "creator-dup", baseRequest(["anchor-a.png"]), same, fakeMatte);
-    const reran = await rerunCreatorJob(jobRoot, "creator-dup", same, fakeMatte);
-    expect(reran.runs[0]!.candidates[0]!.contentHash).toBe(reran.runs[1]!.candidates[0]!.contentHash);
     const result = await reviewJob(jobRoot, "creator-dup");
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]!.runIndex).toBe(0);
@@ -145,7 +159,8 @@ describe("reviewJob", () => {
 
   test("shows the matte adoption would write, per candidate, and names the engine", async () => {
     await seedAnchors(["anchor-a.png"]);
-    const job = await runCreatorJob(jobRoot, "creator-matte-view", { ...baseRequest(["anchor-a.png"]), count: 1 }, distinctGen, fakeMatte);
+    await writeLegacyJob(jobRoot, creatorJob("creator-matte-view", ["anchor-a.png"], mattedCandidates("creator-matte-view", 1)));
+    const job = await loadJob(jobRoot, "creator-matte-view");
     const cand = job.runs[0]!.candidates[0]!;
     const result = await reviewJob(jobRoot, "creator-matte-view");
     const adoption = result.candidates[0]!.adoption;
@@ -162,10 +177,9 @@ describe("reviewJob", () => {
 
   test("says plainly when a candidate has no matte — it is evidence, not an adoptable asset", async () => {
     await seedAnchors(["anchor-a.png"]);
-    const brokenMatte: MatteEngine = async () => {
-      throw new Error("mask model returned no image");
-    };
-    await runCreatorJob(jobRoot, "creator-no-matte", { ...baseRequest(["anchor-a.png"]), count: 1 }, distinctGen, brokenMatte);
+    await writeLegacyJob(jobRoot, creatorJob("creator-no-matte", ["anchor-a.png"], [
+      { bytes: Buffer.concat([OPAQUE_PNG, Buffer.from("-nomatte")]) },
+    ]));
     const result = await reviewJob(jobRoot, "creator-no-matte");
     expect(result.candidates[0]!.adoption.from).toBe("none");
     const html = await readFile(result.reviewPath, "utf8");
@@ -174,8 +188,8 @@ describe("reviewJob", () => {
 
   test("fails loudly when a matte file no longer matches its recorded identity", async () => {
     await seedAnchors(["anchor-a.png"]);
-    const job = await runCreatorJob(jobRoot, "creator-matte-tampered", { ...baseRequest(["anchor-a.png"]), count: 1 }, distinctGen, fakeMatte);
-    const cand = job.runs[0]!.candidates[0]!;
+    await writeLegacyJob(jobRoot, creatorJob("creator-matte-tampered", ["anchor-a.png"], mattedCandidates("creator-matte-tampered", 1)));
+    const cand = (await loadJob(jobRoot, "creator-matte-tampered")).runs[0]!.candidates[0]!;
     await writeFile(path.join(jobRoot, "creator-matte-tampered", cand.matte!.file), ALPHA_PNG);
     await expect(reviewJob(jobRoot, "creator-matte-tampered")).rejects.toThrow(
       /matte.*(changed|identity)/i,
@@ -184,14 +198,14 @@ describe("reviewJob", () => {
 
   test("fails loudly when an identity anchor file is missing", async () => {
     await seedAnchors(["anchor-a.png", "gone.png"]);
-    await runCreatorJob(jobRoot, "creator-missing", baseRequest(["anchor-a.png", "gone.png"]), distinctGen, fakeMatte);
+    await writeLegacyJob(jobRoot, creatorJob("creator-missing", ["anchor-a.png", "gone.png"], mattedCandidates("creator-missing", 1)));
     await rm(path.join(root, "gone.png"));
     await expect(reviewJob(jobRoot, "creator-missing")).rejects.toThrow(/gone\.png/);
   });
 
   test("fails loudly when an identity anchor's bytes no longer match the recorded identity", async () => {
     await seedAnchors(["anchor-a.png"]);
-    await runCreatorJob(jobRoot, "creator-drift", baseRequest(["anchor-a.png"]), distinctGen, fakeMatte);
+    await writeLegacyJob(jobRoot, creatorJob("creator-drift", ["anchor-a.png"], mattedCandidates("creator-drift", 1)));
     await writeFile(path.join(root, "anchor-a.png"), "tampered-anchor-bytes");
     await expect(reviewJob(jobRoot, "creator-drift")).rejects.toThrow(
       /anchor-a\.png.*(changed|identity|drift)/i,
@@ -200,7 +214,7 @@ describe("reviewJob", () => {
 
   test("fails loudly when a candidate file no longer matches its recorded identity", async () => {
     await seedAnchors(["anchor-a.png"]);
-    await runCreatorJob(jobRoot, "creator-tampered", baseRequest(["anchor-a.png"]), distinctGen, fakeMatte);
+    await writeLegacyJob(jobRoot, creatorJob("creator-tampered", ["anchor-a.png"], mattedCandidates("creator-tampered", 1)));
     const job = await loadJob(jobRoot, "creator-tampered");
     const cand = job.runs[0]!.candidates[0]!;
     await writeFile(path.join(jobRoot, "creator-tampered", cand.file), "tampered-candidate-bytes");
@@ -213,13 +227,10 @@ describe("reviewJob", () => {
     const evilSubject = `nice pose</p><script>alert(\"pwned\")</script><img src=x onerror=alert(1)>`;
     const evilName = `an\"chor<img>.png`;
     await seedAnchors([evilName]);
-    await runCreatorJob(jobRoot, "creator-hostile", {
-      kind: "creator",
+    await writeLegacyJob(jobRoot, {
+      ...creatorJob("creator-hostile", [evilName], mattedCandidates("creator-hostile", 1)),
       subject: evilSubject,
-      model: "nano-2",
-      count: 1,
-      refs: [await anchorRef(evilName)],
-    }, distinctGen, fakeMatte);
+    });
     const review = await reviewJob(jobRoot, "creator-hostile");
     const html = await readFile(review.reviewPath, "utf8");
     // No executable markup survives: the raw payload never appears verbatim.
@@ -234,14 +245,8 @@ describe("reviewJob", () => {
 
   test("the CLI review command prints structured JSON with the review path", async () => {
     await seedAnchors(["anchor-a.png"]);
-    await runCreatorJob(jobRoot, "creator-cli", baseRequest(["anchor-a.png"]), distinctGen, fakeMatte);
-    const res = await cliRun(["review", "creator-cli"], {
-      generate: distinctGen,
-      generateObject: distinctGen,
-      generateCreator: distinctGen,
-      matte: fakeMatte,
-      jobsRoot: jobRoot,
-    });
+    await writeLegacyJob(jobRoot, creatorJob("creator-cli", ["anchor-a.png"], mattedCandidates("creator-cli", 2)));
+    const res = await cliRun(["review", "creator-cli"], { jobsRoot: jobRoot });
     expect(res.exitCode).toBe(0);
     const out = res.output as Record<string, any>;
     expect(out.ok).toBe(true);

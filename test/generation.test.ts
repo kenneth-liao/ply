@@ -457,6 +457,30 @@ describe("executeUniformGeneration — verified Reference bytes", () => {
     expect(paths).toHaveLength(3);
   });
 
+  test("a count=3 reference run sends every candidate the same original verified bytes (CRAFT-1)", async () => {
+    // Transferred from the retired reference-read-once suite: the loader home
+    // (loadVerifiedReference) is the one read each Reference gets, and every
+    // candidate call carries those same verified bytes — never a re-resolved
+    // (and potentially drifted) reread per candidate.
+    const provider = fakeProvider();
+    const { ingested } = await ingestedWithRefs();
+    const ingested3: IngestedUniformRequest = {
+      ...ingested,
+      request: { ...ingested.request, count: 3 },
+    };
+    await executeUniformGeneration(jobRoot(), "gen-test", ingested3, { provider });
+
+    expect(provider.imageCalls).toHaveLength(3);
+    const received = new Set(
+      provider.imageCalls.map(
+        (c) =>
+          createHash("sha256").update((c as { prompt: { images: Uint8Array[] } }).prompt.images[0]!).digest("hex"),
+      ),
+    );
+    expect(received.size).toBe(1);
+    expect(received.has(createHash("sha256").update(Buffer.from("reference-alpha")).digest("hex"))).toBe(true);
+  });
+
   test("multimodal requests carry the verified bytes in caller order on the text seam", async () => {
     const provider = fakeProvider();
     const { ingested } = await ingestedWithRefs();

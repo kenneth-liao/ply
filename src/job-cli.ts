@@ -1,60 +1,36 @@
 #!/usr/bin/env bun
 /**
- * The Generation Job CLI — the agent-facing interface to the Generation Job
- * lifecycle (REQ-013/REQ-014/REQ-015): typed request → candidates →
- * immutable Asset adoption.
+ * The Generation Job CLI — inspection and adoption for the legacy
+ * plate/object/creator Generation Job records (REQ-013/REQ-014/REQ-015).
+ *
+ * The category-specific generation entry points (`jobs plates`, `jobs
+ * objects`, `jobs creators`) and kind-dispatched `jobs rerun` generation are
+ * retired (#114, spec #102): the one uniform generation operation is
+ * `ply generate`, and isolation is the independent `ply matte` operation.
+ * What remains here is the read-only record surface — `show`, `list`,
+ * `review` — and candidate adoption for records that already exist. New
+ * Generation Jobs are published under `out/generation/<jobId>/`; this
+ * surface only reads the legacy records under `<cwd>/out/jobs/<jobId>/`.
  *
  * Same contract as the Scene CLI: every command prints machine-readable JSON
  * on stdout ({ok: true, ...} or {ok: false, errors: [...]}), exit codes
  * 0 ok / 1 failure / 2 usage error. run() is the error boundary — an
- * unexpected failure (gateway error, I/O) lands in the same structured shape.
- *
- * This is the only place that talks to the network: `jobs plates`, `jobs
- * objects`, and `jobs rerun` start Generation Jobs; every other command is
- * offline. Jobs live under <cwd>/out/jobs/<jobId>/ — the record (job.json),
- * content-addressed candidates, and the run lineage. Nothing here edits a
- * Scene or an existing asset; adoption goes through the kind's write path,
- * which cannot overwrite (and verifies true alpha for objects).
+ * unexpected failure (I/O) lands in the same structured shape. Nothing here
+ * edits a Scene or an existing asset; adoption goes through the kind's write
+ * path, which cannot overwrite (and verifies true alpha for objects).
  */
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
-  parseTypedRef,
-  runPlateJob,
-  runObjectJob,
-  runCreatorJob,
-  rerunJob,
-  lift,
   loadJob,
   listJobs,
   adoptCandidate,
-  type PlateGenerator,
-  type ObjectGenerator,
-  type CreatorGenerator,
-  type JobGenerator,
-  type PlateJobRequest,
-  type ObjectJobRequest,
-  type CreatorJobRequest,
 } from "./jobs.js";
-import { generatePlates, generateObjects, generateCreators, type GenerateOptions } from "./generate.js";
-import { localSegmentationMatteEngine } from "./segment.js";
-import type { MatteEngine } from "./matte.js";
-import type { TextZone } from "./generate.js";
-import { DEFAULT_MODEL, CREATOR_DEFAULT_MODEL, MODELS } from "./models.js";
 import { LIBRARY_ROOT } from "./assets.js";
 import { reviewJob } from "./review.js";
 
 const HELP = `
-ply jobs — the Generation Job lifecycle (request → candidates → adoption)
+ply jobs — inspect and adopt the legacy Generation Job records
 
-  bun run jobs plates <subject> [options]   Start a plate Generation Job
-  bun run jobs objects <subject> [options]  Start an object Generation Job —
-                                            one isolated non-text object
-  bun run jobs creators <subject> [options] Start a creator Generation Job —
-                                            an isolated creator candidate from
-                                            typed identity anchors
-  bun run jobs rerun <jobId>                Rerun a job's recorded request — appends
-                                            candidates under the lineage, replaces nothing
   bun run jobs show <jobId>                 Full job record: request, typed references, runs
   bun run jobs list                         Summarize recorded jobs
   bun run jobs review <jobId>               Candidate review for any job kind — every
@@ -72,69 +48,14 @@ ply jobs — the Generation Job lifecycle (request → candidates → adoption)
                                             without is refused; creator adoption always enters
                                             the library as trial.
 
-plates options
-  --model <name>        Registry key or raw gateway id. Keys:
-                        ${Object.keys(MODELS).join(" | ")}
-                        (plates/objects default: ${DEFAULT_MODEL})
-  --zone <z>            left (default) | right | bottom | none — the reserved text
-                        region the plate must keep empty
-  --count <n>           Candidates to generate (default 1)
-  --temperature <t>     Multimodal models only
-  --ref <role:path>     Typed reference with its content identity recorded, e.g.
-                        --ref edit:refs/screenshot.png (repeatable). Roles are
-                        semantic: edit marks a source-to-edit screenshot — an
-                        authentic interface simplified to thumbnail-scale UI
-                        (major panels, proportions, and key colors kept as a
-                        few large high-contrast regions; incidental detail
-                        dropped) — while style is palette/lighting only. The
-                        run's recorded prompt role-assigns every reference, so
-                        the provenance preserves each declared role. A Job with
-                        typed References requires a reference-capable model:
-                        an incompatible selection — registry key or raw id —
-                        is refused before any spend, listing every qualified
-                        compatible model.
-  --job <id>            Explicit job id (default: auto plate-<date>-<suffix>)
-
-objects options
-  Same as plates minus --zone. The subject must name an isolated non-text
-  object — official logos and final text are rejected as targets (logos come
-  from sourced Assets, text is rendered locally; ADR-0001). A UI panel is
-  permitted object content — one isolated non-text panel, simplified from an
-  edit reference when one is supplied; scenes and final composites stay
-  banned. Every object candidate goes through the matting pass — the same
-  local BiRefNet segmenter as creators (ADR-0006), local and unbilled — and
-  adoption adopts that matte, since the models return opaque RGB. A natively
-  isolated candidate is kept as-is. Adopted Object Assets carry a verified
-  true-alpha matte; an opaque candidate with no matte is refused.
-
-creators options
-  Same as plates minus --zone. Requires at least one identity reference —
-  a likeness is never generated from text alone. Accepted reference roles:
-  identity (repeatable anchors), pose, expression, outfit, style, and edit
-  (source-to-edit). Defaults to ${CREATOR_DEFAULT_MODEL}, the measured likeness workhorse.
-  References reach the model in the caller's order; the run's fullPrompt
-  role-assigns every reference, so provenance preserves each declared role.
-  Every candidate then goes through the matting pass — a local
-  BiRefNet segmenter predicts the subject mask and it becomes the candidate's
-  alpha channel, since the models return opaque RGB (ADR-0006) — and
-  "jobs adopt" writes that matte, always as a trial Cutout Asset; only an
-  explicit human decision can approve it (DEC-004). The pass is local and unbilled: run cost is
-  generation only. First use needs the pinned weights cached under models/ —
-  a missing file fails loudly with the exact fetch command, before any
-  generation is paid for. A candidate the pass could not isolate is refused
-  at adoption and the run's warnings say why.
-
-A plate is a full-canvas generated background whose contents are
-intentionally flattened (ADR-0011). Your subject is authoritative: request
-UI, products, devices, or any complex background element and the effective
-prompt preserves it. Only final editorial text and exact logos stay local
-(ADR-0001) — the prompt hard-bans text and logos.
-
-Composability is an authoring policy, not a validation rule (DEC-013):
-generate an element as its own Object Asset and Layer when movement,
-resizing, recoloring, replacement, reuse, provenance, or Variants benefit
-from separate control; keep environmental or tightly integrated detail
-flattened in the plate when separate control adds nothing.
+Category-specific generation is retired: "jobs plates", "jobs objects",
+"jobs creators", and "jobs rerun" no longer exist. Generate source images
+with the one uniform operation — "bun run generate <prompt> [options]"
+(full-canvas or --intent isolated, optional ordered --ref local files) — and
+isolate content explicitly with "bun run matte <image>". Published records
+live under out/generation/ (inspect with "bun run generate show|list|review").
+This command only inspects and adopts records that already exist under
+out/jobs/; it does not start new generation.
 
 adopt options
   --id <assetId>        Library id for the adopted Asset (required)
@@ -142,10 +63,6 @@ adopt options
   --tags <csv>          Comma-separated tags
 
 Every command prints JSON: { "ok": true, ... } or { "ok": false, "errors": [...]}.
-Plate candidates are full-canvas flattened backgrounds (ADR-0011); final
-text and exact logos are never generated — text renders locally and logos
-are sourced Assets (ADR-0001). Object candidates are isolated non-text
-Assets (REQ-015), never the final composite.
 `;
 
 interface CliResult {
@@ -163,103 +80,17 @@ const failure = (message: string, path = "jobs"): CliResult => ({
   output: { ok: false, errors: [{ path, message }] },
 });
 
-/**
- * The request→generatePlates mapping — the load-bearing wiring lives here:
- * the agent's subject is authoritative for the plate's visual content
- * (DEC-010, ADR-0011) and passes through untouched, and typed references
- * keep role and recorded identity — generation hash-verifies and loads each
- * Reference exactly once (CRAFT-1, #56). Prompt construction adds only
- * format, zone, reference-role, and invariant guidance — never a backdrop or
- * content ban. Final editorial text and exact logos stay local (ADR-0001).
- */
-export function generateOptionsFor(request: PlateJobRequest): GenerateOptions {
-  return {
-    subject: request.subject,
-    model: request.model,
-    zone: request.zone,
-    refs: request.refs.map(({ role, path, contentHash }) => ({ role, path, contentHash })),
-    count: request.count,
-    ...(request.temperature != null ? { temperature: request.temperature } : {}),
-  };
-}
-
-/** The real generation paths: map the recorded request onto the AI SDK call. */
-export const PRODUCTION_GENERATOR: PlateGenerator = async (request: PlateJobRequest) => {
-  const result = await generatePlates(generateOptionsFor(request));
-  return {
-    candidates: result.plates.map((p) => ({ bytes: p.bytes, mediaType: p.mediaType })),
-    warnings: result.warnings,
-    fullPrompt: result.fullPrompt,
-  };
-};
-
-/** The object request→generateObjects mapping (REQ-015, #56). */
-export const PRODUCTION_OBJECT_GENERATOR: ObjectGenerator = async (request: ObjectJobRequest) => {
-  const result = await generateObjects({
-    subject: request.subject,
-    model: request.model,
-    refs: request.refs.map(({ role, path, contentHash }) => ({ role, path, contentHash })),
-    count: request.count,
-    ...(request.temperature != null ? { temperature: request.temperature } : {}),
-  });
-  return {
-    candidates: result.plates.map((p) => ({ bytes: p.bytes, mediaType: p.mediaType })),
-    warnings: result.warnings,
-    fullPrompt: result.fullPrompt,
-  };
-};
-
-/** The creator request→generateCreators mapping (REQ-017). */
-export const PRODUCTION_CREATOR_GENERATOR: CreatorGenerator = async (request: CreatorJobRequest) => {
-  const result = await generateCreators({
-    subject: request.subject,
-    model: request.model,
-    // Recorded identities travel with the request: generation verifies the
-    // bytes against them before anything is sent to the model.
-    refs: request.refs.map((r) => ({ role: r.role, path: r.path, contentHash: r.contentHash })),
-    count: request.count,
-    ...(request.temperature != null ? { temperature: request.temperature } : {}),
-  });
-  return {
-    candidates: result.plates.map((p) => ({ bytes: p.bytes, mediaType: p.mediaType })),
-    warnings: result.warnings,
-    fullPrompt: result.fullPrompt,
-  };
-};
-
-/**
- * The shipped matting pass (REQ-017, ADR-0006): a BiRefNet segmenter running
- * locally predicts the subject mask, applied as a true alpha channel. It runs
- * on every creator candidate the model does not already return isolated,
- * which — measured — is all of them. Nothing leaves the machine, and nothing
- * is billed.
- */
-export const PRODUCTION_MATTE_ENGINE: MatteEngine = localSegmentationMatteEngine();
-
 export interface JobCliDeps {
-  generate: PlateGenerator;
-  generateObject: ObjectGenerator;
-  generateCreator: CreatorGenerator;
-  /** The matting pass creator and object candidates are isolated with before they can be adopted. */
-  matte: MatteEngine;
   /** Where job records live (default: <cwd>/out/jobs). */
   jobsRoot: string;
   /** Library root for adoption (default: the repo asset library). */
   libraryRoot: string;
 }
 
-const ZONES: TextZone[] = ["left", "right", "bottom", "none"];
-
-function autoJobId(kind: "plate" | "object" | "creator"): string {
-  const day = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-  const suffix = crypto.randomUUID().slice(0, 8);
-  return `${kind}-${day}-${suffix}`;
-}
-
 /**
  * Collect "--flag value" / "--boolean" pairs. Names in `multiple` accumulate
  * every occurrence into an array; the rest keep their last value. Usage errors
- * carry the offending argument — errors identify the invalid field (REQ-013).
+ * carry the offending argument — errors identify the invalid field.
  */
 function parseFlags(
   rest: string[],
@@ -285,150 +116,6 @@ function parseFlags(
     } else flags.set(name, value);
   }
   return { flags };
-}
-
-/** Flags shared by every job-starting command (model, count, refs, job id). */
-async function collectGenerationFlags(
-  rest: string[],
-  usage: (message: string) => CliResult,
-  opts?: { extraFlags?: string[] },
-): Promise<{ fields: {
-    model: string;
-    count: number;
-    temperature?: number;
-    refs: Awaited<ReturnType<typeof parseTypedRef>>[];
-    jobId: string;
-    extra: Map<string, string | string[] | true>;
-  } } | { error: CliResult }> {
-  const allowed = ["model", "count", "temperature", "ref", "job", ...(opts?.extraFlags ?? [])];
-  const parsed = parseFlags(rest, [], allowed, ["ref"]);
-  if ("error" in parsed) return { error: usage(`unexpected argument "${parsed.error}"`) };
-  const flags = parsed.flags;
-
-  const model = (flags.get("model") as string) ?? DEFAULT_MODEL;
-
-  let count = 1;
-  if (flags.has("count")) {
-    count = Number(flags.get("count"));
-    if (!Number.isInteger(count) || count < 1 || count > 8)
-      return { error: usage("--count must be an integer between 1 and 8") };
-  }
-
-  let temperature: number | undefined;
-  if (flags.has("temperature")) {
-    temperature = Number(flags.get("temperature"));
-    if (!Number.isFinite(temperature))
-      return { error: usage("--temperature must be a number") };
-  }
-
-  const refs: Awaited<ReturnType<typeof parseTypedRef>>[] = [];
-  for (const spec of (flags.get("ref") as string[] | undefined) ?? []) {
-    try {
-      refs.push(await parseTypedRef(spec));
-    } catch (err) {
-      return { error: usage((err as Error).message) };
-    }
-  }
-
-  return {
-    fields: {
-      model,
-      count,
-      ...(temperature !== undefined ? { temperature } : {}),
-      refs,
-      jobId: (flags.get("job") as string | undefined) ?? "",
-      extra: flags,
-    },
-  };
-}
-
-async function platesCommand(
-  deps: JobCliDeps,
-  subject: string | undefined,
-  rest: string[],
-): Promise<CliResult> {
-  if (!subject?.trim()) return usageError('"jobs plates" needs a subject describing the background');
-  const collected = await collectGenerationFlags(rest, usageError, { extraFlags: ["zone"] });
-  if ("error" in collected) return collected.error;
-
-  // --zone is plate-only: objects have no reserved text region.
-  const zone = (collected.fields.extra.get("zone") ?? "left") as TextZone;
-  if (!ZONES.includes(zone)) return usageError(`--zone must be one of ${ZONES.join(" | ")}`);
-
-  return startJob(deps, "plate", subject, { ...collected.fields, zone });
-}
-
-async function objectsCommand(
-  deps: JobCliDeps,
-  subject: string | undefined,
-  rest: string[],
-): Promise<CliResult> {
-  if (!subject?.trim())
-    return usageError('"jobs objects" needs a subject naming the object to generate');
-  const collected = await collectGenerationFlags(rest, usageError);
-  if ("error" in collected) return collected.error;
-  return startJob(deps, "object", subject, { ...collected.fields });
-}
-
-async function creatorsCommand(
-  deps: JobCliDeps,
-  subject: string | undefined,
-  rest: string[],
-): Promise<CliResult> {
-  if (!subject?.trim())
-    return usageError(
-      '"jobs creators" needs a subject describing the pose, expression, outfit, or edit — and at least one --ref identity:<file>',
-    );
-  const collected = await collectGenerationFlags(rest, usageError);
-  if ("error" in collected) return collected.error;
-  // Creator jobs default to the measured likeness workhorse — gpt-image is
-  // reference-capable now (#52), but its likeness strength is not qualified
-  // (TEST-012), so the default stays a deliberate likeness choice, not a
-  // capability derivation. An explicit --model is honored as written: only
-  // capability is gated (the job request boundary refuses an unqualified
-  // model before any spend); likeness quality is the agent's judgment.
-  const fields = collected.fields;
-  if (!fields.extra.has("model")) fields.model = CREATOR_DEFAULT_MODEL;
-  return startJob(deps, "creator", subject, { ...fields });
-}
-
-/** Build the request, run the job, and print the run record. */
-async function startJob(
-  deps: JobCliDeps,
-  kind: "plate" | "object" | "creator",
-  subject: string,
-  fields: {
-    model: string;
-    count: number;
-    temperature?: number;
-    refs: Awaited<ReturnType<typeof parseTypedRef>>[];
-    jobId: string;
-    zone?: TextZone;
-  },
-): Promise<CliResult> {
-  const jobId = fields.jobId || autoJobId(kind);
-  const common = {
-    subject,
-    model: fields.model,
-    count: fields.count,
-    ...(fields.temperature !== undefined ? { temperature: fields.temperature } : {}),
-    refs: fields.refs,
-  };
-  const job =
-    kind === "plate"
-      ? await runPlateJob(deps.jobsRoot, jobId, { kind, zone: fields.zone ?? "left", ...common }, deps.generate)
-      : kind === "object"
-        ? await runObjectJob(deps.jobsRoot, jobId, { kind, ...common }, deps.generateObject, deps.matte)
-        : await runCreatorJob(deps.jobsRoot, jobId, { kind, ...common }, deps.generateCreator, deps.matte);
-  const runIndex = job.runs.length - 1;
-  return ok({
-    ok: true,
-    jobId: job.jobId,
-    kind: job.kind,
-    jobDir: path.join(deps.jobsRoot, job.jobId),
-    runIndex,
-    run: job.runs[runIndex],
-  });
 }
 
 async function adoptCommand(
@@ -461,49 +148,10 @@ async function adoptCommand(
   return ok({ ok: true, ...result, libraryPath: result.imagePath });
 }
 
+const REMAINING_COMMANDS = "show, list, review, or adopt";
+
 async function dispatch(args: string[], deps: JobCliDeps): Promise<CliResult> {
-  const [cmd, first, second, ...rest] = args;
-
-  if (cmd === "plates")
-    return platesCommand(deps, first, [second, ...rest].filter((a) => a !== undefined));
-
-  if (cmd === "objects")
-    return objectsCommand(deps, first, [second, ...rest].filter((a) => a !== undefined));
-
-  if (cmd === "creators")
-    return creatorsCommand(deps, first, [second, ...rest].filter((a) => a !== undefined));
-
-  if (cmd === "rerun") {
-    if (!first || second !== undefined) return usageError('"jobs rerun" takes exactly one <jobId>');
-    // The generator follows the loaded job's kind — a recorded lineage is
-    // always rerun with the request contract it was created under, and a
-    // lifted generator refuses the other kind outright.
-    const recorded = await loadJob(deps.jobsRoot, first);
-    const generator: JobGenerator =
-      recorded.request.kind === "object"
-        ? lift("object", deps.generateObject)
-        : recorded.request.kind === "creator"
-          ? lift("creator", deps.generateCreator)
-          : lift("plate", deps.generate);
-    const job = await rerunJob(
-      deps.jobsRoot,
-      first,
-      generator,
-      // recordRun is the single reader of which kinds are matted; the pass is
-      // inert for plates, so the engine is handed over unconditionally.
-      deps.matte,
-    );
-    const runIndex = job.runs.length - 1;
-    return ok({
-      ok: true,
-      jobId: job.jobId,
-      kind: job.kind,
-      jobDir: path.join(deps.jobsRoot, job.jobId),
-      runIndex,
-      run: job.runs[runIndex],
-      job,
-    });
-  }
+  const [cmd, first, second] = args;
 
   if (cmd === "show") {
     if (!first || second !== undefined) return usageError('"jobs show" takes exactly one <jobId>');
@@ -535,34 +183,29 @@ async function dispatch(args: string[], deps: JobCliDeps): Promise<CliResult> {
     });
   }
 
-  if (cmd === "adopt") return adoptCommand(deps, first, second, rest);
+  if (cmd === "adopt") return adoptCommand(deps, first, second, args.slice(3));
 
   return usageError(
     cmd === undefined
-      ? "missing command — expected plates, objects, creators, rerun, show, list, review, or adopt"
-      : `unknown command "${cmd}" — expected plates, objects, creators, rerun, show, list, review, or adopt`,
+      ? `missing command — expected ${REMAINING_COMMANDS}. Category-specific generation ("plates", "objects", "creators") and "rerun" are retired — generate with "bun run generate" and matte with "bun run matte"`
+      : `unknown command "${cmd}" — expected ${REMAINING_COMMANDS}. Category-specific generation ("plates", "objects", "creators") and "rerun" are retired — generate with "bun run generate" and matte with "bun run matte"`,
   );
 }
 
 /**
- * The error boundary: a gateway failure, I/O error, or refused adoption is
- * structured JSON like any other result — never a raw stack trace.
+ * The error boundary: an I/O error or refused adoption is structured JSON
+ * like any other result — never a raw stack trace.
  */
 export async function run(
   args: string[],
   deps?: Partial<JobCliDeps>,
 ): Promise<CliResult> {
   const resolved: JobCliDeps = {
-    generate: deps?.generate ?? PRODUCTION_GENERATOR,
-    generateObject: deps?.generateObject ?? PRODUCTION_OBJECT_GENERATOR,
-    generateCreator: deps?.generateCreator ?? PRODUCTION_CREATOR_GENERATOR,
-    matte: deps?.matte ?? PRODUCTION_MATTE_ENGINE,
     jobsRoot: deps?.jobsRoot ?? path.resolve("out", "jobs"),
     libraryRoot: deps?.libraryRoot ?? LIBRARY_ROOT,
   };
   const [cmd] = args;
   try {
-    await mkdir(resolved.jobsRoot, { recursive: true });
     return await dispatch(args, resolved);
   } catch (err) {
     return failure((err as Error).message || String(err), cmd ?? "jobs");

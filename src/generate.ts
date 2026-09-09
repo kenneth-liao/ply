@@ -1,164 +1,18 @@
-import { generateText, generateImage } from "ai";
+/**
+ * The shared generation provider-call machinery (spec #102): the one home of
+ * the image-kind provider request shape, reference read-and-verify, and
+ * warning flattening. The category-specific prompt builders and
+ * plate/object/creator generation workflows were retired with the legacy
+ * `jobs plates|objects|creators|rerun` entry points (#114) — the one uniform
+ * generation operation lives in src/generation.ts and builds its provider
+ * requests through `buildImageRequestArgs`, so the call shape cannot drift.
+ */
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { resolveModel, referenceIncompatibilityError, type ModelSpec } from "./models.js";
+import type { ModelSpec } from "./models.js";
 
 export type TextZone = "left" | "right" | "bottom" | "none";
-
-/**
- * The plate prompt: the agent's subject is authoritative for visual content
- * (DEC-010, ADR-0011) — UI, products, devices, and complex background elements
- * are requested content, never banned. Construction adds format, zone,
- * reference-role, and cross-cutting invariant guidance only: the hard
- * text/logo ban stays because final editorial text is rendered locally
- * (ADR-0001) and exact logos are sourced Assets.
- *
- * Typed references are role-assigned in the effective prompt (US-020/021,
- * DEC-014/DEC-016): an edit reference is an authentic interface to simplify —
- * macrostructure kept, thumbnail-scale detail dropped — so a Plate can carry
- * intentionally flattened simplified UI. The text layer is rendered locally
- * in CSS, so the model must also leave deliberate empty space where our
- * headline will land.
- */
-function buildPrompt(
-  subject: string,
-  zone: TextZone,
-  refs: TypedRefInput[] = [],
-): string {
-  const composition: Record<TextZone, string> = {
-    left: "Compose with the subject pushed to the RIGHT third of the frame. Keep the left half visually calm and uncluttered.",
-    right:
-      "Compose with the subject pushed to the LEFT third of the frame. Keep the right half visually calm and uncluttered.",
-    bottom:
-      "Compose with the subject in the upper two thirds. Keep the bottom third visually calm and uncluttered.",
-    none: "Fill the frame edge to edge.",
-  };
-
-  return [
-    subject,
-    "",
-    ...(refs.length ? [...roleManifest(refs, PLATE_OBJECT_ROLE_INSTRUCTIONS), ""] : []),
-    "Format: a 16:9 YouTube thumbnail background plate.",
-    composition[zone],
-    "Style: high contrast, saturated, punchy lighting, strong focal subject, clean readable silhouette at small sizes.",
-    "CRITICAL: render absolutely no text, no letters, no words, no numbers, no logos, no watermarks anywhere in the image.",
-  ].join("\n");
-}
-
-/**
- * An object request (REQ-015) is one isolated non-text object: a standalone
- * asset for local compositing, never a scene or a composite (OOS-009). A UI
- * panel is permitted object content (US-024) — simplified from an edit
- * reference when one is supplied; final text, exact official-logo subjects,
- * scenes, and final composites stay banned. Transparency is requested in the
- * prompt; whether the model actually returns a true-alpha PNG is verified at
- * adoption — an opaque candidate is refused there, so nothing hinges on the
- * model's compliance.
- */
-function buildObjectPrompt(subject: string, refs: TypedRefInput[] = []): string {
-  return [
-    subject,
-    "",
-    ...(refs.length ? [...roleManifest(refs, PLATE_OBJECT_ROLE_INSTRUCTIONS), ""] : []),
-    "Format: exactly one single isolated object, centered, with the entire object fully inside the frame and clear margins around it on all sides.",
-    "The object must be a standalone asset on a plain uniform background: no environment, no scene, no room, no surface it stands on, no hands or people holding or touching it.",
-    "Style: clean readable silhouette at small sizes, even studio-like lighting, crisp well-defined edges suitable for cutout isolation, true transparency around the object.",
-    "CRITICAL: render absolutely no text, no letters, no words, no numbers, no logos, no watermarks, and no composite thumbnail layout — this object will be composited into a design by local tooling.",
-  ].join("\n");
-}
-
-// --- creator generation (REQ-017) --------------------------------------------
-
-/**
- * A typed reference as generation receives it: its declared role, the path
- * whose bytes are sent, and the recorded content identity those bytes are
- * verified against — exactly once, at the generation boundary
- * (loadVerifiedRefs), before any candidate runs. Direct API callers may omit
- * a recorded identity; those references are loaded without verification.
- */
-export interface TypedRefInput {
-  role: string;
-  path: string;
-  /** Recorded content identity — when present, the bytes sent to the model are verified against it. */
-  contentHash?: string;
-}
-
-/**
- * Per-role instructions assign every reference in the prompt. Identity roles
- * preserve the supplied subject instead of letting the model average faces;
- * other roles limit what the model should borrow from each image.
- */
-const CREATOR_ROLE_INSTRUCTIONS: Record<string, string> = {
-  identity:
-    "identity anchor — copy this person's face exactly: do not widen, round, age, or blend the face with any other reference",
-  pose: "pose reference — body pose, gesture, and framing only; never take a face from it",
-  expression: "expression reference — facial expression only; never take a face from it",
-  outfit: "outfit reference — clothing and styling only",
-  style: "style reference — lighting and visual style only",
-  edit: "source-to-edit — the image to change; keep its person's identity exactly",
-};
-
-/**
- * The one shape of an effective prompt's reference manifest: every attached
- * image is numbered and role-labeled — by ordinal and role only, so the
- * recorded fullPrompt describes how the images were actually attached without
- * sending any machine-local path off-box — with a per-role instruction when
- * the workflow prescribes one. A role with no instruction is identified by
- * label alone, so the prompt never claims semantics it was not given.
- */
-function roleManifest(refs: TypedRefInput[], instructions: Record<string, string>): string[] {
-  return [
-    "Reference images are attached in this exact order — role-assign every one:",
-    ...refs.map((r, i) => {
-      // Own-property lookup only: a role named like an inherited member
-      // ("constructor") must render label-only, never inject its value into
-      // model-facing prose (CRAFT-2).
-      const what = Object.hasOwn(instructions, r.role) ? instructions[r.role] : undefined;
-      return `image ${i + 1} — ${r.role}${what ? ` (${what})` : ""}`;
-    }),
-  ];
-}
-
-/**
- * Per-role instructions for Plate and Object references (US-020/021/024,
- * DEC-014, DEC-016). "edit" is the UI-abstraction contract: the reference is
- * an authentic interface whose macrostructure is kept — major panels,
- * proportions, key colors, visual language — simplified into a few large
- * high-contrast regions, with everything that fails at thumbnail size
- * dropped. "style" keeps its distinct semantics; anything else is identified
- * by label only.
- */
-const PLATE_OBJECT_ROLE_INSTRUCTIONS: Record<string, string> = {
-  edit: "source-to-edit — keep this interface's macrostructure: its major panels, proportions, key colors, and visual language, simplified into a few large high-contrast regions; omit incidental controls, small labels, dense text, and any detail that would be illegible at thumbnail size",
-  style: "style reference — palette, lighting, and visual style only; never take layout, structure, or content from it",
-};
-
-/**
- * The creator prompt: the subject, a numbered role manifest of the attached
- * references, the tested likeness recipe, and the isolation contract. The
- * The isolation contract is what the matting pass needs — a plain flat
- * background and crisp edges — not a request for transparency the model
- * cannot honour (ADR-0006). The role
- * manifest is what preserves each reference's declared role in the Job's
- * effective-prompt provenance — by ordinal and role label only: local paths
- * are machine details and never leave the box (they live in the Job's typed
- * request record).
- */
-export function buildCreatorPrompt(subject: string, orderedRefs: TypedRefInput[]): string {
-  return [
-    subject,
-    "",
-    ...roleManifest(orderedRefs, CREATOR_ROLE_INSTRUCTIONS),
-    "",
-    "Copy the face from the identity anchors exactly — do not widen, round, or blend. Do not average the references into a different person.",
-    "",
-    "Format: exactly one single isolated creator figure, fully inside the frame with clear margins around it, on a plain, uniform, evenly lit background — no environment, no scene, no room, no props, no surface it stands on.",
-    "Style: clean readable silhouette at small sizes, even studio-like lighting, crisp well-defined edges the matting pass can cut cleanly.",
-    "Do not paint a checkerboard or any other transparency indicator: isolation is done locally after generation, so the background here must be a plain flat colour.",
-    "CRITICAL: render absolutely no text, no letters, no words, no numbers, no logos, no watermarks, no UI elements, and no composite thumbnail layout — this figure will be composited into a design by local tooling.",
-  ].join("\n");
-}
 
 /** AI SDK warnings are objects; flatten to one readable line. */
 export function describeWarning(model: string, w: unknown): string {
@@ -168,79 +22,20 @@ export function describeWarning(model: string, w: unknown): string {
 }
 
 /**
- * Provider message parts from already-loaded reference bytes — the loader
- * resolved and verified them, so nothing here re-reads a path (CRAFT-1).
- */
-function refParts(refs: LoadedRef[]) {
-  return refs.map((r) => ({ type: "image" as const, image: r.bytes }));
-}
-
-/** Image models take raw bytes in GenerateImagePrompt.images, not file parts. */
-function refBytes(refs: LoadedRef[]) {
-  return refs.map((r) => r.bytes);
-}
-
-export interface GenerateOptions {
-  subject: string;
-  model: string;
-  zone: TextZone;
-  /** Typed references — role-assigned in the effective prompt, never path-named. */
-  refs: TypedRefInput[];
-  count: number;
-  /**
-   * Multimodal models only — lowers creative drift for likeness work.
-   * Image-kind models have no such knob; a value here is rejected loudly.
-   */
-  temperature?: number;
-}
-
-/** An isolated-object generation request (REQ-015). */
-export interface GenerateObjectOptions {
-  subject: string;
-  model: string;
-  /** Typed references — role-assigned in the effective prompt, never path-named. */
-  refs: TypedRefInput[];
-  count: number;
-  temperature?: number;
-}
-
-/** A creator-candidate generation request (REQ-017). */
-export interface GenerateCreatorOptions {
-  subject: string;
-  model: string;
-  refs: TypedRefInput[];
-  count: number;
-  temperature?: number;
-}
-
-/**
- * Exact 16:9 for models that want an explicit size, so nothing gets cropped.
- * OpenAI requires both dimensions divisible by 16 — 1536x864 satisfies both.
- */
-const LANDSCAPE_SIZE = "1536x864" as const;
-
-/**
  * The one home of the image-kind provider request shape: the registry-resolved
  * model id, reference adaptation (raw bytes in GenerateImagePrompt.images), and
- * the sizing rule (explicit pixel size for models that reject aspectRatio,
- * 16:9 otherwise). Production generation and the TEST-012 qualification
- * harness both build their request through this function, so the harness can
- * never certify a call shape production no longer takes. Image-branch only by
- * construction: a multimodal model has no image request to build — it takes
- * generateText with message parts.
+ * the caller's explicit sizing. Production uniform generation builds its
+ * request through this function (with the normalized sizing every request
+ * carries), so the harness and tests certify the exact call shape production
+ * takes. Image-branch only by construction: a multimodal model has no image
+ * request to build — it takes generateText with message parts.
  */
 export function buildImageRequestArgs(
   spec: ModelSpec,
   prompt: string,
   refBytes: Uint8Array[],
-  /**
-   * (#104) Explicit caller-selected sizing for the uniform generation surface.
-   * Omitted — the legacy plate shape: the fixed 1536x864 landscape size for
-   * size-kind models, 16:9 otherwise. Legacy Plate/Object/Creator request
-   * bytes are unchanged by this parameter (proven by
-   * test/image-request-args.test.ts).
-   */
-  explicitSizing?: { size: `${number}x${number}` } | { aspectRatio: `${number}:${number}` },
+  /** The caller-selected sizing — required; there is no implicit default. */
+  explicitSizing: { size: `${number}x${number}` } | { aspectRatio: `${number}:${number}` },
 ): {
   model: string;
   prompt: string | { text: string; images: Uint8Array[] };
@@ -252,167 +47,21 @@ export function buildImageRequestArgs(
       `buildImageRequestArgs is the image-kind call shape — "${spec.id}" is ${spec.kind} and takes generateText with message parts, not generateImage`,
     );
   }
-  if (explicitSizing && "size" in explicitSizing && spec.sizing !== "size") {
-    throw new Error(
-      `Model "${spec.id}" takes an aspect ratio, not explicit pixel dimensions — pass --aspect W:H instead of --size`,
-    );
+  if ("size" in explicitSizing) {
+    if (spec.sizing !== "size")
+      throw new Error(
+        `Model "${spec.id}" takes an aspect ratio, not explicit pixel dimensions — pass --aspect W:H instead of --size`,
+      );
+    return {
+      model: spec.id,
+      ...(refBytes.length ? { prompt: { text: prompt, images: refBytes } } : { prompt }),
+      size: explicitSizing.size,
+    };
   }
   return {
     model: spec.id,
-    ...(refBytes.length
-      ? { prompt: { text: prompt, images: refBytes } }
-      : { prompt }),
-    ...(spec.sizing === "size"
-      ? { size: explicitSizing && "size" in explicitSizing ? explicitSizing.size : LANDSCAPE_SIZE }
-      : {
-          aspectRatio:
-            explicitSizing && "aspectRatio" in explicitSizing ? explicitSizing.aspectRatio : ("16:9" as const),
-        }),
-  };
-}
-
-export interface GenerateResult {
-  plates: GeneratedPlate[];
-  warnings: string[];
-  /** The full text sent to the model, composition suffix included. */
-  fullPrompt: string;
-}
-
-export interface GeneratedPlate {
-  bytes: Uint8Array;
-  mediaType: string;
-  spec: ModelSpec;
-}
-
-/**
- * The one AI-SDK call core, shared by every generation workflow: call the
- * resolved model `count` times with the given prompt, collect the images and
- * warnings. Workflow differences live entirely in the caller's prompt.
- * References are hash-verified and loaded exactly once here — after the
- * capability gate, before any candidate — and the same verified bytes go to
- * every candidate (CRAFT-1).
- */
-async function runGeneration(
-  spec: ModelSpec,
-  prompt: string,
-  refs: TypedRefInput[],
-  count: number,
-  temperature?: number,
-): Promise<{ plates: GeneratedPlate[]; warnings: string[] }> {
-  const warnings: string[] = [];
-
-  if (refs.length && !spec.supportsRef) {
-    // Last gate before the provider call — defense in depth behind the job
-    // request boundary, which normally refuses first. The message is the
-    // canonical builder's, so no second compatibility list can drift here
-    // (DEC-018). It stays ahead of reference loading: an incompatible model
-    // is refused before any reference byte is read.
-    throw new Error(referenceIncompatibilityError(spec));
-  }
-
-  if (temperature != null && spec.kind !== "multimodal") {
-    throw new Error(
-      `--temperature only applies to multimodal models (Gemini); "${spec.id}" is an image model.`,
-    );
-  }
-
-  const loaded = await loadVerifiedRefs(refs);
-
-  const runs = Array.from({ length: count }, (_, i) => i);
-
-  const plates = await Promise.all(
-    runs.map(async (): Promise<GeneratedPlate> => {
-      if (spec.kind === "multimodal") {
-        const result = await generateText({
-          model: spec.id,
-          ...(temperature != null ? { temperature } : {}),
-          ...(loaded.length
-            ? {
-                messages: [
-                  {
-                    role: "user" as const,
-                    content: [
-                      { type: "text" as const, text: prompt },
-                      ...refParts(loaded),
-                    ],
-                  },
-                ],
-              }
-            : { prompt }),
-        });
-
-        const file = result.files.find((f) => f.mediaType?.startsWith("image/"));
-        if (!file) {
-          throw new Error(
-            `${spec.id} returned no image. Text response: ${result.text.slice(0, 300)}`,
-          );
-        }
-        // The multimodal branch must record warnings too — a Generation Job
-        // that certifies an empty warnings array is a false record.
-        warnings.push(...(result.warnings ?? []).map((w) => describeWarning(spec.id, w)));
-        return {
-          bytes: file.uint8Array,
-          mediaType: file.mediaType ?? "image/png",
-          spec,
-        };
-      }
-
-      const result = await generateImage(
-        buildImageRequestArgs(spec, prompt, refBytes(loaded)),
-      );
-      warnings.push(...result.warnings.map((w) => describeWarning(spec.id, w)));
-      const image = result.images[0];
-      if (!image) throw new Error(`${spec.id} returned no image.`);
-      return {
-        bytes: Buffer.from(image.base64, "base64"),
-        mediaType: "image/png",
-        spec,
-      };
-    }),
-  );
-
-  return { plates, warnings: [...new Set(warnings)] };
-}
-
-export async function generatePlates(
-  opts: GenerateOptions,
-): Promise<GenerateResult> {
-  const prompt = buildPrompt(opts.subject, opts.zone, opts.refs);
-  const { plates, warnings } = await runGeneration(
-    resolveModel(opts.model),
-    prompt,
-    opts.refs,
-    opts.count,
-    opts.temperature,
-  );
-  return { plates, warnings, fullPrompt: prompt };
-}
-
-/**
- * Isolated non-text object generation (REQ-015): the prompt asks for a
- * standalone cutout-ready object; adoption verifies true alpha. This function
- * adds one warning to the run record when the resolved model cannot be asked
- * for transparency — the record stays honest about what the gate will accept.
- */
-export async function generateObjects(
-  opts: GenerateObjectOptions,
-): Promise<GenerateResult> {
-  const spec = resolveModel(opts.model);
-  const prompt = buildObjectPrompt(opts.subject, opts.refs);
-  const { plates, warnings } = await runGeneration(
-    spec,
-    prompt,
-    opts.refs,
-    opts.count,
-    opts.temperature,
-  );
-  return {
-    plates,
-    warnings: [
-      ...warnings,
-      "object: transparency is requested in-prompt — adoption verifies true alpha and refuses opaque candidates (REQ-015)",
-    ],
-    fullPrompt: prompt,
+    ...(refBytes.length ? { prompt: { text: prompt, images: refBytes } } : { prompt }),
+    aspectRatio: explicitSizing.aspectRatio,
   };
 }
 
@@ -458,52 +107,4 @@ export async function loadVerifiedReference(input: {
       );
   }
   return { path: resolved, bytes };
-}
-
-/**
- * Load references and verify each file's bytes against the identity recorded
- * at request time — the one read every workflow's generation gets (CRAFT-1):
- * the path is resolved exactly once here, and the returned bytes are exactly
- * what the model is sent for every candidate, so the provider can never
- * receive different content than the Job records (INT: request-to-generation
- * drift is refused, not sent). A reference without a recorded identity is
- * loaded without verification because there is nothing to compare it with.
- */
-export async function loadVerifiedRefs(refs: TypedRefInput[]): Promise<LoadedRef[]> {
-  return Promise.all(refs.map(loadVerifiedReference));
-}
-
-/**
- * Creator candidate generation (REQ-017): typed references keep the caller's
- * order and are role-assigned in the effective prompt by ordinal, so the
- * recorded fullPrompt describes the images exactly as they reach the model —
- * with no local path sent off-box.
- * The prompt asks for a clean, evenly lit figure on a flat background — the
- * best input for the matting pass — and never for transparency: asking for it
- * produced a painted checkerboard (ADR-0006).
- * Reference bytes are hash-verified and loaded once at the shared generation
- * boundary, and those exact bytes are what every candidate receives.
- * Isolation is requested in-prompt; adoption verifies true alpha — nothing
- * hinges on the model's compliance.
- */
-export async function generateCreators(
-  opts: GenerateCreatorOptions,
-): Promise<GenerateResult> {
-  const spec = resolveModel(opts.model);
-  const prompt = buildCreatorPrompt(opts.subject, opts.refs);
-  const { plates, warnings } = await runGeneration(
-    spec,
-    prompt,
-    opts.refs,
-    opts.count,
-    opts.temperature,
-  );
-  return {
-    plates,
-    warnings: [
-      ...warnings,
-      "creator: isolation comes from the matting pass, not the prompt — every candidate is matted before it is recorded, and adoption verifies the matte's true alpha (REQ-017)",
-    ],
-    fullPrompt: prompt,
-  };
 }

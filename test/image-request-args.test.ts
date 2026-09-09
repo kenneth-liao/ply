@@ -1,9 +1,11 @@
 /**
- * The image-kind provider request shape at its one home (TEST-012 harness
- * contract, INT-2): production generation and the qualification harness must
- * build equivalent provider arguments from one constructor, so the harness can
- * never certify a call shape production no longer takes. The deliberate
- * TEST-012 preflight bypass lives in the harness, not here.
+ * The image-kind provider request shape at its one home: the uniform
+ * generation surface builds its provider requests through this constructor
+ * (with the sizing every normalized request carries), so the call shape
+ * production takes is certified here and cannot drift. The legacy implicit
+ * plate sizing (a fixed 1536x864 landscape / 16:9 default) was retired with
+ * the category-specific entry points (#114): explicit caller sizing is now
+ * required — there is no implicit default to pin.
  */
 import { describe, test, expect } from "bun:test";
 import { buildImageRequestArgs } from "../src/generate.js";
@@ -13,7 +15,7 @@ describe("buildImageRequestArgs", () => {
   test("gpt-image with a reference: registry id, bytes in prompt.images, explicit size", () => {
     const bytes = new Uint8Array([1, 2, 3]);
     expect(
-      buildImageRequestArgs(MODELS["gpt-image"], "the prompt", [bytes]),
+      buildImageRequestArgs(MODELS["gpt-image"], "the prompt", [bytes], { size: "1536x864" }),
     ).toEqual({
       model: "openai/gpt-image-2",
       prompt: { text: "the prompt", images: [bytes] },
@@ -22,16 +24,17 @@ describe("buildImageRequestArgs", () => {
   });
 
   test("gpt-image without references: plain string prompt, explicit size", () => {
-    const args = buildImageRequestArgs(MODELS["gpt-image"], "the prompt", []);
+    const args = buildImageRequestArgs(MODELS["gpt-image"], "the prompt", [], { size: "1024x1024" });
     expect(args).toEqual({
       model: "openai/gpt-image-2",
       prompt: "the prompt",
-      size: "1536x864",
+      size: "1024x1024",
     });
+    expect(args.aspectRatio).toBeUndefined();
   });
 
-  test("aspectRatio-sized image models take 16:9 and never a size", () => {
-    const args = buildImageRequestArgs(MODELS["flux"], "the prompt", []);
+  test("aspectRatio-sized image models take an aspect ratio and never a size", () => {
+    const args = buildImageRequestArgs(MODELS["flux"], "the prompt", [], { aspectRatio: "16:9" });
     expect(args).toEqual({
       model: "bfl/flux-2-flex",
       prompt: "the prompt",
@@ -41,28 +44,15 @@ describe("buildImageRequestArgs", () => {
   });
 
   test("multimodal models are unrepresentable here — generateText shape only", () => {
-    expect(() => buildImageRequestArgs(MODELS["nano-2"], "the prompt", [])).toThrow(
-      /generateText/,
-    );
+    expect(() =>
+      buildImageRequestArgs(MODELS["nano-2"], "the prompt", [], { aspectRatio: "1:1" }),
+    ).toThrow(/generateText/);
   });
 
-  test("(#104) the legacy three-argument call is byte-identical to its pre-uniform shape", () => {
-    // Ticket #104 made the explicit size an optional fourth parameter. The
-    // legacy plate/object/creator request bytes must not move: a 3-argument
-    // call keeps the 1536x864 landscape plate size and the 16:9 aspect rule.
-    expect(buildImageRequestArgs(MODELS["gpt-image"], "p", [])).toEqual({
-      model: "openai/gpt-image-2",
-      prompt: "p",
-      size: "1536x864",
-    });
-    expect(buildImageRequestArgs(MODELS["flux"], "p", []).aspectRatio).toBe("16:9");
-  });
-
-  test("(#104) an explicit caller size overrides the default for the uniform surface", () => {
-    expect(buildImageRequestArgs(MODELS["gpt-image"], "p", [], { size: "1080x1080" })).toEqual({
-      model: "openai/gpt-image-2",
-      prompt: "p",
-      size: "1080x1080",
-    });
+  test("explicit caller sizing is required — there is no implicit legacy default", () => {
+    // The retirement removed the implicit 1536x864 / 16:9 defaults: the
+    // uniform surface normalizes sizing (model-neutral defaults) and always
+    // passes it explicitly, so the constructor takes no shape without one.
+    expect((buildImageRequestArgs as (...args: unknown[]) => unknown).length).toBe(4);
   });
 });

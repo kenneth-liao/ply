@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Removed
+
+- BREAKING: retired the category-specific generation entry points (#114, #102):
+  `jobs plates`, `jobs objects`, `jobs creators`, and kind-dispatched `jobs
+  rerun` generation no longer exist. The one uniform generation operation is
+  `ply generate` (full-canvas or `--intent isolated`, ordered `--ref` local
+  files, no content policy — ADR-0014); isolation is the independent
+  `ply matte` operation (ADR-0015). Nothing invokes the superseded
+  lifecycle: help, usage errors, and adoption diagnostics direct callers to
+  the replacement workflow. Preserved: read-only `jobs show|list|review`,
+  candidate adoption for existing records (its retirement is separately
+  scoped, #115), Scene operations, library approval, the numeric YouTube
+  region baseline, and every shared helper the retained readers need —
+  legacy records keep their schema versions and stay readable and adoptable.
+  Prompt-contract content, category validation, and provider-request facts
+  are preserved in caller-owned guidance (visual-authoring skill, consuming
+  repositories) per the #103/#110 inventory on #102; the substantive
+  input-integrity/provider assertions moved to the replacement coverage
+  (generation/matting suites) rather than being deleted.
+
 ### Added
 
 - Added offline evidence review for the new workflow (#109, #102):
