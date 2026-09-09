@@ -8,8 +8,12 @@
   Composition foundation coexists with the preserved legacy Scene/Job surface;
   `README.md` documents both.
 - ADR-0013's Project-scoped sharing and retained Render history are shipped
-  by spec #77. ADR-0014/0015's generation-policy and matting/region migrations
-  remain target decisions. Do not remove existing gates in a docs pass.
+  by spec #77. ADR-0014's uniform generation and caller-owned content policy
+  and ADR-0015's independent Matting are shipped by spec #102, including the
+  #114 retirement of the category-specific generation entry points
+  (`jobs plates|objects|creators|rerun`); ADR-0014/0015's region-gate
+  migration remains a target decision. Do not remove existing gates in a
+  docs pass.
 - `.agents/skills/visual-authoring/SKILL.md` owns relocated authoring knowledge.
   It must be committed before any gate deletion (ISC-27).
 - This repository's instructions take precedence over stale generated profile
@@ -54,9 +58,12 @@ Single-context repo: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/
   sha-256 in `src/segment.ts`, and never loaded by the unit suite — tests
   inject a fake `MatteEngine`, and the live check in `test/segment.test.ts`
   skips when the weights are absent.
-- Final composition stays local. ADR-0014 allows caller-chosen text pixels in
-  the target design; today's text/content gates remain until their separately
-  scoped migration. Do not present the accepted destination as already shipped.
+- Final composition stays local. ADR-0014 allows caller-chosen text pixels;
+  the category-specific generation gates were retired with their commands
+  (#114) — the caller's own policy lives in the consuming repositories and
+  the visual-authoring skill. The numeric YouTube region baseline stays
+  until its separately scoped migration. Do not present the accepted
+  destination as already shipped.
 
 ## Rendering gotchas
 
@@ -81,7 +88,9 @@ can be invisible in logs:
 - Generation references are arbitrary local image files supplied by the
   caller. Preserve their order, derive their sha-256 identities once at Job
   creation, and verify/read their bytes once at generation.
-- Current Creator generation requires a caller-supplied `identity` reference.
-  ADR-0014 supersedes that target policy; changing the runtime gate requires a
-  separate implementation after the authoring skill lands.
+- Generation has no subject categories, mandatory identity References, or
+  likeness gates (ADR-0014, #114): those are caller policy, preserved in
+  `.agents/skills/visual-authoring/SKILL.md` and the consuming repositories.
+  Legacy `jobs` records remain inspectable and adoptable; their adoption
+  retirement is separately scoped (#115).
 - Design decisions and their rationale: `docs/adr/`.

@@ -4,20 +4,12 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import {
-  runPlateJob,
-  runObjectJob,
-  loadJob,
-  adoptCandidate,
-  type JobGenerator,
-  type PlateJobRequest,
-  type ObjectJobRequest,
-  type PlateGenerator,
-} from "../src/jobs.js";
+import { loadJob, adoptCandidate } from "../src/jobs.js";
 import { reviewJob } from "../src/review.js";
 import { run as cliRun } from "../src/job-cli.js";
-import { composeMatte, type MatteEngine } from "../src/matte.js";
+import { composeMatte } from "../src/matte.js";
 import { encodePng } from "./png.js";
+import { writeLegacyJob, type LegacyJobSpec } from "./legacy-jobs.js";
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
@@ -46,7 +38,7 @@ const OPAQUE_PNG = encodePng(
   { colorType: 2 },
 );
 
-/** The segmentation mask the matting engine predicts for it. */
+/** The segmentation mask the matting engine predicted for it. */
 const MASK_PNG = encodePng(
   16,
   16,
@@ -54,43 +46,44 @@ const MASK_PNG = encodePng(
   { colorType: 2 },
 );
 
-const fakeMatte: MatteEngine = async ({ bytes, label }) => ({
-  bytes: composeMatte(bytes, MASK_PNG, label),
-  engine: "test/segmentation",
-});
+/** The matte the local pass composed — the recorded, adoptable isolation. */
+const MATTED_PNG = composeMatte(OPAQUE_PNG, MASK_PNG, "fixture");
 
-const brokenMatte: MatteEngine = async () => {
-  throw new Error("mask model returned no image");
-};
-
-let genCounter = 0;
-/** Two distinct opaque candidates per call — every hash is genuine evidence. */
-const distinctOpaqueGen: JobGenerator = async (req) => ({
-  candidates: Array.from({ length: req.count }, () => ({
-    bytes: Buffer.concat([OPAQUE_PNG, Buffer.from(`-${genCounter++}`)]),
-    mediaType: "image/png",
-  })),
-  warnings: [],
-  fullPrompt: `GEN<${req.subject}>`,
-});
-
-const plateGen: PlateGenerator = distinctOpaqueGen as PlateGenerator;
-
-const plateRequest = (count = 2): PlateJobRequest => ({
+/** A plate record with distinct candidates, as a pre-retirement run wrote it. */
+const plateJob = (jobId: string, count = 2): LegacyJobSpec => ({
+  jobId,
   kind: "plate",
   subject: "neon server room",
-  zone: "left",
-  model: "gpt-image",
-  count,
-  refs: [],
+  runs: [{
+    candidates: Array.from({ length: count }, (_, i) => ({
+      bytes: Buffer.concat([OPAQUE_PNG, Buffer.from(`-${jobId}-${i}`)]),
+    })),
+  }],
 });
 
-const objectRequest = (count = 1): Parameters<typeof runObjectJob>[2] => ({
+/** An object record with its recorded matte. */
+const mattedObjectJob = (jobId: string): LegacyJobSpec => ({
+  jobId,
   kind: "object",
   subject: "a retro desk lamp",
-  model: "gpt-image",
-  count,
-  refs: [],
+  runs: [{
+    candidates: [{
+      bytes: OPAQUE_PNG,
+      matteBytes: MATTED_PNG,
+      matteEngine: "test/segmentation",
+    }],
+  }],
+});
+
+/** An object record whose run recorded no matte (the pass failed). */
+const noMatteObjectJob = (jobId: string): LegacyJobSpec => ({
+  jobId,
+  kind: "object",
+  subject: "a retro desk lamp",
+  runs: [{
+    candidates: [{ bytes: OPAQUE_PNG }],
+    warnings: ["matte: candidate could not be isolated — mask model returned no image"],
+  }],
 });
 
 /** sha-256 of every base64 image embedded in an HTML string. */
@@ -101,7 +94,7 @@ const embeddedHashes = (html: string): string[] =>
 
 describe("reviewJob — plate", () => {
   test("shows every distinct candidate at full size and 168px, with nothing creator-specific", async () => {
-    await runPlateJob(jobRoot, "plate-rev", plateRequest(), plateGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-rev"));
     const result = await reviewJob(jobRoot, "plate-rev");
 
     expect(result.kind).toBe("plate");
@@ -126,7 +119,7 @@ describe("reviewJob — plate", () => {
   });
 
   test("the artifact stays static and offline: embedded evidence only, and no Scene, Asset, or job record is touched", async () => {
-    await runPlateJob(jobRoot, "plate-static", plateRequest(), plateGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-static"));
     const recordBefore = await readFile(path.join(jobRoot, "plate-static", "job.json"));
 
     const result = await reviewJob(jobRoot, "plate-static");
@@ -141,7 +134,7 @@ describe("reviewJob — plate", () => {
   });
 
   test("the saved sheet is self-contained: later mutation or deletion of source files cannot alter or break it", async () => {
-    await runPlateJob(jobRoot, "plate-frozen", plateRequest(1), plateGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-frozen", 1));
     const result = await reviewJob(jobRoot, "plate-frozen");
     const sheetBefore = await readFile(result.reviewPath);
 
@@ -156,7 +149,7 @@ describe("reviewJob — plate", () => {
   });
 
   test("a failed later review produces no new output — the prior sheet stands as its point-in-time evidence", async () => {
-    await runPlateJob(jobRoot, "plate-stale", plateRequest(1), plateGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-stale", 1));
     const result = await reviewJob(jobRoot, "plate-stale");
     const sheetBefore = await readFile(result.reviewPath);
     // The sheet stamps when its evidence was verified.
@@ -170,7 +163,7 @@ describe("reviewJob — plate", () => {
   });
 
   test("a failed sheet replacement leaves the prior sheet intact and no temp files behind", async () => {
-    await runPlateJob(jobRoot, "plate-atomic", plateRequest(1), plateGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-atomic", 1));
     const first = await reviewJob(jobRoot, "plate-atomic");
     const sheetBefore = await readFile(first.reviewPath);
 
@@ -191,7 +184,7 @@ describe("reviewJob — plate", () => {
   });
 
   test("fails loudly on a tampered candidate and writes no partial review", async () => {
-    await runPlateJob(jobRoot, "plate-tampered", plateRequest(1), plateGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-tampered", 1));
     const job = await loadJob(jobRoot, "plate-tampered");
     const cand = job.runs[0]!.candidates[0]!;
     await writeFile(path.join(jobRoot, "plate-tampered", cand.file), "tampered-candidate-bytes");
@@ -203,7 +196,7 @@ describe("reviewJob — plate", () => {
   });
 
   test("fails loudly on a missing candidate file", async () => {
-    await runPlateJob(jobRoot, "plate-missing", plateRequest(1), plateGen);
+    await writeLegacyJob(jobRoot, plateJob("plate-missing", 1));
     const job = await loadJob(jobRoot, "plate-missing");
     await rm(path.join(jobRoot, "plate-missing", job.runs[0]!.candidates[0]!.file));
 
@@ -214,7 +207,7 @@ describe("reviewJob — plate", () => {
 
 describe("reviewJob — object", () => {
   test("shows the matte adoption would use, per candidate, and names the engine", async () => {
-    await runObjectJob(jobRoot, "obj-matted", objectRequest(1), distinctOpaqueGen, fakeMatte);
+    await writeLegacyJob(jobRoot, mattedObjectJob("obj-matted"));
     const job = await loadJob(jobRoot, "obj-matted");
     const cand = job.runs[0]!.candidates[0]!;
 
@@ -236,7 +229,7 @@ describe("reviewJob — object", () => {
   });
 
   test("clearly marks an object candidate without an adoptable matte", async () => {
-    await runObjectJob(jobRoot, "obj-opaque-rev", objectRequest(1), distinctOpaqueGen, brokenMatte);
+    await writeLegacyJob(jobRoot, noMatteObjectJob("obj-opaque-rev"));
     const result = await reviewJob(jobRoot, "obj-opaque-rev");
     const adoption = result.candidates[0]!.adoption;
     expect(adoption.from).toBe("none");
@@ -248,7 +241,7 @@ describe("reviewJob — object", () => {
   });
 
   test("labels a matching-hash recorded matte that fails the true-alpha gate as invalid — with its refusal reason — never as missing", async () => {
-    await runObjectJob(jobRoot, "obj-invalid-matte", objectRequest(1), distinctOpaqueGen, fakeMatte);
+    await writeLegacyJob(jobRoot, mattedObjectJob("obj-invalid-matte"));
     const cand = (await loadJob(jobRoot, "obj-invalid-matte")).runs[0]!.candidates[0]!;
     // Point the recorded matte at the candidate's own opaque bytes: the hash
     // matches the record, so this is not tampering — the matte is present but
@@ -280,7 +273,7 @@ describe("reviewJob — object", () => {
   });
 
   test("a hostile matte path inside the invalid-matte refusal renders as inert escaped HTML", async () => {
-    await runObjectJob(jobRoot, "obj-hostile-matte", objectRequest(1), distinctOpaqueGen, fakeMatte);
+    await writeLegacyJob(jobRoot, mattedObjectJob("obj-hostile-matte"));
     const cand = (await loadJob(jobRoot, "obj-hostile-matte")).runs[0]!.candidates[0]!;
     const evil = `mattes/evil"\u003cimg src=x onerror=alert(1)\u003e.png`;
     await writeFile(path.join(jobRoot, "obj-hostile-matte", evil), OPAQUE_PNG);
@@ -353,7 +346,7 @@ describe("reviewJob — object", () => {
   });
 
   test("fails loudly when a recorded matte file no longer matches its identity", async () => {
-    await runObjectJob(jobRoot, "obj-matte-tampered", objectRequest(1), distinctOpaqueGen, fakeMatte);
+    await writeLegacyJob(jobRoot, mattedObjectJob("obj-matte-tampered"));
     const cand = (await loadJob(jobRoot, "obj-matte-tampered")).runs[0]!.candidates[0]!;
     await writeFile(path.join(jobRoot, "obj-matte-tampered", cand.matte!.file), ALPHA_PNG);
 
@@ -365,18 +358,9 @@ describe("reviewJob — object", () => {
 });
 
 describe("jobs review — CLI", () => {
-  const deps = {
-    generate: plateGen,
-    generateObject: distinctOpaqueGen,
-    generateCreator: distinctOpaqueGen,
-    matte: fakeMatte,
-    jobsRoot: "",
-  };
-
   test("reviews a plate job: kind, review path, and adoptable candidates", async () => {
-    deps.jobsRoot = jobRoot;
-    await runPlateJob(jobRoot, "plate-cli", plateRequest(1), plateGen);
-    const res = await cliRun(["review", "plate-cli"], deps);
+    await writeLegacyJob(jobRoot, plateJob("plate-cli", 1));
+    const res = await cliRun(["review", "plate-cli"], { jobsRoot: jobRoot });
     expect(res.exitCode).toBe(0);
     const out = res.output as Record<string, any>;
     expect(out.ok).toBe(true);
@@ -387,9 +371,8 @@ describe("jobs review — CLI", () => {
   });
 
   test("reports an object candidate without an adoptable matte as not adoptable", async () => {
-    deps.jobsRoot = jobRoot;
-    await runObjectJob(jobRoot, "obj-cli-opaque", objectRequest(1), distinctOpaqueGen, brokenMatte);
-    const res = await cliRun(["review", "obj-cli-opaque"], deps);
+    await writeLegacyJob(jobRoot, noMatteObjectJob("obj-cli-opaque"));
+    const res = await cliRun(["review", "obj-cli-opaque"], { jobsRoot: jobRoot });
     expect(res.exitCode).toBe(0);
     const out = res.output as Record<string, any>;
     expect(out.kind).toBe("object");

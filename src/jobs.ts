@@ -1,25 +1,28 @@
 /**
- * Generation Jobs (REQ-013/REQ-014) — the lifecycle from typed request
- * through candidates to immutable Asset adoption.
+ * Legacy Generation Job records (REQ-013/REQ-014) — the read-only record
+ * surface and immutable Asset adoption for the retired plate/object/creator
+ * lifecycle (#114, spec #102).
  *
  * A job is one directory under the jobs root (`out/jobs/<jobId>/`):
  *   job.json                 — the record: request, typed references, run lineage
  *   candidates/<sha-256>.png — content-addressed candidate bytes
  *
- * Every rerun appends a new run to `job.json` and never touches prior runs or
- * candidates. Adoption copies a candidate into the asset library through the
- * normal contract; it can never overwrite an existing asset (see
- * `writePlateAsset` in assets.ts). Jobs never edit Scenes or unrelated assets.
+ * The category-specific entry points (`jobs plates`, `jobs objects`,
+ * `jobs creators`) and kind-dispatched `jobs rerun` generation are retired:
+ * this module no longer starts or extends jobs. What remains is the one
+ * canonical reader shared by inspection (`jobs show/list/review`), review
+ * evidence, and adoption — `adoptCandidate` copies a recorded candidate into
+ * the asset library through the normal contract and can never overwrite an
+ * existing asset (see `writePlateAsset` in assets.ts). Adoption never edits a
+ * Scene or unrelated assets. New generation goes through the uniform
+ * operation (src/generation.ts, `ply generate`).
  */
-import { mkdir, readFile, readdir, writeFile, stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { TextZone } from "./generate.js";
-import { resolveModel, validateReferenceCapability } from "./models.js";
-import { extensionFor, writePlateAsset, writeObjectAsset, writeCreatorAsset } from "./assets.js";
+import { writePlateAsset, writeObjectAsset, writeCreatorAsset } from "./assets.js";
 import { verifyTrueAlpha } from "./alpha.js";
-import { matteCandidate, UnusableMatteError, type MatteEngine } from "./matte.js";
 
 /**
  * Job record schema versions. v1 is the legacy plate-only record; v2 the
@@ -39,20 +42,6 @@ export const CREATOR_JOB_SCHEMA_VERSION = 5 as const;
 
 /** The three Generation Job kinds. */
 export type JobKind = "plate" | "object" | "creator";
-
-/**
- * The schema version the current binary writes for a job kind — the single
- * source of truth for both record writers. Plate and Object records carry the
- * role-aware-Reference prompt contract (v4); Creator records preserve caller
- * Reference order (v5).
- */
-function currentSchemaVersion(kind: JobKind): GenerationJob["schemaVersion"] {
-  return kind === "object"
-    ? OBJECT_JOB_SCHEMA_VERSION
-    : kind === "creator"
-      ? CREATOR_JOB_SCHEMA_VERSION
-      : PLATE_JOB_SCHEMA_VERSION;
-}
 
 /** A generation reference with an explicit role and exact content identity. */
 export interface TypedRef {
@@ -74,8 +63,9 @@ export interface PlateJobRequest {
 
 /**
  * An isolated non-text object request (REQ-015): one standalone object, no
- * scene, no composite. Official logos and final text are rejected as targets
- * at the request boundary — `validateObjectSubject`.
+ * scene, no composite. Official logos and final text were rejected as targets
+ * at the retired request boundary — the caller's own policy now governs what
+ * they generate (ADR-0014).
  */
 export interface ObjectJobRequest {
   kind: "object";
@@ -87,10 +77,10 @@ export interface ObjectJobRequest {
 }
 
 /**
- * A creator candidate request (REQ-017): an isolated creator figure produced
- * from typed identity anchors — never from text alone. Roles are restricted
- * to the creator set and ≥1 identity anchor is enforced at the request
- * boundary by `validateCreatorRequest`.
+ * A creator candidate request (REQ-017): an isolated creator figure. The
+ * retired request boundary restricted roles to the creator set and required
+ * ≥1 identity anchor; the uniform surface carries no such policy (ADR-0014) —
+ * the consuming workflow's own instructions own the identity-anchor rule.
  */
 export interface CreatorJobRequest {
   kind: "creator";
@@ -102,17 +92,6 @@ export interface CreatorJobRequest {
 }
 
 export type JobRequest = PlateJobRequest | ObjectJobRequest | CreatorJobRequest;
-
-/** The roles a creator request may assign its references. */
-export const CREATOR_ROLES = [
-  "identity",
-  "pose",
-  "expression",
-  "outfit",
-  "style",
-  "edit",
-] as const;
-export type CreatorRole = (typeof CREATOR_ROLES)[number];
 
 /**
  * The isolated form of a candidate (REQ-017): the true-alpha bytes the
@@ -183,390 +162,26 @@ export interface JobSummary {
   candidates: number;
 }
 
-/** The injectable generation seam — the AI SDK boundary lives behind this. */
-export interface GeneratedBatch {
-  candidates: { bytes: Uint8Array; mediaType: string }[];
-  warnings: string[];
-  fullPrompt: string;
-}
-export type PlateGenerator = (request: PlateJobRequest) => Promise<GeneratedBatch>;
-export type ObjectGenerator = (request: ObjectJobRequest) => Promise<GeneratedBatch>;
-export type CreatorGenerator = (request: CreatorJobRequest) => Promise<GeneratedBatch>;
-export type JobGenerator = (request: JobRequest) => Promise<GeneratedBatch>;
-
 /**
- * Subjects that ask the model to paint an official logo or readable text are
- * rejected before any generation call: logos come from sourced Assets
- * (`library add-logo`) and final text is rendered locally (ADR-0001,
- * DEC-005/DEC-006). The guard is a deterministic denylist — it errs toward
- * refusing, and a refused subject can always be reworded to name the object
- * itself rather than its lettering.
+ * Load a job record; missing, corrupt, or contradictory records fail loudly.
+ * The record's `kind` mirrors `request.kind`, but a hand-edited or tampered
+ * file could disagree — adoption and review dispatch on the record while the
+ * request types describe the recorded contract, so an unvalidated
+ * contradiction would let one job adopt under a different contract than it
+ * recorded (bypassing the object alpha gate). Both are validated equal here,
+ * the single ingestion point, and v1 records are pinned to plate jobs (v2
+ * introduced object jobs).
  */
-const OBJECT_SUBJECT_BAN =
-  /\b(logos?|logotypes?|logomarks?|wordmarks?|brand ?marks?|trademarks?|text|headline|headlines|title|subtitle|captions?|lettering|typography|letters?|words?|watermarks?|slogans?|taglines?|numbers?|fonts?)\b/i;
-
-export function validateObjectSubject(subject: string): void {
-  if (!subject.trim()) throw new Error(`An object job needs a subject naming the object to generate`);
-  const hit = OBJECT_SUBJECT_BAN.exec(subject);
-  if (hit)
-    throw new Error(
-      `"${subject}" asks for ${hit[0]} — object generation targets must be isolated non-text objects. ` +
-        `Official logos come from sourced Assets (bun run library add-logo) and final text is rendered locally (ADR-0001); ` +
-        `reword the subject to name the object itself, not its lettering.`,
-    );
-}
-
-/**
- * The creator request boundary (REQ-017): roles are restricted to the typed
- * creator set, and at least one caller-supplied identity reference is
- * mandatory — a likeness is never generated from text alone. Runs before any
- * generation call, so a refused request costs nothing.
- */
-export function validateCreatorRequest(request: CreatorJobRequest): void {
-  if (!request.subject.trim())
-    throw new Error(`A creator job needs a subject describing the pose, expression, outfit, or edit to produce`);
-  if (!request.refs.some((r) => r.role === "identity"))
-    throw new Error(
-      `A creator job needs at least one caller-supplied "identity:" reference. ` +
-        `A likeness is never generated from text alone — pass a local image, e.g. --ref identity:<file>.`,
-    );
-  for (const ref of request.refs) {
-    if (!(CREATOR_ROLES as readonly string[]).includes(ref.role))
-      throw new Error(
-        `Reference role "${ref.role}" is not a creator role — creator requests accept: ${CREATOR_ROLES.join(", ")}. ` +
-          `("edit" is the source-to-edit role.)`,
-      );
-  }
-}
-
 const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
-const ROLE_PATTERN = /^[a-z][a-z0-9-]*$/;
 
 function jobDir(jobRoot: string, jobId: string): string {
   return path.join(jobRoot, jobId);
-}
-
-async function writeJobRecord(jobRoot: string, job: GenerationJob): Promise<void> {
-  await writeFile(
-    path.join(jobDir(jobRoot, job.jobId), "job.json"),
-    JSON.stringify(job, null, 2) + "\n",
-  );
-}
-
-/**
- * Parse "<role>:<path>" and derive the reference's exact content identity
- * from its bytes at request time. The role is a typed token — an untyped
- * path-only reference is rejected.
- */
-export async function parseTypedRef(spec: string): Promise<TypedRef> {
-  const sep = spec.indexOf(":");
-  if (sep < 0) throw new Error(`Reference "${spec}" must be typed as "<role>:<path>" (e.g. style:<path>)`);
-  const role = spec.slice(0, sep);
-  const p = spec.slice(sep + 1);
-  if (!ROLE_PATTERN.test(role))
-    throw new Error(`Reference role "${role}" must be lowercase letters/digits/hyphens (got in "${spec}")`);
-  if (!p) throw new Error(`Reference "${spec}" is missing a path after the role`);
-  const bytes = await readFile(path.resolve(p));
-  return { role, path: p, contentHash: sha256(bytes) };
 }
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/**
- * Adapt a kind-specific generator to the joint seam, refusing to run a
- * request of the other kind — a plate generator must never execute an object
- * request (their prompts and contracts differ).
- */
-/** Wrap a kind-specific generator as a JobGenerator that refuses other kinds. */
-export function lift<K extends JobRequest["kind"]>(
-  kind: K,
-  generate: (request: Extract<JobRequest, { kind: K }>) => Promise<GeneratedBatch>,
-): JobGenerator {
-  return (request) => {
-    if (request.kind !== kind)
-      throw new Error(`a ${kind} generator cannot run a "${request.kind}" job request`);
-    return generate(request as Extract<JobRequest, { kind: K }>);
-  };
-}
-
-/**
- * Execute a request as a new Generation Job and record the run.
- * Creating over an existing job id is refused — rerun is the only
- * way to add candidates, so a lineage can never be silently mixed.
- */
-async function runJob(
-  jobRoot: string,
-  jobId: string,
-  request: JobRequest,
-  generate: JobGenerator,
-  matte?: MatteEngine,
-): Promise<GenerationJob> {
-  if (!JOB_ID_PATTERN.test(jobId))
-    throw new Error(`Invalid job id "${jobId}" — use lowercase letters/digits/hyphens`);
-  if (existsSync(path.join(jobRoot, jobId, "job.json")))
-    throw new Error(`Job "${jobId}" already exists — use "jobs rerun ${jobId}" to add candidates under its lineage`);
-
-  // Reference-compatibility is a request-boundary fact (DEC-018/DEC-020,
-  // TEST-011): a Job whose request carries typed References must resolve to a
-  // qualified reference-capable model, or it is refused here — before the
-  // matting preflight, before any generator, and therefore before any spend.
-  validateReferenceCapability(request.model, request.refs.length > 0);
-
-  // Nothing is paid for until the pass that has to isolate the result says it
-  // can run: a job whose matting prerequisites are missing must fail while it
-  // is still free, not leave billed candidates that can never be adopted.
-  await matte?.preflight?.();
-  const batch = await generate(request);
-  const now = new Date().toISOString();
-  const job: GenerationJob = {
-    schemaVersion: currentSchemaVersion(request.kind),
-    jobId,
-    kind: request.kind,
-    createdAt: now,
-    request,
-    runs: [],
-  };
-  const run = await recordRun(jobRoot, job, request, batch, now, matte);
-  job.runs.push(run);
-  await writeJobRecord(jobRoot, job);
-  return job;
-}
-
-export function runPlateJob(
-  jobRoot: string,
-  jobId: string,
-  request: PlateJobRequest,
-  generate: PlateGenerator,
-): Promise<GenerationJob> {
-  return runJob(jobRoot, jobId, request, lift("plate", generate));
-}
-
-export async function runObjectJob(
-  jobRoot: string,
-  jobId: string,
-  request: ObjectJobRequest,
-  generate: ObjectGenerator,
-  matte: MatteEngine,
-): Promise<GenerationJob> {
-  validateObjectSubject(request.subject);
-  return runJob(jobRoot, jobId, request, lift("object", generate), matte);
-}
-
-/**
- * A creator job runs generation *and* the matting pass (REQ-017): the model
- * returns opaque bytes, so isolation is a stage of the lifecycle, not a hope
- * about the prompt. The engine is required — a creator job that could record
- * un-matted candidates would be a job whose candidates can never be adopted.
- */
-export async function runCreatorJob(
-  jobRoot: string,
-  jobId: string,
-  request: CreatorJobRequest,
-  generate: CreatorGenerator,
-  matte: MatteEngine,
-): Promise<GenerationJob> {
-  validateCreatorRequest(request);
-  return runJob(jobRoot, jobId, request, lift("creator", generate), matte);
-}
-
-/**
- * Re-execute a job's recorded request and append the run to its lineage.
- * Reference identities are re-derived and compared first — drifted or
- * missing references fail loudly, because a rerun with different reference
- * content would be a different job wearing the same id.
- */
-export async function rerunJob(
-  jobRoot: string,
-  jobId: string,
-  generate: JobGenerator,
-  matte?: MatteEngine,
-): Promise<GenerationJob> {
-  const job = await loadJob(jobRoot, jobId);
-  // v3 Creator Jobs attached identity references first and pose last. Preserve
-  // that provider order for their first current-binary rerun, then store the
-  // normalized order with v5 so every later rerun has one canonical meaning.
-  const request: JobRequest =
-    job.schemaVersion === LEGACY_CREATOR_JOB_SCHEMA_VERSION && job.request.kind === "creator"
-      ? {
-          ...job.request,
-          refs: [
-            ...job.request.refs.filter((ref) => ref.role === "identity"),
-            ...job.request.refs.filter((ref) => ref.role !== "identity" && ref.role !== "pose"),
-            ...job.request.refs.filter((ref) => ref.role === "pose"),
-          ],
-        }
-      : job.request;
-  // The recorded model is re-checked against the current registry first — a
-  // pure, free check before any reference bytes are read. A qualification
-  // retracted since the job was recorded refuses here instead of spending on
-  // a call the model would not honour (DEC-018/DEC-020).
-  validateReferenceCapability(request.model, request.refs.length > 0);
-  for (const ref of request.refs) {
-    let bytes: Buffer;
-    try {
-      bytes = await readFile(path.resolve(ref.path));
-    } catch {
-      throw new Error(`Reference "${ref.path}" (role ${ref.role}) is missing — cannot rerun job "${jobId}"`);
-    }
-    const actual = sha256(bytes);
-    if (actual !== ref.contentHash)
-      throw new Error(
-        `Reference "${ref.path}" (role ${ref.role}) changed content identity — recorded sha-256 ${ref.contentHash}, actual ${actual}. Record a new job for different references.`,
-      );
-  }
-
-  // A rerun pays for candidates too — same rule as the first run.
-  await matte?.preflight?.();
-  const batch = await generate(request);
-  const run = await recordRun(jobRoot, job, request, batch, new Date().toISOString(), matte);
-  job.runs.push(run);
-  // The new lineage was produced under the CURRENT prompt contract, so the
-  // record is re-persisted at the current schema version with the lineage —
-  // one write, version, canonical request order, and runs together. Current
-  // lineage must never hide under a legacy prompt-contract version that an
-  // older binary would interpret differently. A failed rerun throws above and
-  // leaves the legacy record untouched.
-  job.request = request;
-  job.schemaVersion = currentSchemaVersion(job.kind);
-  await writeJobRecord(jobRoot, job);
-  return job;
-}
-
-export function rerunPlateJob(
-  jobRoot: string,
-  jobId: string,
-  generate: PlateGenerator,
-): Promise<GenerationJob> {
-  return rerunJob(jobRoot, jobId, lift("plate", generate));
-}
-
-export function rerunObjectJob(
-  jobRoot: string,
-  jobId: string,
-  generate: ObjectGenerator,
-  matte: MatteEngine,
-): Promise<GenerationJob> {
-  return rerunJob(jobRoot, jobId, lift("object", generate), matte);
-}
-
-export function rerunCreatorJob(
-  jobRoot: string,
-  jobId: string,
-  generate: CreatorGenerator,
-  matte: MatteEngine,
-): Promise<GenerationJob> {
-  return rerunJob(jobRoot, jobId, lift("creator", generate), matte);
-}
-
-/**
- * Call the generator, persist the candidates, run the matting pass where the
- * job kind requires one, and build the run record.
- *
- * A matting failure never discards the run: the generation is already paid
- * for and the candidate is still likeness evidence, so the candidate is
- * recorded without a matte and the reason is recorded as a run warning. The
- * pass is local, so a failed attempt costs nothing (ADR-0006).
- * Adoption then refuses it by name — the failure surfaces at the point of
- * use instead of being silently swallowed here.
- */
-async function recordRun(
-  jobRoot: string,
-  job: GenerationJob,
-  request: JobRequest,
-  batch: GeneratedBatch,
-  ranAt: string,
-  matte?: MatteEngine,
-): Promise<JobRun> {
-  if (batch.candidates.length === 0) throw new Error("Generation returned no candidates");
-  if (request.kind !== "plate" && !matte)
-    throw new Error(
-      // Article-free plural: reads right for every non-plate kind.
-      `${request.kind} runs need a matting engine — ${request.kind} candidates are adopted as their matte`,
-    );
-  const spec = resolveModel(request.model);
-  const dir = jobDir(jobRoot, job.jobId);
-  await mkdir(path.join(dir, "candidates"), { recursive: true });
-
-  const warnings = [...batch.warnings];
-  const candidates: JobCandidate[] = [];
-
-  for (const candidate of batch.candidates) {
-    const contentHash = sha256(candidate.bytes);
-    const file = path.join("candidates", `${contentHash}.${extensionFor(candidate.mediaType)}`);
-    await writeFile(path.join(dir, file), candidate.bytes);
-    const record: JobCandidate = { contentHash, file, mediaType: candidate.mediaType };
-
-    // Creators and objects both leave the model opaque (measured: gpt-image-2
-    // paints even a checkerboard backdrop rather than returning alpha), so
-    // both kinds run the pass; plates are adopted as-is, opaque by contract
-    // (ADR-0011).
-    if (matte && request.kind !== "plate") {
-      try {
-        const result = await matteCandidate(candidate.bytes, file, matte);
-        warnings.push(...result.warnings);
-        // Content-addressed like the candidate itself, in its own directory:
-        // a matte is derived output, never a candidate in the lineage.
-        const matteHash = sha256(result.bytes);
-        const matteFile = path.join("mattes", `${matteHash}.png`);
-        await mkdir(path.join(dir, "mattes"), { recursive: true });
-        await writeFile(path.join(dir, matteFile), result.bytes);
-        record.matte = { contentHash: matteHash, file: matteFile, engine: result.engine };
-      } catch (err) {
-        // The gate's recovery is the adoption surface's, not the pass's: an
-        // unusable matte carries the rerun/adopt next step here, where a Job
-        // exists. (Independent Matting attaches its own at its own boundary.)
-        const message =
-          err instanceof UnusableMatteError
-            ? `${(err as Error).message} ${adoptionRecovery(job.jobId)}`
-            : (err as Error).message;
-        warnings.push(
-          `matte: candidate ${contentHash.slice(0, 12)} could not be isolated — ${message}`,
-        );
-      }
-    }
-    candidates.push(record);
-  }
-
-  return {
-    ranAt,
-    model: spec.id,
-    fullPrompt: batch.fullPrompt,
-    // Generation is the only billed work in a run: the matting pass runs
-    // locally, so it has no cost to add and none to lose when it fails.
-    // The cost is recorded only when the rate describes the call shape: a
-    // reference call on a text-only rate records unknown with its basis
-    // stated, never the text-only rate claimed as measured (TEST-012).
-    costUsd:
-      request.refs.length === 0 || spec.costCoversRefs
-        ? spec.approxCost * batch.candidates.length
-        : null,
-    costMeasured: spec.costMeasured && (request.refs.length === 0 || spec.costCoversRefs),
-    warnings: [
-      ...new Set([
-        ...warnings,
-        ...(request.refs.length > 0 && !spec.costCoversRefs
-          ? [
-              `cost: reference-call cost recorded as unknown — the measured rate for ${spec.id} covers text-only calls; ` +
-              `a reference call bills the image as extra input tokens (basis in the model note)`,
-            ]
-          : []),
-      ]),
-    ],
-    candidates,
-  };
-}
-
-/**
- * Load a job record; missing, corrupt, or contradictory records fail loudly.
- * The record's `kind` mirrors `request.kind`, but a hand-edited or tampered
- * file could disagree — rerun dispatches on the request and adoption on the
- * record, so an unvalidated contradiction would let one job rerun under one
- * contract and adopt under another (bypassing the object alpha gate). Both
- * are validated equal here, the single ingestion point, and v1 records are
- * pinned to plate jobs (v2 introduced object jobs).
- */
 export async function loadJob(jobRoot: string, jobId: string): Promise<GenerationJob> {
   if (!JOB_ID_PATTERN.test(jobId))
     throw new Error(`Invalid job id "${jobId}" — use lowercase letters/digits/hyphens`);
@@ -579,13 +194,14 @@ export async function loadJob(jobRoot: string, jobId: string): Promise<Generatio
   try {
     const job = JSON.parse(raw) as GenerationJob;
     // The (schemaVersion, kind) matrix is the rollback boundary (PROD-1):
-    // legacy records keep their versions and kinds on read, and a successful
-    // rerun re-persists the record at the current version with its new
-    // lineage — so role-aware runs never hide under a legacy version. New
-    // Plate/Object records ride v4 and caller-ordered Creator records ride
-    // v5; older binaries reject unknown contracts. No record may claim a
-    // version/kind pairing this binary
-    // would never write — an older binary would misread such a pairing
+    // legacy records keep their versions and kinds on read, so an old record
+    // never silently gains new semantics on inspection or adoption. Newer
+    // contracts (v4 role-aware-Reference Plate/Object, v5 caller-ordered
+    // Creator) were written by the retired generation entry points; this
+    // binary no longer writes any legacy record, but records written before
+    // the retirement remain readable. No record may claim a
+    // version/kind pairing the retired writers
+    // would never have written — a reader would misread such a pairing
     // (e.g. run a role-aware plate job with path-only prompt behavior under
     // its v1/v2 contract).
     const knownSchemaVersions = [
@@ -726,7 +342,9 @@ function adoptionRecovery(jobId: string): string {
   return (
     `Adoption requires true alpha (a transparent-background PNG with a real matte) — ` +
     `RGB chroma-key color distance alone cannot qualify an output (REQ-015, REQ-017). ` +
-    `Rerun the job ("jobs rerun ${jobId}") so the matting pass mattes fresh candidates, or adopt a candidate that has one.`
+    `Category-specific generation is retired: record a new uniform Generation Job with "bun run generate" ` +
+    `(use --intent isolated for isolated output), matte it explicitly with "bun run matte", and ingest it as a Layer — ` +
+    `or adopt a candidate of job "${jobId}" that has a recorded matte.`
   );
 }
 
@@ -805,7 +423,9 @@ export async function resolveAdoptionEvidence(
         cause: "no-matte",
         reason:
           `Candidate "${cand.file}" carries no matte — the matting pass did not produce one for it (see the run's warnings). ` +
-          `Rerun the job ("jobs rerun ${jobId}") to matte fresh candidates, or adopt a candidate that has one.`,
+          `Category-specific generation is retired: record a new uniform Generation Job with "bun run generate" ` +
+          `(use --intent isolated for isolated output) and matte it explicitly with "bun run matte", ` +
+          `or adopt a candidate of job "${jobId}" that has a recorded matte.`,
       },
     };
 

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Page } from "playwright";
 import { getBrowser } from "../src/browser.js";
-import { runPlateJob } from "../src/jobs.js";
 import { reviewJob } from "../src/review.js";
 import { encodePng } from "./png.js";
+import { writeLegacyJob } from "./legacy-jobs.js";
 
 /**
  * The full/thumbnail evidence geometry, asserted in a real browser (US-022,
@@ -29,18 +29,12 @@ beforeAll(async () => {
   // A wide candidate: at a 1000px viewport it overflows its column, so only a
   // natural-width overflow container can keep it 1:1.
   const wide = encodePng(2000, 500, (x, y) => [(x % 256) as number, (y % 256) as number, 90, 255]);
-  await runPlateJob(jobRoot, "browser-plate", {
+  await writeLegacyJob(jobRoot, {
+    jobId: "browser-plate",
     kind: "plate",
     subject: "wide plate",
-    zone: "left",
-    model: "gpt-image",
-    count: 1,
-    refs: [],
-  }, async () => ({
-    candidates: [{ bytes: wide, mediaType: "image/png" }],
-    warnings: [],
-    fullPrompt: "p",
-  }));
+    runs: [{ candidates: [{ bytes: wide }] }],
+  });
   const review = await reviewJob(jobRoot, "browser-plate");
   sheetPath = review.reviewPath;
 

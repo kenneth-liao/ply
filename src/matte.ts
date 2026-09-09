@@ -38,8 +38,9 @@ export interface MatteEngineResult {
 
 /**
  * The engine ran, but its output cannot qualify as a matte. A type, not a
- * message shape: callers attach their own recovery (adoption says rerun,
- * independent Matting says ply matte) without string-matching the why.
+ * message shape: callers attach their own recovery (adoption directs to the
+ * replacement workflow, independent Matting says ply matte) without
+ * string-matching the why.
  */
 export class UnusableMatteError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
