@@ -57,6 +57,28 @@ original source files and the rendered PNG are gone — and refuses missing,
 corrupted, or malformed history, or a different rendering environment,
 instead of silently substituting content.
 
+## Uniform generation (new surface)
+
+`ply generate` is one source-image generation operation with no subject
+category: full-canvas or isolated output intent is a request parameter, and
+no content policy is imposed on the prompt (ADR-0014). It publishes a
+Generation Job record with the effective request, content-addressed outputs,
+and provenance under `out/generation/` — see
+[docs/generation-publication-contract.md](docs/generation-publication-contract.md)
+for the record schema and publication contract.
+
+```bash
+ply generate "a red barn at noon" --size 1080x1080
+ply generate "a presenter portrait" --intent isolated --model nano-2
+ply generate show <jobId>   # offline inspection of the published record
+ply generate list
+```
+
+Isolated intent is a generation request, not a matte: it never runs Matting
+and never reports verified alpha — the independent Matting operation stays
+caller-invoked (ADR-0015). The legacy `jobs plates|objects|creators` pipeline
+below keeps working until its separately approved retirement.
+
 ## Setup
 
 ```bash

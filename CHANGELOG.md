@@ -8,6 +8,25 @@
 
 ### Added
 
+- Added the uniform generation surface (#104, #102): `ply generate <prompt>` — one
+  prompt-only source-image Generation Job operation with no subject category
+  (ADR-0014). Full-canvas or isolated output intent is a request parameter;
+  sizing is caller-selected (`--size WxH` / `--aspect W:H`, model-neutral
+  defaults 1024x1024 / 1:1, never YouTube geometry); no text/logo bans, no
+  mandatory identity References, no approval gate. Generation works without
+  Matting weights — the surface never imports the Matting engine (tripwire
+  tested), and isolated intent is a generation request, not verified alpha
+  (ADR-0015). It publishes the effective request, resolved model,
+  content-addressed outputs, cost, and warnings as a schemaVersion-1 Generation
+  Job record under `out/generation/<jobId>/` (contract in
+  docs/generation-publication-contract.md for #105/#107/#108/#109); failures
+  (malformed requests, provider errors, missing images, publication failures)
+  exit nonzero, publish nothing, and never touch Projects or Layers.
+  `generate show`/`list` are offline local reads; default output is compact
+  text, `--json` is strict JSON, exit codes 0/1/2. `buildImageRequestArgs`
+  gained an optional explicit-sizing parameter; legacy Plate/Object/Creator
+  request bytes are unchanged (regression-proven). The legacy `jobs`
+  entry points are untouched.
 - Added Render history capture and replay (#87, #77): every successful `ply composition render` retains a Project-owned manifest under `renders/` — whatever PNG destination the caller chose — pinning the exact ordered Layer revisions (identity + content-derived revision id), canvas, and the rendering environment captured inside the same paint pass (tool version, runtime, platform, browser). The manifest records identities only (revision facts stay in the immutable revision documents; content identity in their `contentHash`), so it is relocation-proof by construction and replay never requires the original PNG or any absolute external path. `ply composition replay <manifest-path> [--out <path>]` regenerates the Render byte-identically from those pinned inputs through a revision-only reader factored from the canonical Layer resolver — never consulting current Layer pointers or Composition documents — and refuses missing, corrupted, or malformed history (missing revision/content, hash mismatches, invalid pinned identifiers checked before path construction, unsupported schema versions) and an exact-match environment mismatch before any output. Replay honors `--out`, retains its own manifest under the render publication discipline, and works after Project relocation, external source deletion, and original-PNG deletion.
 - Extended `docs/project-storage-contract.md` (§6, §7) with the Render history & replay contract: manifest schema and canonical fact ownership, no-mix capture invariant, publication discipline (no reported-success Render without history; caught publication failure cleans only the freshly created manifest; honest crash limits), environment identity/exact-match compatibility, and the replay fail-loud boundaries (#87).
 - Added explicit fork editing for shared Layers (#85, #77): `ply layer edit <layer-id> --fork --composition <comp> --use <local-name>` publishes a new Layer identity with the edited revision and retargets only the selected use in the target Composition under one Project mutation; other Compositions render byte-identically across the fork and the original identity, its historical revisions, and content blobs remain untouched. `--fork` and `--in-place` are mutually exclusive, fork requires `--composition`/`--use` (forbidden without `--fork`), and an explicit fork always creates a new identity even with unchanged content. Intent is normalized once into a canonical discriminated shape; edited revisions for both modes build through one shared construction path (kind stability, ingestion, field preservation); fork publication stages the new identity/revision and commits the use retarget via `atomicReplace` as the live commit point, cleaning up only newly staged artifacts on caught errors. Usage misuse exits 2; target/use mismatches and publication failures exit 1 leaving live state unchanged with a documented retry path.

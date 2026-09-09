@@ -45,4 +45,24 @@ describe("buildImageRequestArgs", () => {
       /generateText/,
     );
   });
+
+  test("(#104) the legacy three-argument call is byte-identical to its pre-uniform shape", () => {
+    // Ticket #104 made the explicit size an optional fourth parameter. The
+    // legacy plate/object/creator request bytes must not move: a 3-argument
+    // call keeps the 1536x864 landscape plate size and the 16:9 aspect rule.
+    expect(buildImageRequestArgs(MODELS["gpt-image"], "p", [])).toEqual({
+      model: "openai/gpt-image-2",
+      prompt: "p",
+      size: "1536x864",
+    });
+    expect(buildImageRequestArgs(MODELS["flux"], "p", []).aspectRatio).toBe("16:9");
+  });
+
+  test("(#104) an explicit caller size overrides the default for the uniform surface", () => {
+    expect(buildImageRequestArgs(MODELS["gpt-image"], "p", [], { size: "1080x1080" })).toEqual({
+      model: "openai/gpt-image-2",
+      prompt: "p",
+      size: "1080x1080",
+    });
+  });
 });
