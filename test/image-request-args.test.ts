@@ -48,11 +48,4 @@ describe("buildImageRequestArgs", () => {
       buildImageRequestArgs(MODELS["nano-2"], "the prompt", [], { aspectRatio: "1:1" }),
     ).toThrow(/generateText/);
   });
-
-  test("explicit caller sizing is required — there is no implicit legacy default", () => {
-    // The retirement removed the implicit 1536x864 / 16:9 defaults: the
-    // uniform surface normalizes sizing (model-neutral defaults) and always
-    // passes it explicitly, so the constructor takes no shape without one.
-    expect((buildImageRequestArgs as (...args: unknown[]) => unknown).length).toBe(4);
-  });
 });

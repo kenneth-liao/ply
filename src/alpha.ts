@@ -32,8 +32,8 @@ export interface AlphaReport {
 
 /**
  * The gate states the *why* only: it serves callers with different recoveries
- * (adoption says rerun/adopt, independent Matting says ply matte), so the
- * next step belongs at the call site, not here.
+ * (adoption directs to the replacement workflow, independent Matting says ply
+ * matte), so the next step belongs at the call site, not here.
  */
 function refuse(label: string, why: string): never {
   throw new Error(`Candidate "${label}" cannot qualify: ${why}`);

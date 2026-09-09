@@ -94,7 +94,7 @@ describe("adoptCandidate for object jobs", () => {
     if (asset.meta.kind === "object") {
       expect(asset.meta.matting).toBe("true-alpha");
       expect(asset.meta.subject).toBe("a retro desk lamp");
-      expect(asset.meta.model).toBe("gpt-image");
+      expect(asset.meta.model).toBe("openai/gpt-image-2");
     }
     expect(result.imagePath).toBe(asset.imagePath);
   });
@@ -120,7 +120,7 @@ describe("adoptCandidate for object jobs", () => {
       expect(asset.meta.matting).toBe("true-alpha");
       expect(asset.meta.matteEngine).toBe("test/segmentation");
       expect(asset.meta.subject).toBe("a retro desk lamp");
-      expect(asset.meta.model).toBe("gpt-image");
+      expect(asset.meta.model).toBe("openai/gpt-image-2");
     }
     expect(result.imagePath).toBe(asset.imagePath);
   });

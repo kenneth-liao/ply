@@ -9,7 +9,7 @@
  * content-addressed candidates and mattes, typed references with derived
  * identities) directly under a jobs root.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { extensionFor } from "../src/assets.js";
@@ -78,7 +78,6 @@ export async function writeLegacyJob(jobRoot: string, spec: LegacyJobSpec): Prom
       await mkdir(path.dirname(refPath), { recursive: true });
       await writeFile(refPath, ref.bytes);
     }
-    const { readFile } = await import("node:fs/promises");
     refs.push({ role: ref.role, path: refPath, contentHash: sha256(await readFile(refPath)) });
   }
 
@@ -89,8 +88,8 @@ export async function writeLegacyJob(jobRoot: string, spec: LegacyJobSpec): Prom
         ? { kind: "object", subject: spec.subject ?? "an object subject", model: "gpt-image", count: 1, refs }
         : { kind: "creator", subject: spec.subject ?? "a creator subject", model: "nano-2", count: 1, refs };
 
-  const jobDir = path.join(dir, "candidates");
-  await mkdir(jobDir, { recursive: true });
+  const candidatesDir = path.join(dir, "candidates");
+  await mkdir(candidatesDir, { recursive: true });
 
   const runs: JobRun[] = [];
   for (const [i, run] of spec.runs.entries()) {
@@ -114,9 +113,13 @@ export async function writeLegacyJob(jobRoot: string, spec: LegacyJobSpec): Prom
       }
       candidates.push(record);
     }
+    // The retired writers recorded the RESOLVED gateway id in run.model
+    // (resolveModel(request.model).id), not the caller's registry key.
+    const resolvedModel =
+      run.model ?? (spec.kind === "creator" ? "google/gemini-3.1-flash-image" : "openai/gpt-image-2");
     runs.push({
       ranAt: run.ranAt ?? `2026-09-0${(i % 9) + 1}T12:00:00.000Z`,
-      model: run.model ?? "gpt-image",
+      model: resolvedModel,
       fullPrompt: run.fullPrompt ?? `effective prompt for ${spec.subject ?? spec.jobId}`,
       costUsd: run.costUsd ?? null,
       costMeasured: run.costMeasured ?? false,
