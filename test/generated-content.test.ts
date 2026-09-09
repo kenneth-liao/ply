@@ -236,6 +236,34 @@ test("usage errors for malformed option combinations exit 2", async () => {
     expect(json.ok).toBe(false);
     expect(json.error).toContain(needle);
   }
+
+  // The same exclusive usage contract on `layer edit`: --from-generation
+  // refuses the text options at the CLI with exit 2 (INT-1), not a domain
+  // exit 1.
+  const imgAdd = await invoke([
+    "composition", "add", "thumb", "img", "--image", image, "--project", projDir, "--json",
+  ]);
+  expect(imgAdd.code).toBe(0);
+  const imgId = JSON.parse(imgAdd.stdout).use.layerId as string;
+  const layerCases: [string[], string][] = [
+    [["layer", "edit", imgId, "--text", "hi", "--from-generation", job.jobId, "--project", projDir, "--json"], "mutually exclusive"],
+    [["layer", "edit", imgId, "--font", "Anton", "--from-generation", job.jobId, "--project", projDir, "--json"], "mutually exclusive"],
+    [["layer", "edit", imgId, "--font-size", "20", "--from-generation", job.jobId, "--project", projDir, "--json"], "mutually exclusive"],
+    [["layer", "edit", imgId, "--color", "#fff", "--from-generation", job.jobId, "--project", projDir, "--json"], "mutually exclusive"],
+    [["layer", "edit", imgId, "--image", image, "--from-generation", job.jobId, "--project", projDir, "--json"], "mutually exclusive"],
+  ];
+  for (const [args, needle] of layerCases) {
+    const res = await invoke(args);
+    expect(res.code).toBe(2);
+    expect(res.stderr).toBe("");
+    const json = JSON.parse(res.stdout);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain(needle);
+  }
+  // And the empty-options usage message names the new option.
+  const none = await invoke(["layer", "edit", imgId, "--project", projDir, "--json"]);
+  expect(none.code).toBe(2);
+  expect(JSON.parse(none.stdout).error).toContain("--from-generation");
 });
 
 test("multi-output jobs require an explicit selection and resolve it exactly", async () => {
@@ -437,6 +465,16 @@ test("refuses missing, corrupt, and mismatched source/provenance without live mu
   ]);
   expect(gone.code).toBe(1);
   expect(JSON.parse(gone.stdout).error).toContain("missing");
+
+  // Oversized output file: refused at the source-resolution size gate (the
+  // same encoded-bytes bound as file ingestion) before any read or staging.
+  const bigJob = await createJob([BLUE]);
+  await writeFile(path.join(jobsRoot, bigJob.jobId, bigJob.run.outputs[0]!.file), Buffer.alloc(65 * 1024 * 1024));
+  const big = await invoke([
+    "composition", "add", "thumb", "hero", "--from-generation", bigJob.jobId, "--project", projDir, "--json",
+  ]);
+  expect(big.code).toBe(1);
+  expect(JSON.parse(big.stdout).error).toContain("over the 64 MB limit");
 
   // Malformed retained record.
   const badJob = await createJob([GREEN]);

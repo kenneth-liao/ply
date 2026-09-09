@@ -28,11 +28,12 @@
  * No function here generates, calls a provider, or touches the network.
  */
 import { createHash } from "node:crypto";
-import { readFile, readdir, mkdir } from "node:fs/promises";
+import { readFile, readdir, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { JOB_ID_PATTERN, parseGenerationJobRecord, type GenerationJobRecord, type UniformOutput } from "./generation.js";
 import { atomicCreate } from "./project-lock.js";
 import { outsideDir, escapesDirReal } from "./paths.js";
+import { MAX_ENCODED_BYTES } from "./png.js";
 
 /** The Project subdirectory holding retained Generation Job records. Created on first retention; Projects without it have no retained provenance. */
 export const RETAINED_GENERATION_DIR = "generation";
@@ -80,20 +81,31 @@ export async function selectGenerationOutput(
   const output = chooseOutput(jobId, outputs, selection.output);
   const jobDir = path.join(jobRoot, jobId);
   const outputFile = path.join(jobDir, output.file);
-  // The recorded output path must land inside the job's own directory — a
-  // lexical check before any read, then a realpath check on the file that
-  // exists, so a symlink alias cannot dodge the containment gate.
+  // Everything that can refuse the source runs before the full read, like the
+  // file-ingestion bound: lexical containment (the path's shape), size on the
+  // open handle, then realpath containment (the file exists, so an alias that
+  // resolves outside the job directory cannot dodge the gate).
   if (outsideDir(jobDir, outputFile)) {
     throw new Error(
       `Generation Job "${jobId}" output path "${output.file}" escapes the job directory — the record cannot be trusted`,
     );
   }
-  let bytes: Buffer;
+  let st: Awaited<ReturnType<typeof stat>>;
   try {
-    bytes = await readFile(outputFile);
+    st = await stat(outputFile);
   } catch {
     throw new Error(
       `Generation Job "${jobId}" output "${output.file}" is missing — the job's outputs are incomplete; refusing to ingest from an unavailable source`,
+    );
+  }
+  if (!st.isFile()) {
+    throw new Error(
+      `Generation Job "${jobId}" output "${output.file}" is not a regular file; refusing to ingest`,
+    );
+  }
+  if (st.size > MAX_ENCODED_BYTES) {
+    throw new Error(
+      `Generation Job "${jobId}" output "${output.file}" is ${(st.size / 1024 / 1024).toFixed(1)} MB — over the ${MAX_ENCODED_BYTES / 1024 / 1024} MB limit`,
     );
   }
   if (await escapesDirReal(jobDir, outputFile)) {
@@ -101,6 +113,7 @@ export async function selectGenerationOutput(
       `Generation Job "${jobId}" output path "${output.file}" escapes the job directory — the record cannot be trusted`,
     );
   }
+  const bytes = await readFile(outputFile);
   const actualHash = createHash("sha256").update(bytes).digest("hex");
   if (actualHash !== output.contentHash) {
     throw new Error(

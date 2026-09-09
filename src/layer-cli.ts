@@ -163,7 +163,7 @@ async function run() {
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --text, --font, --font-size, --color, --x, --y, --opacity, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --text, --font, --font-size, --color, --x, --y, --opacity, or --fork.",
           },
           isJson,
         );
@@ -237,9 +237,13 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (values["from-generation"] !== undefined && values.image !== undefined) {
+      if (
+        values["from-generation"] !== undefined &&
+        (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
+          values["font-size"] !== undefined || values.color !== undefined)
+      ) {
         output(
-          { ok: false, error: "--from-generation and --image are mutually exclusive content options." },
+          { ok: false, error: "--from-generation and --image/--text options are mutually exclusive content options." },
           isJson,
         );
         process.exitCode = 2;
