@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added generated-content ingestion with retained provenance (#107, #102):
+  `ply composition add --from-generation <job-id>` adds one selected output of
+  a published Generation Job as an ordinary image Layer, and
+  `ply layer edit <layer-id> --from-generation <job-id>` explicitly replaces an
+  image Layer's content through the existing edit contract (blast-radius guard,
+  fork, kind stability unchanged) — no re-generation, no category/approval
+  fields, no generated-Layer identity. Multi-output jobs require an explicit
+  `--output <n|sha256>`; the selected output's bytes are verified against the
+  record's sha-256 content identity before anything is staged. The record is
+  retained verbatim under `<project>/generation/<job-id>/job.json` — the one
+  canonical retained provenance representation, immutable across later
+  replacements — and the pixels are retained in `content/<sha256>`, so the
+  Layer renders, edits, forks, and replays offline after the external
+  generation files are removed and the Project is relocated. Linkage is
+  derived from the shared content identity, and provenance resolution fails
+  closed on ambiguous or unreadable retained records. Contract documented in
+  docs/project-storage-contract.md and docs/generation-publication-contract.md.
+
 ### Changed
 
 - Removed `renderComposition`'s inline canvas-cap checks in favor of the canonical `assertRenderableCanvas` shared with replay; the check now runs at the same earlier position (before Layer resolution and destination staging) with behavior and diagnostics unchanged (#87, #99 review INT-1).

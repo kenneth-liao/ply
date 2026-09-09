@@ -40,6 +40,16 @@ the legacy lifecycle is untouched until its separately owned retirement
 uniform Generation Job facts; dependent tickets must not duplicate request
 facts elsewhere.
 
+**Retained provenance (#107).** When a generated output is ingested into a
+Project Layer, the record is copied **verbatim** into the Project under
+`generation/<jobId>/job.json` — the Project's one canonical retained
+representation of the request/output/Reference provenance, immutable once
+retained (a non-identical re-ingestion is refused). The published record here
+remains the ingestion source; after ingestion the Project's retained copy
+resolves the provenance offline. Layer revisions carry no embedded copy —
+linkage is derived from the shared `contentHash`. See
+docs/project-storage-contract.md for the retention contract.
+
 ## 2. Record schema (schemaVersion 1, kind "generation")
 
 ```json

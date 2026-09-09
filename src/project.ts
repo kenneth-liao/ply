@@ -184,6 +184,18 @@ async function readProjectManifest(resolvedPath: string): Promise<ProjectManifes
       throw new Error(`Not a valid Ply project: missing "${subdir}" directory.`);
     }
   }
+  // Retained generation provenance (#107): the generation/ directory is
+  // created on first retention, so it is validated only when present — a
+  // Project without it simply has no retained provenance.
+  const generationDir = path.join(resolvedPath, "generation");
+  if (await pathExists(generationDir)) {
+    if (!(await isDirectory(generationDir))) {
+      throw new Error('Not a valid Ply project: "generation" exists but is not a directory.');
+    }
+    if (await escapesDirReal(resolvedPath, generationDir)) {
+      throw new Error('Security error: project subdirectory "generation" escapes project boundary.');
+    }
+  }
   return manifest;
 }
 

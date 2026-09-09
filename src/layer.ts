@@ -15,6 +15,7 @@ import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
 import { resolveFace, fontAssetBytes } from "./fonts.js";
+import { selectGenerationOutput, retainGenerationRecord, type GenerationOutputSelection } from "./generation-retention.js";
 
 export const LAYER_SCHEMA_VERSION = 1;
 
@@ -108,6 +109,87 @@ async function decodeInBrowser(bytes: Buffer, format: string): Promise<{ width: 
 }
 
 /**
+ * Validate already-read image bytes for Layer ingestion: resource bounds,
+ * format sniffing, and full decode verification. The one content-validation
+ * home shared by file ingestion (`validateAndIngestImage`) and generated-byte
+ * ingestion (#107), so every ingestion path applies identical checks.
+ */
+export async function validateImageBytes(
+  bytes: Buffer,
+  sourceName: string,
+): Promise<{ bytes: Buffer; contentHash: string; format: "png" | "jpeg" | "webp"; width: number; height: number }> {
+  if (bytes.length === 0) {
+    throw new Error(`"${sourceName}" is empty (0 bytes)`);
+  }
+  if (bytes.length > MAX_ENCODED_BYTES) {
+    throw new Error(
+      `"${sourceName}" is ${(bytes.length / 1024 / 1024).toFixed(1)} MB — over the ${MAX_ENCODED_BYTES / 1024 / 1024} MB limit`,
+    );
+  }
+
+  const rasterMeta = readRasterMeta(bytes, sourceName);
+  if (typeof rasterMeta === "string") {
+    throw new Error(rasterMeta);
+  }
+  const meta: RasterMeta = rasterMeta;
+
+  if (meta.width > MAX_DIMENSION || meta.height > MAX_DIMENSION) {
+    throw new Error(
+      `"${sourceName}" declares a ${meta.width}×${meta.height} canvas — over the ${MAX_DIMENSION}px per-axis limit`,
+    );
+  }
+  if (meta.width * meta.height > MAX_PIXELS) {
+    throw new Error(
+      `"${sourceName}" declares ${meta.width}×${meta.height} — over the ${MAX_PIXELS.toLocaleString("en-US")}-pixel limit`,
+    );
+  }
+
+  // Full image decompression / decoding verification
+  let decodedWidth = meta.width;
+  let decodedHeight = meta.height;
+
+  if (meta.format === "png") {
+    try {
+      const decoded = decodePng(bytes);
+      decodedWidth = decoded.width;
+      decodedHeight = decoded.height;
+    } catch (pngErr) {
+      const errMsg = (pngErr as Error).message;
+      if (errMsg.includes("not supported")) {
+        // Unsupported feature in simple parser (e.g. palette, interlaced) -> verify with browser
+        try {
+          const browserDecoded = await decodeInBrowser(bytes, "png");
+          decodedWidth = browserDecoded.width;
+          decodedHeight = browserDecoded.height;
+        } catch {
+          throw new Error(`Corrupted PNG image "${sourceName}": ${errMsg}`);
+        }
+      } else {
+        // Real corruption (bad CRC, truncated IDAT, etc.)
+        throw new Error(`Corrupted PNG image "${sourceName}": ${errMsg}`);
+      }
+    }
+  } else {
+    try {
+      const browserDecoded = await decodeInBrowser(bytes, meta.format);
+      decodedWidth = browserDecoded.width;
+      decodedHeight = browserDecoded.height;
+    } catch (browserErr) {
+      throw new Error(`Corrupted ${meta.format.toUpperCase()} image "${sourceName}": ${(browserErr as Error).message}`);
+    }
+  }
+
+  const contentHash = createHash("sha256").update(bytes).digest("hex");
+  return {
+    bytes,
+    contentHash,
+    format: meta.format,
+    width: decodedWidth,
+    height: decodedHeight,
+  };
+}
+
+/**
  * Validate and ingest an external image file.
  * Returns the validated raw bytes, SHA-256 hash, and intrinsic dimensions.
  */
@@ -123,8 +205,6 @@ export async function validateAndIngestImage(
     throw new Error(`cannot read the input image "${imagePath}": ${(err as Error).message}`);
   }
 
-  let bytes: Buffer;
-  let meta: RasterMeta;
   try {
     const st = await fh.stat();
     if (!st.isFile()) {
@@ -139,7 +219,7 @@ export async function validateAndIngestImage(
       throw new Error(`"${imagePath}" is empty (0 bytes)`);
     }
 
-    bytes = Buffer.alloc(st.size);
+    const bytes = Buffer.alloc(st.size);
     let totalRead = 0;
     while (totalRead < bytes.length) {
       const { bytesRead } = await fh.read(bytes, totalRead, bytes.length - totalRead, totalRead);
@@ -149,66 +229,7 @@ export async function validateAndIngestImage(
       totalRead += bytesRead;
     }
 
-    const rasterMeta = readRasterMeta(bytes, imagePath);
-    if (typeof rasterMeta === "string") {
-      throw new Error(rasterMeta);
-    }
-    meta = rasterMeta;
-
-    if (meta.width > MAX_DIMENSION || meta.height > MAX_DIMENSION) {
-      throw new Error(
-        `"${imagePath}" declares a ${meta.width}×${meta.height} canvas — over the ${MAX_DIMENSION}px per-axis limit`,
-      );
-    }
-    if (meta.width * meta.height > MAX_PIXELS) {
-      throw new Error(
-        `"${imagePath}" declares ${meta.width}×${meta.height} — over the ${MAX_PIXELS.toLocaleString("en-US")}-pixel limit`,
-      );
-    }
-
-    // Full image decompression / decoding verification
-    let decodedWidth = meta.width;
-    let decodedHeight = meta.height;
-
-    if (meta.format === "png") {
-      try {
-        const decoded = decodePng(bytes);
-        decodedWidth = decoded.width;
-        decodedHeight = decoded.height;
-      } catch (pngErr) {
-        const errMsg = (pngErr as Error).message;
-        if (errMsg.includes("not supported")) {
-          // Unsupported feature in simple parser (e.g. palette, interlaced) -> verify with browser
-          try {
-            const browserDecoded = await decodeInBrowser(bytes, "png");
-            decodedWidth = browserDecoded.width;
-            decodedHeight = browserDecoded.height;
-          } catch {
-            throw new Error(`Corrupted PNG image "${imagePath}": ${errMsg}`);
-          }
-        } else {
-          // Real corruption (bad CRC, truncated IDAT, etc.)
-          throw new Error(`Corrupted PNG image "${imagePath}": ${errMsg}`);
-        }
-      }
-    } else {
-      try {
-        const browserDecoded = await decodeInBrowser(bytes, meta.format);
-        decodedWidth = browserDecoded.width;
-        decodedHeight = browserDecoded.height;
-      } catch (browserErr) {
-        throw new Error(`Corrupted ${meta.format.toUpperCase()} image "${imagePath}": ${(browserErr as Error).message}`);
-      }
-    }
-
-    const contentHash = createHash("sha256").update(bytes).digest("hex");
-    return {
-      bytes,
-      contentHash,
-      format: meta.format,
-      width: decodedWidth,
-      height: decodedHeight,
-    };
+    return await validateImageBytes(bytes, imagePath);
   } finally {
     await fh.close().catch(() => {});
   }
@@ -581,6 +602,13 @@ export interface EditLayerOptions {
   x?: number;
   y?: number;
   opacity?: number;
+  /**
+   * Generated-content ingestion (#107): explicitly replace an image Layer's
+   * content with one selected output of a Generation Job, retaining the job's
+   * provenance with the Project. Mutually exclusive with `image`; only valid
+   * on image Layers (kind stability applies unchanged).
+   */
+  fromGeneration?: GenerationOutputSelection & { jobRoot: string; jobId: string };
 }
 
 /** Canonical normalized edit intent (#85, DEC-003): the only shape the edit
@@ -623,6 +651,8 @@ export interface EditLayerResult {
   referrersCount: number;
   /** Present only when the edit published a fork. */
   fork?: ForkInfo;
+  /** Present only when the edit ingested generated content (#107). */
+  generatedFrom?: { jobId: string; contentHash: string };
 }
 
 /**
@@ -737,7 +767,25 @@ async function buildEditedRevision(
     }
 
     let contentHash = prevRev.contentHash;
-    if (options.image !== undefined) {
+    if (options.fromGeneration !== undefined) {
+      // Generated-content ingestion (#107): verify the selected output's bytes
+      // against the recorded identity, retain the pixels in the content store,
+      // and retain the record verbatim — all before any revision staging, so
+      // the bytes, provenance, and revision publish coherently under the same
+      // publication protocol and the same rollback discipline.
+      const selected = await selectGenerationOutput(
+        options.fromGeneration.jobRoot,
+        options.fromGeneration.jobId,
+        { output: options.fromGeneration.output },
+      );
+      const validated = await validateImageBytes(
+        selected.bytes,
+        `Generation Job "${selected.job.jobId}" output "${selected.output.file}"`,
+      );
+      await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
+      await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
+      contentHash = validated.contentHash;
+    } else if (options.image !== undefined) {
       const ingested = await validateAndIngestImage(options.image);
       await storeContentBlob(resolvedRoot, ingested.contentHash, ingested.bytes);
       contentHash = ingested.contentHash;
@@ -760,6 +808,11 @@ async function buildEditedRevision(
 
   if (prevRev.kind === "text") {
     // Incompatible image option passed to text layer
+    if (options.fromGeneration !== undefined) {
+      throw new Error(
+        `Cannot replace content from a Generation Job on a text Layer. Layer "${layerId}" is a text Layer.`,
+      );
+    }
     if (options.image !== undefined) {
       throw new Error(`Cannot edit image source on a text Layer. Layer "${layerId}" is a text Layer.`);
     }
@@ -923,6 +976,12 @@ export async function editLayerInternal(
   const current = await readLayerInternalFull(resolvedRoot, layerId);
   const prevRev = current.currentRevision;
 
+  // Generated-content ingestion (#107) and file ingestion are mutually
+  // exclusive content options — one edit replaces content from one source.
+  if (options.image !== undefined && options.fromGeneration !== undefined) {
+    throw new Error("--image and --from-generation are mutually exclusive content options.");
+  }
+
   // Normalize intent once into the canonical discriminated shape (#85).
   const intent = normalizeEditIntent(options);
 
@@ -966,10 +1025,13 @@ export async function editLayerInternal(
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
     // no-content-change fork).
-    return publishForkEdit(resolvedRoot, layerId, intent, target, newLayerId, revision, {
+    const forkResult = await publishForkEdit(resolvedRoot, layerId, intent, target, newLayerId, revision, {
       referringCompositions,
       referrersCount,
     });
+    return options.fromGeneration !== undefined
+      ? { ...forkResult, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      : forkResult;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
@@ -985,7 +1047,14 @@ export async function editLayerInternal(
   // No-op check: if all fields are identical to previous revision, avoid storage churn
   if (unchanged) {
     const resolved = await readLayerInternal(resolvedRoot, layerId);
-    return { layer: resolved, referringCompositions, referrersCount };
+    return {
+      layer: resolved,
+      referringCompositions,
+      referrersCount,
+      ...(options.fromGeneration !== undefined
+        ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+        : {}),
+    };
   }
 
   // 5. Compute new revision hash and stage revision document
@@ -1022,6 +1091,9 @@ export async function editLayerInternal(
     layer: updatedLayer,
     referringCompositions,
     referrersCount,
+    ...(options.fromGeneration !== undefined
+      ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      : {}),
   };
 }
 

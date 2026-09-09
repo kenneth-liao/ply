@@ -38,6 +38,9 @@ A Ply Project directory has the following canonical structure:
 │       └── <revision-hash>.json
 ├── content/                     # Content-addressed immutable binary blobs (sha-256)
 │   └── <sha256>
+├── generation/                  # Retained Generation Job provenance (#107), created on first retention
+│   └── <job-id>/
+│       └── job.json             # The published record's verbatim bytes
 └── renders/                     # Historical Render manifests and outputs
     ├── <render-id>.manifest.json
     └── <render-id>.png
@@ -130,6 +133,16 @@ Since #80, caller exports via `ply composition render --out` may create a fresh 
 - Content-addressed raw binary blob.
 - Immutable and deduplicated across all Layers and revisions in the Project. Existing deduplicated blobs are validated for byte integrity and headers before reuse.
 
+#### `generation/<job-id>/job.json` (Owned by #107, spec #102 US-003)
+
+A generated image Layer's authoritative request/output/Reference provenance is retained inside the Project as the published Generation Job record's **verbatim bytes**. There is exactly one retained representation of those facts: nothing from the record (prompt, model, References, outputs) is embedded in Layer revisions, Composition documents, or Render manifests.
+
+- **Verbatim retention**: the retained bytes are byte-identical to the published record ingested from `out/generation/<jobId>/job.json` (see docs/generation-publication-contract.md). A subsequent ingestion of the same job id must find the retained record byte-identical or it is refused — retained provenance is never rewritten. Later Layer replacements retain *other* job records; earlier records and the content blobs they pin remain byte-identical.
+- **Derived linkage, one identity**: a Layer revision links to its provenance only through its `contentHash` — the revision's content identity, the retained blob in `content/<sha256>`, and the record's output `contentHash` entries are the same sha-256 fact. No job-id pointer is stored on the revision; the linkage is derived by matching a revision's `contentHash` against each retained record's `run.outputs`. Zero matches means the bytes are not generated content (an ordinary image Layer); more than one match (two retained jobs claiming identical bytes) fails closed rather than reporting possibly wrong provenance; an unreadable retained record also fails closed.
+- **No second lifecycle**: a generated-content Layer is an ordinary image Layer. No generated-Layer identity, no category or approval fields, and no implicit library publication exist; ingestion goes through the exact canonical Layer publication protocol below.
+- **Created on first retention**: Projects created before #107 have no `generation/` directory and remain valid; it appears with the first generated-content ingestion. Only the record is retained here — the generated pixels live in `content/<sha256>` like every other Layer's bytes, so the Layer renders, edits, forks, and replays offline after the external generation files are removed and the Project is relocated.
+- **No garbage collection**: retained records and pinned blobs are never deleted by Ply (DEC-007, OOS-004).
+
 ### Resolution-Time Verification
 
 Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on every resolution:
@@ -168,8 +181,8 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
 
 ### Atomic Publication & Rollback
 1. Acquire Project Lock.
-2. Ingest and validate content: for `--image`, decode the input image and compute SHA-256; for `--text`, resolve the bundled font family once and read its bundled bytes (unknown families and missing bundled bytes fail loudly, naming the bundled families).
-3. Stage immutable content blob in `content/<sha256>` (atomic create if not already present) — the image bytes or the retained font bytes.
+2. Ingest and validate content: for `--image`, decode the input image and compute SHA-256; for `--from-generation` (#107), resolve the published Generation Job record, select one output explicitly (a multi-output record without a selection is refused), read its file, verify its sha-256 against the recorded content identity, and decode the image; for `--text`, resolve the bundled font family once and read its bundled bytes (unknown families and missing bundled bytes fail loudly, naming the bundled families).
+3. Stage immutable content blob in `content/<sha256>` (atomic create if not already present) — the image bytes, the selected generated output's verified bytes, or the retained font bytes. For `--from-generation`, also stage the record verbatim under `generation/<jobId>/job.json` (atomic create; a present retained record must be byte-identical or the ingestion is refused) before any revision staging — provenance, pixels, and the revision publish under the same lock and rollback discipline.
 4. Stage immutable revision in `layers/<layer-id>.revisions/<revision-hash>.json` (atomic create).
 5. Stage Layer identity in `layers/<layer-id>.json` (atomic create), then fully resolve the staged Layer before the live commit. Resolution failure follows the same rollback path.
 6. **Live Commit Point**: Update `compositions/<name>.json` with `{ name: localName, layerId }` via `atomicReplace`.
@@ -365,7 +378,8 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
 - `ply project init [dir] [--name <str>] [--json]`
 - `ply project inspect [options] [--json]`
 - `ply composition create <name> --width <w> --height <h> [options] [--json]`
-- `ply composition add <comp> <local-name> (--image <path> | --text <str> --font <family> [--font-size <px>] [--color <hex>]) [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+- `ply composition add <comp> <local-name> (--image <path> | --text <str> --font <family> [--font-size <px>] [--color <hex>] | --from-generation <job-id> [--output <n|sha256>]) [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+  - `--from-generation` ingests one selected output of a published Generation Job (under `out/generation`, per docs/generation-publication-contract.md) as an ordinary image Layer and retains the record verbatim under `generation/<job-id>/job.json` (#107). Mutually exclusive with `--image` and `--text`; a multi-output job without `--output` is refused. The output bytes are verified against the recorded sha-256 before ingestion; missing, corrupt, or mismatched sources fail without a live Layer reference.
 - `ply composition import <target> <source> [--from-project <path>] [options] [--json]`
   - Without `--from-project`, both Compositions live in the destination Project and import reuses shared Layer identities (#84).
   - With `--from-project <path>`, the source Composition resolves in the other Project and its Layers are copied as independent destination identities with retained bytes (#86). A source path resolving to the destination Project is refused with same-Project guidance.
@@ -378,7 +392,8 @@ All commands support `--project <path>` (or `-p <path>`) and `--json`.
   - Replay a retained Render manifest from pinned history; requires the exact capturing environment (#87).
 - `ply composition list [options] [--json]`
 - `ply layer inspect <layer-id> [options] [--json]`
-- `ply layer edit <layer-id> [--in-place | --fork --composition <comp> --use <local-name>] [--image <path> | --text <str> [--font <family>] [--font-size <px>] [--color <hex>]] [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+- `ply layer edit <layer-id> [--in-place | --fork --composition <comp> --use <local-name>] [--image <path> | --from-generation <job-id> [--output <n|sha256>] | --text <str> [--font <family>] [--font-size <px>] [--color <hex>]] [--x <x>] [--y <y>] [--opacity <op>] [options] [--json]`
+  - `--from-generation` explicitly replaces an image Layer's content with one selected output of a published Generation Job without generating again, retaining the record verbatim (#107). Mutually exclusive with `--image`/`--text`; refused on text Layers (kind stability). In-place blast-radius guards and fork semantics apply unchanged; earlier retained provenance is immutable.
 - `ply layer list [options] [--json]`
 
 ### Status & Error Codes:
