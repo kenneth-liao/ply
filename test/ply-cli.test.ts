@@ -29,6 +29,7 @@ test("ply help names only available modules", async () => {
     ["composition", 0],
     ["layer", 0],
     ["generate", 0],
+    ["matte", 0],
     ["scene", 2],
     ["library", 0],
     ["jobs", 2],
@@ -53,4 +54,10 @@ test("generate rejects a missing prompt through the public entry point", async (
   const result = await invoke("generate");
   expect(result.code).toBe(2);
   expect(result.stderr).toContain("prompt");
+});
+
+test("matte rejects a missing image through the public entry point", async () => {
+  const result = await invoke("matte");
+  expect(result.code).toBe(2);
+  expect(result.stderr).toContain("ply matte");
 });

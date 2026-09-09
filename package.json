@@ -1,6 +1,6 @@
 {
   "name": "ply",
-  "version": "2.12.0",
+  "version": "2.13.0",
   "bin": {
     "ply": "src/cli.ts"
   },
@@ -11,6 +11,7 @@
     "test": "for f in $(find test -name '*.test.ts'); do bun test --isolate \"$f\" || exit 1; done",
     "project": "bun run src/project-cli.ts",
     "generate": "bun run src/generation-cli.ts",
+    "matte": "bun run src/matting-cli.ts",
     "scene": "bun run src/scene-cli.ts",
     "library": "bun run src/library-cli.ts",
     "jobs": "bun run src/job-cli.ts"

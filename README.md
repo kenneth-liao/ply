@@ -84,6 +84,27 @@ before any provider call — no remote fetching, no mandatory identity
 Reference, no roles. The legacy `jobs plates|objects|creators` pipeline below
 keeps working until its separately approved retirement.
 
+## Independent Matting (new surface)
+
+`ply matte` is one independent local Matting operation on a caller-selected
+local PNG: no Generation Job, no library adoption, no network, no billed hop
+(DEC-004, ADR-0015). A source that already carries a real matte is kept as-is
+with no inference (engine `native-alpha`); anything else runs through the
+pinned local BiRefNet segmenter with engine preflight — missing or mismatched
+weights are refused before anything is published. The source bytes are never
+modified; the verified true-alpha result and its provenance are published
+under `out/matting/` — see
+[docs/matting-publication-contract.md](docs/matting-publication-contract.md)
+for the record schema and publication contract.
+
+```bash
+ply matte photo.png
+ply matte out/generation/<jobId>/outputs/<sha256>.png --id my-cutout
+```
+
+The input is PNG only — convert other formats locally with an offline tool
+first. Matting never generates content and never touches Projects or Layers.
+
 ## Setup
 
 ```bash
@@ -368,6 +389,7 @@ A Scene Asset reference can be:
 | `src/generate.ts`, `src/models.ts` | Provider prompts, calls, and model registry |
 | `src/assets.ts`, `src/library-cli.ts` | Immutable Asset library and approval |
 | `src/matte.ts`, `src/segment.ts` | Local subject isolation |
+| `src/matting.ts`, `src/matting-cli.ts` | Independent local Matting operation and command |
 | `src/manifest.ts`, `src/finalize.ts` | Render provenance and output limits |
 | `src/fonts.ts` | Bundled font registry and fallback rejection |
 | `src/themes.ts`, `src/templates.ts`, `src/variants.ts` | Reusable local composition primitives |

@@ -22,7 +22,7 @@
  * cost to lose (ADR-0006). Tests inject their own engine.
  */
 import { decodePng, encodePngRgba, PngParseError } from "./png.js";
-import { verifyTrueAlpha } from "./alpha.js";
+import { verifyTrueAlpha, type AlphaReport } from "./alpha.js";
 
 /** Engine name recorded when the candidate's own alpha channel is the matte. */
 export const NATIVE_ALPHA = "native-alpha" as const;
@@ -40,10 +40,12 @@ export interface MatteEngineResult {
  * The matting seam. Input is one candidate; output is its true-alpha matte.
  *
  * `preflight` is how an engine says "I cannot run" *before* anything is paid
- * for. The lifecycle calls it once, ahead of the generation call, so an
- * engine with a missing prerequisite (the local segmenter's weights) stops
- * the job while it is still free — rather than after N billed candidates
- * exist with no way to isolate them. An engine with nothing to check omits
+ * for. It is called twice by design: the lifecycle calls it once, ahead of
+ * the generation call, so an engine with a missing prerequisite (the local
+ * segmenter's weights) stops the job while it is still free — and the pass
+ * itself calls it again immediately before inference, so no caller of this
+ * seam can ever invoke an engine that cannot run (independent Matting has no
+ * generation to pre-preflight, US-002). An engine with nothing to check omits
  * it; a fake engine in a test is just a function.
  */
 export interface MatteEngine {
@@ -55,6 +57,8 @@ export interface MatteOutcome {
   bytes: Uint8Array;
   engine: string;
   warnings: string[];
+  /** The true-alpha report measured while verifying the returned bytes. */
+  alpha: AlphaReport;
 }
 
 /** Rec. 709 luminance — a predicted mask is read as brightness, white = subject. */
@@ -148,20 +152,28 @@ export async function matteCandidate(
   engine: MatteEngine,
 ): Promise<MatteOutcome> {
   try {
-    verifyTrueAlpha(bytes, label);
-    return { bytes, engine: NATIVE_ALPHA, warnings: [] };
+    const report = verifyTrueAlpha(bytes, label);
+    return { bytes, engine: NATIVE_ALPHA, warnings: [], alpha: report };
   } catch {
     // Not natively isolated — the ordinary case, and exactly why this pass exists.
   }
 
-  const result = await engine({ bytes, label });
+  const result = await (async () => {
+    // The pass itself refuses to run inference un-preflighted: the lifecycle's
+    // earlier preflight (ahead of generation) protects spend, this one
+    // protects the pass — an independent matting operation that never pays
+    // for generation still must not run an engine that cannot work.
+    await engine.preflight?.();
+    return engine({ bytes, label });
+  })();
+  let report: AlphaReport;
   try {
-    verifyTrueAlpha(result.bytes, label);
+    report = verifyTrueAlpha(result.bytes, label);
   } catch (err) {
     throw new Error(
       `The matting pass ("${result.engine}") did not produce a usable matte for "${label}": ${(err as Error).message}`,
       { cause: err },
     );
   }
-  return { bytes: result.bytes, engine: result.engine, warnings: result.warnings ?? [] };
+  return { bytes: result.bytes, engine: result.engine, warnings: result.warnings ?? [], alpha: report };
 }

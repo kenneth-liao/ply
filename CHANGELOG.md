@@ -8,6 +8,25 @@
 
 ### Added
 
+- Added independent local Matting (#106, #102): `ply matte <image> [--id <id>]`
+  mattes a caller-selected local PNG with no Generation Job, no adoption, and
+  no network (US-002, DEC-004, ADR-0015). A source that already carries a real
+  matte is kept as-is with no inference (engine `native-alpha`; the engine is
+  tripwire-proven not to run); anything else runs through the pinned local
+  BiRefNet segmenter with engine preflight at the operation — missing or
+  mismatched weights are refused before anything is published. The true-alpha
+  gate verifies the result at the pass that produced it, refusing an
+  all-opaque or all-transparent matte. The source bytes are only read, never
+  modified; the verified result and Matting provenance (source identity, engine,
+  alpha report, content-addressed output) are published under
+  `out/matting/<matteId>/` with `matte.json` as the commit point — failures
+  (non-PNG input with a convert-locally diagnostic, preflight refusals,
+  unusable mattes, publication failures, duplicate ids) remove the fresh
+  directory and publish nothing. Contract in
+  docs/matting-publication-contract.md for #108/#109. Default output is
+  compact text, `--json` is strict JSON, exit codes 0/1/2; unit tests inject
+  a fake MatteEngine (no weights loaded), and the command is qualified under
+  kernel-level network denial plus a generation-SDK import tripwire.
 - Added ordered local References to the uniform generation surface (#105,
   #102): `ply generate <prompt> --ref <path>` (repeatable) attaches local
   images in caller order with no roles and no mandatory identity — a request
