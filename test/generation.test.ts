@@ -481,6 +481,45 @@ describe("executeUniformGeneration — verified Reference bytes", () => {
     expect(received.has(createHash("sha256").update(Buffer.from("reference-alpha")).digest("hex"))).toBe(true);
   });
 
+  test("a Reference file that changes during the run cannot reach any candidate — the load happened once (CRAFT-1, adversarial)", async () => {
+    // The distinguishing condition the deleted read-once regression pinned:
+    // the source bytes change after the first provider call. The correct
+    // implementation verifies and loads each Reference once, before the
+    // candidate loop, so all three calls carry the original verified bytes.
+    // A per-candidate reread would pick up the tampered bytes — a drift
+    // refusal (nothing published) or tampered bytes on a later call — and
+    // this test would fail either way.
+    const refPath = path.join(root, "drifting.png");
+    await writeFile(refPath, "original-reference-bytes");
+    const ingested = await ingestUniformRequest({
+      ...base,
+      count: 3,
+      references: [refPath],
+    });
+
+    let calls = 0;
+    const provider = fakeProvider({
+      async image() {
+        if (calls++ === 0) await writeFile(refPath, "tampered-after-the-first-call");
+        return {
+          images: [{ base64: Buffer.from(`adversarial-${calls}`).toString("base64") }],
+          warnings: [],
+        };
+      },
+    });
+    await executeUniformGeneration(jobRoot(), "gen-test", ingested, { provider });
+
+    expect(provider.imageCalls).toHaveLength(3);
+    const received = new Set(
+      provider.imageCalls.map(
+        (c) =>
+          createHash("sha256").update((c as { prompt: { images: Uint8Array[] } }).prompt.images[0]!).digest("hex"),
+      ),
+    );
+    expect(received.size).toBe(1);
+    expect(received.has(createHash("sha256").update(Buffer.from("original-reference-bytes")).digest("hex"))).toBe(true);
+  });
+
   test("multimodal requests carry the verified bytes in caller order on the text seam", async () => {
     const provider = fakeProvider();
     const { ingested } = await ingestedWithRefs();

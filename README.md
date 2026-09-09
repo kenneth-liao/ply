@@ -183,9 +183,10 @@ bun run scene validate thumbnail.scene.json
 bun run scene render thumbnail.scene.json
 ```
 
-Every `scene`, `generate`, `matte`, and `jobs` command writes
-machine-readable JSON to stdout. Successful renders are exactly 1280×720 and
-include a portable manifest.
+Scene and `jobs` commands write machine-readable JSON to stdout;
+`generate` and `matte` print compact text by default and emit
+machine-readable JSON only under `--json`. Successful renders are exactly
+1280×720 and include a portable manifest.
 
 ## Scenes
 
