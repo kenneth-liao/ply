@@ -5,21 +5,10 @@
 ### Removed
 
 - BREAKING: retired the generated-asset adoption entry points (#115, #102):
-  `jobs adopt` and `library adopt` no longer exist, and the library write
-  path for generated candidates went with them — generated or matted content
-  enters Projects as ordinary Layers (`ply composition add
-  --from-generation` / `--from-matte`), never the asset library. The legacy
-  `jobs review` surface stays read-only and keeps its isolation evidence
-  (the recorded matte, checkerboard-showing the alpha), with its candidate
-  status cue renamed from `adoptable` to `isolation` (`matte` / `candidate`
-  / `none`) and every adoption-directing message re-aimed at the
-  generate → matte → ingest workflow. Preserved: read-only `jobs
-  show|list|review`, library `list|resolve|add-logo|add-cutout|add-mask|approve`
-  (cutout approval untouched), Scene operations including trial/experimental
-  behavior, the numeric YouTube region baseline, and the true-alpha gate the
-  independent Matting operation applies. Substantive reader-level assertions
-  (identity verification, true-alpha gate, invalid-matte evidence) transferred
-  to the retained canonical reader's coverage rather than being deleted.
+  `jobs adopt` and `library adopt` no longer exist — generated or matted
+  content enters Projects as ordinary Layers (`ply composition add
+  --from-generation` / `--from-matte`); the `jobs review` JSON candidate cue
+  is renamed `adoptable` → `isolation`.
 - BREAKING: retired the category-specific generation entry points (#114, #102):
   `jobs plates`, `jobs objects`, `jobs creators`, and kind-dispatched `jobs
   rerun` generation no longer exist. The one uniform generation operation is
