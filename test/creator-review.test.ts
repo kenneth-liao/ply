@@ -157,16 +157,16 @@ describe("reviewJob", () => {
     expect(html).toContain(`run ${result.candidates[0]!.runIndex}`);
   });
 
-  test("shows the matte adoption would write, per candidate, and names the engine", async () => {
+  test("shows the recorded matte as isolation evidence, per candidate, and names the engine", async () => {
     await seedAnchors(["anchor-a.png"]);
     await writeLegacyJob(jobRoot, creatorJob("creator-matte-view", ["anchor-a.png"], mattedCandidates("creator-matte-view", 1)));
     const job = await loadJob(jobRoot, "creator-matte-view");
     const cand = job.runs[0]!.candidates[0]!;
     const result = await reviewJob(jobRoot, "creator-matte-view");
-    const adoption = result.candidates[0]!.adoption;
-    if (adoption.from !== "matte") throw new Error("expected the matte adoption would write");
-    expect(adoption.engine).toBe("test/segmentation");
-    expect(adoption.file).toBe(cand.matte!.file);
+    const isolation = result.candidates[0]!.isolation;
+    if (isolation.from !== "matte") throw new Error("expected the recorded matte");
+    expect(isolation.engine).toBe("test/segmentation");
+    expect(isolation.file).toBe(cand.matte!.file);
     const html = await readFile(result.reviewPath, "utf8");
     expect(html).toMatch(/isolation/i);
     // The displayed matte is the verified matte — its embedded bytes decode to
@@ -175,15 +175,15 @@ describe("reviewJob", () => {
     expect(html).toContain("matte via test/segmentation");
   });
 
-  test("says plainly when a candidate has no matte — it is evidence, not an adoptable asset", async () => {
+  test("says plainly when a candidate has no matte — it is evidence, not a promotion cue", async () => {
     await seedAnchors(["anchor-a.png"]);
     await writeLegacyJob(jobRoot, creatorJob("creator-no-matte", ["anchor-a.png"], [
       { bytes: Buffer.concat([OPAQUE_PNG, Buffer.from("-nomatte")]) },
     ]));
     const result = await reviewJob(jobRoot, "creator-no-matte");
-    expect(result.candidates[0]!.adoption.from).toBe("none");
+    expect(result.candidates[0]!.isolation.from).toBe("none");
     const html = await readFile(result.reviewPath, "utf8");
-    expect(html).toContain("no matte — not adoptable");
+    expect(html).toContain("no matte recorded");
   });
 
   test("fails loudly when a matte file no longer matches its recorded identity", async () => {
@@ -252,7 +252,7 @@ describe("reviewJob", () => {
     expect(out.ok).toBe(true);
     expect(out.review).toBe(path.join(jobRoot, "creator-cli", "review.html"));
     expect(out.candidates).toHaveLength(2);
-    expect(out.candidates.every((c: { adoptable: boolean }) => c.adoptable)).toBe(true);
+    expect(out.candidates.every((c: { isolation: string }) => c.isolation === "matte")).toBe(true);
     const job = await loadJob(jobRoot, "creator-cli");
     expect(job.runs[0]!.candidates).toHaveLength(2);
   });

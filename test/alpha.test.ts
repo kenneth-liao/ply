@@ -61,8 +61,9 @@ describe("verifyTrueAlpha", () => {
   });
 
   test("states the why only — caller recovery lives at the call site, not in the gate", () => {
-    // The gate serves both the adoption surface (rerun/adopt) and independent
-    // Matting (ply matte): its message must stay caller-neutral.
+    // The gate served the retired adoption surface and now serves independent
+    // Matting (ply matte) and the legacy review reader: its message must stay
+    // caller-neutral.
     let message = "";
     try {
       verifyTrueAlpha(OPAQUE, "opaque.png");

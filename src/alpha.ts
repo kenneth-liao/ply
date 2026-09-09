@@ -1,7 +1,8 @@
 /**
  * True-alpha verification for generated candidates (REQ-015, REQ-017).
  *
- * The gate at adoption: a candidate qualifies only when it carries a real
+ * The gate the retired adoption applied, and independent Matting still
+ * applies: a candidate qualifies only when it carries a real
  * alpha channel with a real matte — meaningful transparent area and a
  * meaningful opaque subject. RGB chroma-key color distance cannot qualify an
  * output because no keying path exists here: the bytes are only ever parsed
@@ -32,8 +33,9 @@ export interface AlphaReport {
 
 /**
  * The gate states the *why* only: it serves callers with different recoveries
- * (adoption directs to the replacement workflow, independent Matting says ply
- * matte), so the next step belongs at the call site, not here.
+ * (the legacy review reader attaches its replacement-workflow guidance,
+ * independent Matting says ply matte), so the next step belongs at the call
+ * site, not here.
  */
 function refuse(label: string, why: string): never {
   throw new Error(`Candidate "${label}" cannot qualify: ${why}`);

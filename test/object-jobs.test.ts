@@ -2,12 +2,11 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { loadJob, listJobs, adoptCandidate } from "../src/jobs.js";
-import { scanLibrary, writePlateAsset } from "../src/assets.js";
+import { loadJob, listJobs, resolveIsolationEvidence } from "../src/jobs.js";
 import { loadScene } from "../src/scene.js";
 import { buildManifest, readManifest } from "../src/manifest.js";
 import { encodePng } from "./png.js";
-import { writeLegacyJob, type LegacyJobSpec } from "./legacy-jobs.js";
+import { writeLegacyJob, writeLegacyLibraryAsset, type LegacyJobSpec } from "./legacy-jobs.js";
 
 let root: string;
 let jobRoot: string;
@@ -74,60 +73,32 @@ const mattedObjectJob = (jobId: string, extra?: Partial<LegacyJobSpec>): LegacyJ
   ...extra,
 });
 
-describe("adoptCandidate for object jobs", () => {
-  test("adopts a true-alpha candidate as an Object Asset with provenance", async () => {
-    const job = await writeLegacyJob(jobRoot, nativeObjectJob("obj-adopt"));
+describe("resolveIsolationEvidence for object records", () => {
+  test("a natively isolated candidate's own verified bytes are the evidence", async () => {
+    const job = await writeLegacyJob(jobRoot, nativeObjectJob("obj-native"));
     const cand = job.runs[0]!.candidates[0]!;
 
-    const result = await adoptCandidate(jobRoot, "obj-adopt", cand.contentHash, "lamp", {
-      libraryRoot,
-      name: "Desk Lamp",
-      tags: ["retro"],
-    });
-
-    expect(result.adoptedFrom).toBe(`job:obj-adopt#${cand.contentHash}`);
-    const lib = await scanLibrary(libraryRoot);
-    const asset = lib.objects.find((o) => o.meta.id === "lamp")!;
-    expect(asset).toBeDefined();
-    expect(asset.hash).toBe(cand.contentHash);
-    expect(asset.meta.kind).toBe("object");
-    if (asset.meta.kind === "object") {
-      expect(asset.meta.matting).toBe("true-alpha");
-      expect(asset.meta.subject).toBe("a retro desk lamp");
-      expect(asset.meta.model).toBe("openai/gpt-image-2");
-    }
-    expect(result.imagePath).toBe(asset.imagePath);
+    const { candidate, evidence } = await resolveIsolationEvidence(jobRoot, "obj-native", "object", cand);
+    expect(candidate.contentHash).toBe(cand.contentHash);
+    expect(evidence).toMatchObject({ from: "candidate", file: cand.file, contentHash: cand.contentHash });
   });
 
-  test("adopts a matted candidate's matte — verified true alpha enters the library", async () => {
-    const job = await writeLegacyJob(jobRoot, mattedObjectJob("obj-adopt-matte"));
+  test("the recorded matte is the evidence — verified true alpha, the matte's identity", async () => {
+    const job = await writeLegacyJob(jobRoot, mattedObjectJob("obj-matted"));
     const cand = job.runs[0]!.candidates[0]!;
 
-    const result = await adoptCandidate(jobRoot, "obj-adopt-matte", cand.contentHash, "tile", {
-      libraryRoot,
-      name: "Hook Tile",
-      tags: ["hook-scene"],
-    });
-
-    // The asset's identity is the matte's — the isolated form is what ships.
-    expect(result.contentHash).toBe(cand.matte!.contentHash);
-    expect(result.adoptedFrom).toBe(`job:obj-adopt-matte#${cand.contentHash}`);
-    const lib = await scanLibrary(libraryRoot);
-    const asset = lib.objects.find((o) => o.meta.id === "tile")!;
-    expect(asset.hash).toBe(cand.matte!.contentHash);
-    expect(asset.meta.kind).toBe("object");
-    if (asset.meta.kind === "object") {
-      expect(asset.meta.matting).toBe("true-alpha");
-      expect(asset.meta.matteEngine).toBe("test/segmentation");
-      expect(asset.meta.subject).toBe("a retro desk lamp");
-      expect(asset.meta.model).toBe("openai/gpt-image-2");
-    }
-    expect(result.imagePath).toBe(asset.imagePath);
+    const { evidence } = await resolveIsolationEvidence(jobRoot, "obj-matted", "object", cand);
+    if (evidence.from !== "matte") throw new Error("expected the recorded matte");
+    // The isolated form is the evidence — the matte's identity, not the
+    // opaque candidate's.
+    expect(evidence.contentHash).toBe(cand.matte!.contentHash);
+    expect(evidence.contentHash).not.toBe(cand.contentHash);
+    expect(evidence.engine).toBe("test/segmentation");
   });
 
   test("refuses an opaque candidate with no matte — chroma-key color distance cannot qualify", async () => {
     // The run recorded no matte (the pass failed before retirement); the raw
-    // candidate is opaque, so adoption refuses it.
+    // candidate is opaque, so the gate refuses it.
     await writeLegacyJob(jobRoot, {
       jobId: "obj-opaque",
       kind: "object",
@@ -138,46 +109,32 @@ describe("adoptCandidate for object jobs", () => {
       }],
     });
     const job = await loadJob(jobRoot, "obj-opaque");
-    const hash = job.runs[0]!.candidates[0]!.contentHash;
 
-    await expect(
-      adoptCandidate(jobRoot, "obj-opaque", hash, "opaque-lamp", { libraryRoot }),
-    ).rejects.toThrow(/matte|chroma-key|alpha/i);
+    const { evidence } = await resolveIsolationEvidence(jobRoot, "obj-opaque", "object", job.runs[0]!.candidates[0]!);
+    expect(evidence.from).toBe("none");
+    if (evidence.from !== "none") throw new Error("unreachable");
+    expect(evidence.cause).toBe("no-matte");
+    expect(evidence.reason).toMatch(/matte|chroma-key|alpha/i);
     // The refusal's diagnostics point at the replacement workflow, not the
     // retired commands.
-    try {
-      await adoptCandidate(jobRoot, "obj-opaque", hash, "opaque-lamp-2", { libraryRoot });
-      throw new Error("adoption should have been refused");
-    } catch (err) {
-      expect((err as Error).message).toMatch(/bun run generate/);
-      expect((err as Error).message).not.toMatch(/jobs rerun/);
-    }
-    // Nothing entered the library.
-    const lib = await scanLibrary(libraryRoot);
-    expect(lib.objects).toHaveLength(0);
+    expect(evidence.reason).toMatch(/bun run generate/);
+    expect(evidence.reason).toMatch(/bun run matte/);
+    expect(evidence.reason).toMatch(/--from-matte/);
+    expect(evidence.reason).not.toMatch(/jobs rerun/);
+    expect(evidence.reason).not.toMatch(/jobs adopt|library adopt/);
   });
 
-  test("refuses a non-PNG candidate outright", async () => {
+  test("refuses a non-PNG candidate outright — the gate cannot qualify it", async () => {
     await writeLegacyJob(jobRoot, {
       jobId: "obj-jpeg",
       kind: "object",
       runs: [{ candidates: [{ bytes: Buffer.from("jpeg bytes"), mediaType: "image/jpeg" }] }],
     });
     const job = await loadJob(jobRoot, "obj-jpeg");
-    const hash = job.runs[0]!.candidates[0]!.contentHash;
-    await expect(
-      adoptCandidate(jobRoot, "obj-jpeg", hash, "jpeg-lamp", { libraryRoot }),
-    ).rejects.toThrow(/PNG|alpha|matte/i);
-  });
-
-  test("never overwrites an existing asset", async () => {
-    await writeLegacyJob(jobRoot, nativeObjectJob("obj-overwrite"));
-    const job = await loadJob(jobRoot, "obj-overwrite");
-    const [a, b] = job.runs[0]!.candidates;
-    await adoptCandidate(jobRoot, "obj-overwrite", a!.contentHash, "taken", { libraryRoot });
-    await expect(
-      adoptCandidate(jobRoot, "obj-overwrite", b!.contentHash, "taken", { libraryRoot }),
-    ).rejects.toThrow(/already exists/i);
+    const { evidence } = await resolveIsolationEvidence(jobRoot, "obj-jpeg", "object", job.runs[0]!.candidates[0]!);
+    expect(evidence.from).toBe("none");
+    if (evidence.from !== "none") throw new Error("unreachable");
+    expect(evidence.reason).toMatch(/PNG|alpha|matte/i);
   });
 });
 
@@ -188,11 +145,8 @@ describe("loadJob record integrity", () => {
     const tampered = JSON.parse(await readFile(file, "utf8"));
     tampered.kind = "plate"; // claims the plate contract while carrying an object request
     await writeFile(file, JSON.stringify(tampered, null, 2));
-    // Both dispatch paths go through loadJob — neither can run the contradiction.
+    // Every read path goes through loadJob — the contradiction cannot run.
     await expect(loadJob(jobRoot, "obj-contradiction")).rejects.toThrow(/contradictory/i);
-    await expect(adoptCandidate(jobRoot, "obj-contradiction", "0", "steal", { libraryRoot })).rejects.toThrow(
-      /contradictory/i,
-    );
   });
 
   test("refuses a v3 record claiming kind object — an older binary would misread it", async () => {
@@ -203,25 +157,6 @@ describe("loadJob record integrity", () => {
   test("rejects a v1 record claiming kind object — v1 is plate-only, the rollback boundary", async () => {
     await writeLegacyJob(jobRoot, nativeObjectJob("obj-forged-v1", { schemaVersion: 1 }));
     await expect(loadJob(jobRoot, "obj-forged-v1")).rejects.toThrow(/schemaVersion 1.*plate-only/i);
-    await expect(adoptCandidate(jobRoot, "obj-forged-v1", "0", "no-gate", { libraryRoot })).rejects.toThrow(
-      /plate-only/i,
-    );
-  });
-
-  test("adopts a candidate mislabeled image/jpeg as a PNG object — verified bytes are the truth", async () => {
-    await writeLegacyJob(jobRoot, {
-      jobId: "obj-mislabeled",
-      kind: "object",
-      runs: [{ candidates: [{ bytes: ALPHA_PNG, mediaType: "image/jpeg" }] }],
-    });
-    const job = await loadJob(jobRoot, "obj-mislabeled");
-    const hash = job.runs[0]!.candidates[0]!.contentHash;
-    const result = await adoptCandidate(jobRoot, "obj-mislabeled", hash, "lamp", { libraryRoot });
-    // The alpha gate proved the bytes are PNG, so the asset is object.png —
-    // not object.jpg — and downstream resolution reports image/png.
-    expect(result.imagePath.endsWith(path.join("lamp", "object.png"))).toBe(true);
-    const lib = await scanLibrary(libraryRoot);
-    expect(lib.objects[0]!.imagePath).toBe(result.imagePath);
   });
 });
 
@@ -236,15 +171,16 @@ describe("listJobs with object jobs", () => {
   });
 });
 
-describe("an adopted Object Asset in a Scene", () => {
+describe("a library object asset in a Scene", () => {
   test("loads as an Image layer behind and in front of other layers, movable and hideable", async () => {
-    await writeLegacyJob(jobRoot, nativeObjectJob("obj-scene"));
-    const job = await loadJob(jobRoot, "obj-scene");
-    await adoptCandidate(jobRoot, "obj-scene", job.runs[0]!.candidates[0]!.contentHash, "lamp", {
-      libraryRoot,
+    // Seeded as the retired adoption wrote it: a true-alpha object asset
+    // beside a backdrop plate (adoption entry points are retired, #115; the
+    // library readers are retained).
+    await writeLegacyLibraryAsset(libraryRoot, "objects", "lamp", "object.png", ALPHA_PNG, {
+      kind: "object", id: "lamp", name: "Desk Lamp", tags: [],
+      subject: "a retro desk lamp", model: "openai/gpt-image-2", matting: "true-alpha",
     });
-    // A backdrop plate for the object to sit over.
-    await writePlateAsset(libraryRoot, "plate-a", new TextEncoder().encode("PLATE"), {
+    await writeLegacyLibraryAsset(libraryRoot, "plates", "plate-a", "plate.png", new TextEncoder().encode("PLATE"), {
       kind: "plate", id: "plate-a", name: "Plate A", tags: [],
     });
 
@@ -264,6 +200,7 @@ describe("an adopted Object Asset in a Scene", () => {
           position: { x: 100, y: 100 }, size: { width: 600, height: 120 } },
       ],
     };
+    const { scanLibrary } = await import("../src/assets.js");
     const lib = await scanLibrary(libraryRoot);
     const loaded = await loadScene(libraryRoot, async () => lib, scene);
     if (!loaded.ok) throw new Error(`scene failed to load: ${JSON.stringify(loaded.errors)}`);
@@ -280,13 +217,9 @@ describe("an adopted Object Asset in a Scene", () => {
   });
 
   test("records the object kind in a Render manifest that verifies on read", async () => {
-    await writeLegacyJob(jobRoot, nativeObjectJob("obj-manifest"));
-    const job = await loadJob(jobRoot, "obj-manifest");
-    await adoptCandidate(jobRoot, "obj-manifest", job.runs[0]!.candidates[0]!.contentHash, "lamp", {
-      libraryRoot,
-    });
-    await writePlateAsset(libraryRoot, "plate-a", new TextEncoder().encode("PLATE"), {
-      kind: "plate", id: "plate-a", name: "Plate A", tags: [],
+    await writeLegacyLibraryAsset(libraryRoot, "objects", "lamp", "object.png", ALPHA_PNG, {
+      kind: "object", id: "lamp", name: "Desk Lamp", tags: [],
+      subject: "a retro desk lamp", model: "openai/gpt-image-2", matting: "true-alpha",
     });
     const scene = {
       schemaVersion: 1,
@@ -296,6 +229,7 @@ describe("an adopted Object Asset in a Scene", () => {
           position: { x: 500, y: 300 }, size: { width: 280, height: 280 } },
       ],
     };
+    const { scanLibrary } = await import("../src/assets.js");
     const lib = await scanLibrary(libraryRoot);
     const loaded = await loadScene(libraryRoot, async () => lib, scene);
     if (!loaded.ok) throw new Error("scene failed to load");

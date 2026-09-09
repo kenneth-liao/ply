@@ -22,15 +22,14 @@ operation (`ply generate`) with no subject category (ADR-0014): full-canvas or
 isolated output intent is a request parameter, and no content policy is imposed
 on the prompt. Final text and final composition stay local. The legacy
 category-specific generation commands (`jobs plates|objects|creators|rerun`)
-are retired; their records remain inspectable and adoptable (see below).
+are retired; their records remain inspectable (see below).
 
 The legacy workflow is:
 
-1. Supply existing image files or generate candidate Assets.
-2. Adopt reusable candidates into the Asset library.
-3. Author a Scene.
-4. Validate and render locally.
-5. Iterate with Scene edits or Variants, without another model call.
+1. Supply existing image files or candidate Assets.
+2. Author a Scene.
+3. Validate and render locally.
+4. Iterate with Scene edits or Variants, without another model call.
 
 The legacy terms and commands below describe what runs today, not the target
 glossary. Architectural decisions are in [docs/adr/](docs/adr/).
@@ -85,7 +84,7 @@ files attached in caller order: identities are derived at Job creation, bytes
 are verified against them at generation, and missing or changed files fail
 before any provider call — no remote fetching, no mandatory identity
 Reference, no roles. The retired `jobs plates|objects|creators` pipeline no
-longer exists; `jobs` now only inspects and adopts its existing records.
+longer exist; `jobs` now only inspects its existing records.
 
 ## Independent Matting (new surface)
 
@@ -282,7 +281,7 @@ the exact Scene and Asset identities needed for offline rerendering.
 
 Category-specific generation is retired (spec #102, #114): the one generation
 operation is `ply generate` (see above), and isolation is `ply matte`. The
-`jobs` module now only inspects and adopts the Generation Job records written
+`jobs` module now only inspects the Generation Job records written
 under `out/jobs/<jobId>/` before the retirement — by the pre-retirement
 `jobs plates|objects|creators|rerun` commands or other writer binaries:
 
@@ -290,13 +289,13 @@ under `out/jobs/<jobId>/` before the retirement — by the pre-retirement
 bun run jobs show <jobId>                 # full record: request, references, runs
 bun run jobs list                         # summarize recorded jobs
 bun run jobs review <jobId>               # offline evidence sheet (see below)
-bun run jobs adopt <jobId> <hash> --id <assetId>
 ```
 
-No command here starts or extends a job. Adoption creates a new immutable
-Asset of the record's kind and never overwrites an existing one; object and
-creator candidates with a recorded matte are adopted as that matte (verified
-true alpha), and creator adoption always enters the library as trial.
+No command here starts or extends a job, and none publishes anything:
+generation and candidate adoption are retired (spec #102, #115). Generated
+and matted content enters Projects as ordinary Layers
+(`ply composition add --from-generation` / `--from-matte`), and the records
+below stay reviewable evidence only.
 
 ### Arbitrary reference files
 
@@ -314,11 +313,10 @@ mutable remote content outside the composition boundary.
 
 ### Legacy records and the library
 
-Existing plate/object/creator records stay reviewable and adoptable:
+Existing plate/object/creator records stay reviewable:
 
 ```bash
 bun run jobs review <jobId>
-bun run jobs adopt <jobId> <hash> --id presenter-pointing
 bun run library approve presenter-pointing
 ```
 
@@ -363,10 +361,10 @@ bun run library add-cutout ./person.png --id presenter --source "source URL + da
 bun run library add-mask ./shirt-mask.png --id presenter-shirt
 ```
 
-Legacy Generation Job records adopted through `jobs adopt` keep their
-generation provenance attached. New generated and matted content enters
-through the composer surface (`ply composition add --from-generation` /
-`--from-matte`).
+Existing library plates and objects keep their recorded generation
+provenance. New generated and matted content enters through the composer
+surface (`ply composition add --from-generation` / `--from-matte`), not the
+library.
 
 A Scene Asset reference can be:
 
@@ -381,7 +379,7 @@ A Scene Asset reference can be:
 | `src/scene.ts`, `src/scene-schema.ts` | Scene loading, validation, and schema |
 | `src/scene-render.ts` | Local Chromium renderer |
 | `src/scene-cli.ts`, `src/scene-author.ts` | Scene commands and live authoring |
-| `src/jobs.ts`, `src/job-cli.ts` | Legacy Generation Job records: read-only inspection and adoption |
+| `src/jobs.ts`, `src/job-cli.ts` | Legacy Generation Job records: read-only inspection and review |
 | `src/generate.ts`, `src/models.ts` | Shared provider call shape, Reference verification, and model registry |
 | `src/assets.ts`, `src/library-cli.ts` | Immutable Asset library and approval |
 | `src/matte.ts`, `src/segment.ts` | Local subject isolation |

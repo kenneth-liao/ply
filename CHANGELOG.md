@@ -4,6 +4,11 @@
 
 ### Removed
 
+- BREAKING: retired the generated-asset adoption entry points (#115, #102):
+  `jobs adopt` and `library adopt` no longer exist — generated or matted
+  content enters Projects as ordinary Layers (`ply composition add
+  --from-generation` / `--from-matte`); the `jobs review` JSON candidate cue
+  is renamed `adoptable` → `isolation`.
 - BREAKING: retired the category-specific generation entry points (#114, #102):
   `jobs plates`, `jobs objects`, `jobs creators`, and kind-dispatched `jobs
   rerun` generation no longer exist. The one uniform generation operation is

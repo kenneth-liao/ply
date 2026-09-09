@@ -19,12 +19,14 @@
  * the prior sheet stands untouched.
  *
  * Kind-specific evidence rides on the shared base:
- * - Object jobs get an isolation section read through the same canonical
- *   reader adoption uses (`resolveAdoptionEvidence`): the matte adoption
- *   would write, or a natively isolated candidate marked adoptable as-is, or
- *   a plain "no matte — not adoptable" marker — while a recorded matte that
- *   fails the true-alpha gate is labeled "invalid matte — not adoptable"
- *   with its escaped refusal reason, never as missing.
+ * - Object and creator jobs get an isolation section read through the same
+ *   canonical reader inspection uses (`resolveIsolationEvidence`): the
+ *   recorded matte a pre-retirement run's matting pass produced, or a
+ *   natively isolated candidate's own verified bytes, or a plain "no matte
+ *   recorded" marker — while a recorded matte that fails the true-alpha gate
+ *   is labeled "invalid matte" with its escaped refusal reason, never as
+ *   missing. Adoption is retired (#115): the section is alpha evidence for
+ *   the caller's review, not a promotion cue.
  * - Creator jobs keep their identity-anchor, face-detail, and matte evidence:
  *   the face-detail section applies the *same* deterministic center-crop
  *   geometry to every candidate and every identity anchor, so crops are
@@ -49,7 +51,7 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { loadJob, resolveAdoptionEvidence, type JobCandidate, type JobKind } from "./jobs.js";
+import { loadJob, resolveIsolationEvidence, type JobCandidate, type JobKind } from "./jobs.js";
 import { atomicReplace } from "./reference-import.js";
 import { dataUrl, escapeHtml } from "./html.js";
 
@@ -76,12 +78,13 @@ export interface ReviewCandidate {
   /** ISO timestamp of that run. */
   ranAt: string;
   /**
-   * What adoption would write for this candidate — the same canonical read
-   * adoption performs (`resolveAdoptionEvidence`), so review and adoption cannot
-   * drift: the recorded matte (with its engine), the candidate's own verified
-   * bytes when adopted as-is, or the recorded reason it cannot be adopted.
+   * The isolation evidence recorded for this candidate — the same canonical
+   * read review performs (`resolveIsolationEvidence`), so review and the
+   * record cannot drift: the recorded matte (with its engine), the
+   * candidate's own verified bytes when they are the evidence as-is, or the
+   * recorded reason there is none.
    */
-  adoption:
+  isolation:
     | { from: "matte"; file: string; engine: string }
     | { from: "candidate"; file: string }
     | { from: "none"; cause: "no-matte" | "invalid-matte"; reason: string };
@@ -115,7 +118,7 @@ export async function reviewJob(jobRoot: string, jobId: string, opts: ReviewOpti
   const jobDirectory = path.join(jobRoot, jobId);
 
   // Distinct candidates across all runs, in run order; a recurring hash
-  // resolves to its first recorded run (same rule as adoption).
+  // resolves to its first recorded run (the rule the retired adoption used).
   const distinct = new Map<string, { cand: JobCandidate; runIndex: number; ranAt: string }>();
   job.runs.forEach((run, runIndex) => {
     for (const cand of run.candidates) {
@@ -125,21 +128,21 @@ export async function reviewJob(jobRoot: string, jobId: string, opts: ReviewOpti
   });
 
   // Every distinct candidate is read once, content-identity verified, and
-  // resolved to the evidence adoption would use — through the one canonical
+  // resolved to its isolation evidence — through the one canonical
   // reader — BEFORE anything is rendered. The verified buffers travel with
   // the render input: the sheet embeds them, so it never re-reads (and can
   // never be altered by) the source files afterwards. A tampered or missing
   // recorded file throws here, so no partial sheet is ever written.
   const rendered: { cand: ReviewCandidate; candidateBytes: Buffer; evidenceBytes?: Buffer }[] = [];
   for (const { cand, runIndex, ranAt } of distinct.values()) {
-    const { candidate, evidence } = await resolveAdoptionEvidence(jobRoot, jobId, job.kind, cand);
+    const { candidate, evidence } = await resolveIsolationEvidence(jobRoot, jobId, job.kind, cand);
     rendered.push({
       cand: {
         contentHash: cand.contentHash,
         file: cand.file,
         runIndex,
         ranAt,
-        adoption:
+        isolation:
           evidence.from === "matte"
             ? { from: "matte", file: evidence.file, engine: evidence.engine }
             : evidence.from === "candidate"
@@ -216,23 +219,25 @@ function renderReviewSheet(
     )
     .join("\n");
 
-  // Isolation evidence: what adoption would write, per candidate — read
-  // through the same resolver adoption uses, so the sheet cannot drift from
-  // the adoption decision. The checkerboard shows the alpha.
+  // Isolation evidence: the recorded matte per candidate — read through the
+  // same canonical reader inspection uses, so the sheet cannot drift from
+  // the record. The checkerboard shows the alpha. Adoption is retired
+  // (#115): this is alpha evidence for the caller's review, not a promotion
+  // cue.
   const isolation = rendered
     .map(({ cand, candidateBytes, evidenceBytes }) => {
       const tag = `run ${escapeHtml(String(cand.runIndex))} · ${escapeHtml(cand.contentHash.slice(0, 12))}`;
-      if (cand.adoption.from === "matte")
-        return `<figure><div class="fullwrap"><img class="full" src="${escapeHtml(dataUrl(evidenceBytes!))}"></div><figcaption>${tag} · matte via ${escapeHtml(cand.adoption.engine)}</figcaption></figure>`;
-      if (cand.adoption.from === "candidate")
-        return `<figure><div class="fullwrap"><img class="full" src="${escapeHtml(dataUrl(candidateBytes))}"></div><figcaption>${tag} · natively isolated — adoption writes these bytes as-is</figcaption></figure>`;
+      if (cand.isolation.from === "matte")
+        return `<figure><div class="fullwrap"><img class="full" src="${escapeHtml(dataUrl(evidenceBytes!))}"></div><figcaption>${tag} · matte via ${escapeHtml(cand.isolation.engine)}</figcaption></figure>`;
+      if (cand.isolation.from === "candidate")
+        return `<figure><div class="fullwrap"><img class="full" src="${escapeHtml(dataUrl(candidateBytes))}"></div><figcaption>${tag} · natively isolated — the candidate's own true-alpha bytes</figcaption></figure>`;
       // A genuinely absent matte says "no matte"; a recorded, hash-matching
       // matte that fails the true-alpha gate is present but invalid — the
       // escaped refusal reason travels with the label, as evidence.
       const refused =
-        cand.adoption.cause === "invalid-matte"
-          ? `invalid matte — not adoptable<br>${escapeHtml(cand.adoption.reason).replaceAll("\n", "<br>")}`
-          : "no matte — not adoptable";
+        cand.isolation.cause === "invalid-matte"
+          ? `invalid matte — refused by the true-alpha gate<br>${escapeHtml(cand.isolation.reason).replaceAll("\n", "<br>")}`
+          : "no matte recorded";
       return `<figure><div class="empty"></div><figcaption>${tag} · ${refused}</figcaption></figure>`;
     })
     .join("\n");
@@ -249,7 +254,7 @@ function renderReviewSheet(
   const isolationSection =
     kind === "plate"
       ? ""
-      : `<h2>isolation — what adoption would write (checkerboard shows the alpha)</h2>
+      : `<h2>isolation — recorded matte or native alpha (checkerboard shows the alpha)</h2>
 <div class="g">${isolation || "<p>no candidates</p>"}</div>`;
   const faceSection =
     kind !== "creator"

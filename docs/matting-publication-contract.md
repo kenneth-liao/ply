@@ -72,9 +72,10 @@ Facts and their one home:
   source bytes — their content hash equals the source's), or the engine name
   the real segmenter records (`local-segmentation:birefnet-hr-fp16.onnx`).
 - **The result passes the true-alpha gate before publication**: the alpha
-  report in the record is measured by the same gate (`src/alpha.ts`) that
-  adoption applies, run at the pass that produced the bytes. An unusable
-  result (all-opaque or all-transparent) is refused there and never published.
+  report in the record is measured by the same gate (`src/alpha.ts`) the
+  retired adoption path applied, run at the pass that produced the bytes. An
+  unusable result (all-opaque or all-transparent) is refused there and never
+  published.
 - **Outputs are content-addressed** by sha-256 of the exact bytes on disk;
   `contentHash` is verifiable against the file at any time.
 - **`engine.preflight` runs at this operation, before inference.** Missing or
