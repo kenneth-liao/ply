@@ -46,11 +46,14 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { verifyTrueAlpha } from "../src/alpha.js";
-import { weightsPath, SUBJECT_SEGMENTER } from "../src/segment.js";
+import { SUBJECT_SEGMENTER } from "../src/segment.js";
 import { parseMattingRecord } from "../src/matting.js";
 
 const W = 256;
 const H = 256;
+
+/** The true-alpha gate's own transparency slack (src/alpha.ts thresholds). */
+const ALPHA_TOLERANCE = 8;
 
 /**
  * The qualification fixture: a deterministic, fully opaque PNG with a salient
@@ -111,7 +114,10 @@ describe("independent Matting (live engine, #112)", () => {
   test(
     "the public command mattes an opaque fixture with the real pinned weights, offline, to a usable true alpha",
     async () => {
-      if (!(await stat(weightsPath()).catch(() => null))) {
+      // One home for "where the weights are": the ambient override if set,
+      // otherwise the repo-root cache beside this test file.
+      const models = process.env.PLY_MODEL_DIR ?? path.resolve(import.meta.dir, "../models");
+      if (!(await stat(path.join(models, SUBJECT_SEGMENTER.file)).catch(() => null))) {
         console.log("skipped: local matting weights are not on this machine — no qualification is claimed");
         return;
       }
@@ -125,11 +131,12 @@ describe("independent Matting (live engine, #112)", () => {
         const sourceHash = createHash("sha256").update(fixture).digest("hex");
 
         // The real CLI, its process cwd rooted at the temp dir so the default
-        // matte root resolves there. The weights cache is handed over through
-        // the documented PLY_MODEL_DIR override (src/segment.ts modelDir) —
-        // cwd-relative model resolution would not find it under a temp cwd.
-        // Darwin: kernel network denial around the whole command — the engine
-        // must run with no network at all, from locally cached weights only.
+        // matte root resolves there. The weights cache resolved above is
+        // handed over through the documented PLY_MODEL_DIR override
+        // (src/segment.ts modelDir) — cwd-relative model resolution would not
+        // find it under a temp cwd. Darwin: kernel network denial around the
+        // whole command — the engine must run with no network at all, from
+        // locally cached weights only.
         const cli = path.resolve(import.meta.dir, "../src/matting-cli.ts");
         const args = [cli, "fixture.png", "--id", "matte-112-live-qual", "--json"];
         const argv =
@@ -140,21 +147,34 @@ describe("independent Matting (live engine, #112)", () => {
           cwd: root,
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, PLY_MODEL_DIR: path.resolve(import.meta.dir, "../models") },
+          env: { ...process.env, PLY_MODEL_DIR: models },
         });
         const [stdout, stderr, code] = await Promise.all([
           new Response(child.stdout).text(),
           new Response(child.stderr).text(),
           child.exited,
         ]);
-        expect(code).toBe(0);
-        const json = JSON.parse(stdout) as {
+        // A six-minute cycle must fail diagnosably in one run: stderr and the
+        // refusal text travel with the failure, never behind a bare expect.
+        if (code !== 0)
+          throw new Error(
+            `the live matting command exited ${code} (expected 0)\nstdout: ${stdout}\nstderr: ${stderr}`,
+          );
+        let json: {
           ok: boolean;
           error?: string;
           matteId: string;
           matteDir: string;
           matte: unknown;
         };
+        try {
+          json = JSON.parse(stdout);
+        } catch (err) {
+          throw new Error(
+            `the live matting command printed unparseable stdout: ${stdout}\nstderr: ${stderr}`,
+            { cause: err },
+          );
+        }
         if (!json.ok) throw new Error(`live matting failed: ${json.error ?? stderr}`);
         expect(json.matteId).toBe("matte-112-live-qual");
 
@@ -166,6 +186,11 @@ describe("independent Matting (live engine, #112)", () => {
         );
         expect(record.result.engine).toBe(`local-segmentation:${SUBJECT_SEGMENTER.file}`);
         expect(record.request.source.path).toBe("fixture.png");
+        // The runtime identity actually used, surfaced when it differs from
+        // the recorded configuration (segment.ts records a CoreML→CPU
+        // fallback warning there) — the run describes itself.
+        if (record.result.warnings.length > 0)
+          console.log("live run warnings:", record.result.warnings.join(" | "));
         // The source identity the record claims is the fixture's actual identity.
         expect(record.request.source.contentHash).toBe(sourceHash);
         // Inference actually ran: the published bytes are not the source.
@@ -192,9 +217,12 @@ describe("independent Matting (live engine, #112)", () => {
         expect(report.opaquePx / total).toBeGreaterThan(0.05);
 
         // The matte is genuinely usable on contrasting backgrounds: the
-        // cut-out shows the background through (transparent pixels take the
-        // background colour), the subject body keeps its own colours, and the
-        // background-showing pixel count tracks the record's transparent count.
+        // cut-out shows the background through, the subject body keeps its
+        // own colours, and the background-showing pixel count equals the
+        // record's transparent count (both count alpha ≤ 8, the gate's
+        // threshold). Live numerics may drift slightly across execution
+        // providers, so composite comparisons carry the gate's own slack —
+        // what must hold is the gate vocabulary, not bit-exact pixels.
         const matte = decodePng(outBytes);
         const centre = (132 * W + 128) * 4; // well inside the subject body
         const backgrounds: [string, Background][] = [
@@ -206,14 +234,19 @@ describe("independent Matting (live engine, #112)", () => {
         for (const [name, bg] of backgrounds) {
           const over = compositeOver(matte.rgba, bg);
           const corner = (3 * W + 3) * 4; // far corner — transparent under every background
-          expect(over[corner]!).toBe(bg(3, 3)[0]);
-          expect(over[corner + 1]!).toBe(bg(3, 3)[1]);
-          expect(over[corner + 2]!).toBe(bg(3, 3)[2]);
-          // The subject body's colours survive compositing unchanged.
-          for (let c = 0; c < 3; c++) expect(over[centre + c]!).toBe(matte.rgba[centre + c]!);
+          expect(matte.rgba[corner + 3]!).toBeLessThanOrEqual(ALPHA_TOLERANCE);
+          for (let c = 0; c < 3; c++)
+            expect(Math.abs(over[corner + c]! - bg(3, 3)[c]!)).toBeLessThanOrEqual(ALPHA_TOLERANCE);
+          // The subject body keeps its own colours.
+          expect(matte.rgba[centre + 3]!).toBeGreaterThanOrEqual(255 - ALPHA_TOLERANCE);
+          for (let c = 0; c < 3; c++)
+            expect(Math.abs(over[centre + c]! - matte.rgba[centre + c]!)).toBeLessThanOrEqual(
+              ALPHA_TOLERANCE,
+            );
+          // Same threshold the gate counts with, so this equals transparentPx.
           let bgShown = 0;
-          for (let i = 3; i < over.length; i += 4) if (matte.rgba[i]! / 255 < 0.02) bgShown++;
-          expect(bgShown).toBeGreaterThan(total * 0.6);
+          for (let i = 3; i < over.length; i += 4) if (matte.rgba[i]! <= ALPHA_TOLERANCE) bgShown++;
+          expect(bgShown).toBe(report.transparentPx);
         }
       } finally {
         await rm(root, { recursive: true, force: true });
