@@ -161,7 +161,7 @@ export function buildCreatorPrompt(subject: string, orderedRefs: TypedRefInput[]
 }
 
 /** AI SDK warnings are objects; flatten to one readable line. */
-function describeWarning(model: string, w: unknown): string {
+export function describeWarning(model: string, w: unknown): string {
   const o = w as { type?: string; feature?: string; setting?: string; details?: string; message?: string };
   const what = o?.feature ?? o?.setting ?? o?.type ?? "setting";
   return `${model}: ${o?.details ?? o?.message ?? `unsupported ${what}`}`;
@@ -233,15 +233,28 @@ export function buildImageRequestArgs(
   spec: ModelSpec,
   prompt: string,
   refBytes: Uint8Array[],
+  /**
+   * (#104) Explicit caller-selected sizing for the uniform generation surface.
+   * Omitted — the legacy plate shape: the fixed 1536x864 landscape size for
+   * size-kind models, 16:9 otherwise. Legacy Plate/Object/Creator request
+   * bytes are unchanged by this parameter (proven by
+   * test/image-request-args.test.ts).
+   */
+  explicitSizing?: { size: `${number}x${number}` } | { aspectRatio: `${number}:${number}` },
 ): {
   model: string;
   prompt: string | { text: string; images: Uint8Array[] };
   size?: `${number}x${number}`;
-  aspectRatio?: "16:9";
+  aspectRatio?: `${number}:${number}`;
 } {
   if (spec.kind !== "image") {
     throw new Error(
       `buildImageRequestArgs is the image-kind call shape — "${spec.id}" is ${spec.kind} and takes generateText with message parts, not generateImage`,
+    );
+  }
+  if (explicitSizing && "size" in explicitSizing && spec.sizing !== "size") {
+    throw new Error(
+      `Model "${spec.id}" takes an aspect ratio, not explicit pixel dimensions — pass --aspect W:H instead of --size`,
     );
   }
   return {
@@ -250,8 +263,11 @@ export function buildImageRequestArgs(
       ? { prompt: { text: prompt, images: refBytes } }
       : { prompt }),
     ...(spec.sizing === "size"
-      ? { size: LANDSCAPE_SIZE }
-      : { aspectRatio: "16:9" as const }),
+      ? { size: explicitSizing && "size" in explicitSizing ? explicitSizing.size : LANDSCAPE_SIZE }
+      : {
+          aspectRatio:
+            explicitSizing && "aspectRatio" in explicitSizing ? explicitSizing.aspectRatio : ("16:9" as const),
+        }),
   };
 }
 
@@ -405,7 +421,6 @@ export interface LoadedRef {
   path: string;
   bytes: Uint8Array;
 }
-
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
 /**

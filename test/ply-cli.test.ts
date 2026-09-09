@@ -28,12 +28,14 @@ test("ply help names only available modules", async () => {
     ["project", 0],
     ["composition", 0],
     ["layer", 0],
+    ["generate", 0],
     ["scene", 2],
     ["library", 0],
     ["jobs", 2],
   ] as const) {
     expect(result.stdout).toContain(module);
     // Preserve the existing surfaces: scene/jobs classify help as usage (2).
+    // The introduced generate surface follows the project/composition pattern (0).
     const help = await invoke(module, "--help");
     expect(help.code).toBe(code);
     expect(help.stdout).toContain(module);
@@ -45,4 +47,10 @@ test("ply rejects unknown modules and preserves module failures", async () => {
   const result = await invoke("scene", "validate", "does-not-exist.scene.json");
   expect(result.code).toBe(1);
   expect(JSON.parse(result.stdout).ok).toBe(false);
+});
+
+test("generate rejects a missing prompt through the public entry point", async () => {
+  const result = await invoke("generate");
+  expect(result.code).toBe(2);
+  expect(result.stderr).toContain("prompt");
 });
