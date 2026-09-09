@@ -298,6 +298,172 @@ describe("ply generate show/list — offline inspection", () => {
   });
 });
 
+describe("ply generate --ref — ordered verified References (#105)", () => {
+  function recordingProvider(): UniformProvider & {
+    imageArgs: Parameters<UniformProvider["image"]>[0][];
+    textArgs: Parameters<UniformProvider["text"]>[0][];
+  } {
+    const imageArgs: Parameters<UniformProvider["image"]>[0][] = [];
+    const textArgs: Parameters<UniformProvider["text"]>[0][] = [];
+    return {
+      imageArgs,
+      textArgs,
+      image: async (args) => {
+        imageArgs.push(args);
+        return { images: [{ base64: Buffer.from(`ref-cli-${imageArgs.length}`).toString("base64") }], warnings: [] };
+      },
+      text: async (args) => {
+        textArgs.push(args);
+        return { files: [{ mediaType: "image/png", uint8Array: Buffer.from(`ref-cli-text-${textArgs.length}`) }], text: "", warnings: [] };
+      },
+    };
+  }
+
+  async function ref(name: string, bytes: string): Promise<string> {
+    const p = path.join(root, name);
+    await writeFile(p, bytes);
+    return p;
+  }
+
+  test("outbound attachments carry the distinct Reference bytes in caller order, and the record lists them in order", async () => {
+    const a = await ref("alpha.png", "reference-alpha-bytes");
+    const b = await ref("beta.png", "reference-beta-bytes");
+    const c = await ref("gamma.png", "reference-gamma-bytes");
+    const provider = recordingProvider();
+    const res = await run(
+      ["a lighthouse collage from these photos", "--ref", a, "--ref", b, "--ref", c, "--json"],
+      deps(provider),
+    );
+    expect(res.exitCode).toBe(0);
+    const json = res.json as Record<string, any>;
+    // The recorded identities, in caller order.
+    expect(json.job.request.references).toEqual([
+      { path: a, contentHash: createHash("sha256").update("reference-alpha-bytes").digest("hex") },
+      { path: b, contentHash: createHash("sha256").update("reference-beta-bytes").digest("hex") },
+      { path: c, contentHash: createHash("sha256").update("reference-gamma-bytes").digest("hex") },
+    ]);
+    // The actual outbound attachment order and bytes match caller order.
+    expect(provider.imageArgs).toHaveLength(1);
+    expect((provider.imageArgs[0].prompt as { text: string; images: Uint8Array[] }).images).toEqual([
+      Buffer.from("reference-alpha-bytes"),
+      Buffer.from("reference-beta-bytes"),
+      Buffer.from("reference-gamma-bytes"),
+    ]);
+    expect((provider.imageArgs[0].prompt as { text: string; images: Uint8Array[] }).text).toBe("a lighthouse collage from these photos");
+    expect(provider.imageArgs[0].size).toBe("1024x1024");
+    // Reversing the flag order reverses the attachments — no reordering.
+    const provider2 = recordingProvider();
+    const res2 = await run(["mirror order", "--ref", c, "--ref", a, "--json"], deps(provider2));
+    expect(res2.exitCode).toBe(0);
+    expect((provider2.imageArgs[0].prompt as { images: Uint8Array[] }).images).toEqual([
+      Buffer.from("reference-gamma-bytes"),
+      Buffer.from("reference-alpha-bytes"),
+    ]);
+    expect(((res2.json as Record<string, any>).job.request.references as { path: string }[]).map((r) => r.path)).toEqual([c, a]);
+  });
+
+  test("multimodal models attach the verified bytes as ordered message images", async () => {
+    const a = await ref("alpha.png", "reference-alpha-bytes");
+    const provider = recordingProvider();
+    const res = await run(
+      ["a portrait study", "--model", "nano-2", "--ref", a, "--json"],
+      deps(provider),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(provider.textArgs).toHaveLength(1);
+    expect(provider.textArgs[0].images).toEqual([Buffer.from("reference-alpha-bytes")]);
+    expect(provider.imageArgs).toHaveLength(0);
+  });
+
+  test("an unqualified model is refused with the canonical capability message and no provider call", async () => {
+    const a = await ref("alpha.png", "bytes");
+    const provider = recordingProvider();
+    const res = await run(["a barn", "--model", "flux", "--ref", a, "--json"], deps(provider));
+    expect(res.exitCode).toBe(1);
+    expect((res.json as any).error).toMatch(/not qualified reference-capable/);
+    expect(provider.imageArgs).toHaveLength(0);
+    expect(await publishedIds()).toEqual([]);
+  });
+
+  test("a missing Reference file exits 1 with an actionable diagnostic and publishes nothing", async () => {
+    const provider = recordingProvider();
+    const res = await run(["a barn", "--ref", path.join(root, "absent.png"), "--json"], deps(provider));
+    expect(res.exitCode).toBe(1);
+    expect((res.json as any).error).toMatch(/absent\.png/);
+    expect((res.json as any).error).toMatch(/missing/i);
+    expect(provider.imageArgs).toHaveLength(0);
+    expect(await publishedIds()).toEqual([]);
+  });
+
+  test("the recorded identity is the verified pre-run bytes even when the file changes during the run", async () => {
+    // Single-shot capture and execution both read the file; a mutation between
+    // the identity read and the verification read is caught by hash mismatch.
+    const a = await ref("alpha.png", "capture-bytes");
+    const provider = recordingProvider();
+    // The provider mutates the file the instant it is called — after the
+    // verification read, so the run succeeds and records the captured identity.
+    const mutating: UniformProvider = {
+      image: async (args) => {
+        await writeFile(a, "mutated-after-verification");
+        return provider.image(args);
+      },
+      text: provider.text,
+    };
+    const res = await run(["a barn", "--ref", a, "--json"], deps(mutating));
+    expect(res.exitCode).toBe(0);
+    expect((res.json as any).job.request.references[0].contentHash).toBe(
+      createHash("sha256").update("capture-bytes").digest("hex"),
+    );
+  });
+
+  test("compact text lists each Reference in order; show repeats them", async () => {
+    const a = await ref("alpha.png", "bytes-one");
+    const b = await ref("beta.png", "bytes-two");
+    const res = await run(["a barn", "--ref", a, "--ref", b, "--job", "gen-refs"], deps());
+    expect(res.exitCode).toBe(0);
+    expect(res.text).toContain(`ref 1: ${a}`);
+    expect(res.text).toContain(`ref 2: ${b}`);
+    const shown = await run(["show", "gen-refs", "--json"], { provider: neverProvider, jobsRoot });
+    expect(shown.exitCode).toBe(0);
+    expect((shown.json as any).job.request.references).toHaveLength(2);
+  });
+
+  test("show and list refuse --ref as a generation flag (exit 2)", async () => {
+    const a = await ref("alpha.png", "bytes");
+    for (const argv of [["show", "gen-x", "--ref", a], ["list", "--ref", a]]) {
+      const res = await run(argv, deps());
+      expect(res.exitCode).toBe(2);
+      expect((res.json as any).error).toMatch(/--ref/);
+    }
+  });
+
+  test("usage errors: empty and missing --ref values exit 2 and publish nothing", async () => {
+    for (const argv of [["a barn", "--ref"], ["a barn", "--ref", ""], ["a barn", "--ref="]]) {
+      const res = await run(argv, deps());
+      expect(res.exitCode).toBe(2);
+      expect((res.json as any).error).toMatch(/--ref/);
+    }
+    expect(await publishedIds()).toEqual([]);
+  });
+
+  test("a duplicate --job id is refused before any Reference byte is read", async () => {
+    await run(["first", "--job", "gen-preflight", "--json"], deps());
+    const provider = recordingProvider();
+    const res = await run(
+      ["second", "--job", "gen-preflight", "--ref", path.join(root, "absent.png"), "--json"],
+      deps(provider),
+    );
+    expect(res.exitCode).toBe(1);
+    expect((res.json as any).error).toMatch(/already exists/);
+    expect(provider.imageArgs).toHaveLength(0);
+  });
+
+  test("--help documents --ref", async () => {
+    const res = await run(["--help"], { provider: neverProvider, jobsRoot });
+    expect(res.text).toContain("--ref");
+  });
+});
+
 // --- helpers ---------------------------------------------------------------
 
 async function projectFingerprint(projectDir: string): Promise<Record<string, string>> {

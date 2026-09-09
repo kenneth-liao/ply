@@ -70,14 +70,19 @@ for the record schema and publication contract.
 ```bash
 ply generate "a red barn at noon" --size 1080x1080
 ply generate "a presenter portrait" --intent isolated --model nano-2
+ply generate "restyle this room" --ref room.png --ref palette.png
 ply generate show <jobId>   # offline inspection of the published record
 ply generate list
 ```
 
 Isolated intent is a generation request, not a matte: it never runs Matting
 and never reports verified alpha — the independent Matting operation stays
-caller-invoked (ADR-0015). The legacy `jobs plates|objects|creators` pipeline
-below keeps working until its separately approved retirement.
+caller-invoked (ADR-0015). References (`--ref <path>`, repeatable) are local
+files attached in caller order: identities are derived at Job creation, bytes
+are verified against them at generation, and missing or changed files fail
+before any provider call — no remote fetching, no mandatory identity
+Reference, no roles. The legacy `jobs plates|objects|creators` pipeline below
+keeps working until its separately approved retirement.
 
 ## Setup
 

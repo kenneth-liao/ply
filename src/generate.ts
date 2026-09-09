@@ -424,6 +424,43 @@ export interface LoadedRef {
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
 /**
+ * Read one reference file and verify its bytes against a recorded identity —
+ * the one read-and-verify home every workflow's generation shares (CRAFT-1):
+ * the path is resolved exactly once here, and the returned bytes are exactly
+ * what the model is sent, so the provider can never receive different content
+ * than the Job records (INT: request-to-generation drift is refused, not
+ * sent). A reference without a recorded identity is loaded without
+ * verification because there is nothing to compare it with; a role, when
+ * present, names the reference in every diagnostic.
+ */
+export async function loadVerifiedReference(input: {
+  path: string;
+  role?: string;
+  contentHash?: string;
+}): Promise<LoadedRef> {
+  // Resolve the path once, at this boundary — every use below (read, error,
+  // drift message) names the same resolved location.
+  const resolved = path.resolve(input.path);
+  const label = input.role ? ` (role ${input.role})` : "";
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(resolved);
+  } catch {
+    throw new Error(
+      `Reference "${resolved}"${label} is missing — cannot start the generation`,
+    );
+  }
+  if (input.contentHash !== undefined) {
+    const actual = sha256(bytes);
+    if (actual !== input.contentHash)
+      throw new Error(
+        `Reference "${resolved}"${label} changed content identity after the request was recorded — sha-256 ${input.contentHash}, actual ${actual}. Record a new job for different references.`,
+      );
+  }
+  return { path: resolved, bytes };
+}
+
+/**
  * Load references and verify each file's bytes against the identity recorded
  * at request time — the one read every workflow's generation gets (CRAFT-1):
  * the path is resolved exactly once here, and the returned bytes are exactly
@@ -433,29 +470,7 @@ const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes)
  * loaded without verification because there is nothing to compare it with.
  */
 export async function loadVerifiedRefs(refs: TypedRefInput[]): Promise<LoadedRef[]> {
-  return Promise.all(
-    refs.map(async (r): Promise<LoadedRef> => {
-      // Resolve the path once, at this boundary — every use below (read,
-      // error, drift message) names the same resolved location.
-      const resolved = path.resolve(r.path);
-      let bytes: Buffer;
-      try {
-        bytes = await readFile(resolved);
-      } catch {
-        throw new Error(
-          `Reference "${resolved}" (role ${r.role}) is missing — cannot start the generation`,
-        );
-      }
-      if (r.contentHash !== undefined) {
-        const actual = sha256(bytes);
-        if (actual !== r.contentHash)
-          throw new Error(
-            `Reference "${resolved}" (role ${r.role}) changed content identity after the request was recorded — sha-256 ${r.contentHash}, actual ${actual}. Record a new job for different references.`,
-          );
-      }
-      return { path: resolved, bytes };
-    }),
-  );
+  return Promise.all(refs.map(loadVerifiedReference));
 }
 
 /**
