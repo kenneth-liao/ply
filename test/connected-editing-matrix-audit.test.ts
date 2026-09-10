@@ -124,7 +124,10 @@ const audit: Array<{ suite: string; markers: string[] }> = [
   },
   {
     suite: "quality-selection.test.ts",
-    markers: ["quality"],
+    markers: [
+      "each qualified tier is forwarded and retained as request and run provenance",
+      "an unsupported combination fails before any provider call",
+    ],
   },
 ];
 

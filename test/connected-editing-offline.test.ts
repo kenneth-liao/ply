@@ -349,10 +349,11 @@ darwinOnly(
     const manifestP1 = renderP1.render.manifest as string;
     const pngP1 = await readFile(renderP1.render.output as string);
     expect(readPngHeader(pngP1)).toMatchObject({ width: 1600, height: 900 });
-    const posterInk = orangeBBox(decodePng(pngP1), 430, 900, 0, 250);
+    const decodedP1 = decodePng(pngP1);
+    const posterInk = orangeBBox(decodedP1, 430, 900, 0, 250);
     expect(closeTo((posterInk.minX + posterInk.maxX) / 2, 640, 2)).toBe(true);
     // The shared fact is 1280×720: the poster's extra canvas stays transparent.
-    expect(decodePng(pngP1).rgba[(899 * 1600 + 1590) * 4 + 3]).toBe(0);
+    expect(decodedP1.rgba[(899 * 1600 + 1590) * 4 + 3]).toBe(0);
     await writeFile(path.join(outEvidenceDir, "poster_initial.png"), pngP1);
 
     const snapBg = await snapshotLayer(proj, bgLayerId);
@@ -360,10 +361,11 @@ darwinOnly(
 
     // Ambiguous edit refusal: luigi is shared by thumb and poster.
     const ambiguous = await invokeOffline(["layer", "edit", luigiLayerId, "--opacity", "0.9", ...P], root);
+    const amb = json(ambiguous);
     expect(ambiguous.code).toBe(1);
-    expect(json(ambiguous).ok).toBe(false);
-    expect(json(ambiguous).referrersCount).toBe(2);
-    expect(json(ambiguous).referringCompositions).toEqual(expect.arrayContaining(["thumb", "poster"]));
+    expect(amb.ok).toBe(false);
+    expect(amb.referrersCount).toBe(2);
+    expect(amb.referringCompositions).toEqual(expect.arrayContaining(["thumb", "poster"]));
 
     // Explicit propagation: the rotated hero reaches both Compositions.
     const rotated = await ok(["layer", "edit", luigiLayerId, "--in-place", "--rotate", "-8", ...P], root);
@@ -491,11 +493,14 @@ darwinOnly(
     const genAttempt = await invokeOffline(["generate", "offline denial control prompt", "--json"], root, {
       AI_GATEWAY_API_KEY: "dummy-key-for-denial-control",
     });
+    const attempt = json(genAttempt);
     expect(genAttempt.code).toBe(1);
-    expect(json(genAttempt).ok).toBe(false);
-    expect(json(genAttempt).error).toMatch(/ENOTFOUND|getaddrinfo|fetch failed|network/i);
-    // Nothing was published: the attempted job store holds no record.
+    expect(attempt.ok).toBe(false);
+    expect(attempt.error).toMatch(/ENOTFOUND|getaddrinfo|fetch failed|network/i);
+    // Nothing was published: the attempted job store holds no record and the
+    // published surface reads empty (the #111 control's publish check).
     expect(await readdir(path.join(root, "out", "generation")).catch(() => [])).toEqual([]);
+    expect((await ok(["generate", "list", "--json"], root)).jobs).toHaveLength(0);
   },
   LONG,
 );
