@@ -7,8 +7,8 @@
 - Layer resize without replacing source content (#133, spec #132, ADR-0016):
   `ply layer edit --resize <factor>` scales image and text Layers by a
   relative factor and `--resize-to <WxH>` sets an absolute effective size
-  (image Layers only; one omitted axis preserves the aspect ratio, both
-  deliberately change it). Resizing changes placement, never retained
+  (image Layers only; one omitted axis preserves the Layer's current aspect
+  ratio, both deliberately change it). Resizing changes placement, never retained
   pixels: source hashes, retained generation/Matting lineage, and pinned
   Render history stay intact across repeated resizes. Transform scale
   (`scaleX`/`scaleY`) is the one canonical revision fact — reported

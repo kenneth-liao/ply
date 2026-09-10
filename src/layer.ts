@@ -862,9 +862,10 @@ export function roundEffective(px: number): number {
  * resize never advances live state.
  *
  * Omitted resize options preserve the current revision's scale. Aspect-ratio
- * rules: a relative factor preserves it by definition; an absolute target
- * with one omitted axis preserves it from the intrinsic size; both axes
- * supplied deliberately change it.
+ * rules: a relative factor preserves the current ratio by definition; an
+ * absolute target with one omitted axis preserves the Layer's current aspect
+ * ratio (a deliberate both-axes change survives, never reset to intrinsic);
+ * both axes supplied deliberately change it.
  */
 function resolveEditScale(
   options: EditLayerOptions,
@@ -921,12 +922,15 @@ function resolveEditScale(
     scaleX = width / prevRev.width;
     scaleY = height / prevRev.height;
   } else if (width !== undefined) {
-    // One axis supplied: preserve the aspect ratio from the intrinsic size.
+    // One axis supplied: preserve the Layer's CURRENT aspect ratio — a
+    // deliberate both-axes change is explicitly kept, never silently reset
+    // to the intrinsic ratio (#133, ADR-0016). For a uniform prior this is
+    // exactly intrinsic-ratio preservation.
     scaleX = width / prevRev.width;
-    scaleY = scaleX;
+    scaleY = (scaleX * prevRev.scaleY) / prevRev.scaleX;
   } else {
     scaleY = height! / prevRev.height;
-    scaleX = scaleY;
+    scaleX = (scaleY * prevRev.scaleX) / prevRev.scaleY;
   }
   return boundedScale({ scaleX, scaleY }, prevRev, layerId);
 }

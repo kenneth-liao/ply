@@ -76,11 +76,11 @@ Options:
   --resize-to <WxH>     Set the effective painted size in px (image Layers
                         only — text has no intrinsic pixel size; use
                         --resize). "800x600" deliberately changes the aspect
-                        ratio; "800x" or "x600" preserves it from the
-                        retained content's intrinsic size. Mutually exclusive
-                        with --resize and with content-replacement options.
-                        The Layer's (x, y) stays its top-left corner: it
-                        grows/shrinks right and down.
+                        ratio; "800x" or "x600" preserves the Layer's current
+                        aspect ratio (a deliberate aspect change survives).
+                        Mutually exclusive with --resize and with
+                        content-replacement options. The Layer's (x, y) stays
+                        its top-left corner: it grows/shrinks right and down.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —

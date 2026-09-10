@@ -154,9 +154,10 @@ ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
   always preserved. Every result (text and JSON) reports the absolute
   effective scale and, for image Layers, the absolute effective size.
 - `--resize-to <WxH>` is image-only (text has no intrinsic pixel size).
-  Supplying one axis (`800x`, `x600`) preserves the aspect ratio from the
-  retained content's intrinsic size; supplying both deliberately changes it.
-  Repeating an absolute target is idempotent.
+  Supplying one axis (`800x`, `x600`) preserves the Layer's current aspect
+  ratio — a deliberate aspect change survives later one-axis resizes;
+  supplying both deliberately changes it. Repeating an absolute target is
+  idempotent.
 - The Layer's `(x, y)` stays its top-left corner: it grows/shrinks right and
   down. Scale is a Layer revision fact shared as a whole (in-place edits
   propagate, forks isolate), survives sharing and cross-Project import, and

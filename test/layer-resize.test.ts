@@ -24,6 +24,8 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { computeRevisionHash, type LayerImageRevision } from "../src/layer.js";
+import { runUniformGeneration, type GenerationJobRecord } from "../src/generation.js";
+import { DEFAULT_MODEL } from "../src/models.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -173,11 +175,26 @@ test("image Layer --resize-to normalizes to scale with documented aspect-ratio b
   expect(bothJson.layer.currentRevision.scaleX).toBe(5);
   expect(bothJson.layer.currentRevision.scaleY).toBe(2.5);
 
-  // --resize-to sets absolute effective size: repeating it is idempotent.
+  // One-axis after a deliberate non-uniform scale preserves the Layer's
+  // CURRENT aspect ratio — the explicit choice survives, never reset to
+  // intrinsic (INT-2, ADR-0016). 10:3 stays 10:3: 200 wide → 60 high.
+  const oneAxis = await invoke(["layer", "edit", layerId, "--resize-to", "200x", "--project", projDir, "--json"]);
+  expect(oneAxis.code).toBe(0);
+  const oneAxisJson = JSON.parse(oneAxis.stdout);
+  expect(oneAxisJson.resized).toEqual({ scaleX: 2, scaleY: 1, width: 200, height: 60 });
+
+  // Symmetric on the height axis: 150 high → 500 wide (the prior geometry).
+  const heightAxis = await invoke(["layer", "edit", layerId, "--resize-to", "x150", "--project", projDir, "--json"]);
+  expect(heightAxis.code).toBe(0);
+  const heightAxisJson = JSON.parse(heightAxis.stdout);
+  expect(heightAxisJson.resized).toEqual({ scaleX: 5, scaleY: 2.5, width: 500, height: 150 });
+
+  // --resize-to sets absolute effective size: repeating it is idempotent —
+  // the immediately repeated target is a no-op against the current revision.
   const repeat = await invoke(["layer", "edit", layerId, "--resize-to", "500x150", "--project", projDir, "--json"]);
   expect(repeat.code).toBe(0);
   const repeatJson = JSON.parse(repeat.stdout);
-  expect(repeatJson.layer.currentRevisionId).toBe(bothJson.layer.currentRevisionId);
+  expect(repeatJson.layer.currentRevisionId).toBe(heightAxisJson.layer.currentRevisionId);
   expect(repeatJson.resized).toEqual({ scaleX: 5, scaleY: 2.5, width: 500, height: 150 });
 
   // Inspect reports the effective scale and size for auditability.
@@ -555,6 +572,75 @@ test("render history stays pinned across resizes: pre-resize replay is byte-iden
   expect(await readFile(secondReplay)).toEqual(await readFile(secondOut));
   // The scaled render differs from the pre-resize one (placement changed).
   expect(await readFile(secondOut)).not.toEqual(await readFile(firstOut));
+});
+
+/** Tracer 8 (INT-1): a Layer carrying real Generation Job lineage keeps that
+ * lineage — retained record and its reporting — across repeated resizes,
+ * with source bytes untouched throughout (DEC-005). */
+test("resizes never touch retained generation lineage or source bytes", async () => {
+  // Deterministic Generation Job through the uniform domain with a recording
+  // fake provider (never billed); the CLI resolves it via <cwd>/out/generation.
+  const jobId = "gen-resize-lineage";
+  const jobsRoot = path.join(tempDir, "out", "generation");
+  const generatedPng = solidPng(32, 32, GREEN);
+  const job: GenerationJobRecord = await runUniformGeneration(
+    jobsRoot,
+    jobId,
+    {
+      prompt: "deterministic lineage content",
+      intent: "full-canvas",
+      model: DEFAULT_MODEL,
+      sizing: { kind: "size", width: 32, height: 32 },
+      count: 1,
+    },
+    {
+      provider: {
+        image: async () => ({ images: [{ base64: generatedPng.toString("base64") }], warnings: [] }),
+        text: async () => {
+          throw new Error("TRIPWIRE: resize must never generate");
+        },
+      },
+    },
+  );
+  const output = job.run.outputs[0]!;
+
+  await makeComp("gen", 300, 200);
+  const addRes = await invoke(
+    ["composition", "add", "gen", "hero", "--from-generation", jobId, "--project", projDir, "--json"],
+    tempDir,
+  );
+  expect(addRes.code).toBe(0);
+  const addJson = JSON.parse(addRes.stdout);
+  const layerId = addJson.use.layerId as string;
+  expect(addJson.generatedFrom).toEqual({ jobId, contentHash: output.contentHash });
+
+  // The job record is retained verbatim in the Project at ingest time.
+  const retainedRecord = path.join(projDir, "generation", jobId, "job.json");
+  const recordBefore = await readFile(retainedRecord);
+  expect(recordBefore).toEqual(await readFile(path.join(jobsRoot, jobId, "job.json")));
+
+  // Resize twice: content identity and retained bytes never change...
+  const resize1 = await invoke(["layer", "edit", layerId, "--resize", "2", "--project", projDir, "--json"]);
+  expect(resize1.code).toBe(0);
+  const resize2 = await invoke(["layer", "edit", layerId, "--resize", "2", "--project", projDir, "--json"]);
+  expect(resize2.code).toBe(0);
+  const resize2Json = JSON.parse(resize2.stdout);
+  expect(resize2Json.layer.currentRevision.contentHash).toBe(output.contentHash);
+  expect(resize2Json.layer.currentRevision.scaleX).toBe(4);
+  expect((await readFile(path.join(projDir, "content", output.contentHash))).equals(generatedPng)).toBe(true);
+  const contentFiles = await readdir(path.join(projDir, "content"));
+  expect(contentFiles).toEqual([output.contentHash]);
+
+  // ...and the retained lineage record survives byte-identically, still
+  // reported by the evidence surface.
+  expect(await readFile(retainedRecord)).toEqual(recordBefore);
+  const reviewOut = path.join(tempDir, "review.html");
+  const reviewRes = await invoke(
+    ["layer", "review", layerId, "--out", reviewOut, "--project", projDir],
+    tempDir,
+  );
+  expect(reviewRes.code).toBe(0);
+  expect(reviewRes.stdout).toContain(`generated by: ${jobId}`);
 });
 
 async function addTextLayer(comp: string, localName: string, text: string, opts: { font?: string; fontSize?: number; color?: string; x?: number; y?: number; opacity?: number } = {}) {
