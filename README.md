@@ -248,10 +248,15 @@ ply composition measure poster --json                # machine-readable
   two-decimal rounded: ink is quantized to the capture window's pixel
   grid, while canvas offsets are layout-derived and may be fractional.
   Capture is bounded — one windowed screenshot per Layer, never scaled by
-  off-canvas distance; a Layer whose layout box exceeds the 8192×8192px
+  off-canvas distance and widened by each Layer's shadow extent; a Layer
+  whose layout box plus shadow extent exceeds the 8192×8192px
   window is refused with an actionable error instead of growing memory.
-  Effects beyond opacity are not reflected (they are separate
-  functionality).
+  Painted bounds are the
+  browser's own paint of the exact markup rendering uses, so
+  measurement and rendering agree; opacity scaling
+  changes alpha values, never the ink footprint. A Layer's shadow extends
+  its painted ink: painted bounds, the on-canvas intersection, `clipped`,
+  and the `effects` facts include the shadow extent (#139).
 - Text dimensions are measured with the same retained font bytes painting
   uses — never a second measuring authority. Corrupt content or an
   unresolved font fails instead of producing misleading numbers.
@@ -289,10 +294,10 @@ ply layer edit <layerId> --anchor center,top --x 100 --y 200
 - **Transform interaction:** resolution runs against the Layer's CURRENT
   scale/rotation/reflection (the rotated ink box is what gets anchored),
   and anchored placement is its own edit — it cannot be combined with
-  `--resize`, `--rotate`, `--flip`, or content replacement in one edit,
-  because the reference ink would be ambiguous. `--opacity` combines
-  freely. A later transform or content edit keeps the resolved x/y
-  literally; re-anchor explicitly after changing the geometry.
+  `--resize`, `--rotate`, `--flip`, `--shadow`, or content replacement in
+  one edit, because the reference ink would be ambiguous. `--opacity`
+  combines freely. A later transform or content edit keeps the resolved
+  x/y literally; re-anchor explicitly after changing the geometry.
 - **Resolution contexts:** a text Layer's ink depends on the referring
   Composition's canvas width (text wraps), and placement is one shared
   fact, so the resolution measures the Layer in every referring
@@ -307,6 +312,46 @@ ply layer edit <layerId> --anchor center,top --x 100 --y 200
   per-Composition placement state, and pinned replay stays deterministic.
   `ply composition measure` verifies where the ink landed; invalid inputs
   (exit 2) and semantic refusals (exit 1) never mutate live state.
+
+## Layer shadows (new surface)
+
+`ply layer edit --shadow` applies a drop shadow to a Layer's content —
+image alpha and text glyphs alike, one uniform effect with no
+kind-specific lifecycle (ADR-0018):
+
+```bash
+ply layer edit <layerId> --shadow "10,10,4,#000000"    # soft black shadow
+ply layer edit <layerId> --shadow "0,2,6,#00000080"    # alpha-softened
+ply layer edit <layerId> --shadow none                 # remove (its own edit)
+```
+
+- The spec is an ABSOLUTE setter `"<dx>,<dy>,<blur>,<color>"` that replaces
+  any previous shadow (the same command twice keeps the same shadow);
+  `"none"` removes it. Offsets are px within ±256 (negative is valid),
+  blur is a px radius between 0 and 256, and the color is hex —
+  `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (alpha softens the shadow).
+- **Ordering contract:** the shadow paints in the Layer's LOCAL coordinate
+  space — the canonical transform (scale/rotation/flip about `(x, y)`)
+  then maps content and shadow together, the Layer's opacity fades both,
+  and canvas clipping applies to the shadow-extended result. A rotated
+  Layer's shadow rotates with it.
+- **Painted bounds include the shadow:** `ply composition measure` reports
+  the shadow-extended ink in `painted`/`paintedOnCanvas`/`clipped` and the
+  effective shadow settings in the `effects` facts; anchored placement
+  (`--anchor`) resolves against the same shadow-extended painted ink — one
+  definition of painted ink. Because anchoring is one-shot, a shadow edit
+  never moves an already-resolved placement; anchoring with a shadow
+  centers the composite (content + shadow). `--anchor` and `--shadow`
+  cannot combine in one edit — make the effect edit first, then anchor.
+- **Revision fact (DEC-002):** the shadow is shared as a whole like
+  placement and transform — in-place edits propagate it, forks isolate it,
+  cross-Project copies preserve it verbatim, and it participates in the
+  revision hash (a shadow edit is a new revision). Retained source bytes
+  never change. A shadow edit is its own revision field, appended to the
+  hash only when present, so pre-#139 revisions keep their exact ids and
+  pinned Render history replays byte-identically.
+- Invalid settings fail at the command boundary (exit 2) through the same
+  parser the edit path uses — nothing invalid ever mutates live state.
 
 ## Setup
 

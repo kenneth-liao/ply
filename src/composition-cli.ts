@@ -66,16 +66,19 @@ composition — Composition authoring and inspection
       line-box extent — plus the painted extent's intersection with the
       canvas and whether painted ink is clipped, judged against painted
       extents, never the layout box (no visible ink reports painted: null).
+      A Layer's shadow extends its painted ink: painted bounds, the on-canvas
+      intersection, and clipped include the shadow extent, and the effective
+      shadow settings are reported in the effects facts and in compact text.
       Painted values are two-decimal rounded: ink is quantized to the
       capture window's pixel grid, while canvas offsets are layout-derived
       and may be fractional. Capture is bounded — one windowed screenshot
-      per Layer (never scaled by off-canvas distance), and a Layer whose
-      layout box exceeds the 8192×8192px window is refused with an
+      per Layer (never scaled by off-canvas distance), widened by each
+      Layer's shadow extent, and a Layer whose layout box plus shadow extent
+      exceeds the 8192×8192px window is refused with an
       actionable error instead of growing memory. Painted bounds are the
       browser's own paint of the exact markup rendering uses, so
       measurement and rendering agree; opacity scaling
-      changes alpha values, never the ink footprint, and effects beyond
-      opacity are separate functionality. Text dimensions are measured with
+      changes alpha values, never the ink footprint. Text dimensions are measured with
       the Layer's retained font bytes — the same face painting uses, never
       a second measuring authority; corrupt content or an unresolved font
       fails instead of producing misleading numbers. Writes nothing to the
@@ -604,6 +607,10 @@ async function run() {
             result.layers.forEach((layer, idx) => {
               const t = layer.transform;
               const facts: string[] = [];
+              if (layer.effects.shadow) {
+                const s = layer.effects.shadow;
+                facts.push(`shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
+              }
               if (t.scaleX !== 1 || t.scaleY !== 1) {
                 facts.push(`scale ${t.scaleX === t.scaleY ? `${t.scaleX}×` : `${t.scaleX}×/${t.scaleY}×`}`);
               }

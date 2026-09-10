@@ -4,6 +4,34 @@
 
 ### Added
 
+- Layer shadows with correct painted bounds (#139, spec #132 US-003 /
+  US-002 / US-006, DEC-002/003/004/005, ADR-0018):
+  `ply layer edit --shadow "<dx>,<dy>,<blur>,<color>"` applies a drop
+  shadow to a Layer's content — image alpha and text glyphs alike, one
+  uniform effect — as an ABSOLUTE setter that replaces any previous shadow
+  (`--shadow none` removes it). The shadow paints in the Layer's LOCAL
+  coordinate space: the canonical transform maps content and shadow
+  together, the Layer's opacity fades both, and canvas clipping applies to
+  the shadow-extended result. `ply composition measure` includes the
+  shadow extent in painted bounds, the on-canvas intersection, and
+  `clipped` — its bounded capture window widens by the revision's shadow
+  reach (|dx| + |dy| + 2·blur) so a shadowed Layer's full extent is
+  captured or refused loudly, never silently clipped — and reports the
+  effective shadow settings in the `effects` facts and compact text.
+  Anchored placement resolves against the same shadow-extended painted
+  ink (one definition of painted ink); a shadow edit never moves an
+  already-resolved placement, and `--anchor`/`--shadow` refuse to combine
+  in one edit. The shadow is a Layer revision fact shared as a whole:
+  in-place edits propagate it, forks isolate it, cross-Project copies
+  preserve it verbatim, and it is hash-appended only when present so
+  pre-#139 revisions keep their exact ids and pinned Render history
+  replays byte-identically. Invalid settings fail at the command boundary
+  (exit 2) through one shared parser — nothing invalid mutates live
+  state. Outline (#140) extends the same contract; no general filter
+  framework (DEC-006).
+
+### Added
+
 - Anchored Layer placement (#138, spec #132 US-002 / US-006, DEC-002/003/004,
   ADR-0017): `ply layer edit --anchor <h>[,<v>] --x <tx> --y <ty>` places a
   Layer's visible painted ink at the requested target instead of targeting

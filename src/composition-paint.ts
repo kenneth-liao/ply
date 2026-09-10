@@ -11,6 +11,10 @@
  * Paint contract: Layers paint in reference-list order — later Layers paint
  * over earlier ones — at each revision's stored position (x, y) and opacity in
  * [0, 1], at the retained content's intrinsic size, clipped to the canvas.
+ * A revision's shadow (#139, ADR-0018) applies to the content in its LOCAL
+ * coordinate space (image alpha or text glyphs alike) before the canonical
+ * transform, which maps content+shadow together, and the Layer's opacity
+ * fades both.
  * Areas no Layer covers stay transparent. Text Layers (#81) paint as DOM text
  * with their retained font bytes declared under an internal @font-face
  * family (never re-consulting assets/fonts/), and every text layer's family
@@ -227,13 +231,22 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
         transformParts.length > 0
           ? `transform:${transformParts.join(" ")};transform-origin:0 0;`
           : "";
+      // Canonical shadow (#139, ADR-0018): drop-shadow applies to the
+      // Layer's content in its LOCAL coordinate space — the transform above
+      // then maps content+shadow together, and the element's opacity fades
+      // both. Emitted only when a shadow exists, so pre-#139 revisions and
+      // their pinned Render history paint exactly as before.
+      const shadowFilter =
+        rev.shadow !== undefined
+          ? `filter:drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color});`
+          : "";
       if (rev.kind === "text") {
         const style =
-          `${base}${transformed}font-family:'${internalFontFamily(rev.contentHash)}';` +
+          `${base}${transformed}${shadowFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
           `font-size:${rev.fontSize}px;color:${rev.color};white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
-      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}">`;
+      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${shadowFilter}">`;
     })
     .join("");
   return (

@@ -99,6 +99,31 @@ interface LayerRevisionBase {
    */
   flipX?: boolean;
   flipY?: boolean;
+  /**
+   * Canonical Layer shadow (#139, ADR-0018): a drop shadow applied to the
+   * Layer's content in its LOCAL coordinate space — before the canonical
+   * transform, which maps content+shadow together — then faded by the
+   * Layer's opacity. `dx`/`dy` are the shadow offset in px (negative
+   * allowed), `blur` the softening radius in px (≥ 0), `color` a hex color
+   * (#RGB/#RRGGBB/#RRGGBBAA — alpha softens the shadow). The fact applies
+   * uniformly to image alpha and text glyphs (DEC-006: a bounded effect,
+   * never a general filter framework), and is a revision fact shared as a
+   * whole (DEC-002).
+   *
+   * Present ⟺ a shadow exists: absence IS the canonical no-shadow form, so
+   * removal drops the field and every reader treats absence as none — no
+   * second "no shadow" representation. The revision hash appends it only
+   * when present, so revisions written before #139 keep their exact ids.
+   */
+  shadow?: LayerShadow;
+}
+
+/** Canonical shadow parameters (#139, ADR-0018): offset, softening, color. */
+export interface LayerShadow {
+  dx: number;
+  dy: number;
+  blur: number;
+  color: string;
 }
 
 /**
@@ -234,6 +259,55 @@ export function normalizeStoredFlip(revision: {
     );
   }
   return { flipX, flipY };
+}
+
+/** Shadow parameter bounds (#139, ADR-0018): a bounded effect footprint, so
+ * painted-extent capture stays bounded (DEC-006). Offsets may be negative. */
+const MAX_SHADOW_OFFSET_PX = 256;
+const MAX_SHADOW_BLUR_PX = 256;
+
+/** Shadow hex color: #RGB, #RRGGBB, or #RRGGBBAA (alpha softens the shadow). */
+const SHADOW_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+
+/**
+ * Canonical stored-shadow validation and normalization (#139, ADR-0018).
+ * The one normalization boundary for the shadow effect: documents written
+ * before #139 lack the field, and absence IS the canonical no-shadow form —
+ * every downstream reader projects through this function and never re-derives
+ * a default. A present field must be a valid shadow object: finite `dx`/`dy`
+ * within the offset cap, finite `blur` ≥ 0 within the blur cap, and a hex
+ * `color` (#RGB/#RRGGBB/#RRGGBBAA) — anything else is a malformed document,
+ * refused loudly before the revision hash is consulted.
+ */
+export function normalizeStoredShadow(revision: { shadow?: unknown }): LayerShadow | undefined {
+  if (revision.shadow === undefined) {
+    return undefined;
+  }
+  const raw = revision.shadow;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `Malformed revision document: shadow must be a shadow object when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  const { dx, dy, blur, color } = raw as Record<string, unknown>;
+  for (const [label, value] of [["dx", dx], ["dy", dy]] as const) {
+    if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > MAX_SHADOW_OFFSET_PX) {
+      throw new Error(
+        `Malformed revision document: shadow.${label} must be a finite number of px within ±${MAX_SHADOW_OFFSET_PX} (got ${JSON.stringify(value)}).`,
+      );
+    }
+  }
+  if (typeof blur !== "number" || !Number.isFinite(blur) || blur < 0 || blur > MAX_SHADOW_BLUR_PX) {
+    throw new Error(
+      `Malformed revision document: shadow.blur must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX} (got ${JSON.stringify(blur)}).`,
+    );
+  }
+  if (typeof color !== "string" || !SHADOW_COLOR_PATTERN.test(color)) {
+    throw new Error(
+      `Malformed revision document: shadow.color must be a hex color like #000000, #000, or #00000080 (got ${JSON.stringify(color)}).`,
+    );
+  }
+  return { dx, dy, blur, color } as LayerShadow;
 }
 
 export type ResolvedLayerRevision =
@@ -436,7 +510,11 @@ export function computeRevisionHash(rev: LayerRevision): string {
   const rotationField = rev.rotationDeg !== undefined ? `:${rev.rotationDeg}` : "";
   const flipFields =
     rev.flipX !== undefined || rev.flipY !== undefined ? `:${rev.flipX}:${rev.flipY}` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}`).digest("hex").slice(0, 16)}`;
+  const shadowField =
+    rev.shadow !== undefined
+      ? `:shadow(${rev.shadow.dx},${rev.shadow.dy},${rev.shadow.blur},${rev.shadow.color})`
+      : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -649,6 +727,10 @@ export async function readRevisionInternalFull(
   // boundary (#135, ADR-0016) — malformed stored fields are refused loudly
   // before the revision hash is consulted.
   const flip = normalizeStoredFlip(revision);
+  // Canonical shadow effect: validated and normalized at this same one
+  // boundary (#139, ADR-0018) — a malformed stored field is refused loudly
+  // before the revision hash is consulted. Absence IS the no-shadow form.
+  const shadow = normalizeStoredShadow(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -717,6 +799,7 @@ export async function readRevisionInternalFull(
             rotationDeg,
             flipX: flip.flipX,
             flipY: flip.flipY,
+            ...(shadow !== undefined ? { shadow } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -738,6 +821,7 @@ export async function readRevisionInternalFull(
           rotationDeg,
           flipX: flip.flipX,
           flipY: flip.flipY,
+          ...(shadow !== undefined ? { shadow } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -835,6 +919,17 @@ export interface EditLayerOptions {
    */
   flip?: "horizontal" | "vertical" | "both" | "none";
   /**
+   * Apply a shadow to the Layer's content (#139, ADR-0018): an ABSOLUTE
+   * setter that replaces any previous shadow — the same command twice keeps
+   * the same shadow — and `"none"` removes it. The spec string is normalized
+   * by `resolveEditShadow` against the current revision, so an omitted option
+   * preserves the current revision's shadow. Independent of the retained
+   * content's size, so it combines freely with other edit options including
+   * content replacement and resize; it must not combine with --anchor, whose
+   * resolution would see different ink than the edit publishes.
+   */
+  shadow?: string;
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -905,6 +1000,9 @@ export interface EditLayerResult {
   /** Present when the edit flipped the Layer (#135): the absolute reflection
    * state now recorded on the revision. */
   flipped?: { flip: "horizontal" | "vertical" | "both" | "none" };
+  /** Present when the edit set or removed the shadow (#139): the absolute
+   * shadow state now recorded on the revision (null when removed). */
+  shadowed?: { shadow: LayerShadow | null };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -1034,6 +1132,68 @@ function resolveEditFlip(options: EditLayerOptions, prevRev: ResolvedLayerRevisi
   }
 }
 
+/**
+ * Canonical shadow normalization (#139, ADR-0018): `--shadow` sets an ABSOLUTE
+ * shadow, replacing any previous one; `"none"` removes it. Omitted option
+ * preserves the current revision's shadow. Every refusal runs before any
+ * staging, so an invalid shadow never advances live state. Exported for the
+ * CLI boundary: the command classifies malformed specs as usage errors
+ * (exit 2) with this same parser, so the two never disagree.
+ */
+export function parseShadowSpec(spec: string, prev?: LayerShadow): LayerShadow | undefined {
+  const raw = spec.trim();
+  if (raw.toLowerCase() === "none") {
+    return undefined;
+  }
+  const parts = raw.split(",").map((p) => p.trim());
+  if (parts.length !== 4) {
+    throw new Error(
+      `Invalid shadow "${raw}": --shadow takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".`,
+    );
+  }
+  const [dxRaw, dyRaw, blurRaw, colorRaw] = parts;
+  const dx = Number(dxRaw);
+  const dy = Number(dyRaw);
+  const blur = Number(blurRaw);
+  const color = colorRaw ?? "";
+  if (dxRaw === "" || dyRaw === "" || blurRaw === "" || color === "") {
+    throw new Error(
+      `Invalid shadow "${raw}": --shadow takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".`,
+    );
+  }
+  for (const [label, value] of [["dx", dx], ["dy", dy]] as const) {
+    if (!Number.isFinite(value) || Math.abs(value) > MAX_SHADOW_OFFSET_PX) {
+      throw new Error(
+        `Invalid shadow offset ${label} ${dxRaw}: must be a finite number of px within ±${MAX_SHADOW_OFFSET_PX}.`,
+      );
+    }
+  }
+  if (!Number.isFinite(blur) || blur < 0 || blur > MAX_SHADOW_BLUR_PX) {
+    throw new Error(
+      `Invalid shadow blur ${blurRaw}: must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX}.`,
+    );
+  }
+  if (!SHADOW_COLOR_PATTERN.test(color)) {
+    throw new Error(
+      `Invalid shadow color "${color}": must be a hex color like #000000, #000, or #00000080.`,
+    );
+  }
+  return { dx, dy, blur, color };
+}
+
+/**
+ * Canonical shadow edit resolution (#139, ADR-0018): an omitted option
+ * preserves the current revision's shadow; a spec sets or removes it
+ * absolutely. The refusal runs before any staging, so an invalid shadow
+ * never advances live state.
+ */
+function resolveEditShadow(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerShadow | undefined {
+  if (options.shadow === undefined) {
+    return prevRev.shadow;
+  }
+  return parseShadowSpec(options.shadow, prevRev.shadow);
+}
+
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
 export function roundEffective(px: number): number {
   return Math.round(px * 100) / 100;
@@ -1161,6 +1321,7 @@ async function buildEditedRevision(
   scale: LayerTransformScale,
   rotationDeg: number,
   flip: LayerTransformFlip,
+  shadow: LayerShadow | undefined,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -1258,12 +1419,14 @@ async function buildEditedRevision(
       rotationDeg,
       flipX: flip.flipX,
       flipY: flip.flipY,
+      ...(shadow !== undefined ? { shadow } : {}),
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
       scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY &&
       rotationDeg === prevRev.rotationDeg &&
-      flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY;
+      flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY &&
+      shadow === prevRev.shadow;
     return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
@@ -1316,6 +1479,7 @@ async function buildEditedRevision(
       rotationDeg,
       flipX: flip.flipX,
       flipY: flip.flipY,
+      ...(shadow !== undefined ? { shadow } : {}),
     };
     const unchanged =
       contentHash === prevRev.contentHash &&
@@ -1329,7 +1493,8 @@ async function buildEditedRevision(
       scale.scaleY === prevRev.scaleY &&
       rotationDeg === prevRev.rotationDeg &&
       flip.flipX === prevRev.flipX &&
-      flip.flipY === prevRev.flipY;
+      flip.flipY === prevRev.flipY &&
+      shadow === prevRev.shadow;
     return { revision, unchanged, retainedGeneration: null };
   }
 
@@ -1492,6 +1657,10 @@ export async function editLayerInternal(
   const scale = resolveEditScale(options, prevRev, layerId);
   const rotationDeg = resolveEditRotation(options, prevRev);
   const flip = resolveEditFlip(options, prevRev);
+  // Shadow effect (#139, ADR-0018): absolute setter, refusal before staging.
+  const shadow = resolveEditShadow(options, prevRev);
+  const hasShadow = options.shadow !== undefined;
+  const shadowedReport = { shadow: shadow ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -1529,6 +1698,7 @@ export async function editLayerInternal(
       scale,
       rotationDeg,
       flip,
+      shadow,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
@@ -1540,17 +1710,18 @@ export async function editLayerInternal(
     const withResized = hasResize ? { ...forkResult, resized: resizedReport } : forkResult;
     const withRotated = hasRotate ? { ...withResized, rotated: rotatedReport } : withResized;
     const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
+    const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     return options.fromGeneration !== undefined
-      ? { ...withFlipped, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withShadow, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
         ? {
-            ...withFlipped,
+            ...withShadow,
             mattedFrom,
             ...(retainedGeneration
               ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
               : {}),
           }
-        : withFlipped;
+        : withShadow;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
@@ -1564,6 +1735,7 @@ export async function editLayerInternal(
     scale,
     rotationDeg,
     flip,
+    shadow,
   );
 
   // No-op check: if all fields are identical to previous revision, avoid storage churn
@@ -1576,6 +1748,7 @@ export async function editLayerInternal(
       ...(hasResize ? { resized: resizedReport } : {}),
       ...(hasRotate ? { rotated: rotatedReport } : {}),
       ...(flippedReport ? { flipped: flippedReport } : {}),
+      ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -1627,6 +1800,7 @@ export async function editLayerInternal(
     ...(hasResize ? { resized: resizedReport } : {}),
     ...(hasRotate ? { rotated: rotatedReport } : {}),
     ...(flippedReport ? { flipped: flippedReport } : {}),
+    ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),
