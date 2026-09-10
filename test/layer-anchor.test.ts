@@ -690,3 +690,79 @@ test(
   },
   60_000,
 );
+
+/** Tracer 10 (SPEC-1): text Layers anchor across the required combinations —
+ * edge pairs beyond center,center — and the documented single-axis forms
+ * anchor exactly their one axis, leaving the other axis's plain targeting
+ * (or its explicit coordinate) intact. The audit report states exactly what
+ * publishes (SPEC-3). */
+test(
+  "text Layers anchor across edge combinations; single-axis forms publish the unanchored axis honestly",
+  async () => {
+    await makeComp("poster", 400, 300);
+    const addHeadline = async (name: string) => {
+      const res = await invoke([
+        "composition", "add", "poster", name, "--text", "Ply", "--font", "Anton",
+        "--font-size", "48", "--x", "10", "--y", "10", "--project", projDir, "--json",
+      ]);
+      expect(res.code).toBe(0);
+      return JSON.parse(res.stdout).use.layerId as string;
+    };
+
+    // Text edge pair 1: left,top.
+    const headlineA = await addHeadline("head-a");
+    const editA = await invoke([
+      "layer", "edit", headlineA, "--anchor", "left,top", "--x", "0", "--y", "0", "--project", projDir, "--json",
+    ]);
+    expect(editA.code).toBe(0);
+    const reportA = JSON.parse(editA.stdout);
+    const measureA = useReport(await measure("poster"), "head-a");
+    expect(measureA.painted).toEqual({ x: 0, y: 0, width: reportA.anchored.painted.width, height: reportA.anchored.painted.height });
+
+    // Text edge pair: right,bottom.
+    const headlineB = await addHeadline("head-b");
+    const editB = await invoke([
+      "layer", "edit", headlineB, "--anchor", "right,bottom", "--x", "400", "--y", "300", "--project", projDir, "--json",
+    ]);
+    expect(editB.code).toBe(0);
+    const measureB = useReport(await measure("poster"), "head-b");
+    const pB = measureB.painted;
+    expect(pB.x + pB.width).toBe(400);
+    expect(pB.y + pB.height).toBe(300);
+
+    // Single-axis form on an image: --anchor right anchors x only; the
+    // unanchored y keeps its current placement when --y is omitted.
+    const redImg = path.join(tempDir, "red.png");
+    await writeFile(redImg, solidPng(80, 40, RED));
+    const addRes = await addImageLayer("poster", "solo", redImg, { x: 10, y: 10 });
+    const soloId = addRes.use.layerId as string;
+    const soloEdit = await invoke([
+      "layer", "edit", soloId, "--anchor", "right", "--x", "200", "--project", projDir, "--json",
+    ]);
+    expect(soloEdit.code).toBe(0);
+    const soloJson = JSON.parse(soloEdit.stdout);
+    expect(soloJson.anchored.anchor).toEqual({ horizontal: "right" });
+    expect(soloJson.anchored.target).toEqual({ x: 200 });
+    expect(soloJson.anchored.placement).toEqual({ x: 120, y: 10 }); // 200 - 80
+    const soloMeasure = useReport(await measure("poster"), "solo");
+    expect(soloMeasure.painted).toEqual({ x: 120, y: 10, width: 80, height: 40 });
+
+    // Mixed axes (SPEC-3): an unanchored axis with a SUPPLIED coordinate
+    // publishes as a plain placement edit — the report and the published
+    // revision agree.
+    const mixedEdit = await invoke([
+      "layer", "edit", soloId, "--anchor", "top", "--y", "250", "--x", "50", "--project", projDir, "--json",
+    ]);
+    expect(mixedEdit.code).toBe(0);
+    const mixedJson = JSON.parse(mixedEdit.stdout);
+    // Ink offset from placement is (0, 0): top → y = 250; x publishes 50.
+    expect(mixedJson.anchored.placement).toEqual({ x: 50, y: 250 });
+    expect(mixedJson.layer.currentRevision.x).toBe(50);
+    expect(mixedJson.layer.currentRevision.y).toBe(250);
+    // Single vertical anchor spec in compact text.
+    const textOut = await invoke(["layer", "edit", soloId, "--anchor", "top", "--y", "250", "--x", "50", "--project", projDir]);
+    expect(textOut.code).toBe(0);
+    expect(textOut.stdout).toContain("anchored top at y 250");
+  },
+  120_000,
+);

@@ -96,7 +96,9 @@ export interface AnchorResolution {
   /** The requested target, restricted to the anchored axes. */
   target: { x?: number; y?: number };
   /** The resolved canonical placement (x, y) to publish. An unanchored axis
-   * carries the Layer's current placement (preserved by the edit). */
+   * keeps the Layer's current placement unless that axis's coordinate is
+   * explicitly supplied (a plain placement edit); the command report
+   * reflects exactly the placement the edit publishes. */
   placement: { x: number; y: number };
   /** The measured painted ink box the resolution anchored against (from the
    * first resolution context; identical across agreeing contexts). */
@@ -224,11 +226,9 @@ export async function resolveAnchoredPlacement(
  * resolves against visible ink and never falls back to the layout box. */
 function noInkRefusal(layerId: string, context: string): Error {
   return new Error(
-    `Layer "${layerId}" has no visible painted ink ` +
-      (context === "standalone"
-        ? "(its content is fully transparent)"
-        : `in composition "${context}"`) +
-      ` — anchored placement resolves against the painted ink box, not the layout box. Use explicit --x/--y placement instead.`,
+    `Layer "${layerId}" has no visible painted ink (transparent content or opacity 0` +
+      (context === "standalone" ? "" : ` in composition "${context}"`) +
+      `) — anchored placement resolves against the painted ink box, not the layout box. Use explicit --x/--y placement instead.`,
   );
 }
 

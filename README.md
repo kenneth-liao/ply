@@ -267,7 +267,7 @@ content box (ADR-0017):
 ```bash
 ply layer edit <layerId> --anchor center,center --x 960 --y 540
 ply layer edit <layerId> --anchor center,bottom --x 960 --y 1070
-ply layer edit <layerId> --anchor right       # horizontal only: --x is the target
+ply layer edit <layerId> --anchor right --x 300  # horizontal only: --x is the target
 ply layer edit <layerId> --anchor top,center --y 200 --x 100
 ```
 

@@ -30,9 +30,6 @@
   help documents the anchor box, transform interaction, padding, and
   resolution contexts; the edit report carries `anchored: {anchor, target,
   placement, painted, contexts}` for audit.
-
-### Added
-
 - Painted footprints and canvas clipping (#137, spec #132 US-002 / US-006,
   DEC-004): `ply composition measure` now reports each Layer's painted
   extents alongside its layout boxes — the visible-ink (alpha > 0)

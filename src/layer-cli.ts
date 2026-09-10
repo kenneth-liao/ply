@@ -639,6 +639,16 @@ async function run() {
           }
           if (parsedAnchor.horizontal !== undefined) editX = anchored.placement.x;
           if (parsedAnchor.vertical !== undefined) editY = anchored.placement.y;
+          // The report states what WILL publish: an unanchored axis with a
+          // supplied coordinate publishes as a plain placement edit, so the
+          // audit report and the published revision can never disagree.
+          anchored = {
+            ...anchored,
+            placement: {
+              x: parsedAnchor.horizontal !== undefined ? anchored.placement.x : (editX ?? anchored.placement.x),
+              y: parsedAnchor.vertical !== undefined ? anchored.placement.y : (editY ?? anchored.placement.y),
+            },
+          };
         }
 
         const res = await editLayer(targetProj, layerId, {
