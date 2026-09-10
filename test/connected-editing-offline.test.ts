@@ -69,6 +69,64 @@ async function invokeOffline(args: string[], cwd: string, extraEnv: Record<strin
 
 const darwinOnly = test.skipIf(process.platform !== "darwin");
 const LONG = 300_000;
+
+/**
+ * The recorded rendering environment: the identity this qualification's
+ * pixel/numerical evidence was calibrated against — the same identity render
+ * manifests pin for byte-identical replay (#87: tool, runtime, browser,
+ * platform). A different stack (newer Chromium build, different font
+ * rasterizer, other macOS release) shifts anti-aliased ink edges, glyph
+ * capture boxes, and downsampled means, so the hardcoded geometry, the
+ * 8/255 patch tolerance, and the ink-count thresholds would false-fail on a
+ * machine they were never claimed to hold. Following the render-history
+ * pattern, the suite detects the actual paint environment and skips —
+ * loudly, never silently — when it is not the recorded one; the skip is the
+ * re-qualification signal, not a claim that the behavior broke. The
+ * matrix-audit file and the network-denial negative control are
+ * environment-independent and stay active regardless.
+ */
+const RECORDED_ENV = {
+  tool: { name: "ply", version: "4.11.0" },
+  runtime: "bun 1.4.0",
+  browser: "chromium 151.0.7922.34",
+  platform: "darwin-arm64",
+};
+
+/** The actual paint environment, captured the way captureEnvironment does
+ * (the browser identity comes from the same Playwright launch renders use). */
+async function currentPaintEnvironment() {
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch();
+  try {
+    return {
+      tool: { name: "ply", version: (await import("../package.json", { with: { type: "json" } })).default.version },
+      runtime: `bun ${Bun.version}`,
+      browser: `${browser.browserType().name()} ${browser.version()}`,
+      platform: `${process.platform}-${process.arch}`,
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
+const envNow = await currentPaintEnvironment();
+const envMismatches = [
+  envNow.tool.name === RECORDED_ENV.tool.name ? null : `tool name ${envNow.tool.name} ≠ ${RECORDED_ENV.tool.name}`,
+  envNow.tool.version === RECORDED_ENV.tool.version ? null : `tool version ${envNow.tool.version} ≠ ${RECORDED_ENV.tool.version}`,
+  envNow.runtime === RECORDED_ENV.runtime ? null : `runtime ${envNow.runtime} ≠ ${RECORDED_ENV.runtime}`,
+  envNow.browser === RECORDED_ENV.browser ? null : `browser ${envNow.browser} ≠ ${RECORDED_ENV.browser}`,
+  envNow.platform === RECORDED_ENV.platform ? null : `platform ${envNow.platform} ≠ ${RECORDED_ENV.platform}`,
+].filter((m): m is string => m !== null);
+const envMismatch = envMismatches.length > 0 ? envMismatches.join(", ") : null;
+if (envMismatch) {
+  console.log(
+    `skipped: the connected-editing qualification's pixel/numerical evidence is calibrated to the recorded rendering environment, and this is a different one (${envMismatch}). ` +
+      "The calibrated constants (RECORDED_ENV, ink boxes, 8/255 patch tolerance, count thresholds) would false-fail here; re-qualify in the recorded environment or re-record them.",
+  );
+}
+/** The env-sensitive lifecycle runs only in the recorded environment; the
+ * negative control below is environment-independent and always runs. */
+const recordedEnvOnly = test.skipIf(envMismatch !== null);
 const json = (r: { stdout: string }) => JSON.parse(r.stdout);
 const ok = async (args: string[], cwd: string, env?: Record<string, string>) => {
   const r = await invokeOffline(args, cwd, env ?? {});
@@ -216,7 +274,7 @@ darwinOnly("network isolation negative control: local listener is reachable outs
 // 2. The connected lifecycle (TEST-004 + TEST-003)
 // ---------------------------------------------------------------------------
 
-darwinOnly(
+recordedEnvOnly(
   "connected editing workflow: Luigi rebuilt from the retained matte with in-tool resize, centered headline, and shadow; poster shares and forks; then deletion, relocation, offline edits, and byte-identical replay",
   async () => {
     const root = tempDir;

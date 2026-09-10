@@ -17,7 +17,7 @@
  * | layout/content measurement      | "measure reports an identity image Layer's layout box" | "text measurement uses the retained face" | test/composition-measure.test.ts |
  * | painted bounds / padding        | "measure reports painted extents separately from layout boxes" | "text painted extents are tight glyph ink" | test/composition-measure.test.ts |
  * | canvas clipping                 | "canvas clipping is judged against painted extents" | (same seam, both kinds) | test/composition-measure.test.ts |
- * | anchored placement (--anchor)   | "image Layer --anchor center,center resolves placement" | text anchor tests in the same suite | test/layer-anchor.test.ts |
+ * | anchored placement (--anchor)   | "image Layer --anchor center,center resolves placement" | "a text headline centers its glyph ink at the requested target"; "text Layers anchor across edge combinations; single-axis forms publish the unanchored axis honestly" | test/layer-anchor.test.ts |
  * | shadow (--shadow)               | "image Layer --shadow paints drop-shadow pixels" | "text Layer --shadow paints at the glyph ink" | test/layer-shadow.test.ts |
  * | outline (--outline)             | "image Layer --outline paints outline pixels" | "text Layer --outline paints at the glyph ink" | test/layer-outline.test.ts |
  * | placement/opacity editing       | "single-referrer image Layer edit advances revision" | "single-referrer text Layer edit advances revision" | test/layer-edit.test.ts |
@@ -66,6 +66,8 @@ const audit: Array<{ suite: string; markers: string[] }> = [
     suite: "layer-anchor.test.ts",
     markers: [
       "image Layer --anchor center,center resolves placement so the painted ink centers on the target",
+      "a text headline centers its glyph ink at the requested target",
+      "text Layers anchor across edge combinations; single-axis forms publish the unanchored axis honestly",
       "rendered pixels agree with the anchored resolution",
     ],
   },
