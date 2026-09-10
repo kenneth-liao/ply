@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "jobId": "gen-20260910-5a5ce6fd",
+  "kind": "generation",
+  "createdAt": "2026-09-10T01:13:49.438Z",
+  "request": {
+    "prompt": "Side-scrolling platformer level background, bright blue sky with fluffy cartoon clouds, brown dirt ground across the bottom third, green pipes coming up from the ground, cheerful retro video-game style, wide shot, no characters, no text, no watermark",
+    "intent": "full-canvas",
+    "model": "gpt-image",
+    "sizing": {
+      "kind": "size",
+      "width": 1280,
+      "height": 720
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-10T01:13:49.438Z",
+    "model": "openai/gpt-image-2",
+    "fullPrompt": "Side-scrolling platformer level background, bright blue sky with fluffy cartoon clouds, brown dirt ground across the bottom third, green pipes coming up from the ground, cheerful retro video-game style, wide shot, no characters, no text, no watermark",
+    "costUsd": 0.0045,
+    "costMeasured": true,
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "26f14e9fe3cf9a9941a9494f2d6d6fe7d96e3e55574dda144ae49884f7869fc6",
+        "file": "outputs/26f14e9fe3cf9a9941a9494f2d6d6fe7d96e3e55574dda144ae49884f7869fc6.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

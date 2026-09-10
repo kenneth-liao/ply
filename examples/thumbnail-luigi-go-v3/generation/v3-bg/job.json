@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "jobId": "v3-bg",
+  "kind": "generation",
+  "createdAt": "2026-09-10T18:34:28.675Z",
+  "request": {
+    "prompt": "Side-scrolling platformer level background, bright blue sky with fluffy cartoon clouds, brown dirt ground across the bottom third, green pipes coming up from the ground, cheerful retro video-game style, wide shot, no characters, no text, no watermark",
+    "intent": "full-canvas",
+    "model": "nano-2",
+    "sizing": {
+      "kind": "aspectRatio",
+      "ratio": "16:9"
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-10T18:34:28.675Z",
+    "model": "google/gemini-3.1-flash-image",
+    "fullPrompt": "Side-scrolling platformer level background, bright blue sky with fluffy cartoon clouds, brown dirt ground across the bottom third, green pipes coming up from the ground, cheerful retro video-game style, wide shot, no characters, no text, no watermark\nOutput aspect ratio: 16:9.",
+    "costUsd": 0.067,
+    "costMeasured": true,
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "2c770e35174d392266d8912542ffa026773421393d1e156cdb0e45226dfb2f82",
+        "file": "outputs/2c770e35174d392266d8912542ffa026773421393d1e156cdb0e45226dfb2f82.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "matteId": "v3-luigi",
+  "kind": "matting",
+  "createdAt": "2026-09-10T18:41:38.193Z",
+  "request": {
+    "source": {
+      "path": "out/generation/v3-char/outputs/69ef825401b3ad72ee8206f150910db66d1871092ce7fdc794caa5744ef915eb.png",
+      "contentHash": "69ef825401b3ad72ee8206f150910db66d1871092ce7fdc794caa5744ef915eb"
+    }
+  },
+  "result": {
+    "engine": "local-segmentation:birefnet-hr-fp16.onnx",
+    "alpha": {
+      "width": 1024,
+      "height": 1024,
+      "transparentPx": 805795,
+      "opaquePx": 215796
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "d824da4adc718939e9f3404ce2f60c772482087aa41bed4663e6ddafc48431ec",
+        "file": "outputs/d824da4adc718939e9f3404ce2f60c772482087aa41bed4663e6ddafc48431ec.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

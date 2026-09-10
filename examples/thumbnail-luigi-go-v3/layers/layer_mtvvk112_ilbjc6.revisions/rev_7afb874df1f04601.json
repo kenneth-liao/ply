@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "layerId": "layer_mtvvk112_ilbjc6",
+  "createdAt": "2026-09-10T18:42:51.432Z",
+  "kind": "text",
+  "contentHash": "3de40176cd8f890e6c8895028335f54b23272d91304e461d7dbd6bc6ff997bab",
+  "text": "LUIGI GO",
+  "fontSize": 110,
+  "color": "#FF8C00",
+  "x": 474,
+  "y": 41,
+  "opacity": 1,
+  "scaleX": 1,
+  "scaleY": 1,
+  "rotationDeg": 0,
+  "flipX": false,
+  "flipY": false,
+  "shadow": {
+    "dx": 0,
+    "dy": 6,
+    "blur": 18,
+    "color": "#000000aa"
+  },
+  "outline": {
+    "width": 2,
+    "color": "#101014"
+  }
+}
