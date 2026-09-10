@@ -18,6 +18,7 @@ import {
   type ResolvedCompositionLayer,
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
+import { measureCompositionLayers } from "./composition-measure.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
 const HELP = `
@@ -53,6 +54,21 @@ composition — Composition authoring and inspection
 
   bun run ply composition inspect <name> [options]
       Inspect a Composition's canvas and ordered Layers
+
+  bun run ply composition measure <comp> [use-name] [options]
+      Measure Layer layout bounds read-only in Composition coordinates,
+      including the current scale, rotation, and reflection. Reports each
+      Layer's untransformed content box, the axis-aligned bounding box of
+      its transformed content rectangle (unclipped), and that rectangle's
+      corners. These are LAYOUT boxes, not painted extents: image boxes
+      include transparent padding, text boxes are line-box extents rather
+      than tight glyph ink, and effects, opacity fading, and canvas
+      clipping are not reflected (visible painted bounds are separate
+      functionality). Text dimensions are measured with the Layer's
+      retained font bytes — the same face painting uses, never a second
+      measuring authority; corrupt content or an unresolved font fails
+      instead of producing misleading numbers. Writes nothing to the
+      Project.
 
   bun run ply composition render <name> [options]
       Render a Composition to a PNG at its exact canvas dimensions and
@@ -558,6 +574,43 @@ async function run() {
         output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
+    } else if (command === "measure") {
+      const compName = positionals[1];
+      const useName = positionals[2];
+      if (!compName) {
+        output({ ok: false, error: "Usage: ply composition measure <composition> [use-name]" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+
+      try {
+        const result = await measureCompositionLayers(targetProj, compName, useName);
+        output(
+          { ok: true, composition: result.composition, canvas: result.canvas, layers: result.layers },
+          isJson,
+          () => {
+            console.log(`Measured Composition "${result.composition}" (${result.canvas.width}×${result.canvas.height}), ${result.layers.length} Layer${result.layers.length === 1 ? "" : "s"} (layout boxes — not painted extents):`);
+            result.layers.forEach((layer, idx) => {
+              const t = layer.transform;
+              const facts: string[] = [];
+              if (t.scaleX !== 1 || t.scaleY !== 1) {
+                facts.push(`scale ${t.scaleX === t.scaleY ? `${t.scaleX}×` : `${t.scaleX}×/${t.scaleY}×`}`);
+              }
+              if (t.rotationDeg !== 0) facts.push(`rot ${t.rotationDeg}°`);
+              if (t.flipX || t.flipY) {
+                facts.push(`flip ${t.flipX && t.flipY ? "both" : t.flipX ? "horizontal" : "vertical"}`);
+              }
+              console.log(
+                `  ${idx + 1}. "${layer.name}" (${contentContentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height}` +
+                  (facts.length > 0 ? ` [${facts.join(", ")}]` : ""),
+              );
+            });
+          },
+        );
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
     } else if (command === "render") {
       const name = positionals[1];
       if (!name) {
@@ -626,7 +679,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, render, replay, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, measure, render, replay, list. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }
@@ -659,4 +712,9 @@ function emitRender(
 /** Blank supplied values are invalid, never implicit zero. */
 function parseNumericArgument(value: string | undefined): number {
   return value?.trim() ? Number(value) : NaN;
+}
+
+/** Compact content description for a measured Layer. */
+function contentContentLabel(layer: { kind: string; content: { width: number; height: number } }): string {
+  return layer.kind === "text" ? `text ${layer.content.width}×${layer.content.height}` : `image content ${layer.content.width}×${layer.content.height}`;
 }

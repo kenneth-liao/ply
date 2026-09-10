@@ -19,7 +19,7 @@ if (!command || command === "--help" || command === "-h") {
 Usage: ply <project|composition|layer|generate|matte|scene|library|jobs> <command> [options]
 
   project        Create, select, and inspect self-contained Projects
-  composition    Create, add layers, import, remove, reorder, inspect, render, replay, and list Compositions
+  composition    Create, add layers, import, remove, reorder, inspect, measure, render, replay, and list Compositions
   layer          Inspect and list Layers within a Project
   generate       Generate source images as Generation Jobs — one uniform operation,
                  full-canvas or isolated intent, no content policy (new surface)

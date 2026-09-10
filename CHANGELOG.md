@@ -4,6 +4,21 @@
 
 ### Added
 
+- Read-only Layer layout measurement (#136, spec #132 US-002 / US-006,
+  DEC-004): `ply composition measure <comp> [use-name]` reports each Layer's
+  untransformed content box, the axis-aligned bounding box of its transformed
+  content rectangle (unclipped), and that rectangle's corners — in
+  Composition coordinates, including the current scale, rotation, and
+  reflection. Measurement loads the exact markup painting builds (same
+  retained font bytes under the same internal @font-face families, same
+  emitted transforms, same canvas and text wrapping) and reads the browser's
+  own geometry, so text dimensions always agree with painting. The reported
+  boxes are LAYOUT boxes — image boxes include transparent padding and text
+  boxes are line-box extents, not tight glyph ink — deliberately distinct
+  from the painted extents of a later ticket. Corrupt or missing content and
+  unresolved fonts fail loudly instead of producing misleading numbers. The
+  query writes no Project state, works offline, and ships compact text,
+  valid `--json`, and scoped help.
 - Layer flip without replacing source content (#135, spec #132, ADR-0016):
   `ply layer edit --flip <horizontal|vertical|both|none>` sets an **absolute**
   reflection state about the Layer's `(x, y)` placement point — it replaces
