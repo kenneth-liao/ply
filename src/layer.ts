@@ -116,6 +116,22 @@ interface LayerRevisionBase {
    * when present, so revisions written before #139 keep their exact ids.
    */
   shadow?: LayerShadow;
+  /**
+   * Canonical Layer outline (#140, ADR-0019): a solid outline hugging the
+   * Layer's content in its LOCAL coordinate space — painted BEFORE the
+   * shadow, which is therefore cast from the outlined composite — then
+   * mapped by the canonical transform and faded by the Layer's opacity.
+   * `width` is the outline thickness in px (≥ 0), `color` a hex color
+   * (#RGB/#RRGGBB/#RRGGBBAA). The fact applies uniformly to image alpha and
+   * text glyphs (DEC-006: a bounded effect, never a general filter
+   * framework), and is a revision fact shared as a whole (DEC-002).
+   *
+   * Present ⟺ an outline exists: absence IS the canonical no-outline form,
+   * so removal drops the field and every reader treats absence as none — no
+   * second "no outline" representation. The revision hash appends it only
+   * when present, so revisions written before #140 keep their exact ids.
+   */
+  outline?: LayerOutline;
 }
 
 /** Canonical shadow parameters (#139, ADR-0018): offset, softening, color. */
@@ -123,6 +139,12 @@ export interface LayerShadow {
   dx: number;
   dy: number;
   blur: number;
+  color: string;
+}
+
+/** Canonical outline parameters (#140, ADR-0019): thickness, color. */
+export interface LayerOutline {
+  width: number;
   color: string;
 }
 
@@ -261,13 +283,34 @@ export function normalizeStoredFlip(revision: {
   return { flipX, flipY };
 }
 
-/** Shadow parameter bounds (#139, ADR-0018): a bounded effect footprint, so
- * painted-extent capture stays bounded (DEC-006). Offsets may be negative. */
+/** Effect parameter bounds (#139/#140, ADR-0018/0019): a bounded effect
+ * footprint, so painted-extent capture stays bounded (DEC-006). Shadow
+ * offsets may be negative. */
 const MAX_SHADOW_OFFSET_PX = 256;
 const MAX_SHADOW_BLUR_PX = 256;
+const MAX_OUTLINE_WIDTH_PX = 256;
 
-/** Shadow hex color: #RGB, #RRGGBB, or #RRGGBBAA (alpha softens the shadow). */
-const SHADOW_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+/** Effect hex color: #RGB, #RRGGBB, or #RRGGBBAA. */
+const EFFECT_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+
+/**
+ * Canonical effect-color form (INT-2 from the #139 review, decided for both
+ * effects in #140): lowercase hex with `#RGB` expanded to `#RRGGBB`, applied
+ * at the ONE ingestion boundary (the spec parsers). Case/shorthand variants
+ * of the same paint can no longer hash into redundant revisions going
+ * forward; documents stored before this decision stay verbatim (the stored
+ * normalizers accept every conformant form, so old revision ids and pinned
+ * paint are untouched).
+ */
+function canonicalizeEffectColor(color: string): string {
+  const lower = color.toLowerCase();
+  if (lower.length === 4) {
+    // #RGB → #RRGGBB: duplicate each digit.
+    const [, r, g, b] = lower;
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return lower;
+}
 
 /**
  * Canonical stored-shadow validation and normalization (#139, ADR-0018).
@@ -302,12 +345,45 @@ export function normalizeStoredShadow(revision: { shadow?: unknown }): LayerShad
       `Malformed revision document: shadow.blur must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX} (got ${JSON.stringify(blur)}).`,
     );
   }
-  if (typeof color !== "string" || !SHADOW_COLOR_PATTERN.test(color)) {
+  if (typeof color !== "string" || !EFFECT_COLOR_PATTERN.test(color)) {
     throw new Error(
       `Malformed revision document: shadow.color must be a hex color like #000000, #000, or #00000080 (got ${JSON.stringify(color)}).`,
     );
   }
   return { dx, dy, blur, color } as LayerShadow;
+}
+
+/**
+ * Canonical stored-outline validation and normalization (#140, ADR-0019).
+ * The one normalization boundary for the outline effect: documents written
+ * before #140 lack the field, and absence IS the canonical no-outline form —
+ * every downstream reader projects through this function and never re-derives
+ * a default. A present field must be a valid outline object: finite `width`
+ * ≥ 0 within the width cap and a hex `color` — anything else is a malformed
+ * document, refused loudly before the revision hash is consulted.
+ */
+export function normalizeStoredOutline(revision: { outline?: unknown }): LayerOutline | undefined {
+  if (revision.outline === undefined) {
+    return undefined;
+  }
+  const raw = revision.outline;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `Malformed revision document: outline must be an outline object when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  const { width, color } = raw as Record<string, unknown>;
+  if (typeof width !== "number" || !Number.isFinite(width) || width < 0 || width > MAX_OUTLINE_WIDTH_PX) {
+    throw new Error(
+      `Malformed revision document: outline.width must be a finite number of px between 0 and ${MAX_OUTLINE_WIDTH_PX} (got ${JSON.stringify(width)}).`,
+    );
+  }
+  if (typeof color !== "string" || !EFFECT_COLOR_PATTERN.test(color)) {
+    throw new Error(
+      `Malformed revision document: outline.color must be a hex color like #000000, #000, or #00000080 (got ${JSON.stringify(color)}).`,
+    );
+  }
+  return { width, color } as LayerOutline;
 }
 
 export type ResolvedLayerRevision =
@@ -501,7 +577,9 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
  * likewise appended only when present, so revisions written before #134 —
  * with or without scale fields — keep their exact ids (#134). The flip
  * fields are appended only when present, so revisions written before #135
- * keep their exact ids (#135). */
+ * keep their exact ids (#135). The shadow and outline fields are appended
+ * only when present, so revisions written before #139/#140 keep their exact
+ * ids (#139, #140). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
@@ -514,7 +592,9 @@ export function computeRevisionHash(rev: LayerRevision): string {
     rev.shadow !== undefined
       ? `:shadow(${rev.shadow.dx},${rev.shadow.dy},${rev.shadow.blur},${rev.shadow.color})`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}`).digest("hex").slice(0, 16)}`;
+  const outlineField =
+    rev.outline !== undefined ? `:outline(${rev.outline.width},${rev.outline.color})` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -735,6 +815,10 @@ export async function readRevisionInternalFull(
   // scale/rotation/flip normalizers apply); the canonical fields are the
   // only representation any consumer sees.
   const shadow = normalizeStoredShadow(revision);
+  // Canonical outline effect: validated and normalized at this same one
+  // boundary (#140, ADR-0019) — a malformed stored field is refused loudly
+  // before the revision hash is consulted. Absence IS the no-outline form.
+  const outline = normalizeStoredOutline(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -804,6 +888,7 @@ export async function readRevisionInternalFull(
             flipX: flip.flipX,
             flipY: flip.flipY,
             ...(shadow !== undefined ? { shadow } : {}),
+            ...(outline !== undefined ? { outline } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -826,6 +911,7 @@ export async function readRevisionInternalFull(
           flipX: flip.flipX,
           flipY: flip.flipY,
           ...(shadow !== undefined ? { shadow } : {}),
+          ...(outline !== undefined ? { outline } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -934,6 +1020,18 @@ export interface EditLayerOptions {
    */
   shadow?: string;
   /**
+   * Apply an outline to the Layer's content (#140, ADR-0019): an ABSOLUTE
+   * setter that replaces any previous outline — the same command twice keeps
+   * the same outline — and `"none"` removes it. The spec string is
+   * normalized by `resolveEditOutline` against the current revision, so an
+   * omitted option preserves the current revision's outline. Independent of
+   * the retained content's size, so it combines freely with other edit
+   * options including content replacement and resize; it must not combine
+   * with --anchor, whose resolution would see different ink than the edit
+   * publishes.
+   */
+  outline?: string;
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -1007,6 +1105,9 @@ export interface EditLayerResult {
   /** Present when the edit set or removed the shadow (#139): the absolute
    * shadow state now recorded on the revision (null when removed). */
   shadowed?: { shadow: LayerShadow | null };
+  /** Present when the edit set or removed the outline (#140): the absolute
+   * outline state now recorded on the revision (null when removed). */
+  outlined?: { outline: LayerOutline | null };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -1177,12 +1278,52 @@ export function parseShadowSpec(spec: string): LayerShadow | undefined {
       `Invalid shadow blur ${blurRaw}: must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX}.`,
     );
   }
-  if (!SHADOW_COLOR_PATTERN.test(color)) {
+  if (!EFFECT_COLOR_PATTERN.test(color)) {
     throw new Error(
       `Invalid shadow color "${color}": must be a hex color like #000000, #000, or #00000080.`,
     );
   }
-  return { dx, dy, blur, color };
+  return { dx, dy, blur, color: canonicalizeEffectColor(color) };
+}
+
+/**
+ * Canonical outline normalization (#140, ADR-0019): `--outline` sets an
+ * ABSOLUTE outline, replacing any previous one; `"none"` removes it. The
+ * spec is "<width>,<color>" with width in px (0..256) and the same hex
+ * color forms as the shadow, canonicalized by the same INT-2 rule. Exported
+ * for the CLI boundary: the command classifies malformed specs as usage
+ * errors (exit 2) with this same parser, so the two never disagree.
+ */
+export function parseOutlineSpec(spec: string): LayerOutline | undefined {
+  const raw = spec.trim();
+  if (raw.toLowerCase() === "none") {
+    return undefined;
+  }
+  const parts = raw.split(",").map((p) => p.trim());
+  if (parts.length !== 2) {
+    throw new Error(
+      `Invalid outline "${raw}": --outline takes "<width>,<color>" (e.g. "4,#000000") or "none".`,
+    );
+  }
+  const [widthRaw, colorRaw] = parts;
+  const width = Number(widthRaw);
+  const color = colorRaw ?? "";
+  if (widthRaw === "" || color === "") {
+    throw new Error(
+      `Invalid outline "${raw}": --outline takes "<width>,<color>" (e.g. "4,#000000") or "none".`,
+    );
+  }
+  if (!Number.isFinite(width) || width < 0 || width > MAX_OUTLINE_WIDTH_PX) {
+    throw new Error(
+      `Invalid outline width ${widthRaw}: must be a finite number of px between 0 and ${MAX_OUTLINE_WIDTH_PX}.`,
+    );
+  }
+  if (!EFFECT_COLOR_PATTERN.test(color)) {
+    throw new Error(
+      `Invalid outline color "${color}": must be a hex color like #000000, #000, or #00000080.`,
+    );
+  }
+  return { width, color: canonicalizeEffectColor(color) };
 }
 
 /** Field-wise shadow equality for the no-op check (#139): the flip
@@ -1204,6 +1345,27 @@ function resolveEditShadow(options: EditLayerOptions, prevRev: ResolvedLayerRevi
     return prevRev.shadow;
   }
   return parseShadowSpec(options.shadow);
+}
+
+/** Field-wise outline equality for the no-op check (#140): the flip
+ * precedent — re-issuing an identical outline is a detected no-op, never a
+ * redundant revision. */
+function outlineEq(a: LayerOutline | undefined, b: LayerOutline | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.width === b.width && a.color === b.color;
+}
+
+/**
+ * Canonical outline edit resolution (#140, ADR-0019): an omitted option
+ * preserves the current revision's outline; a spec sets or removes it
+ * absolutely. The refusal runs before any staging, so an invalid outline
+ * never advances live state.
+ */
+function resolveEditOutline(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerOutline | undefined {
+  if (options.outline === undefined) {
+    return prevRev.outline;
+  }
+  return parseOutlineSpec(options.outline);
 }
 
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
@@ -1334,6 +1496,7 @@ async function buildEditedRevision(
   rotationDeg: number,
   flip: LayerTransformFlip,
   shadow: LayerShadow | undefined,
+  outline: LayerOutline | undefined,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -1432,13 +1595,15 @@ async function buildEditedRevision(
       flipX: flip.flipX,
       flipY: flip.flipY,
       ...(shadow !== undefined ? { shadow } : {}),
+      ...(outline !== undefined ? { outline } : {}),
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
       scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY &&
       rotationDeg === prevRev.rotationDeg &&
       flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY &&
-      shadowEq(shadow, prevRev.shadow);
+      shadowEq(shadow, prevRev.shadow) &&
+      outlineEq(outline, prevRev.outline);
     return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
@@ -1492,6 +1657,7 @@ async function buildEditedRevision(
       flipX: flip.flipX,
       flipY: flip.flipY,
       ...(shadow !== undefined ? { shadow } : {}),
+      ...(outline !== undefined ? { outline } : {}),
     };
     const unchanged =
       contentHash === prevRev.contentHash &&
@@ -1506,7 +1672,8 @@ async function buildEditedRevision(
       rotationDeg === prevRev.rotationDeg &&
       flip.flipX === prevRev.flipX &&
       flip.flipY === prevRev.flipY &&
-      shadowEq(shadow, prevRev.shadow);
+      shadowEq(shadow, prevRev.shadow) &&
+      outlineEq(outline, prevRev.outline);
     return { revision, unchanged, retainedGeneration: null };
   }
 
@@ -1673,6 +1840,10 @@ export async function editLayerInternal(
   const shadow = resolveEditShadow(options, prevRev);
   const hasShadow = options.shadow !== undefined;
   const shadowedReport = { shadow: shadow ?? null };
+  // Outline effect (#140, ADR-0019): absolute setter, refusal before staging.
+  const outline = resolveEditOutline(options, prevRev);
+  const hasOutline = options.outline !== undefined;
+  const outlinedReport = { outline: outline ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -1711,6 +1882,7 @@ export async function editLayerInternal(
       rotationDeg,
       flip,
       shadow,
+      outline,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
@@ -1723,17 +1895,18 @@ export async function editLayerInternal(
     const withRotated = hasRotate ? { ...withResized, rotated: rotatedReport } : withResized;
     const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
+    const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
     return options.fromGeneration !== undefined
-      ? { ...withShadow, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withOutline, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
         ? {
-            ...withShadow,
+            ...withOutline,
             mattedFrom,
             ...(retainedGeneration
               ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
               : {}),
           }
-        : withShadow;
+        : withOutline;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
@@ -1748,6 +1921,7 @@ export async function editLayerInternal(
     rotationDeg,
     flip,
     shadow,
+    outline,
   );
 
   // No-op check: if all fields are identical to previous revision, avoid storage churn
@@ -1761,6 +1935,7 @@ export async function editLayerInternal(
       ...(hasRotate ? { rotated: rotatedReport } : {}),
       ...(flippedReport ? { flipped: flippedReport } : {}),
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
+      ...(hasOutline ? { outlined: outlinedReport } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -1813,6 +1988,7 @@ export async function editLayerInternal(
     ...(hasRotate ? { rotated: rotatedReport } : {}),
     ...(flippedReport ? { flipped: flippedReport } : {}),
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
+    ...(hasOutline ? { outlined: outlinedReport } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),

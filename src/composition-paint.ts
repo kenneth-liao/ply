@@ -14,7 +14,9 @@
  * A revision's shadow (#139, ADR-0018) applies to the content in its LOCAL
  * coordinate space (image alpha or text glyphs alike) before the canonical
  * transform, which maps content+shadow together, and the Layer's opacity
- * fades both.
+ * fades both. A revision's outline (#140, ADR-0019) hugs the content in the
+ * same LOCAL space, painted BEFORE the shadow — the shadow is therefore cast
+ * from the outlined composite — and both map and fade together.
  * Areas no Layer covers stay transparent. Text Layers (#81) paint as DOM text
  * with their retained font bytes declared under an internal @font-face
  * family (never re-consulting assets/fonts/), and every text layer's family
@@ -30,7 +32,8 @@ import { withRenderPage } from "./browser.js";
 import { familyResolved } from "./fonts.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
-import type { ResolvedLayerRevision } from "./layer.js";
+import { createHash } from "node:crypto";
+import type { LayerOutline, ResolvedLayerRevision } from "./layer.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
   png: "image/png",
@@ -106,6 +109,9 @@ export async function paintComposition(
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
     // Awaited decode: a partially painted canvas is never screenshotted.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+    // Per-Layer outline-filter region sizing (#140, ADR-0019): before any
+    // pixel leaves this page — see sizeOutlineFilterRegions.
+    await sizeOutlineFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
     const png = await page.screenshot({
       type: "png",
@@ -163,6 +169,44 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
   }
 }
 
+/**
+ * The outline's SVG-filter id and def (#140, ADR-0019): one `feMorphology`
+ * dilate over `SourceAlpha` (radius = outline width, in the element's LOCAL
+ * px), flooded with the outline color and composited back under the source
+ * graphic — a solid ring hugging the content's alpha/glyph ink, extended
+ * exactly `width` px in every direction (a box structuring element: painted
+ * ink ⊆ content ⊕ square(width), the bound the measurement reach relies
+ * on).
+ *
+ * One filter per OUTLINED LAYER, not per distinct (width, color) pair: the
+ * filter's declared region must cover the element's untransformed box
+ * expanded by `width` px on every side, and that box differs per Layer —
+ * a shared def would clip one Layer's ring or content to another's box
+ * (verified empirically: Chromium DOES clip both the dilate ring and the
+ * source graphic to the declared region, contrary to the pre-review
+ * comment's claim). The region is therefore declared as a placeholder here
+ * and sized in-page from the element's real untransformed border box by
+ * `sizeOutlineFilterRegions` — the SAME sizing pass in the paint and
+ * measurement flows, so render and painted extents agree exactly. The id
+ * is a deterministic hash of the pair plus the Layer's snapshot index, so
+ * the same facts always emit the same markup.
+ */
+function outlineFilterId(outline: LayerOutline, layerIndex: number): string {
+  return `ply-o-${createHash("sha256").update(`${outline.width}:${outline.color}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+}
+
+function outlineFilterDef(outline: LayerOutline, layerIndex: number): string {
+  const id = outlineFilterId(outline, layerIndex);
+  return (
+    `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
+    `<feMorphology in="SourceAlpha" operator="dilate" radius="${outline.width}" result="dil"/>` +
+    `<feFlood flood-color="${outline.color}" result="flood"/>` +
+    `<feComposite in="flood" in2="dil" operator="in" result="ring"/>` +
+    `<feMerge><feMergeNode in="ring"/><feMergeNode in="SourceGraphic"/></feMerge>` +
+    `</filter>`
+  );
+}
+
 /** Minimal HTML escaping for text layer content (#81). */
 function escapeHtml(text: string): string {
   return text
@@ -171,6 +215,99 @@ function escapeHtml(text: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+/**
+ * The per-Layer `<defs>` markup for every outlined Layer in the snapshot
+ * (#140, ADR-0019). Emitted once per Composition as an inline SVG OUTSIDE
+ * the `#canvas` element — zero-size, so it paints nothing itself, and
+ * outside so `#canvas`'s children remain exactly one element per Layer
+ * (the measurement probe and the painted-ink pass index them by
+ * position). Referenced from the Layer elements' CSS `filter` chains by
+ * id; the region placeholder is sized in-page before any screenshot by
+ * `sizeOutlineFilterRegions`.
+ */
+function outlineDefs(layers: SnapshotLayer[]): string {
+  const defs = layers
+    .map((l, i) => (l.revision.outline !== undefined ? outlineFilterDef(l.revision.outline, i) : ""))
+    .join("");
+  if (defs === "") return "";
+  return `<svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>`;
+}
+
+/**
+ * The per-Layer outline-filter specs handed to `sizeOutlineFilterRegions`:
+ * null for Layers without an outline; the name rides along for the loud
+ * failure message.
+ */
+function outlineFilterSpecs(layers: SnapshotLayer[]): ({ id: string; width: number; name: string } | null)[] {
+  return layers.map((l, i) =>
+    l.revision.outline !== undefined
+      ? { id: outlineFilterId(l.revision.outline, i), width: l.revision.outline.width, name: l.name }
+      : null,
+  );
+}
+
+/**
+ * Size every outlined Layer's filter region in-page from the element's
+ * real untransformed border box (#140, ADR-0019). The filter region is the
+ * one clip Chromium applies to the dilate result AND the source graphic,
+ * and the box is only knowable in the browser (text Layers wrap), so the
+ * markup carries a placeholder and both page flows — paint and
+ * measurement — call this before any screenshot: the region is set to the
+ * untransformed box expanded by `width` px plus a 1px antialiasing pad on
+ * every side, in the element's LOCAL user space (origin at the element's
+ * own top-left, verified empirically). The same adjustment in both flows
+ * keeps render and painted extents identical, and it is a deterministic
+ * function of the same DOM, so pinned Render history replays
+ * byte-identically.
+ *
+ * Fails loudly (PROD-1, review): a skipped sizing would leave Chromium
+ * clipping the ring and the source graphic to the placeholder region —
+ * the exact silent-clip failure the bounded-capture contract forbids — so
+ * a missing #canvas, Layer element, or filter def rejects the paint and
+ * measurement flows naming the Layer, instead of silently succeeding.
+ * The guards are reachable only if the page is not the markup the builder
+ * emitted (the same `buildCompositionHtml` call emits the elements and
+ * their defs), i.e. a markup-contract violation — fail fast at the seam.
+ */
+export async function sizeOutlineFilterRegions(page: Page, layers: SnapshotLayer[]): Promise<void> {
+  const specs = outlineFilterSpecs(layers);
+  if (specs.every((s) => s === null)) return;
+  const failure = await page.evaluate((input) => {
+    const canvas = document.getElementById("canvas");
+    if (!canvas) return "#canvas element missing";
+    const problems: string[] = [];
+    input.forEach((spec, i) => {
+      if (!spec) return;
+      const el = canvas.children[i] as HTMLElement | undefined;
+      const filter = document.getElementById(spec.id);
+      if (!el) {
+        problems.push(`Layer "${spec.name}": element ${i} not found in #canvas`);
+      } else if (!filter) {
+        problems.push(`Layer "${spec.name}": outline filter ${spec.id} not found`);
+      } else {
+        const saved = el.style.transform;
+        el.style.transform = "none";
+        const box = el.getBoundingClientRect();
+        el.style.transform = saved;
+        const pad = spec.width + 1;
+        filter.setAttribute("filterUnits", "userSpaceOnUse");
+        filter.setAttribute("x", String(-pad));
+        filter.setAttribute("y", String(-pad));
+        filter.setAttribute("width", String(box.width + 2 * pad));
+        filter.setAttribute("height", String(box.height + 2 * pad));
+      }
+    });
+    return problems.length > 0 ? problems.join("; ") : null;
+  }, specs);
+  if (failure !== null) {
+    throw new Error(
+      `Outline filter region sizing failed: ${failure}. ` +
+        `The page is not the markup the composition builder emitted, so the outline would be clipped to its ` +
+        `placeholder region — refusing to paint or measure clipped ink.`,
+    );
+  }
 }
 
 /**
@@ -202,7 +339,7 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
     )
     .join("\n");
   const els = layers
-    .map((l) => {
+    .map((l, layerIndex) => {
       const rev = l.revision;
       const base = `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};`;
       // Canonical transform (#133/#134/#135, ADR-0016): applied about the
@@ -231,22 +368,36 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
         transformParts.length > 0
           ? `transform:${transformParts.join(" ")};transform-origin:0 0;`
           : "";
-      // Canonical shadow (#139, ADR-0018): drop-shadow applies to the
-      // Layer's content in its LOCAL coordinate space — the transform above
-      // then maps content+shadow together, and the element's opacity fades
-      // both. Emitted only when a shadow exists, so pre-#139 revisions and
-      // their pinned Render history paint exactly as before.
-      const shadowFilter =
-        rev.shadow !== undefined
-          ? `filter:drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color});`
+      // Canonical effects (#139/#140, ADR-0018/0019): one `filter` chain on
+      // the Layer element. The outline comes FIRST — its feMorphology dilate
+      // filter hugs the content's alpha/glyph ink and composites the ring
+      // under the source graphic (def above, referenced by id) — and the
+      // shadow's single drop-shadow comes LAST, so it is cast from the
+      // outlined composite. CSS filter-list chaining feeds each function's
+      // output to the next, so the chain builds the union exactly once per
+      // primitive — dilate extends exactly `width` px in every direction
+      // with no scallop and no compounding. The transform above then maps
+      // content+outline+shadow together, and the element's opacity fades
+      // all of it. Emitted only when an effect exists, so pre-#139/#140
+      // revisions and their pinned Render history paint exactly as before
+      // (the shadow-only markup is byte-identical to the #139 form).
+      const outlineFn =
+        rev.outline !== undefined
+          ? `url(#${outlineFilterId(rev.outline, layerIndex)})`
           : "";
+      const shadowFn =
+        rev.shadow !== undefined
+          ? `drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color})`
+          : "";
+      const effectsFns = [outlineFn, shadowFn].filter(Boolean).join(" ");
+      const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
       if (rev.kind === "text") {
         const style =
-          `${base}${transformed}${shadowFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
+          `${base}${transformed}${effectsFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
           `font-size:${rev.fontSize}px;color:${rev.color};white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
-      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${shadowFilter}">`;
+      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;
     })
     .join("");
   return (
@@ -255,6 +406,6 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
     `html,body{margin:0;padding:0;background:transparent}` +
     `#canvas{position:relative;width:${canvas.width}px;height:${canvas.height}px;overflow:hidden}` +
     `</style></head>` +
-    `<body><div id="canvas">${els}</div></body></html>`
+    `<body>${outlineDefs(layers)}<div id="canvas">${els}</div></body></html>`
   );
 }

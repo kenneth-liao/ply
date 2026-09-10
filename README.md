@@ -248,15 +248,15 @@ ply composition measure poster --json                # machine-readable
   two-decimal rounded: ink is quantized to the capture window's pixel
   grid, while canvas offsets are layout-derived and may be fractional.
   Capture is bounded — one windowed screenshot per Layer, never scaled by
-  off-canvas distance and widened by each Layer's shadow extent; a Layer
-  whose layout box plus shadow extent exceeds the 8192×8192px
+  off-canvas distance and widened by each Layer's effect extent; a Layer
+  whose layout box plus effect extent exceeds the 8192×8192px
   window is refused with an actionable error instead of growing memory.
   Painted bounds are the
   browser's own paint of the exact markup rendering uses, so
   measurement and rendering agree; opacity scaling
-  changes alpha values, never the ink footprint. A Layer's shadow extends
+  changes alpha values, never the ink footprint. A Layer's effects extend
   its painted ink: painted bounds, the on-canvas intersection, `clipped`,
-  and the `effects` facts include the shadow extent (#139).
+  and the `effects` facts include the effect extent (#139, #140).
 - Text dimensions are measured with the same retained font bytes painting
   uses — never a second measuring authority. Corrupt content or an
   unresolved font fails instead of producing misleading numbers.
@@ -350,6 +350,53 @@ ply layer edit <layerId> --shadow none                 # remove (its own edit)
   never change. A shadow edit is its own revision field, appended to the
   hash only when present, so pre-#139 revisions keep their exact ids and
   pinned Render history replays byte-identically.
+- Invalid settings fail at the command boundary (exit 2) through the same
+  parser the edit path uses — nothing invalid ever mutates live state.
+
+## Layer outlines (new surface)
+
+`ply layer edit --outline` applies a solid outline to a Layer's content —
+image alpha and text glyphs alike, one uniform effect with no
+kind-specific lifecycle (ADR-0019):
+
+```bash
+ply layer edit <layerId> --outline "4,#000000"     # 4px black outline
+ply layer edit <layerId> --outline "2,#ff8800"     # replaces any previous outline
+ply layer edit <layerId> --outline none            # remove (its own edit)
+```
+
+- The spec is an ABSOLUTE setter `"<width>,<color>"` that replaces any
+  previous outline (the same command twice keeps the same outline);
+  `"none"` removes it. Width is a px thickness between 0 and 256 and the
+  color is hex — `#RGB`, `#RRGGBB`, or `#RRGGBBAA`. Color forms
+  canonicalize at the command boundary: `#4C4C4C` and `#4c4c4c` are the
+  same outline, so case/shorthand variants of the same paint cannot mint
+  redundant revisions.
+- **Ordering contract:** the outline hugs the content in the Layer's
+  LOCAL coordinate space, painted BEFORE the shadow — a shadow on the
+  same Layer is cast from the outlined composite — and the canonical
+  transform then maps content, outline, and shadow together, with the
+  Layer's opacity fading all of it and canvas clipping applied to the
+  effect-extended result. The ring is an exact geometry: an
+  `feMorphology` dilate extends the content's alpha by exactly `width`
+  px in every direction, so painted ink and measurement reach agree
+  exactly (ADR-0019).
+- **Painted bounds include the outline:** `ply composition measure`
+  reports the outlined (and shadowed) ink in
+  `painted`/`paintedOnCanvas`/`clipped` and the effective outline
+  settings in the `effects` facts; anchored placement (`--anchor`)
+  resolves against the same effect-extended painted ink — one definition
+  of painted ink. A later outline edit never moves an already-resolved
+  placement; anchoring first then adding the outline keeps the resolved
+  x/y literally. `--anchor` and `--outline` cannot combine in one edit —
+  make the effect edit first, then anchor.
+- **Revision fact (DEC-002):** the outline is shared as a whole like
+  placement and transform — in-place edits propagate it, forks isolate
+  it, cross-Project copies preserve it verbatim, and it participates in
+  the revision hash (an outline edit is a new revision). Retained source
+  bytes never change. The outline is its own revision field, appended to
+  the hash only when present, so pre-#140 revisions keep their exact ids
+  and pinned Render history replays byte-identically.
 - Invalid settings fail at the command boundary (exit 2) through the same
   parser the edit path uses — nothing invalid ever mutates live state.
 

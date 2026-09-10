@@ -893,6 +893,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       flipX: source.flipX,
       flipY: source.flipY,
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+      ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
     };
   }
   if (source.kind !== "image") {
@@ -913,6 +914,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     flipX: source.flipX,
     flipY: source.flipY,
     ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+    ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
   };
 }
 
