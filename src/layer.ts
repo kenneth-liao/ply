@@ -693,9 +693,10 @@ export interface EditLayerOptions {
   /**
    * Resize to an absolute effective size in px (#133, ADR-0016): image Layers
    * only (text has no intrinsic pixel size until measurement exists). One
-   * omitted axis preserves the aspect ratio from the retained content's
-   * intrinsic size; both axes deliberately change it. Normalized to canonical
-   * scale here at the edit boundary; never stored as authoritative fields.
+   * omitted axis preserves the Layer's current aspect ratio (a deliberate
+   * both-axes change survives); both axes deliberately change it. Normalized
+   * to canonical scale here at the edit boundary; never stored as
+   * authoritative fields.
    */
   resizeTo?: { width?: number; height?: number };
   /**
