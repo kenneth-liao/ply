@@ -130,9 +130,11 @@ combination restrictions, and exit-code semantics are owned by `ply layer
   from it).
 - **`--anchor` targets painted ink, not the top-left corner** — transparent
   padding does not count and glyph ink centers, so the resolution runs
-  against the Layer's current transforms and effects. Sequence effect and
-  transform edits first, anchor after, and re-anchor when the geometry
-  later changes.
+  against the Layer's current transforms and effects. Sequence transforms
+  and content edits first, then anchor, then apply effects last
+  (`--shadow`/`--outline` cannot combine with `--anchor` in one edit —
+  see `ply layer edit --help`, the owner of these restrictions) — and
+  re-anchor when the geometry later changes.
 - **Sharing is explicit:** a Layer referenced by several Compositions
   refuses a bare edit and names the blast radius — choose `--in-place`
   (propagates everywhere) or `--fork` (isolates the named use) deliberately;
