@@ -282,3 +282,47 @@ test(
   },
   60_000,
 );
+
+/** Tracer 4: a text Layer's headline centers on its tight glyph ink (#137),
+ * measured through the same retained font bytes painting uses. */
+test(
+  "a text headline centers its glyph ink at the requested target",
+  async () => {
+    await makeComp("poster", 400, 300);
+    const addRes = await invoke([
+      "composition", "add", "poster", "headline", "--text", "Ply", "--font", "Anton",
+      "--font-size", "48", "--x", "10", "--y", "10", "--project", projDir, "--json",
+    ]);
+    expect(addRes.code).toBe(0);
+    const addJson = JSON.parse(addRes.stdout);
+    const layerId = addJson.use.layerId as string;
+    const before = useReport(await measure("poster"), "headline");
+    expect(before.painted).not.toBeNull();
+
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "center,center", "--x", "200", "--y", "150", "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(0);
+    const editJson = JSON.parse(editRes.stdout);
+    const placed = editJson.anchored.placement as { x: number; y: number };
+    const paintedAt = editJson.anchored.painted as { x: number; y: number; width: number; height: number };
+
+    // The placement is auditable from the pre-edit ink evidence: the glyph
+    // ink's offset from the placement point centers it on the target.
+    const wantX = 200 - (paintedAt.x - before.placement.x) - paintedAt.width / 2;
+    const wantY = 150 - (paintedAt.y - before.placement.y) - paintedAt.height / 2;
+    expect(placed.x).toBeCloseTo(wantX, 2);
+    expect(placed.y).toBeCloseTo(wantY, 2);
+
+    // The post-edit measure is the real contract: glyph ink center at the
+    // target, through the same retained font bytes painting uses.
+    const after = useReport(await measure("poster"), "headline");
+    const p = after.painted as { x: number; y: number; width: number; height: number };
+    expect(p.x + p.width / 2).toBeCloseTo(200, 0);
+    expect(p.y + p.height / 2).toBeCloseTo(150, 0);
+    // The revision records plain placement — no anchor facts.
+    expect(editJson.layer.currentRevision.x).toBe(placed.x);
+    expect(editJson.layer.currentRevision.y).toBe(placed.y);
+  },
+  60_000,
+);
