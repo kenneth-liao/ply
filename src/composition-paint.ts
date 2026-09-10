@@ -183,13 +183,22 @@ function buildCompositionHtml(canvas: { width: number; height: number }, layers:
     .map((l) => {
       const rev = l.revision;
       const base = `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};`;
+      // Canonical transform scale (#133, ADR-0016): the scale is applied about
+      // the Layer's (x, y) top-left placement point — the Layer grows/shrinks
+      // right and down. Emitted only when scale ≠ 1, so revisions written
+      // before #133 and scale-1 revisions paint exactly as before (pinned
+      // history stays byte-identical).
+      const scaled =
+        rev.scaleX !== 1 || rev.scaleY !== 1
+          ? `transform:scale(${rev.scaleX},${rev.scaleY});transform-origin:0 0;`
+          : "";
       if (rev.kind === "text") {
         const style =
-          `${base}font-family:'${internalFontFamily(rev.contentHash)}';` +
+          `${base}${scaled}font-family:'${internalFontFamily(rev.contentHash)}';` +
           `font-size:${rev.fontSize}px;color:${rev.color};white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
-      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}">`;
+      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${scaled}">`;
     })
     .join("");
   return (

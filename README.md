@@ -137,6 +137,33 @@ offline after the external `out/` files are removed and the Project is
 relocated; see
 [docs/project-storage-contract.md](docs/project-storage-contract.md).
 
+## Layer resize (new surface)
+
+`ply layer edit` resizes Layers locally without ever replacing source
+content (ADR-0016) — resizing changes placement, never retained pixels:
+
+```bash
+ply layer edit <layerId> --resize 2        # relative: current scale × 2
+ply layer edit <layerId> --resize-to 800x  # absolute, aspect preserved
+ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
+```
+
+- `--resize <factor>` works on image and text Layers. It is **relative**: the
+  new scale is the current scale multiplied by the factor, so the same
+  command twice keeps enlarging (2 then 2 gives 4×). The aspect ratio is
+  always preserved. Every result (text and JSON) reports the absolute
+  effective scale and, for image Layers, the absolute effective size.
+- `--resize-to <WxH>` is image-only (text has no intrinsic pixel size).
+  Supplying one axis (`800x`, `x600`) preserves the Layer's current aspect
+  ratio — a deliberate aspect change survives later one-axis resizes;
+  supplying both deliberately changes it. Repeating an absolute target is
+  idempotent.
+- The Layer's `(x, y)` stays its top-left corner: it grows/shrinks right and
+  down. Scale is a Layer revision fact shared as a whole (in-place edits
+  propagate, forks isolate), survives sharing and cross-Project import, and
+  participates in pinned Render history — replaying a pre-resize Render
+  still reproduces its original pixels exactly.
+
 ## Setup
 
 ```bash

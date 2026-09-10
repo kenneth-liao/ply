@@ -2,7 +2,7 @@
 // Layer management CLI: edit, inspect, and list Layers within a Project.
 import { parseArgs } from "node:util";
 import path from "node:path";
-import { inspectLayer, listLayers, editLayer, type ResolvedLayer } from "./layer.js";
+import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
@@ -14,6 +14,10 @@ layer — Layer management and inspection within a Project
       Requires --in-place when referenced by multiple Compositions.
       With --fork, publish a new Layer identity and retarget only the
       selected use in --composition; other Compositions are unaffected.
+      Resize changes placement, never retained pixels: --resize <factor>
+      multiplies the current scale (relative), --resize-to <WxH> sets an
+      absolute effective size (image Layers only; one omitted axis preserves
+      the aspect ratio).
 
   bun run ply layer inspect <layer-id> [options]
       Inspect a Layer's identity, current revision, and content details
@@ -63,6 +67,20 @@ Options:
   --x <num>             X position on canvas
   --y <num>             Y position on canvas
   --opacity <num>       Layer opacity between 0 and 1
+  --resize <factor>     Scale the Layer by a RELATIVE factor: the new scale
+                        is the current scale multiplied by <factor>, so the
+                        same command twice keeps enlarging (e.g. 2 then 2
+                        gives 4×). Works on image and text Layers; the aspect
+                        ratio is always preserved. Resizing changes placement
+                        only: retained source bytes and lineage never change.
+  --resize-to <WxH>     Set the effective painted size in px (image Layers
+                        only — text has no intrinsic pixel size; use
+                        --resize). "800x600" deliberately changes the aspect
+                        ratio; "800x" or "x600" preserves the Layer's current
+                        aspect ratio (a deliberate aspect change survives).
+                        Mutually exclusive with --resize and with
+                        content-replacement options. The Layer's (x, y) stays
+                        its top-left corner: it grows/shrinks right and down.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -119,6 +137,8 @@ let values: {
   x?: string;
   y?: string;
   opacity?: string;
+  resize?: string;
+  "resize-to"?: string;
 };
 let positionals: string[];
 
@@ -146,6 +166,8 @@ try {
       x: { type: "string" },
       y: { type: "string" },
       opacity: { type: "string" },
+      resize: { type: "string" },
+      "resize-to": { type: "string" },
     },
   });
   values = parsed.values;
@@ -183,14 +205,16 @@ async function run() {
         values.color !== undefined ||
         values.x !== undefined ||
         values.y !== undefined ||
-        values.opacity !== undefined;
+        values.opacity !== undefined ||
+        values.resize !== undefined ||
+        values["resize-to"] !== undefined;
 
       if (!hasEditOption && !values.fork) {
         output(
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --resize, --resize-to, or --fork.",
           },
           isJson,
         );
@@ -339,6 +363,53 @@ async function run() {
         return;
       }
 
+      // Resize flags (#133): syntax and well-formedness at the command
+      // boundary; scale semantics, caps, and kind conflicts are enforced by
+      // the edit path before any staging, so invalid resize inputs never
+      // advance live state.
+      if (values.resize !== undefined && values["resize-to"] !== undefined) {
+        output(
+          { ok: false, error: "--resize and --resize-to are mutually exclusive resize forms: use one per edit." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      let resizeFactor: number | undefined;
+      if (values.resize !== undefined) {
+        resizeFactor = parseNumericArgument(values.resize);
+        if (!Number.isFinite(resizeFactor) || resizeFactor <= 0) {
+          output(
+            { ok: false, error: `Resize factor (--resize) must be a finite number greater than 0 (got "${values.resize}").` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+      }
+      let resizeTo: { width?: number; height?: number } | undefined;
+      if (values["resize-to"] !== undefined) {
+        const raw = values["resize-to"].trim();
+        const m = raw.match(/^(\d+(?:\.\d+)?)?x(\d+(?:\.\d+)?)?$/);
+        if (!m || (m[1] === undefined && m[2] === undefined)) {
+          output(
+            {
+              ok: false,
+              error:
+                `--resize-to takes "<W>x<H>" (both axes: deliberate aspect change) or "<W>x" / "x<H>" ` +
+                `(one axis: aspect preserved), e.g. "800x600", "800x", "x600" — got "${values["resize-to"]}".`,
+            },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+        resizeTo = {
+          ...(m[1] !== undefined ? { width: Number(m[1]) } : {}),
+          ...(m[2] !== undefined ? { height: Number(m[2]) } : {}),
+        };
+      }
+
       try {
         const res = await editLayer(targetProj, layerId, {
           inPlace: values["in-place"],
@@ -365,6 +436,8 @@ async function run() {
           x,
           y,
           opacity,
+          resizeFactor,
+          resizeTo,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {
@@ -382,6 +455,9 @@ async function run() {
         if (res.mattedFrom) {
           resultBody.mattedFrom = res.mattedFrom;
         }
+        if (res.resized) {
+          resultBody.resized = res.resized;
+        }
 
         output(
           resultBody,
@@ -397,13 +473,18 @@ async function run() {
             const matted = res.mattedFrom
               ? `; from matte ${res.mattedFrom.matteId} (engine ${res.mattedFrom.engine}, provenance retained)`
               : "";
+            const resized = res.resized
+              ? res.resized.width !== undefined
+                ? `; scale ${res.resized.scaleX}×, effective ${res.resized.width}×${res.resized.height}px`
+                : `; scale ${res.resized.scaleX}×`
+              : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}`);
             }
           },
         );
@@ -448,7 +529,15 @@ async function run() {
               console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
             }
             console.log(`  Content hash: ${rev.contentHash}`);
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}`);
+            const scalePart =
+              rev.scaleX === rev.scaleY ? `${rev.scaleX}×` : `${rev.scaleX}×/${rev.scaleY}×`;
+            const scale =
+              rev.scaleX === 1 && rev.scaleY === 1
+                ? ""
+                : rev.kind === "text"
+                  ? `, Scale: ${scalePart}`
+                  : `, Scale: ${scalePart} (effective ${roundEffective(rev.width * rev.scaleX)}×${roundEffective(rev.height * rev.scaleY)})`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}`);
           },
         );
       } catch (err) {
