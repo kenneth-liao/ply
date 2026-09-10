@@ -220,10 +220,10 @@ ply layer edit <layerId> --flip none         # remove the reflection
 
 ## Layer measurement (new surface)
 
-`ply composition measure` reports read-only Layer layout bounds in
-Composition coordinates, including the current scale, rotation, and
-reflection (DEC-004 — measurement and painting share one geometry and font
-authority):
+`ply composition measure` reports read-only Layer layout boxes and painted
+extents in Composition coordinates, including the current scale, rotation,
+and reflection (DEC-004 — measurement and painting share one geometry and
+font authority):
 
 ```bash
 ply composition measure poster                       # every Layer
@@ -236,10 +236,16 @@ ply composition measure poster --json                # machine-readable
   retained font bytes at its font size), the **box** (axis-aligned bounding
   box of the transformed content rectangle, unclipped), and the
   transformed rectangle's **corners**.
-- These are LAYOUT boxes, not painted extents: image boxes include
-  transparent padding, text boxes are line-box extents rather than tight
-  glyph ink, and effects, opacity fading, and canvas clipping are not
-  reflected. Visible painted bounds are separate functionality.
+- It also reports the **painted extents**: the visible-ink (alpha > 0)
+  bounding box in the same coordinates — image transparent padding is
+  excluded from painted but kept in content, and text painted bounds are
+  tight glyph ink rather than the line-box extent — plus
+  **paintedOnCanvas** (the painted extent's intersection with the canvas,
+  the footprint that actually shows in a render) and **clipped** (whether
+  painted ink falls outside the canvas, judged against painted extents,
+  never the layout box). Content with no visible ink (fully transparent
+  content or opacity 0) reports `painted: null`. Effects beyond opacity are
+  not reflected (they are separate functionality).
 - Text dimensions are measured with the same retained font bytes painting
   uses — never a second measuring authority. Corrupt content or an
   unresolved font fails instead of producing misleading numbers.

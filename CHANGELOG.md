@@ -4,6 +4,20 @@
 
 ### Added
 
+- Painted footprints and canvas clipping (#137, spec #132 US-002 / US-006,
+  DEC-004): `ply composition measure` now reports each Layer's painted
+  extents alongside its layout boxes — the visible-ink (alpha > 0)
+  bounding box in Composition coordinates, with image transparent padding
+  excluded from painted but kept in content and text painted bounds as
+  tight glyph ink rather than the line-box extent — plus
+  `paintedOnCanvas` (the painted extent's intersection with the canvas,
+  the footprint that actually shows in a render) and `clipped` (judged
+  against painted extents, never the layout box). Fully transparent
+  content and opacity 0 report `painted: null` consistently. Painted
+  bounds come from the browser's own paint of the same paint-identical
+  page (each Layer screenshotted with the others hidden), so measurement
+  and rendering agree; read-only, offline, compact text/JSON, and scoped
+  help are unchanged.
 - Read-only Layer layout measurement (#136, spec #132 US-002 / US-006,
   DEC-004): `ply composition measure <comp> [use-name]` reports each Layer's
   untransformed content box, the axis-aligned bounding box of its transformed
