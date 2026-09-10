@@ -610,3 +610,31 @@ test("hash compatibility: shadow appended only when present; malformed stored sh
   const shadowId = computeRevisionHash(withShadow as unknown as LayerImageRevision);
   expect(shadowId).not.toBe(revId);
 });
+
+/** Review fix: re-issuing an IDENTICAL shadow is a detected no-op (same
+ * revision id, no storage churn) — field-wise comparison, the flip
+ * precedent; `--shadow none` on a shadowless Layer is a no-op too. */
+test("an identical shadow edit is a no-op, never a redundant revision", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 10, y: 10 });
+  const layerId = addRes.use.layerId as string;
+
+  const setRes = await invoke(["layer", "edit", layerId, "--shadow", "10,10,4,#000000", "--project", projDir, "--json"]);
+  expect(setRes.code).toBe(0);
+  const revId = JSON.parse(setRes.stdout).layer.currentRevisionId as string;
+
+  const again = await invoke(["layer", "edit", layerId, "--shadow", "10,10,4,#000000", "--project", projDir, "--json"]);
+  expect(again.code).toBe(0);
+  expect(JSON.parse(again.stdout).layer.currentRevisionId).toBe(revId);
+
+  const removeNone = await invoke(["layer", "edit", layerId, "--shadow", "none", "--project", projDir, "--json"]);
+  expect(removeNone.code).toBe(0);
+  const removedId = JSON.parse(removeNone.stdout).layer.currentRevisionId as string;
+  expect(removedId).not.toBe(revId);
+
+  const removeAgain = await invoke(["layer", "edit", layerId, "--shadow", "none", "--project", projDir, "--json"]);
+  expect(removeAgain.code).toBe(0);
+  expect(JSON.parse(removeAgain.stdout).layer.currentRevisionId).toBe(removedId);
+});

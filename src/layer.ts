@@ -730,6 +730,10 @@ export async function readRevisionInternalFull(
   // Canonical shadow effect: validated and normalized at this same one
   // boundary (#139, ADR-0018) — a malformed stored field is refused loudly
   // before the revision hash is consulted. Absence IS the no-shadow form.
+  // A conformant object with extra unknown keys is tolerated and those keys
+  // are dropped from the resolved view (the same reader tolerance the
+  // scale/rotation/flip normalizers apply); the canonical fields are the
+  // only representation any consumer sees.
   const shadow = normalizeStoredShadow(revision);
 
   // The stored document must hash to exactly the pinned revision id
@@ -1140,7 +1144,7 @@ function resolveEditFlip(options: EditLayerOptions, prevRev: ResolvedLayerRevisi
  * CLI boundary: the command classifies malformed specs as usage errors
  * (exit 2) with this same parser, so the two never disagree.
  */
-export function parseShadowSpec(spec: string, prev?: LayerShadow): LayerShadow | undefined {
+export function parseShadowSpec(spec: string): LayerShadow | undefined {
   const raw = spec.trim();
   if (raw.toLowerCase() === "none") {
     return undefined;
@@ -1181,6 +1185,14 @@ export function parseShadowSpec(spec: string, prev?: LayerShadow): LayerShadow |
   return { dx, dy, blur, color };
 }
 
+/** Field-wise shadow equality for the no-op check (#139): the flip
+ * precedent — re-issuing an identical shadow is a detected no-op, never a
+ * redundant revision. */
+function shadowEq(a: LayerShadow | undefined, b: LayerShadow | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.dx === b.dx && a.dy === b.dy && a.blur === b.blur && a.color === b.color;
+}
+
 /**
  * Canonical shadow edit resolution (#139, ADR-0018): an omitted option
  * preserves the current revision's shadow; a spec sets or removes it
@@ -1191,7 +1203,7 @@ function resolveEditShadow(options: EditLayerOptions, prevRev: ResolvedLayerRevi
   if (options.shadow === undefined) {
     return prevRev.shadow;
   }
-  return parseShadowSpec(options.shadow, prevRev.shadow);
+  return parseShadowSpec(options.shadow);
 }
 
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
@@ -1426,7 +1438,7 @@ async function buildEditedRevision(
       scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY &&
       rotationDeg === prevRev.rotationDeg &&
       flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY &&
-      shadow === prevRev.shadow;
+      shadowEq(shadow, prevRev.shadow);
     return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
@@ -1494,7 +1506,7 @@ async function buildEditedRevision(
       rotationDeg === prevRev.rotationDeg &&
       flip.flipX === prevRev.flipX &&
       flip.flipY === prevRev.flipY &&
-      shadow === prevRev.shadow;
+      shadowEq(shadow, prevRev.shadow);
     return { revision, unchanged, retainedGeneration: null };
   }
 

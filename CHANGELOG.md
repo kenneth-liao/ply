@@ -29,9 +29,6 @@
   (exit 2) through one shared parser — nothing invalid mutates live
   state. Outline (#140) extends the same contract; no general filter
   framework (DEC-006).
-
-### Added
-
 - Anchored Layer placement (#138, spec #132 US-002 / US-006, DEC-002/003/004,
   ADR-0017): `ply layer edit --anchor <h>[,<v>] --x <tx> --y <ty>` places a
   Layer's visible painted ink at the requested target instead of targeting
