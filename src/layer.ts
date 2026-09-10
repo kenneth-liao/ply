@@ -66,6 +66,22 @@ interface LayerRevisionBase {
    */
   scaleX?: number;
   scaleY?: number;
+  /**
+   * Canonical transform rotation (#134, ADR-0016): the Layer's rotation in
+   * degrees about its (x, y) top-left placement point, applied AFTER scale
+   * (the content stretches along its own axes, then the stretched result
+   * rotates). Positive degrees rotate clockwise (CSS convention). This is a
+   * revision fact shared as a whole (DEC-002) and stored verbatim — the
+   * command sets an absolute angle, so equivalent angles are distinct
+   * deliberate edits.
+   *
+   * Optional in the stored shape only for revisions written before #134 —
+   * absent means 0 and is normalized by the one revision reader, so no
+   * downstream reader needs a fallback. Every newly written revision records
+   * it explicitly, and the hash appends it only when present, so revisions
+   * written before #134 (with or without scale fields) keep their exact ids.
+   */
+  rotationDeg?: number;
 }
 
 /**
@@ -142,9 +158,31 @@ export function normalizeStoredScale(revision: {
   return { scaleX, scaleY };
 }
 
+/**
+ * Canonical stored-rotation validation and normalization (#134, ADR-0016).
+ * The one normalization boundary for transform rotation: documents written
+ * before #134 lack the field (only a missing field is absent — a present
+ * `null` or any other non-number is a malformed document, never a silent
+ * default) and normalize to 0 here; every downstream reader projects through
+ * this function and never re-derives a default. A present field must be a
+ * finite number (degrees, clockwise positive, stored verbatim).
+ */
+export function normalizeStoredRotation(revision: { rotationDeg?: unknown }): number {
+  const rotation = revision.rotationDeg;
+  if (rotation === undefined) {
+    return 0;
+  }
+  if (typeof rotation !== "number" || !Number.isFinite(rotation)) {
+    throw new Error(
+      `Malformed revision document: rotationDeg must be a finite number of degrees when present (got ${JSON.stringify(rotation)}).`,
+    );
+  }
+  return rotation;
+}
+
 export type ResolvedLayerRevision =
-  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number })
-  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number });
+  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number })
+  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number });
 
 export interface ResolvedLayer {
   id: string;
@@ -329,13 +367,16 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
 /** Compute content-derived revision hash for an immutable revision record.
  * The scale fields are appended only when present, so revisions written
  * before #133 hash to exactly their pre-resize ids: older revisions retain
- * their original hash and paint meaning (#133). */
+ * their original hash and paint meaning (#133). The rotation field is
+ * likewise appended only when present, so revisions written before #134 —
+ * with or without scale fields — keep their exact ids (#134). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
   const scaleFields =
     rev.scaleX !== undefined || rev.scaleY !== undefined ? `:${rev.scaleX}:${rev.scaleY}` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}`).digest("hex").slice(0, 16)}`;
+  const rotationField = rev.rotationDeg !== undefined ? `:${rev.rotationDeg}` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -540,6 +581,10 @@ export async function readRevisionInternalFull(
   // (#133, ADR-0016) — malformed stored pairs are refused loudly before the
   // revision hash is consulted.
   const scale = normalizeStoredScale(revision);
+  // Canonical transform rotation: validated and normalized at this same one
+  // boundary (#134, ADR-0016) — a malformed stored field is refused loudly
+  // before the revision hash is consulted.
+  const rotationDeg = normalizeStoredRotation(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -605,6 +650,7 @@ export async function readRevisionInternalFull(
             opacity: revision.opacity,
             scaleX: scale.scaleX,
             scaleY: scale.scaleY,
+            rotationDeg,
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -623,6 +669,7 @@ export async function readRevisionInternalFull(
           opacity: revision.opacity,
           scaleX: scale.scaleX,
           scaleY: scale.scaleY,
+          rotationDeg,
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -700,6 +747,15 @@ export interface EditLayerOptions {
    */
   resizeTo?: { width?: number; height?: number };
   /**
+   * Rotate the Layer to an ABSOLUTE angle in degrees (#134, ADR-0016): sets
+   * the Layer's canonical rotation, replacing any previous angle — repeating
+   * the same command keeps the same angle, and 0 removes the rotation. Unlike
+   * the relative resize factor this is never incremental. Rotation is
+   * independent of the retained content's size, so it combines freely with
+   * other edit options, including content replacement and resize.
+   */
+  rotateDeg?: number;
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -764,6 +820,9 @@ export interface EditLayerResult {
    * effective pixel size for text Layers awaits read-only measurement.
    */
   resized?: { scaleX: number; scaleY: number; width?: number; height?: number };
+  /** Present when the edit rotated the Layer (#134): the absolute rotation in
+   * degrees now recorded on the revision. */
+  rotated?: { rotationDeg: number };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -848,6 +907,23 @@ function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision)
     throw new Error(`Invalid opacity ${options.opacity}: must be a finite number between 0 and 1.`);
   }
   return { x, y, opacity };
+}
+
+/**
+ * Canonical rotation normalization (#134, ADR-0016): `--rotate` sets an
+ * ABSOLUTE angle in degrees, replacing any previous rotation. Omitted option
+ * preserves the current revision's rotation. The refusal runs before any
+ * staging, so an invalid angle never advances live state.
+ */
+function resolveEditRotation(options: EditLayerOptions, prevRev: ResolvedLayerRevision): number {
+  if (options.rotateDeg === undefined) {
+    return prevRev.rotationDeg;
+  }
+  const deg = options.rotateDeg;
+  if (!Number.isFinite(deg)) {
+    throw new Error(`Invalid rotation ${deg}: --rotate takes a finite number of degrees (clockwise positive).`);
+  }
+  return deg;
 }
 
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
@@ -975,6 +1051,7 @@ async function buildEditedRevision(
   options: EditLayerOptions,
   placement: { x: number; y: number; opacity: number },
   scale: LayerTransformScale,
+  rotationDeg: number,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -1069,10 +1146,12 @@ async function buildEditedRevision(
       opacity,
       scaleX: scale.scaleX,
       scaleY: scale.scaleY,
+      rotationDeg,
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
-      scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY;
+      scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY &&
+      rotationDeg === prevRev.rotationDeg;
     return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
@@ -1122,6 +1201,7 @@ async function buildEditedRevision(
       opacity,
       scaleX: scale.scaleX,
       scaleY: scale.scaleY,
+      rotationDeg,
     };
     const unchanged =
       contentHash === prevRev.contentHash &&
@@ -1132,7 +1212,8 @@ async function buildEditedRevision(
       y === prevRev.y &&
       opacity === prevRev.opacity &&
       scale.scaleX === prevRev.scaleX &&
-      scale.scaleY === prevRev.scaleY;
+      scale.scaleY === prevRev.scaleY &&
+      rotationDeg === prevRev.rotationDeg;
     return { revision, unchanged, retainedGeneration: null };
   }
 
@@ -1293,6 +1374,7 @@ export async function editLayerInternal(
   // 3. Placement and transform-scale options: preserve existing values if omitted
   const placement = resolveEditPlacement(options, prevRev);
   const scale = resolveEditScale(options, prevRev, layerId);
+  const rotationDeg = resolveEditRotation(options, prevRev);
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -1306,6 +1388,8 @@ export async function editLayerInternal(
         }
       : { scaleX: scale.scaleX, scaleY: scale.scaleY };
   const hasResize = options.resizeFactor !== undefined || options.resizeTo !== undefined;
+  const hasRotate = options.rotateDeg !== undefined;
+  const rotatedReport = { rotationDeg };
 
   if (intent.mode === "fork") {
     // Canonical target/use→original-id validation before any content work.
@@ -1322,6 +1406,7 @@ export async function editLayerInternal(
       options,
       placement,
       scale,
+      rotationDeg,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
@@ -1331,17 +1416,18 @@ export async function editLayerInternal(
       referrersCount,
     });
     const withResized = hasResize ? { ...forkResult, resized: resizedReport } : forkResult;
+    const withRotated = hasRotate ? { ...withResized, rotated: rotatedReport } : withResized;
     return options.fromGeneration !== undefined
-      ? { ...withResized, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withRotated, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
         ? {
-            ...withResized,
+            ...withRotated,
             mattedFrom,
             ...(retainedGeneration
               ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
               : {}),
           }
-        : withResized;
+        : withRotated;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
@@ -1353,6 +1439,7 @@ export async function editLayerInternal(
     options,
     placement,
     scale,
+    rotationDeg,
   );
 
   // No-op check: if all fields are identical to previous revision, avoid storage churn
@@ -1363,6 +1450,7 @@ export async function editLayerInternal(
       referringCompositions,
       referrersCount,
       ...(hasResize ? { resized: resizedReport } : {}),
+      ...(hasRotate ? { rotated: rotatedReport } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -1412,6 +1500,7 @@ export async function editLayerInternal(
     referringCompositions,
     referrersCount,
     ...(hasResize ? { resized: resizedReport } : {}),
+    ...(hasRotate ? { rotated: rotatedReport } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),
