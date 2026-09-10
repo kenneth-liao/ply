@@ -32,15 +32,21 @@
  *   painted bounds are tight glyph ink rather than the line-box extent.
  *   The ink pass renders the same paint-identical page, hides the other
  *   Layers (no reflow — they are absolutely positioned), screenshots the
- *   Layer alone, and reads its alpha support — so the numbers are the
- *   browser's own paint, never a second rasterizer. Layers without visible
+ *   Layer alone through a bounded per-Layer capture window (shifted, never
+ *   grown with the Layer's off-canvas distance), and reads its alpha
+ *   support — so the numbers are the browser's own paint, never a second
+ *   rasterizer. Values are reported through round2 (fractional): the ink
+ *   support is quantized to the screenshot's pixel grid, but the canvas
+ *   offsets are layout-derived and may be fractional. Layers without visible
  *   ink (fully transparent content, or opacity 0) report `painted: null`;
  *   opacity scaling changes alpha values, never the ink support (and a
  *   Layer's footprint is its own ink — occlusion by later Layers is
  *   stacking, not footprint). Painted extents are the alpha support of the
  *   browser's actual paint, so resampling (scale/rotation interpolation)
  *   may bleed ink roughly a pixel past the geometric ink boundary — that
- *   bleed is genuinely painted and the render shows it too.
+ *   bleed is genuinely painted and the render shows it too. A Layer whose
+ *   layout box exceeds the bounded capture window is refused loudly rather
+ *   than measured with unbounded memory.
  * - `paintedOnCanvas` — `painted` ∩ the canvas rectangle: the footprint that
  *   actually shows in a render; `null` when empty (no visible ink, or ink
  *   entirely outside the canvas).
@@ -159,11 +165,20 @@ function round2(n: number): number {
 }
 
 /**
- * Safety pad (px) added around the union of all layout boxes when sizing the
- * ink pass's viewport: glyph ink may overhang its line box by a pixel or two
- * (italic faces), so the captured region must not end exactly at the box.
+ * Safety pad (px) added around each Layer box when sizing its ink-capture
+ * window: glyph ink may overhang its line box by a pixel or two (italic
+ * faces), so the captured region must not end exactly at the box.
  */
 const INK_PAD_PX = 16;
+
+/**
+ * Single-dimension cap (px) for the per-Layer ink-capture window (review
+ * INT-1/PROD-1): a layout box needing more is refused loudly instead of
+ * growing a viewport without bound. 8192 keeps one window screenshot at
+ * most ~256MB of RGBA — bounded, and far above any on-canvas ink a
+ * Composition-scale Layer produces.
+ */
+const MAX_INK_VIEWPORT_PX = 8192;
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -226,40 +241,67 @@ async function measureSnapshot(
     // the paint path's exact markup, the same decode and font gates — is
     // screenshotted once per Layer with the others hidden (they are
     // absolutely positioned, so hiding changes no geometry, and the page
-    // is throwaway). The canvas overflow is released and the viewport
-    // grown by the union of the layout boxes plus a safety pad, so ink can
-    // be captured beyond the canvas and the canvas intersection reported
-    // against the PAINTED extents, never the layout box.
-    // Cost ceiling: O(Layers × grown-viewport area) — one screenshot plus
-    // one pixel scan per Layer. Deliberate for a read-only query; revisit
-    // only if large multi-Layer measurement ever becomes hot.
+    // is throwaway). The canvas overflow is released, so ink beyond the
+    // canvas can be captured and the canvas intersection reported against
+    // the PAINTED extents, never the layout box.
+    //
+    // Bounded capture (review INT-1/PROD-1): the capture window is sized
+    // for the largest single Layer box plus the pad — never the union of
+    // all off-canvas extents — and the canvas is SHIFTED per Layer so its
+    // box sits inside the window. A placement far off-canvas costs a
+    // window shift, not viewport growth; a box beyond the cap is refused
+    // loudly, because a read-only query must fail safely, never grow
+    // memory without bound. Cost ceiling: O(Layers × capture-window
+    // area) — one screenshot plus one pixel scan per Layer.
     let painted: (Box | null)[] = [];
     if (measured.length > 0) {
       const boxes = measured.map((m) => m.box);
-      const needLeft = Math.max(0, -Math.min(...boxes.map((b) => b.x)));
-      const needTop = Math.max(0, -Math.min(...boxes.map((b) => b.y)));
-      const needRight = Math.max(0, Math.max(...boxes.map((b) => b.x + b.width)) - canvas.width);
-      const needBottom = Math.max(0, Math.max(...boxes.map((b) => b.y + b.height)) - canvas.height);
-      const offsetX = needLeft + INK_PAD_PX;
-      const offsetY = needTop + INK_PAD_PX;
-      await page.setViewportSize({
-        width: offsetX + canvas.width + needRight + INK_PAD_PX,
-        height: offsetY + canvas.height + needBottom + INK_PAD_PX,
-      });
-      // A relative-position shift moves the canvas and its children inside
-      // the grown viewport; the throwaway measure page paints nothing.
-      await page.addStyleTag({ content: `#canvas{overflow:visible;left:${offsetX}px;top:${offsetY}px}` });
-      const shots: Buffer[] = [];
+      const widest = Math.max(...boxes.map((b) => b.width));
+      const tallest = Math.max(...boxes.map((b) => b.height));
+      if (
+        widest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX ||
+        tallest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX
+      ) {
+        const bad = boxes.findIndex(
+          (b) => b.width + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX || b.height + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX,
+        );
+        throw new Error(
+          `Layer "${layers[bad]!.name}" has a layout box ${Math.ceil(boxes[bad]!.width)}×${Math.ceil(boxes[bad]!.height)}px, ` +
+            `beyond the ${MAX_INK_VIEWPORT_PX}×${MAX_INK_VIEWPORT_PX}px painted-extent capture window. Painted extents are refused ` +
+            `instead of growing measurement memory without bound — reduce the transform scale or place the Layer nearer the canvas.`,
+        );
+      }
+      const captureW = Math.max(1, Math.ceil(widest + 2 * INK_PAD_PX));
+      const captureH = Math.max(1, Math.ceil(tallest + 2 * INK_PAD_PX));
+      await page.setViewportSize({ width: captureW, height: captureH });
       for (let i = 0; i < measured.length; i++) {
+        const b = boxes[i]!;
+        // Window shift: position the canvas (and its absolutely positioned
+        // children, so this Layer's box) inside the fixed capture window,
+        // centered with the pad on every side (rounded to whole pixels — a
+        // fractional shift would re-render the Layer at a subpixel offset
+        // and bleed its raster). Feasible because the cap check above
+        // bounds every box.
+        const left = Math.round(captureW / 2 - (b.x + b.width / 2));
+        const top = Math.round(captureH / 2 - (b.y + b.height / 2));
+        await page.evaluate(
+          ({ left, top }) => {
+            const canvasEl = document.getElementById("canvas") as HTMLElement;
+            canvasEl.style.overflow = "visible";
+            canvasEl.style.left = `${left}px`;
+            canvasEl.style.top = `${top}px`;
+          },
+          { left, top },
+        );
         await page.evaluate((idx) => {
           const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
           kids.forEach((el, j) => {
             el.style.visibility = j === idx ? "" : "hidden";
           });
         }, i);
-        shots.push(Buffer.from(await page.screenshot({ type: "png", omitBackground: true })));
+        const shot = await page.screenshot({ type: "png", omitBackground: true });
+        painted.push(inkBounds(decodePng(Buffer.from(shot)), left, top));
       }
-      painted = shots.map((bytes) => inkBounds(decodePng(bytes), offsetX, offsetY));
     }
 
     return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null }));

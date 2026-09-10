@@ -18,7 +18,7 @@ import {
   type ResolvedCompositionLayer,
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
-import { measureCompositionLayers } from "./composition-measure.js";
+import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
 const HELP = `
@@ -66,8 +66,14 @@ composition — Composition authoring and inspection
       line-box extent — plus the painted extent's intersection with the
       canvas and whether painted ink is clipped, judged against painted
       extents, never the layout box (no visible ink reports painted: null).
-      Painted bounds are the browser's own paint of the exact markup
-      rendering uses, so measurement and rendering agree; opacity scaling
+      Painted values are two-decimal rounded: ink is quantized to the
+      capture window's pixel grid, while canvas offsets are layout-derived
+      and may be fractional. Capture is bounded — one windowed screenshot
+      per Layer (never scaled by off-canvas distance), and a Layer whose
+      layout box exceeds the 8192×8192px window is refused with an
+      actionable error instead of growing memory. Painted bounds are the
+      browser's own paint of the exact markup rendering uses, so
+      measurement and rendering agree; opacity scaling
       changes alpha values, never the ink footprint, and effects beyond
       opacity are separate functionality. Text dimensions are measured with
       the Layer's retained font bytes — the same face painting uses, never
@@ -729,11 +735,7 @@ function contentLabel(layer: { kind: string; content: { width: number; height: n
  * box, plus the on-canvas intersection only when ink is clipped, or the
  * explicit no-visible-ink wording when there is nothing painted.
  */
-function paintedText(layer: {
-  painted: { x: number; y: number; width: number; height: number } | null;
-  paintedOnCanvas: { x: number; y: number; width: number; height: number } | null;
-  clipped: boolean;
-}): string {
+function paintedText(layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped">): string {
   if (!layer.painted) return "painted: none (no visible ink)";
   const p = layer.painted;
   let segment = `painted (${p.x}, ${p.y}) ${p.width}×${p.height}`;

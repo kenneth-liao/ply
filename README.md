@@ -244,8 +244,14 @@ ply composition measure poster --json                # machine-readable
   the footprint that actually shows in a render) and **clipped** (whether
   painted ink falls outside the canvas, judged against painted extents,
   never the layout box). Content with no visible ink (fully transparent
-  content or opacity 0) reports `painted: null`. Effects beyond opacity are
-  not reflected (they are separate functionality).
+  content or opacity 0) reports `painted: null`. Painted values are
+  two-decimal rounded: ink is quantized to the capture window's pixel
+  grid, while canvas offsets are layout-derived and may be fractional.
+  Capture is bounded — one windowed screenshot per Layer, never scaled by
+  off-canvas distance; a Layer whose layout box exceeds the 8192×8192px
+  window is refused with an actionable error instead of growing memory.
+  Effects beyond opacity are not reflected (they are separate
+  functionality).
 - Text dimensions are measured with the same retained font bytes painting
   uses — never a second measuring authority. Corrupt content or an
   unresolved font fails instead of producing misleading numbers.

@@ -760,3 +760,49 @@ test("opacity scales alpha without moving ink; opacity 0 paints nothing", async 
   expect(layer.paintedOnCanvas).toBeNull();
   expect(layer.clipped).toBe(false);
 });
+
+test("a far off-canvas Layer is measured through a bounded window, never unbounded memory", async () => {
+  // Regression (review INT-1/PROD-1): the ink capture window is sized for
+  // the Layer's box and SHIFTED to it, so a placement 100000px off-canvas
+  // costs a window shift — the query succeeds instead of forcing a
+  // gigapixel viewport.
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(16, 16, RED));
+  await makeComp("faraway", 200, 200);
+  await addImageLayer("faraway", "far", img, { x: 100000, y: 40 });
+
+  const { res, json } = await measure("faraway");
+  expect(res.code).toBe(0);
+  const layer = json.layers[0];
+  expect(layer.painted).toEqual({ x: 100000, y: 40, width: 16, height: 16 });
+  expect(layer.paintedOnCanvas).toBeNull();
+  expect(layer.clipped).toBe(true);
+  const text = await invoke(["composition", "measure", "faraway", "--project", projDir]);
+  expect(text.code).toBe(0);
+  expect(text.stdout).toContain("painted (100000, 40) 16×16 — clipped (entirely off-canvas)");
+});
+
+test("a Layer box beyond the capture window is refused loudly, not measured with unbounded memory", async () => {
+  // The resize path caps effective sizes at 8192px per axis, so the
+  // legitimate way to exceed the ink-capture cap is a transform combination:
+  // maximum-size content rotated 45° has an AABB of 8192·√2 ≈ 11586px per
+  // axis — past the 8192px per-dimension capture window. The query fails
+  // safely (exit 1, actionable message) instead of allocating a gigapixel
+  // screenshot.
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(100, 100, RED));
+  await makeComp("huge", 200, 200);
+  await addImageLayer("huge", "giant", img, { x: 50, y: 50 });
+  const layerId = JSON.parse(
+    (await invoke(["composition", "inspect", "huge", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0].layerId as string;
+  expect((await invoke(["layer", "edit", layerId, "--resize-to", "8192x8192", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  expect((await invoke(["layer", "edit", layerId, "--rotate", "45", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+
+  const { res } = await measure("huge", "giant");
+  expect(res.code).toBe(1);
+  const out = JSON.parse(res.stdout);
+  expect(out.ok).toBe(false);
+  expect(out.error).toContain("giant");
+  expect(out.error).toMatch(/capture window/i);
+});

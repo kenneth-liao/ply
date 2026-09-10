@@ -14,10 +14,14 @@
   the footprint that actually shows in a render) and `clipped` (judged
   against painted extents, never the layout box). Fully transparent
   content and opacity 0 report `painted: null` consistently. Painted
-  bounds come from the browser's own paint of the same paint-identical
-  page (each Layer screenshotted with the others hidden), so measurement
-  and rendering agree; read-only, offline, compact text/JSON, and scoped
-  help are unchanged.
+  values are two-decimal rounded: ink is quantized to the capture
+  window's pixel grid, while canvas offsets are layout-derived and may be
+  fractional. Painted bounds come from the browser's own paint of the
+  same paint-identical page (each Layer screenshotted alone through a
+  bounded per-Layer capture window — a far off-canvas Layer costs a
+  window shift, never viewport growth, and a box beyond the 8192×8192px
+  window is refused loudly), so measurement and rendering agree;
+  read-only, offline, compact text/JSON, and scoped help are unchanged.
 - Read-only Layer layout measurement (#136, spec #132 US-002 / US-006,
   DEC-004): `ply composition measure <comp> [use-name]` reports each Layer's
   untransformed content box, the axis-aligned bounding box of its transformed
