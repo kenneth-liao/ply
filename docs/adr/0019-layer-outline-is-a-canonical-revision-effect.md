@@ -102,3 +102,17 @@ the anchor would resolve different ink than the edit publishes.
   Documents stored before this decision stay verbatim — the stored
   normalizers accept every conformant form, so old revision ids and
   pinned paint are untouched.
+- **Rollback to a pre-#140 binary (PROD-2, review):** an older binary
+  ignores the `outline` field when re-deriving the revision hash, so a
+  revision document carrying an outline fails its pinned-hash check —
+  fail-closed (loud refusal, never a silent misread or repaint), but the
+  outlined Layers are unreadable until re-upgrade. The remediation runs
+  BEFORE reverting, on the #140 binary: for every Layer with an outline
+  (`ply layer inspect` shows `Outline: ...` on its current revision;
+  `ply composition measure` reports `outline` in the `effects` facts),
+  run `ply layer edit <layerId> --outline none` — that strips the field,
+  publishes a revision whose id derives without it, and is therefore
+  readable by a pre-#140 binary — then verify a render replays
+  byte-identically before switching binaries. Non-current revisions
+  with outlines stay pinned history: they refuse the same way and are
+  recoverable by re-upgrading, so no data is lost.

@@ -237,12 +237,13 @@ function outlineDefs(layers: SnapshotLayer[]): string {
 
 /**
  * The per-Layer outline-filter specs handed to `sizeOutlineFilterRegions`:
- * null for Layers without an outline.
+ * null for Layers without an outline; the name rides along for the loud
+ * failure message.
  */
-function outlineFilterSpecs(layers: SnapshotLayer[]): ({ id: string; width: number } | null)[] {
+function outlineFilterSpecs(layers: SnapshotLayer[]): ({ id: string; width: number; name: string } | null)[] {
   return layers.map((l, i) =>
     l.revision.outline !== undefined
-      ? { id: outlineFilterId(l.revision.outline, i), width: l.revision.outline.width }
+      ? { id: outlineFilterId(l.revision.outline, i), width: l.revision.outline.width, name: l.name }
       : null,
   );
 }
@@ -260,30 +261,53 @@ function outlineFilterSpecs(layers: SnapshotLayer[]): ({ id: string; width: numb
  * keeps render and painted extents identical, and it is a deterministic
  * function of the same DOM, so pinned Render history replays
  * byte-identically.
+ *
+ * Fails loudly (PROD-1, review): a skipped sizing would leave Chromium
+ * clipping the ring and the source graphic to the placeholder region —
+ * the exact silent-clip failure the bounded-capture contract forbids — so
+ * a missing #canvas, Layer element, or filter def rejects the paint and
+ * measurement flows naming the Layer, instead of silently succeeding.
+ * The guards are reachable only if the page is not the markup the builder
+ * emitted (the same `buildCompositionHtml` call emits the elements and
+ * their defs), i.e. a markup-contract violation — fail fast at the seam.
  */
 export async function sizeOutlineFilterRegions(page: Page, layers: SnapshotLayer[]): Promise<void> {
   const specs = outlineFilterSpecs(layers);
   if (specs.every((s) => s === null)) return;
-  await page.evaluate((input) => {
+  const failure = await page.evaluate((input) => {
     const canvas = document.getElementById("canvas");
-    if (!canvas) return;
+    if (!canvas) return "#canvas element missing";
+    const problems: string[] = [];
     input.forEach((spec, i) => {
       if (!spec) return;
       const el = canvas.children[i] as HTMLElement | undefined;
       const filter = document.getElementById(spec.id);
-      if (!el || !filter) return;
-      const saved = el.style.transform;
-      el.style.transform = "none";
-      const box = el.getBoundingClientRect();
-      el.style.transform = saved;
-      const pad = spec.width + 1;
-      filter.setAttribute("filterUnits", "userSpaceOnUse");
-      filter.setAttribute("x", String(-pad));
-      filter.setAttribute("y", String(-pad));
-      filter.setAttribute("width", String(box.width + 2 * pad));
-      filter.setAttribute("height", String(box.height + 2 * pad));
+      if (!el) {
+        problems.push(`Layer "${spec.name}": element ${i} not found in #canvas`);
+      } else if (!filter) {
+        problems.push(`Layer "${spec.name}": outline filter ${spec.id} not found`);
+      } else {
+        const saved = el.style.transform;
+        el.style.transform = "none";
+        const box = el.getBoundingClientRect();
+        el.style.transform = saved;
+        const pad = spec.width + 1;
+        filter.setAttribute("filterUnits", "userSpaceOnUse");
+        filter.setAttribute("x", String(-pad));
+        filter.setAttribute("y", String(-pad));
+        filter.setAttribute("width", String(box.width + 2 * pad));
+        filter.setAttribute("height", String(box.height + 2 * pad));
+      }
     });
+    return problems.length > 0 ? problems.join("; ") : null;
   }, specs);
+  if (failure !== null) {
+    throw new Error(
+      `Outline filter region sizing failed: ${failure}. ` +
+        `The page is not the markup the composition builder emitted, so the outline would be clipped to its ` +
+        `placeholder region — refusing to paint or measure clipped ink.`,
+    );
+  }
 }
 
 /**
