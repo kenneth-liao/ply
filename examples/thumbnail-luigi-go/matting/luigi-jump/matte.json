@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "matteId": "luigi-jump",
+  "kind": "matting",
+  "createdAt": "2026-09-10T01:20:57.723Z",
+  "request": {
+    "source": {
+      "path": "out/generation/gen-20260910-2432e2ef/outputs/69ad419d2b21b924e5040e115f37945f608b94bfdab084623bfa751a62a3650b.png",
+      "contentHash": "69ad419d2b21b924e5040e115f37945f608b94bfdab084623bfa751a62a3650b"
+    }
+  },
+  "result": {
+    "engine": "local-segmentation:birefnet-hr-fp16.onnx",
+    "alpha": {
+      "width": 1024,
+      "height": 1024,
+      "transparentPx": 865229,
+      "opaquePx": 163376
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "328c9f6fdf0e57bd866e1c7bbba9ba957b86ea4f3445a2717af28385024287df",
+        "file": "outputs/328c9f6fdf0e57bd866e1c7bbba9ba957b86ea4f3445a2717af28385024287df.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

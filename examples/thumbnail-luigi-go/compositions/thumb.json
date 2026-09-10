@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "thumb",
+  "canvas": {
+    "width": 1280,
+    "height": 720
+  },
+  "layers": [
+    {
+      "name": "bg",
+      "layerId": "layer_mtuuba7q_wdjdu4"
+    },
+    {
+      "name": "luigi",
+      "layerId": "layer_mtuudjt8_k03vnm"
+    },
+    {
+      "name": "banner",
+      "layerId": "layer_mtuudjxp_6849p1"
+    }
+  ]
+}

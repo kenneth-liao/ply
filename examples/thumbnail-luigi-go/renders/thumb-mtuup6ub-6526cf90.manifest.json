@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "composition": "thumb",
+  "canvas": {
+    "width": 1280,
+    "height": 720
+  },
+  "environment": {
+    "tool": {
+      "name": "ply",
+      "version": "4.0.0"
+    },
+    "runtime": "bun 1.4.0",
+    "browser": "chromium 151.0.7922.34",
+    "platform": "darwin-arm64"
+  },
+  "output": "renders/thumb-mtuup6ub-6526cf90.png",
+  "createdAt": "2026-09-10T01:30:47.189Z",
+  "layers": [
+    {
+      "name": "bg",
+      "layerId": "layer_mtuuba7q_wdjdu4",
+      "revisionId": "rev_d999064222ccf17e"
+    },
+    {
+      "name": "luigi",
+      "layerId": "layer_mtuudjt8_k03vnm",
+      "revisionId": "rev_7f9672821c4b5d69"
+    },
+    {
+      "name": "banner",
+      "layerId": "layer_mtuudjxp_6849p1",
+      "revisionId": "rev_83a3a96b7311c5d1"
+    }
+  ]
+}

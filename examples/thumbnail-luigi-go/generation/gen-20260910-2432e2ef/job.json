@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "jobId": "gen-20260910-2432e2ef",
+  "kind": "generation",
+  "createdAt": "2026-09-10T01:14:36.860Z",
+  "request": {
+    "prompt": "Original cartoon hero character, young man with brown mustache wearing a green cap, green shirt, blue overalls, white gloves and brown shoes, jumping joyfully mid-air with one fist raised high, side view, bold cartoon game art style, full body visible with clear margins, plain solid white background, no text, no watermark, no logo",
+    "intent": "isolated",
+    "model": "nano-2",
+    "sizing": {
+      "kind": "aspectRatio",
+      "ratio": "1:1"
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-10T01:14:36.860Z",
+    "model": "google/gemini-3.1-flash-image",
+    "fullPrompt": "Original cartoon hero character, young man with brown mustache wearing a green cap, green shirt, blue overalls, white gloves and brown shoes, jumping joyfully mid-air with one fist raised high, side view, bold cartoon game art style, full body visible with clear margins, plain solid white background, no text, no watermark, no logo\n\nFormat: exactly one single isolated subject, fully inside the frame with clear margins on all sides, on a plain, uniform, evenly lit background with crisp, well-defined edges — suitable for later local isolation.\nOutput aspect ratio: 1:1.",
+    "costUsd": 0.067,
+    "costMeasured": true,
+    "warnings": [
+      "isolated: isolated intent is a generation request, not a matte — the output is not verified alpha; invoke Matting explicitly (ADR-0015) for verified true alpha"
+    ],
+    "outputs": [
+      {
+        "contentHash": "69ad419d2b21b924e5040e115f37945f608b94bfdab084623bfa751a62a3650b",
+        "file": "outputs/69ad419d2b21b924e5040e115f37945f608b94bfdab084623bfa751a62a3650b.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}
