@@ -10,6 +10,11 @@ composition machinery; the caller owns content choices and acceptance. These
 practices are relocated before the old runtime gates are removed (ISC-24/27).
 The current CLI still enforces its legacy gates; this skill does not bypass them.
 
+The tool's operating route — import/generate, optional Matting, Layer
+ingestion, measurement and edits, Render and pixel review — lives in the
+`ply-operating` skill; use it for how to run the composer and follow this
+skill for what the content and its acceptance require.
+
 ## Identity-anchor prompting
 
 When likeness matters, prefer an appropriate real source photo before generation.

@@ -36,6 +36,12 @@ glossary. Architectural decisions are in [docs/adr/](docs/adr/).
 
 ## Projects and Compositions (new surface)
 
+The end-to-end operating route — import or generate, optional Matting, Layer
+ingestion, measurement and edits, Render and pixel review, with the chosen
+defaults — is taught in [.agents/skills/ply-operating/SKILL.md](.agents/skills/ply-operating/SKILL.md)
+(the `ply-operating` skill). Content-policy practice is a separate
+authority: see [.agents/skills/visual-authoring/SKILL.md](.agents/skills/visual-authoring/SKILL.md).
+
 The composer workflow runs through `ply project`, `ply composition`, and
 `ply layer` — see `ply <module> --help` and
 [docs/project-storage-contract.md](docs/project-storage-contract.md) for the
