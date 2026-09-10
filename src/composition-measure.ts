@@ -1,6 +1,6 @@
 /**
- * Read-only Composition layout measurement (#136, spec #132 US-002 / US-006,
- * DEC-001, DEC-003–004).
+ * Read-only Composition geometry measurement (#136/#137, spec #132 US-002 /
+ * US-006, DEC-001, DEC-003–004).
  *
  * One measuring authority: measurement renders the EXACT markup the paint
  * path builds (`buildCompositionHtml` — same retained font bytes under the
@@ -25,11 +25,40 @@
  *   browser-measured through the revision's canonical transform.
  * - `box` — the axis-aligned bounding box of those corners: the layout
  *   footprint in Composition coordinates, UNCLIPPED (a Layer extending past
- *   the canvas reports its full geometry; canvas clipping is later work).
- * These are LAYOUT boxes, deliberately NOT painted extents: image boxes
- * include transparent padding, text boxes are line-box extents rather than
- * tight glyph ink, and effects/opacity are not reflected. Visible
- * alpha/glyph painted bounds belong to ticket #137.
+ *   the canvas reports its full geometry).
+ * - `painted` — the axis-aligned bounding box of the Layer's VISIBLE ink
+ *   (alpha > 0) in Composition coordinates, UNCLIPPED: image alpha trimming
+ *   excludes transparent padding from painted but not from content, and text
+ *   painted bounds are tight glyph ink rather than the line-box extent.
+ *   The ink pass renders the same paint-identical page, hides the other
+ *   Layers (no reflow — they are absolutely positioned), screenshots the
+ *   Layer alone through a bounded per-Layer capture window (shifted, never
+ *   grown with the Layer's off-canvas distance), and reads its alpha
+ *   support — so the numbers are the browser's own paint, never a second
+ *   rasterizer. Values are reported through round2 (fractional): the ink
+ *   support is quantized to the screenshot's pixel grid, but the canvas
+ *   offsets are layout-derived and may be fractional. Layers without visible
+ *   ink (fully transparent content, or opacity 0) report `painted: null`;
+ *   opacity scaling changes alpha values, never the ink support (and a
+ *   Layer's footprint is its own ink — occlusion by later Layers is
+ *   stacking, not footprint). Painted extents are the alpha support of the
+ *   browser's actual paint, so resampling (scale/rotation interpolation)
+ *   may bleed ink roughly a pixel past the geometric ink boundary — that
+ *   bleed is genuinely painted and the render shows it too. A Layer whose
+ *   layout box exceeds the bounded capture window is refused loudly rather
+ *   than measured with unbounded memory.
+ * - `paintedOnCanvas` — `painted` ∩ the canvas rectangle: the footprint that
+ *   actually shows in a render; `null` when empty (no visible ink, or ink
+ *   entirely outside the canvas).
+ * - `clipped` — whether painted ink falls outside the canvas, computed
+ *   against the PAINTED extents, never the layout box (a mostly transparent
+ *   image may have a layout box past the canvas while all of its ink stays
+ *   visible).
+ *
+ * These remain LAYOUT-vs-PAINTED distinct by construction (DEC-004): `box`
+ * is layout geometry, `painted` is ink geometry, both in Composition
+ * coordinates through the same retained font bytes and the same emitted
+ * transforms. Effects beyond opacity are not reflected (#139/#140).
  *
  * The query writes no Project state: the Composition, its current revisions,
  * and verified retained bytes are resolved exactly once through the
@@ -41,6 +70,7 @@ import { withRenderPage } from "./browser.js";
 import { readCompositionInternalFull } from "./composition.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
+import { decodePng } from "./png.js";
 import { buildCompositionHtml, rejectUnresolvedFonts, type SnapshotLayer } from "./composition-paint.js";
 import type { Page } from "playwright";
 
@@ -55,6 +85,12 @@ export interface MeasuredLayerBounds {
   box: { x: number; y: number; width: number; height: number };
   /** Transformed content rectangle corners, clockwise from top-left, in Composition coordinates (px). */
   corners: { x: number; y: number }[];
+  /** Axis-aligned bounding box of the Layer's visible ink (alpha > 0) in Composition coordinates (px, unclipped, quantized to the screenshot's pixel grid; offsets are layout-derived and may be fractional); null when nothing is visible. */
+  painted: { x: number; y: number; width: number; height: number } | null;
+  /** The painted extent's intersection with the canvas rectangle — the footprint that shows in a render; null when empty. */
+  paintedOnCanvas: { x: number; y: number; width: number; height: number } | null;
+  /** Whether painted ink falls outside the canvas, judged against the painted extents (never the layout box). */
+  clipped: boolean;
   /** The revision's placement facts, verbatim. */
   placement: { x: number; y: number; opacity: number };
   /** The revision's normalized canonical transform facts, verbatim. */
@@ -129,6 +165,57 @@ function round2(n: number): number {
 }
 
 /**
+ * Safety pad (px) added around each Layer box when sizing its ink-capture
+ * window: glyph ink may overhang its line box by a pixel or two (italic
+ * faces), so the captured region must not end exactly at the box.
+ */
+const INK_PAD_PX = 16;
+
+/**
+ * Single-dimension cap (px) for the per-Layer ink-capture window (review
+ * INT-1/PROD-1): a layout box needing more is refused loudly instead of
+ * growing a viewport without bound. 8192 keeps one window screenshot at
+ * most ~256MB of RGBA — bounded, and far above any on-canvas ink a
+ * Composition-scale Layer produces.
+ */
+const MAX_INK_VIEWPORT_PX = 8192;
+
+type Box = { x: number; y: number; width: number; height: number };
+
+/** Round every component of an optional box for reporting. */
+function roundBox(box: Box | null): Box | null {
+  return box ? { x: round2(box.x), y: round2(box.y), width: round2(box.width), height: round2(box.height) } : null;
+}
+
+/** Intersection of a box with the canvas rectangle; null when empty. */
+function clipToCanvas(box: Box, canvas: { width: number; height: number }): Box | null {
+  const x1 = Math.max(box.x, 0);
+  const y1 = Math.max(box.y, 0);
+  const x2 = Math.min(box.x + box.width, canvas.width);
+  const y2 = Math.min(box.y + box.height, canvas.height);
+  return x2 > x1 && y2 > y1 ? { x: x1, y: y1, width: x2 - x1, height: y2 - y1 } : null;
+}
+
+/** Bounding box of every alpha > 0 pixel, mapped from page coordinates into Composition coordinates. */
+function inkBounds(png: { width: number; height: number; rgba: Uint8Array }, offsetX: number, offsetY: number): Box | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (png.rgba[(y * png.width + x) * 4 + 3]! > 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  return minX === Infinity ? null : { x: minX - offsetX, y: minY - offsetY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+/**
  * Measure the snapshot's exact bytes through the render page using the
  * paint path's markup and rejection contract. Mirrors `paintComposition`'s
  * page flow: viewport = canvas, same content, awaited image decode (a
@@ -139,7 +226,7 @@ async function measureSnapshot(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
   options: { page?: Page } = {},
-): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: { x: number; y: number; width: number; height: number } }[]> {
+): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null }[]> {
   const run = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
@@ -148,7 +235,76 @@ async function measureSnapshot(
     // The same retained-font gate as painting: an unresolved face is a
     // loud failure, never a fallback measurement.
     await rejectUnresolvedFonts(page, layers);
-    return page.evaluate(MEASURE_PROBE);
+    const measured = await page.evaluate(MEASURE_PROBE);
+
+    // Painted-ink pass (#137): the same page that just measured layout —
+    // the paint path's exact markup, the same decode and font gates — is
+    // screenshotted once per Layer with the others hidden (they are
+    // absolutely positioned, so hiding changes no geometry, and the page
+    // is throwaway). The canvas overflow is released, so ink beyond the
+    // canvas can be captured and the canvas intersection reported against
+    // the PAINTED extents, never the layout box.
+    //
+    // Bounded capture (review INT-1/PROD-1): the capture window is sized
+    // for the largest single Layer box plus the pad — never the union of
+    // all off-canvas extents — and the canvas is SHIFTED per Layer so its
+    // box sits inside the window. A placement far off-canvas costs a
+    // window shift, not viewport growth; a box beyond the cap is refused
+    // loudly, because a read-only query must fail safely, never grow
+    // memory without bound. Cost ceiling: O(Layers × capture-window
+    // area) — one screenshot plus one pixel scan per Layer.
+    let painted: (Box | null)[] = [];
+    if (measured.length > 0) {
+      const boxes = measured.map((m) => m.box);
+      const widest = Math.max(...boxes.map((b) => b.width));
+      const tallest = Math.max(...boxes.map((b) => b.height));
+      if (
+        widest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX ||
+        tallest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX
+      ) {
+        const bad = boxes.findIndex(
+          (b) => b.width + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX || b.height + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX,
+        );
+        throw new Error(
+          `Layer "${layers[bad]!.name}" has a layout box ${Math.ceil(boxes[bad]!.width)}×${Math.ceil(boxes[bad]!.height)}px, ` +
+            `beyond the ${MAX_INK_VIEWPORT_PX}×${MAX_INK_VIEWPORT_PX}px painted-extent capture window. Painted extents are refused ` +
+            `instead of growing measurement memory without bound — reduce the transform scale or place the Layer nearer the canvas.`,
+        );
+      }
+      const captureW = Math.max(1, Math.ceil(widest + 2 * INK_PAD_PX));
+      const captureH = Math.max(1, Math.ceil(tallest + 2 * INK_PAD_PX));
+      await page.setViewportSize({ width: captureW, height: captureH });
+      for (let i = 0; i < measured.length; i++) {
+        const b = boxes[i]!;
+        // Window shift: position the canvas (and its absolutely positioned
+        // children, so this Layer's box) inside the fixed capture window,
+        // centered with the pad on every side (rounded to whole pixels — a
+        // fractional shift would re-render the Layer at a subpixel offset
+        // and bleed its raster). Feasible because the cap check above
+        // bounds every box.
+        const left = Math.round(captureW / 2 - (b.x + b.width / 2));
+        const top = Math.round(captureH / 2 - (b.y + b.height / 2));
+        await page.evaluate(
+          ({ left, top }) => {
+            const canvasEl = document.getElementById("canvas") as HTMLElement;
+            canvasEl.style.overflow = "visible";
+            canvasEl.style.left = `${left}px`;
+            canvasEl.style.top = `${top}px`;
+          },
+          { left, top },
+        );
+        await page.evaluate((idx) => {
+          const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
+          kids.forEach((el, j) => {
+            el.style.visibility = j === idx ? "" : "hidden";
+          });
+        }, i);
+        const shot = await page.screenshot({ type: "png", omitBackground: true });
+        painted.push(inkBounds(decodePng(Buffer.from(shot)), left, top));
+      }
+    }
+
+    return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null }));
   };
   return options.page ? run(options.page) : withRenderPage(run);
 }
@@ -188,6 +344,18 @@ export async function measureCompositionLayers(
   const bounds: MeasuredLayerBounds[] = layers.map((l, i) => {
       const m = measured[i]!;
       const rev = l.revision;
+      // One home for the reported painted box: clipping and the canvas
+      // intersection are derived from the same rounded values the report
+      // carries, so a consumer recomputing them from the JSON can never
+      // disagree with the reported `clipped`.
+      const painted = m.painted ? roundBox(m.painted) : null;
+      const paintedOnCanvas = painted ? roundBox(clipToCanvas(painted, comp.canvas)) : null;
+      const clipped =
+        painted !== null &&
+        (painted.x < 0 ||
+          painted.y < 0 ||
+          painted.x + painted.width > comp.canvas.width ||
+          painted.y + painted.height > comp.canvas.height);
       return {
         name: l.name,
         layerId: l.layerId,
@@ -205,6 +373,9 @@ export async function measureCompositionLayers(
           width: round2(m.box.width),
           height: round2(m.box.height),
         },
+        painted,
+        paintedOnCanvas,
+        clipped,
         corners: m.corners.map((c) => ({ x: round2(c.x), y: round2(c.y) })),
         placement: { x: rev.x, y: rev.y, opacity: rev.opacity },
         transform: {

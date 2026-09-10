@@ -18,7 +18,7 @@ import {
   type ResolvedCompositionLayer,
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
-import { measureCompositionLayers } from "./composition-measure.js";
+import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
 const HELP = `
@@ -56,18 +56,29 @@ composition — Composition authoring and inspection
       Inspect a Composition's canvas and ordered Layers
 
   bun run ply composition measure <comp> [use-name] [options]
-      Measure Layer layout bounds read-only in Composition coordinates,
-      including the current scale, rotation, and reflection. Reports each
-      Layer's untransformed content box, the axis-aligned bounding box of
-      its transformed content rectangle (unclipped), and that rectangle's
-      corners. These are LAYOUT boxes, not painted extents: image boxes
-      include transparent padding, text boxes are line-box extents rather
-      than tight glyph ink, and effects, opacity fading, and canvas
-      clipping are not reflected (visible painted bounds are separate
-      functionality). Text dimensions are measured with the Layer's
-      retained font bytes — the same face painting uses, never a second
-      measuring authority; corrupt content or an unresolved font fails
-      instead of producing misleading numbers. Writes nothing to the
+      Measure Layer geometry read-only in Composition coordinates, including
+      the current scale, rotation, and reflection. Reports each Layer's
+      LAYOUT boxes (untransformed content box, the axis-aligned bounding box
+      of its transformed content rectangle, and that rectangle's corners)
+      and its PAINTED extents: the visible-ink (alpha > 0) bounding box —
+      image transparent padding is excluded from painted but kept in
+      content, text painted bounds are tight glyph ink rather than the
+      line-box extent — plus the painted extent's intersection with the
+      canvas and whether painted ink is clipped, judged against painted
+      extents, never the layout box (no visible ink reports painted: null).
+      Painted values are two-decimal rounded: ink is quantized to the
+      capture window's pixel grid, while canvas offsets are layout-derived
+      and may be fractional. Capture is bounded — one windowed screenshot
+      per Layer (never scaled by off-canvas distance), and a Layer whose
+      layout box exceeds the 8192×8192px window is refused with an
+      actionable error instead of growing memory. Painted bounds are the
+      browser's own paint of the exact markup rendering uses, so
+      measurement and rendering agree; opacity scaling
+      changes alpha values, never the ink footprint, and effects beyond
+      opacity are separate functionality. Text dimensions are measured with
+      the Layer's retained font bytes — the same face painting uses, never
+      a second measuring authority; corrupt content or an unresolved font
+      fails instead of producing misleading numbers. Writes nothing to the
       Project.
 
   bun run ply composition render <name> [options]
@@ -589,7 +600,7 @@ async function run() {
           { ok: true, composition: result.composition, canvas: result.canvas, layers: result.layers },
           isJson,
           () => {
-            console.log(`Measured Composition "${result.composition}" (${result.canvas.width}×${result.canvas.height}), ${result.layers.length} Layer${result.layers.length === 1 ? "" : "s"} (layout boxes — not painted extents):`);
+            console.log(`Measured Composition "${result.composition}" (${result.canvas.width}×${result.canvas.height}), ${result.layers.length} Layer${result.layers.length === 1 ? "" : "s"} (layout boxes + painted extents):`);
             result.layers.forEach((layer, idx) => {
               const t = layer.transform;
               const facts: string[] = [];
@@ -601,7 +612,7 @@ async function run() {
                 facts.push(`flip ${t.flipX && t.flipY ? "both" : t.flipX ? "horizontal" : "vertical"}`);
               }
               console.log(
-                `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height}` +
+                `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height} ${paintedText(layer)}` +
                   (facts.length > 0 ? ` [${facts.join(", ")}]` : ""),
               );
             });
@@ -717,4 +728,24 @@ function parseNumericArgument(value: string | undefined): number {
 /** Compact content description for a measured Layer. */
 function contentLabel(layer: { kind: string; content: { width: number; height: number } }): string {
   return layer.kind === "text" ? `text ${layer.content.width}×${layer.content.height}` : `image content ${layer.content.width}×${layer.content.height}`;
+}
+
+/**
+ * Compact painted-extent segment for a measured Layer: the unclipped ink
+ * box, plus the on-canvas intersection only when ink is clipped, or the
+ * explicit no-visible-ink wording when there is nothing painted.
+ */
+function paintedText(layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped">): string {
+  if (!layer.painted) return "painted: none (no visible ink)";
+  const p = layer.painted;
+  let segment = `painted (${p.x}, ${p.y}) ${p.width}×${p.height}`;
+  if (layer.clipped) {
+    // Ink can be clipped with an empty on-canvas footprint — entirely
+    // outside the canvas — so the intersection may be null.
+    const v = layer.paintedOnCanvas;
+    segment += v
+      ? `, on-canvas (${v.x}, ${v.y}) ${v.width}×${v.height} — clipped`
+      : " — clipped (entirely off-canvas)";
+  }
+  return segment;
 }
