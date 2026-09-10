@@ -34,7 +34,31 @@ export interface ModelSpec {
    * `aspectRatio` and require an explicit `size`.
    */
   sizing?: "aspectRatio" | "size";
+  /**
+   * The quality tiers this model accepts, when it has any (spec #132 #142).
+   * Only models with a real provider-side quality parameter carry this claim:
+   * every other model — including raw gateway ids and the multimodal family —
+   * has no quality tiers, and none are invented for it (US-005, DEC-007).
+   * The absence of this field is itself the refusal: quality selection is a
+   * capability read from the one registry, never inferred.
+   */
+  supportedQualities?: readonly ImageQuality[];
   note: string;
+}
+
+  /**
+   * The GPT Image 2 quality tiers (spec #132 US-005, #142).
+   */
+export type ImageQuality = "low" | "medium" | "high";
+
+/**
+ * The one runtime home of the tier vocabulary (CRAFT-4, #142 review): every
+ * site that tests a value against the quality tiers — CLI syntax, domain
+ * validation, record parsing — reads this predicate, so a future tier cannot
+ * be added to one site and missed in another.
+ */
+export function isImageQuality(value: unknown): value is ImageQuality {
+  return value === "low" || value === "medium" || value === "high";
 }
 
 export const MODELS: Record<string, ModelSpec> = {
@@ -42,6 +66,7 @@ export const MODELS: Record<string, ModelSpec> = {
     id: "openai/gpt-image-2",
     kind: "image",
     sizing: "size",
+    supportedQualities: ["low", "medium", "high"],
     approxCost: 0.0045,
     costMeasured: true,
     // The measured rate is the text-only plate rate: a reference call bills
@@ -175,6 +200,32 @@ export function validateReferenceCapability(model: string, hasReferences: boolea
   if (!hasReferences) return;
   const spec = resolveModel(model);
   if (!spec.supportsRef) throw new Error(referenceIncompatibilityError(spec));
+}
+
+/**
+ * The quality-capability refusal (#142): names the rejected model, states
+ * that nothing was sent, and points at the one qualified choice — recovery
+ * never requires registry knowledge (the same shape as the reference
+ * incompatibility message).
+ */
+export function qualityUnsupportedError(spec: ModelSpec): string {
+  return (
+    `Model "${spec.id}" takes no quality selection — explicit low/medium/high quality control is qualified for ` +
+    `GPT Image 2 only (gpt-image), and no quality tiers are invented for other models (spec #132, DEC-007). ` +
+    `The Job was refused before any provider call and nothing was spent; drop --quality or pass --model gpt-image.`
+  );
+}
+
+/**
+ * The quality-capability gate (#142): a quality selection is accepted only
+ * for a model whose registry spec carries the qualified tiers — refused
+ * before any provider call, therefore before any spend (US-005). A request
+ * without a quality selection needs no capability claim: the provider's own
+ * default applies and the record gains no quality key.
+ */
+export function validateQualitySupport(spec: ModelSpec, quality: ImageQuality | undefined): void {
+  if (quality === undefined) return;
+  if (!spec.supportedQualities?.includes(quality)) throw new Error(qualityUnsupportedError(spec));
 }
 
 export function resolveModel(name: string): ModelSpec {

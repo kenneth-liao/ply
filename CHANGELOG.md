@@ -4,6 +4,27 @@
 
 ### Added
 
+- Explicit GPT Image 2 quality selection (#142, spec #132 US-005, DEC-007):
+  `ply generate --quality low|medium|high` accepts an explicit quality for
+  `gpt-image` and forwards the requested value through the provider seam —
+  on the production adapter, to the AI Gateway inside
+  `providerOptions.openai.quality` (verified against the installed SDK,
+  ai 7.0.82 / @ai-sdk/gateway 4.0.67, whose image model sends
+  `providerOptions` verbatim; the Gateway's mapping onto the upstream
+  `quality` parameter is Gateway-service behavior, not locally provable).
+  Quality capability is registry-owned (`supportedQualities` on the
+  `gpt-image` spec): unsupported model/quality combinations — nano-2 and the
+  multimodal family, other image models, unregistered raw gateway ids — are
+  refused before any provider call, and no quality tiers are invented for
+  them. An explicit selection is retained as both request and effective run
+  provenance (`request.quality`, `run.quality`); an unselected request omits
+  both keys entirely (the provider's own default applies — no fabricated
+  historical choice), pre-#142 records stay readable, and a contradictory
+  quality value fails record parsing closed. Compact text, `show`/`list`
+  output and JSON, and scoped help report the selection; `show`/`list` refuse
+  generation flags including `--quality`. Deterministic provider-seam
+  evidence only — no billing, no network. Explicit caller choices override
+  defaults; provider refusals surface with no fallback policy (DEC-007).
 - Layer outlines with correct painted bounds (#140, spec #132 US-003 /
   US-002 / US-006, DEC-002/003/004/005, ADR-0019):
   `ply layer edit --outline "<width>,<color>"` applies a solid outline to
