@@ -892,7 +892,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       rotationDeg: source.rotationDeg,
       flipX: source.flipX,
       flipY: source.flipY,
-      ...(source.shadow !== undefined ? { shadow: source.shadow } : {}),
+      ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
     };
   }
   if (source.kind !== "image") {
@@ -912,7 +912,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     rotationDeg: source.rotationDeg,
     flipX: source.flipX,
     flipY: source.flipY,
-    ...(source.shadow !== undefined ? { shadow: source.shadow } : {}),
+    ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
   };
 }
 

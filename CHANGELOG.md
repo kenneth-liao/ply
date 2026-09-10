@@ -15,7 +15,8 @@
   the shadow-extended result. `ply composition measure` includes the
   shadow extent in painted bounds, the on-canvas intersection, and
   `clipped` — its bounded capture window widens by the revision's shadow
-  reach (|dx| + |dy| + 2·blur) so a shadowed Layer's full extent is
+  reach (the local |dx| + |dy| + 2·blur scaled by the transform's largest
+  factor) so a shadowed Layer's full extent is
   captured or refused loudly, never silently clipped — and reports the
   effective shadow settings in the `effects` facts and compact text.
   Anchored placement resolves against the same shadow-extended painted

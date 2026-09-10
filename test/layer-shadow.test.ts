@@ -234,7 +234,6 @@ test("text Layer --shadow paints at the glyph ink and keeps font bytes", async (
       }
     }
   }
-  console.log("DIFFS", diffCount);
   expect(foundGreen).toBe(true);
 });
 /** Tracer 3: measurement's painted extents, canvas clipping, and the report
@@ -637,4 +636,49 @@ test("an identical shadow edit is a no-op, never a redundant revision", async ()
   const removeAgain = await invoke(["layer", "edit", layerId, "--shadow", "none", "--project", projDir, "--json"]);
   expect(removeAgain.code).toBe(0);
   expect(JSON.parse(removeAgain.stdout).layer.currentRevisionId).toBe(removedId);
+});
+
+/** INT-1 regression: the shadow paints BEFORE the canonical transform, so a
+ * scaled Layer's canvas-space shadow extent is the LOCAL reach scaled by
+ * the transform — measurement must widen its capture window by the scaled
+ * reach, or painted extents silently clip and disagree with the render. */
+test("measure includes the scale-amplified shadow extent: painted agrees with the render", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 500, 500);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 100, y: 100 });
+  const layerId = addRes.use.layerId as string;
+
+  // Scale 3× (effective 300×180) then shadow (20,20,0): local reach 40 →
+  // canvas reach 120. Content ink [100,400)×[100,280); the shadow rect maps
+  // to [160,460)×[160,340). Union painted = [100,460)×[100,340).
+  const scaleRes = await invoke(["layer", "edit", layerId, "--resize", "3", "--project", projDir, "--json"]);
+  expect(scaleRes.code).toBe(0);
+  const shadowRes = await invoke(["layer", "edit", layerId, "--shadow", "20,20,0,#000000", "--project", projDir, "--json"]);
+  expect(shadowRes.code).toBe(0);
+
+  const measureRes = await invoke(["composition", "measure", "poster", "hero", "--project", projDir, "--json"]);
+  expect(measureRes.code).toBe(0);
+  const layer = JSON.parse(measureRes.stdout).layers[0];
+  expect(layer.box).toEqual({ x: 100, y: 100, width: 300, height: 180 });
+  expect(layer.painted).toEqual({ x: 100, y: 100, width: 360, height: 240 });
+  expect(layer.paintedOnCanvas).toEqual({ x: 100, y: 100, width: 360, height: 240 });
+  expect(layer.clipped).toBe(false);
+
+  // Measurement/render agreement: the rendered PNG's actual ink support is
+  // exactly the reported painted extent (blur 0 — sharp edges).
+  const out = path.join(tempDir, "scaled-shadow.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
+  const png = decodePng(await readFile(out));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (pixel(png, x, y)[3] > 0) {
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  expect({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 }).toEqual(layer.painted);
 });

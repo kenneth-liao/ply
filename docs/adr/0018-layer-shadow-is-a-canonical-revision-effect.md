@@ -41,9 +41,11 @@ before.
 The #137 ink pass screenshots the paint-identical markup, so the shadow's
 ink is part of the measured `painted` extents by construction —
 `paintedOnCanvas` and `clipped` inherit the extension. The capture window
-is widened by the Layer's **shadow reach** — `|dx| + |dy| + 2·blur`, the
-documented margin over the CSS blur radius's ~1.5× visible extent —
-derived from the revision fact alone, so a shadowed Layer's full extent is
+is widened by the Layer's **canvas-space shadow reach** — the local reach
+`|dx| + |dy| + 2·blur` (the documented margin over the CSS blur radius's
+~1.5× visible extent) scaled by the revision transform's largest factor,
+because the shadow paints before the transform — derived from the revision
+facts alone, so a shadowed Layer's full extent is
 captured or the measurement is refused loudly, never silently clipped.
 
 **Anchored placement resolves against the shadow-extended painted ink.**
