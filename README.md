@@ -268,13 +268,15 @@ content box (ADR-0017):
 ply layer edit <layerId> --anchor center,center --x 960 --y 540
 ply layer edit <layerId> --anchor center,bottom --x 960 --y 1070
 ply layer edit <layerId> --anchor right --x 300  # horizontal only: --x is the target
-ply layer edit <layerId> --anchor top,center --y 200 --x 100
+ply layer edit <layerId> --anchor center,top --x 100 --y 200
 ```
 
 - Horizontal values are `left|center|right` (anchoring `--x`), vertical
   values `top|center|bottom` (anchoring `--y`); a pair like
   `center,center` anchors both, in that order. A single value anchors one
-  axis only (`left`/`right` are horizontal, `top`/`bottom` vertical). A
+  axis only (`left`/`right` are horizontal, `top`/`bottom` vertical); a
+  coordinate supplied for the unanchored axis still applies as a plain
+  placement edit, and the report states exactly what publishes. A
   bare `center` is ambiguous and refused — name both, e.g. `center,center`.
 - **The anchor box is the painted ink box** (alpha > 0 for images, tight
   glyph ink for text — exactly the `painted` extents `ply composition

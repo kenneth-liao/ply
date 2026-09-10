@@ -82,7 +82,9 @@ Options:
                         single value anchors one axis only (left/right are
                         horizontal, top/bottom vertical; a bare "center" is
                         ambiguous and refused — name both, e.g.
-                        "center,center").
+                        "center,center"). A coordinate supplied for the
+                        unanchored axis still applies as a plain placement
+                        edit, and the report states exactly what publishes.
 
                         The anchor box is the PAINTED INK box (alpha > 0 /
                         tight glyph ink, unclipped), never the layout
