@@ -64,6 +64,7 @@ docs/project-storage-contract.md for the retention contract.
     "model": "registry key or raw gateway id, as the caller wrote it",
     "sizing": { "kind": "size", "width": 1080, "height": 1080 }
             | { "kind": "aspectRatio", "ratio": "4:5" },
+    "quality": "low | medium | high   (optional, #142 — present only when the caller selected one)",
     "count": 1,
     "temperature": 0.7,
     "references": [
@@ -73,6 +74,7 @@ docs/project-storage-contract.md for the retention contract.
   "run": {
     "ranAt": "2026-09-08T12:00:05.000Z",
     "model": "resolved provider id actually called",
+    "quality": "the effective quality sent to the provider (#142, optional — omitted when unselected)",
     "fullPrompt": "the effective text sent to the model",
     "costUsd": 0.0045,
     "costMeasured": true,
@@ -105,6 +107,11 @@ Facts and their one home:
   identity derived once at Job creation. Records from requests without
   References omit the key entirely — the zero-Reference record shape is
   byte-identical to the pre-#105 schema.
+- **`request.quality` / `run.quality` (optional, #142)** record an explicit
+  GPT Image 2 quality selection and the effective quality sent to the
+  provider. Records from requests without a quality choice omit both keys
+  entirely — the provider's own default applied, and no historical choice is
+  fabricated. A contradictory value fails record parsing closed.
 - **`run.costUsd`/`costMeasured` stay honest about the call shape** (TEST-012,
   mirroring the legacy job records): a Reference call on a model whose
   measured rate covers text-only calls only records the cost as `null` with
@@ -132,6 +139,13 @@ Both steps run the following semantic checks before any provider call:
   defaulted. Caller-selected sizes pass through as given; whether a provider
   accepts a particular size/ratio is the provider's own explicit validation.
 - `--temperature` is multimodal-only.
+- **Quality (`--quality low|medium|high`, #142)**: an explicit quality
+  selection is accepted only for the model whose registry spec carries the
+  qualified GPT Image 2 tiers; unsupported model/quality combinations —
+  multimodal models, other image models, unregistered raw gateway ids — are
+  refused with the canonical capability message before any provider call, so
+  no invented quality tiers can reach a provider. An omitted selection is not
+  defaulted: the provider's own default applies. An unknown tier is refused.
 - **References (`--ref <path>`, repeatable, #105)**: a model without a
   qualified reference-capable claim (including raw gateway ids) is refused
   with the canonical capability message before any Reference byte is read;
@@ -165,9 +179,9 @@ The CLI layer additionally classifies pure syntax problems as usage errors
 ## 4. Provider seam
 
 `UniformProvider` (src/generation.ts) is the seam the outbound request is
-captured at: `image({ model, prompt, size?, aspectRatio? })` for size/aspect
-image models, `text({ model, prompt, images?, temperature? })` for multimodal
-models. On image-kind there is no top-level `images` field: `prompt` is the
+captured at: `image({ model, prompt, size?, aspectRatio?, quality? })` for
+size/aspect image models, `text({ model, prompt, images?, temperature? })`
+for multimodal models. On image-kind there is no top-level `images` field: `prompt` is the
 plain string when no References are attached, or `{ text, images:
 Uint8Array[] }` — the verified bytes in caller order — otherwise. On
 multimodal, the top-level `images` field carries the verified bytes in caller
@@ -175,7 +189,13 @@ order (message parts on the production path). Image-kind requests are built
 through `buildImageRequestArgs` (src/generate.ts) — the one home of the
 image-kind provider request shape — so the uniform surface cannot drift from
 the legacy call shape. Legacy callers pass no explicit sizing and keep their
-exact request bytes (proven by test/image-request-args.test.ts).
+exact request bytes (proven by test/image-request-args.test.ts). A selected
+quality is carried in the image request as `quality` and, on the production
+adapter, forwarded to the AI Gateway inside `providerOptions.openai.quality` —
+verified against the installed SDK (ai 7.0.82, @ai-sdk/gateway 4.0.67, whose
+image model sends `providerOptions` verbatim in the request body); the
+Gateway's mapping of that option onto the upstream quality parameter is
+Gateway-service behavior (documented by Vercel), not locally provable.
 
 Missing-image responses are refused by name; provider errors surface verbatim.
 

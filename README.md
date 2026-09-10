@@ -71,10 +71,14 @@ for the record schema and publication contract.
 Omitting `--model` selects **nano-2** (effective
 `google/gemini-3.1-flash-image`) — the tool-wide default for general
 generation. An explicit `--model` selection always takes precedence over
-the default.
+the default. Explicit GPT Image 2 quality selection (`--quality low|medium|high`)
+is qualified for `gpt-image` only — other models acquire no quality tiers, an
+unsupported model/quality combination is refused before any provider call, and
+omitting `--quality` leaves the provider's own default with no quality recorded
+in the Job.
 
 ```bash
-ply generate "a red barn at noon" --model gpt-image --size 1080x1080
+ply generate "a red barn at noon" --model gpt-image --size 1080x1080 --quality low
 ply generate "a presenter portrait" --intent isolated --model nano-2
 ply generate "restyle this room" --ref room.png --ref palette.png
 ply generate show <jobId>   # offline inspection of the published record

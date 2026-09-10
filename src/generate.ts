@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { ModelSpec } from "./models.js";
+import { isImageQuality, validateQualitySupport, type ImageQuality, type ModelSpec } from "./models.js";
 
 export type TextZone = "left" | "right" | "bottom" | "none";
 
@@ -36,16 +36,28 @@ export function buildImageRequestArgs(
   refBytes: Uint8Array[],
   /** The caller-selected sizing — required; there is no implicit default. */
   explicitSizing: { size: `${number}x${number}` } | { aspectRatio: `${number}:${number}` },
+  /** The caller-selected quality (#142) — present only when the request selected one. */
+  quality?: ImageQuality,
 ): {
   model: string;
   prompt: string | { text: string; images: Uint8Array[] };
   size?: `${number}x${number}`;
   aspectRatio?: `${number}:${number}`;
+  quality?: ImageQuality;
 } {
   if (spec.kind !== "image") {
     throw new Error(
       `buildImageRequestArgs is the image-kind call shape — "${spec.id}" is ${spec.kind} and takes generateText with message parts, not generateImage`,
     );
+  }
+  if (quality !== undefined) {
+    // The canonical capability refusal (SPEC-1/CRAFT-3, #142 review): the one
+    // home in models.ts, never a second message shape.
+    if (!isImageQuality(quality))
+      throw new Error(
+        `Unknown quality ${JSON.stringify(String(quality))} — --quality takes low, medium, or high`,
+      );
+    validateQualitySupport(spec, quality);
   }
   if ("size" in explicitSizing) {
     if (spec.sizing !== "size")
@@ -56,12 +68,14 @@ export function buildImageRequestArgs(
       model: spec.id,
       ...(refBytes.length ? { prompt: { text: prompt, images: refBytes } } : { prompt }),
       size: explicitSizing.size,
+      ...(quality !== undefined ? { quality } : {}),
     };
   }
   return {
     model: spec.id,
     ...(refBytes.length ? { prompt: { text: prompt, images: refBytes } } : { prompt }),
     aspectRatio: explicitSizing.aspectRatio,
+    ...(quality !== undefined ? { quality } : {}),
   };
 }
 

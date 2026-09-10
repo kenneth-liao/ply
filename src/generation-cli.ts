@@ -35,7 +35,7 @@ import {
   type UniformSizing,
 } from "./generation.js";
 import { reviewPublishedGeneration } from "./evidence-review.js";
-import { MODELS, DEFAULT_MODEL } from "./models.js";
+import { isImageQuality, MODELS, DEFAULT_MODEL } from "./models.js";
 
 const HELP = `
 ply generate — one uniform source-image generation operation (Generation Jobs)
@@ -71,6 +71,11 @@ options
                         provider call.
   --model <name>        Registry key or raw gateway id. Keys:
                         ${Object.keys(MODELS).join(" | ")} (default: ${DEFAULT_MODEL})
+  --quality <q>         Explicit output quality — low | medium | high. Qualified for
+                        GPT Image 2 (gpt-image) only; other models acquire no quality
+                        tiers, and an unsupported combination is refused before any
+                        provider call. Omitting it leaves the provider's own default,
+                        and the record gains no quality key (US-005, #142).
   --count <n>           How many outputs to generate (default 1, max 8)
   --temperature <t>     Multimodal models only
   --job <id>            Explicit job id (default: auto gen-<date>-<suffix>)
@@ -104,6 +109,15 @@ export const PRODUCTION_UNIFORM_PROVIDER: UniformProvider = {
       prompt: args.prompt,
       ...(args.size ? { size: args.size } : {}),
       ...(args.aspectRatio ? { aspectRatio: args.aspectRatio } : {}),
+      // The GPT Image 2 quality selection (#142): forwarded inside
+      // providerOptions, the provider-options channel the AI SDK carries
+      // verbatim into the Gateway image request. Verified against the
+      // installed SDK (ai 7.0.82 / @ai-sdk/gateway 4.0.67); the Gateway's
+      // mapping of that option to the upstream quality parameter is
+      // Gateway-service behavior documented by Vercel, not provable locally.
+      ...(args.quality
+        ? { providerOptions: { openai: { quality: args.quality } } }
+        : {}),
     });
     return { images: result.images, warnings: result.warnings };
   },
@@ -151,6 +165,7 @@ type Parsed =
       intent?: string;
       sizingFlag?: { kind: "size"; raw: string } | { kind: "aspect"; raw: string };
       model?: string;
+      quality?: string;
       count?: number;
       temperature?: number;
       references?: string[];
@@ -198,6 +213,7 @@ function parse(args: string[]): Parsed {
         size: { type: "string" },
         aspect: { type: "string" },
         model: { type: "string" },
+        quality: { type: "string" },
         count: { type: "string" },
         temperature: { type: "string" },
         job: { type: "string" },
@@ -220,7 +236,7 @@ function parse(args: string[]): Parsed {
   if (first === "show" || first === "list" || first === "review") {
     if (refs.length > 0)
       return usage(`"generate ${first}" is an offline inspection command — it takes no generation flags (--ref)`);
-    for (const flag of ["intent", "size", "aspect", "model", "count", "temperature", "job"] as const) {
+    for (const flag of ["intent", "size", "aspect", "model", "quality", "count", "temperature", "job"] as const) {
       if (parsed.values[flag] !== undefined)
         return usage(`"generate ${first}" is an offline inspection command — it takes no generation flags (--${flag})`);
     }
@@ -268,6 +284,11 @@ function parse(args: string[]): Parsed {
   }
   if (parsed.values.intent !== undefined && parsed.values.intent !== "full-canvas" && parsed.values.intent !== "isolated")
     return usage(`--intent must be full-canvas or isolated (got "${parsed.values.intent}")`);
+  if (
+    parsed.values.quality !== undefined &&
+    !isImageQuality(parsed.values.quality)
+  )
+    return usage(`--quality takes low, medium, or high (got "${parsed.values.quality}")`);
 
   return {
     kind: "generate",
@@ -280,6 +301,7 @@ function parse(args: string[]): Parsed {
       ? { sizingFlag: { kind: "aspect", raw: parsed.values.aspect } as const }
       : {}),
     model: parsed.values.model,
+    ...(parsed.values.quality !== undefined ? { quality: parsed.values.quality } : {}),
     count,
     temperature,
     ...(refs.length ? { references: refs } : {}),
@@ -295,13 +317,16 @@ function usage(message: string): { kind: "usage"; message: string; error: string
 /** Build the compact default text for a published/loaded job. */
 function jobText(job: {
   jobId: string;
-  request: { intent: string; prompt: string; references?: { path: string; contentHash: string }[] };
-  run: { model: string; outputs: { file: string; contentHash: string }[]; warnings: string[] };
+  request: { intent: string; prompt: string; quality?: string; references?: { path: string; contentHash: string }[] };
+  run: { model: string; quality?: string; outputs: { file: string; contentHash: string }[]; warnings: string[] };
 }): string {
+  const quality = job.request.quality; // == run.quality by the record invariant; absent when unselected
   const lines = [
     `Generation Job ${job.jobId}`,
     `  prompt: ${job.request.prompt}`,
-    `  intent: ${job.request.intent} · model: ${job.run.model} · outputs: ${job.run.outputs.length}`,
+    `  intent: ${job.request.intent} · model: ${job.run.model}` +
+      (quality ? ` · quality: ${quality}` : "") +
+      ` · outputs: ${job.run.outputs.length}`,
   ];
   (job.request.references ?? []).forEach((r, i) =>
     lines.push(`  ref ${i + 1}: ${r.path} (${r.contentHash.slice(0, 12)})`),
@@ -355,7 +380,14 @@ export async function run(
     if (parsed.kind === "list") {
       const jobs = await listGenerationJobs(resolved.jobsRoot);
       const text = jobs.length
-        ? jobs.map((j) => `${j.jobId}  ${j.intent}  ${j.model}  ${j.outputs} output(s)`).join("\n")
+        ? jobs
+            .map(
+              (j) =>
+                `${j.jobId}  ${j.intent}  ${j.model}` +
+                (j.quality ? ` (${j.quality})` : "") +
+                `  ${j.outputs} output(s)`,
+            )
+            .join("\n")
         : "no Generation Jobs";
       return { exitCode: 0, text, json: { ok: true, jobs } };
     }
@@ -402,6 +434,7 @@ export async function run(
         intent: (parsed.intent as UniformGenerationRequest["intent"] | undefined) ?? "full-canvas",
         model: parsed.model ?? DEFAULT_MODEL,
         ...(sizing ? { sizing } : {}),
+        ...(parsed.quality !== undefined ? { quality: parsed.quality as UniformGenerationRequest["quality"] } : {}),
         count: parsed.count ?? 1,
         ...(parsed.temperature !== undefined ? { temperature: parsed.temperature } : {}),
         ...(parsed.references?.length ? { references: parsed.references } : {}),

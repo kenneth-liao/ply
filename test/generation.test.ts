@@ -157,6 +157,49 @@ describe("validateUniformRequest", () => {
       /Unknown model/,
     );
   });
+
+  test("(#142) accepts each qualified quality tier for GPT Image 2 and carries it into the normalized request", () => {
+    for (const quality of ["low", "medium", "high"] as const) {
+      const { request, spec } = validateUniformRequest({ ...base, quality });
+      expect(spec.id).toBe("openai/gpt-image-2");
+      expect(request.quality).toBe(quality);
+    }
+  });
+
+  test("(#142) an unselected quality stays absent from the normalized request", () => {
+    const { request } = validateUniformRequest(base);
+    expect("quality" in request).toBe(false);
+  });
+
+  test("(#142) an unknown tier is refused", () => {
+    expect(() =>
+      validateUniformRequest({ ...base, quality: "ultra" as never }),
+    ).toThrow(/--quality/);
+  });
+
+  test("(#142) unsupported model/quality combinations are refused before any call — no invented tiers", () => {
+    // Multimodal models acquire no quality tiers.
+    expect(() =>
+      validateUniformRequest({
+        ...base,
+        model: "nano-2",
+        sizing: { kind: "aspectRatio", ratio: "1:1" },
+        quality: "high",
+      }),
+    ).toThrow(/quality/i);
+    // Other image-capable models gain no claim either.
+    expect(() =>
+      validateUniformRequest({
+        ...base,
+        model: "bytedance/seedream-5.0-pro",
+        sizing: { kind: "aspectRatio", ratio: "1:1" },
+        quality: "low",
+      }),
+    ).toThrow(/quality/i);
+    // The registered raw gateway id IS the qualified model (exact identity).
+    const raw = validateUniformRequest({ ...base, model: "openai/gpt-image-2", quality: "medium" });
+    expect(raw.request.quality).toBe("medium");
+  });
 });
 
 describe("buildUniformPrompt", () => {
@@ -241,6 +284,28 @@ describe("runUniformGeneration", () => {
     // The record is on disk exactly as returned.
     const onDisk = JSON.parse(await readFile(path.join(jobRoot(), "gen-test", "job.json"), "utf8"));
     expect(onDisk).toEqual(job);
+  });
+
+  test("(#142) a published run with a selected quality retains it in run provenance", async () => {
+    const provider = fakeProvider();
+    const job = await runUniformGeneration(
+      jobRoot(),
+      "gen-q",
+      { ...base, quality: "medium" },
+      { provider },
+    );
+    expect(provider.imageCalls).toEqual([
+      { model: "openai/gpt-image-2", prompt: "a lighthouse at dusk", size: "1080x1080", quality: "medium" },
+    ]);
+    expect(job.request.quality).toBe("medium");
+    expect(job.run.quality).toBe("medium");
+  });
+
+  test("(#142) an unselected run records no quality key", async () => {
+    const provider = fakeProvider();
+    const job = await runUniformGeneration(jobRoot(), "gen-noq", base, { provider });
+    expect("quality" in job.request).toBe(false);
+    expect("quality" in job.run).toBe(false);
   });
 
   test("isolated intent records the warning that intent is not a matte", async () => {
@@ -345,6 +410,93 @@ describe("loadGenerationJob and listGenerationJobs", () => {
     await expect(loadGenerationJob(jobRoot(), "wrong")).rejects.toThrow(/kind/i);
   });
 
+  test("(#142) a pre-#142 record without a quality choice stays readable and gains none", async () => {
+    // A record in the exact pre-#142 shape (no quality key anywhere) must
+    // remain honestly interpretable — never fabricated into having chosen.
+    await mkdir(path.join(jobRoot(), "gen-legacy"), { recursive: true });
+    await writeFile(
+      path.join(jobRoot(), "gen-legacy", "job.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        jobId: "gen-legacy",
+        kind: "generation",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        request: {
+          prompt: "a lighthouse at dusk",
+          intent: "full-canvas",
+          model: "gpt-image",
+          sizing: { kind: "size", width: 1080, height: 1080 },
+          count: 1,
+        },
+        run: {
+          ranAt: "2026-01-01T00:00:05.000Z",
+          model: "openai/gpt-image-2",
+          fullPrompt: "a lighthouse at dusk",
+          costUsd: 0.0045,
+          costMeasured: true,
+          warnings: [],
+          outputs: [
+            { contentHash: "a".repeat(64), file: "outputs/" + "a".repeat(64) + ".png", mediaType: "image/png" },
+          ],
+        },
+      }),
+    );
+    const job = await loadGenerationJob(jobRoot(), "gen-legacy");
+    expect("quality" in job.request).toBe(false);
+    expect("quality" in job.run).toBe(false);
+  });
+
+  test("(#142) a record with a contradictory quality value fails closed", async () => {
+    // The writer records request and run quality together with the same value
+    // or neither; every other pairing is a shape the writer cannot produce.
+    const cases: Record<string, { request?: string; run?: string }> = {
+      "gen-bad-request-only": { request: "ultra" },
+      "gen-bad-run-only": { run: "ultra" },
+      "gen-bad-request-typo": { request: "ultra", run: "low" },
+      "gen-bad-run-typo": { request: "low", run: "ultra" },
+      "gen-bad-divergent": { request: "low", run: "high" },
+      // Valid tiers alone on one side are the realistic partial-write shape
+      // the pair invariant targets — they must fail closed too, not just
+      // malformed values (CRAFT-F1/SPEC-F2).
+      "gen-bad-request-valid-only": { request: "low" },
+      "gen-bad-run-valid-only": { run: "low" },
+    };
+    for (const [jobId, quality] of Object.entries(cases)) {
+      await mkdir(path.join(jobRoot(), jobId), { recursive: true });
+      await writeFile(
+        path.join(jobRoot(), jobId, "job.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          jobId,
+          kind: "generation",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          request: {
+            prompt: "a lighthouse at dusk",
+            intent: "full-canvas",
+            model: "gpt-image",
+            sizing: { kind: "size", width: 1080, height: 1080 },
+            count: 1,
+            ...(quality.request ? { quality: quality.request } : {}),
+          },
+          run: {
+            ranAt: "2026-01-01T00:00:05.000Z",
+            model: "openai/gpt-image-2",
+            fullPrompt: "a lighthouse at dusk",
+            costUsd: 0.0045,
+            costMeasured: true,
+            warnings: [],
+            outputs: [
+              { contentHash: "a".repeat(64), file: "outputs/" + "a".repeat(64) + ".png", mediaType: "image/png" },
+            ],
+            ...(quality.run ? { quality: quality.run } : {}),
+          },
+        }),
+      );
+      await expect(loadGenerationJob(jobRoot(), jobId)).rejects.toThrow(/quality/);
+    }
+    await rm(jobRoot(), { recursive: true, force: true });
+  });
+
   test("list summarizes published jobs and skips unreadable directories", async () => {
     const provider = fakeProvider();
     await runUniformGeneration(jobRoot(), "gen-a", base, { provider });
@@ -354,10 +506,15 @@ describe("loadGenerationJob and listGenerationJobs", () => {
       { ...base, intent: "isolated" },
       { provider },
     );
+    await runUniformGeneration(jobRoot(), "gen-c", { ...base, quality: "high" }, { provider });
     await mkdir(path.join(jobRoot(), "junk"), { recursive: true });
     const jobs = await listGenerationJobs(jobRoot());
-    expect(jobs.map((j) => j.jobId)).toEqual(["gen-a", "gen-b"]);
+    expect(jobs.map((j) => j.jobId)).toEqual(["gen-a", "gen-b", "gen-c"]);
     expect(jobs[0]).toMatchObject({ intent: "full-canvas", outputs: 1 });
+    // The summary reports the selected quality when there is one, and gains
+    // no key when there is not.
+    expect("quality" in jobs[0]).toBe(false);
+    expect(jobs[2]).toMatchObject({ quality: "high" });
     expect(jobs[1]).toMatchObject({ intent: "isolated", outputs: 1 });
   });
 });
@@ -581,6 +738,25 @@ describe("executeUniformGeneration — verified Reference bytes", () => {
       executeUniformGeneration(jobRoot(), "gen-cap", handBuilt, { provider }),
     ).rejects.toThrow(/not qualified reference-capable/);
     expect(provider.imageCalls).toHaveLength(0);
+  });
+
+  test("an unsupported quality caught only at execution still refuses before the provider call", async () => {
+    // Defense in depth (PROD-1, #155 review): a tampered or hand-built
+    // ingested request cannot pair a quality selection with an unqualified
+    // spec past the ingestion boundary — the same parallel re-check the
+    // reference capability gets, so combination validation holds for forged
+    // shapes too, before any provider call.
+    const provider = fakeProvider();
+    const handBuilt = {
+      request: { ...base, quality: "high" },
+      spec: resolveModel("nano-2"),
+    } as unknown as IngestedUniformRequest;
+    await expect(
+      executeUniformGeneration(jobRoot(), "gen-qual-cap", handBuilt, { provider }),
+    ).rejects.toThrow(/takes no quality selection/);
+    expect(provider.imageCalls).toHaveLength(0);
+    expect(provider.textCalls).toHaveLength(0);
+    expect(existsSync(path.join(jobRoot(), "gen-qual-cap"))).toBe(false);
   });
 
   test("published provenance records the ordered identities and honest cost for a text-only rate", async () => {

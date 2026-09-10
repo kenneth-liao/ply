@@ -29,6 +29,9 @@ import path from "node:path";
 import {
   resolveModel,
   referenceIncompatibilityError,
+  validateQualitySupport,
+  isImageQuality,
+  type ImageQuality,
   type ModelSpec,
 } from "./models.js";
 import { extensionFor } from "./assets.js";
@@ -55,11 +58,19 @@ export interface UniformGenerationRequest {
   /** Registry key or raw gateway id, as the caller wrote it. */
   model: string;
   /**
-   * The caller's sizing selection. Omitted sizing is filled with the
+   * The caller-selected sizing selection. Omitted sizing is filled with the
    * model-neutral default (1024x1024 / 1:1); a mismatch with the model's
    * provider call shape is refused. See validateUniformRequest.
    */
   sizing?: UniformSizing;
+  /**
+   * An explicit GPT Image 2 quality selection (spec #132 #142): low, medium,
+   * or high. Only models with qualified quality tiers accept one; unsupported
+   * model/quality combinations are refused before any provider call. An
+   * omitted selection is NOT defaulted — the provider's own default applies,
+   * and the record gains no quality key (no fabricated historical choice).
+   */
+  quality?: ImageQuality;
   count: number;
   /** Multimodal models only. */
   temperature?: number;
@@ -87,6 +98,12 @@ export interface UniformRun {
   ranAt: string;
   /** The resolved provider model id actually called. */
   model: string;
+  /**
+   * The effective quality sent to the provider (#142) — present only when
+   * the request selected one; records from unselected requests omit the key
+   * entirely rather than record a fabricated historical choice.
+   */
+  quality?: ImageQuality;
   /** The effective text sent to the model. */
   fullPrompt: string;
   costUsd: number | null;
@@ -111,6 +128,8 @@ export interface GenerationJobSummary {
   createdAt: string;
   intent: GenerationIntent;
   model: string;
+  /** The selected quality (#142) — omitted when the request selected none. */
+  quality?: ImageQuality;
   outputs: number;
 }
 
@@ -127,6 +146,11 @@ export interface ProviderImageRequest {
   size?: `${number}x${number}`;
   /** Aspect ratio — models that take an aspect ratio. */
   aspectRatio?: `${number}:${number}`;
+  /**
+   * The caller-selected GPT Image 2 quality tier (#142) — present only when
+   * the request selected one; never fabricated for other models.
+   */
+  quality?: ImageQuality;
 }
 
 export interface ProviderTextRequest {
@@ -237,6 +261,15 @@ export function validateUniformRequest(input: UniformGenerationRequest): Validat
     throw new Error(
       `--temperature only applies to multimodal models (Gemini); "${spec.id}" is an image model`,
     );
+  if (input.quality !== undefined) {
+    if (!isImageQuality(input.quality))
+      throw new Error(
+        `Unknown quality ${JSON.stringify(String(input.quality))} — --quality takes low, medium, or high`,
+      );
+    // Unsupported model/quality combinations are refused here, before any
+    // provider call — no invented tiers for other models (US-005, #142).
+    validateQualitySupport(spec, input.quality);
+  }
 
   const request: NormalizedUniformRequest = {
     prompt: input.prompt.trim(),
@@ -245,6 +278,7 @@ export function validateUniformRequest(input: UniformGenerationRequest): Validat
     sizing,
     count: input.count,
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.quality !== undefined ? { quality: input.quality } : {}),
   };
   return { request, spec };
 }
@@ -323,6 +357,27 @@ export function parseGenerationJobRecord(raw: string, jobId: string): Generation
       throw new Error(
         `Job "${jobId}" is unreadable: its request sizing is not a valid uniform sizing`,
       );
+    if (!isImageQuality(job.request.quality) && job.request.quality !== undefined)
+      throw new Error(
+        `Job "${jobId}" is unreadable: its request quality ${JSON.stringify(String(job.request.quality))} is not a valid quality tier (low/medium/high)`,
+      );
+    if (!isImageQuality(job.run?.quality) && job.run?.quality !== undefined)
+      throw new Error(
+        `Job "${jobId}" is unreadable: its run quality ${JSON.stringify(String(job.run?.quality))} is not a valid quality tier (low/medium/high)`,
+      );
+    // The writer records request and run quality together, with the same
+    // value, or neither (CRAFT-2, #142 review): any other pairing — one key
+    // alone, or a divergent pair — is a shape this writer cannot produce, so
+    // the record is contradictory and fails closed (SPEC-2).
+    const requestQuality: ImageQuality | undefined = job.request.quality;
+    const runQuality: ImageQuality | undefined = job.run?.quality;
+    if (
+      (requestQuality !== undefined || runQuality !== undefined) &&
+      (requestQuality === undefined || runQuality === undefined || requestQuality !== runQuality)
+    )
+      throw new Error(
+        `Job "${jobId}" is contradictory: its request and run quality values ${JSON.stringify(requestQuality)}/${JSON.stringify(runQuality)} must be the same tier or both absent`,
+      );
     if (job.request.references !== undefined) {
       const refs = job.request.references;
       const valid =
@@ -389,6 +444,7 @@ export async function listGenerationJobs(jobRoot: string): Promise<GenerationJob
         createdAt: job.createdAt,
         intent: job.request.intent,
         model: job.run.model,
+        ...(job.request.quality !== undefined ? { quality: job.request.quality } : {}),
         outputs: job.run.outputs.length,
       });
     } catch {
@@ -444,6 +500,7 @@ function buildProviderRequest(
     request.sizing.kind === "size"
       ? { size: `${request.sizing.width}x${request.sizing.height}` }
       : { aspectRatio: `${request.sizing.ratio}` as `${number}:${number}` },
+    request.quality,
   ) as ProviderImageRequest;
 }
 
@@ -500,6 +557,10 @@ export async function executeUniformGeneration(
   // ingested request cannot carry References onto an unqualified model.
   if (request.references?.length && !spec.supportsRef)
     throw new Error(referenceIncompatibilityError(spec));
+  // Same parallel re-check for quality (PROD-1, #155 review): a forged pair
+  // of quality with an unqualified spec is refused here, before any provider
+  // call — combination validation holds behind the ingestion boundary too.
+  if (request.quality !== undefined) validateQualitySupport(spec, request.quality);
   // Verify/read every Reference once, in caller order — these exact bytes are
   // what the provider receives for every candidate.
   const refBytes: Uint8Array[] = [];
@@ -536,6 +597,7 @@ export async function executeUniformGeneration(
       run: {
         ranAt: now,
         model: spec.id,
+        ...(request.quality !== undefined ? { quality: request.quality } : {}),
         fullPrompt,
         // The cost is recorded only when the rate describes the call shape: a
         // Reference call on a text-only rate records unknown with its basis
