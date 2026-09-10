@@ -46,7 +46,14 @@
  *   may bleed ink roughly a pixel past the geometric ink boundary — that
  *   bleed is genuinely painted and the render shows it too. A Layer whose
  *   layout box exceeds the bounded capture window is refused loudly rather
- *   than measured with unbounded memory.
+ *   than measured with unbounded memory. A shadow (#139, ADR-0018) extends
+ *   the ink beyond the layout box: the ink pass captures the same paint
+ *   markup (so the shadow's ink IS part of `painted`), and the capture
+ *   window is widened by the revision's canvas-space shadow reach (the
+ *   local reach |dx| + |dy| + 2·blur, scaled by the transform's largest
+ *   factor — the shadow paints before the transform), from the facts
+ *   alone — a shadowed Layer's full extent is captured or
+ *   the measurement is refused loudly, never silently clipped.
  * - `paintedOnCanvas` — `painted` ∩ the canvas rectangle: the footprint that
  *   actually shows in a render; `null` when empty (no visible ink, or ink
  *   entirely outside the canvas).
@@ -58,7 +65,9 @@
  * These remain LAYOUT-vs-PAINTED distinct by construction (DEC-004): `box`
  * is layout geometry, `painted` is ink geometry, both in Composition
  * coordinates through the same retained font bytes and the same emitted
- * transforms. Effects beyond opacity are not reflected (#139/#140).
+ * transforms. The shadow effect is reflected in painted extents and in the
+ * reported `effects` facts (#139, ADR-0018); outline (#140) and any wider
+ * effect surface extend the same contract.
  *
  * The query writes no Project state: the Composition, its current revisions,
  * and verified retained bytes are resolved exactly once through the
@@ -73,6 +82,7 @@ import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
 import { decodePng } from "./png.js";
 import { buildCompositionHtml, rejectUnresolvedFonts, type SnapshotLayer } from "./composition-paint.js";
+import type { ResolvedLayerRevision, LayerShadow } from "./layer.js";
 import type { Page } from "playwright";
 
 /** One Layer's measured layout geometry (module doc documents each box). */
@@ -96,6 +106,10 @@ export interface MeasuredLayerBounds {
   placement: { x: number; y: number; opacity: number };
   /** The revision's normalized canonical transform facts, verbatim. */
   transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean };
+  /** The revision's effective effect facts (#139): `shadow` is the stored
+   * shadow parameters (or null when the Layer has none) — the same facts
+   * painting applies, reported for auditability. */
+  effects: { shadow: LayerShadow | null };
 }
 
 export interface MeasureCompositionResult {
@@ -189,6 +203,22 @@ const STANDALONE_CANVAS_PX = MAX_INK_VIEWPORT_PX - 2 * INK_PAD_PX;
 
 type Box = { x: number; y: number; width: number; height: number };
 
+/**
+ * The px a Layer's shadow may extend its ink beyond the layout box, in every
+ * canvas direction (#139, ADR-0018). The shadow paints in the Layer's LOCAL
+ * space — before the canonical transform — so its LOCAL reach (|dx| + |dy| +
+ * 2·blur, the margin over the CSS blur radius's ~1.5× visible extent) maps
+ * through the transform: rotation preserves lengths, and the AABB of a
+ * transformed reach ball is bounded by its largest semi-axis, so the
+ * canvas-space reach is the local reach × max(scaleX, scaleY), derived from
+ * the revision facts alone (deterministic, never rendering-consulted).
+ */
+function shadowReachPx(revision: ResolvedLayerRevision): number {
+  if (!revision.shadow) return 0;
+  const local = Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur;
+  return local * Math.max(revision.scaleX, revision.scaleY);
+}
+
 /** Round every component of an optional box for reporting. */
 function roundBox(box: Box | null): Box | null {
   return box ? { x: round2(box.x), y: round2(box.y), width: round2(box.width), height: round2(box.height) } : null;
@@ -260,22 +290,37 @@ async function measureSnapshot(
     // loudly, because a read-only query must fail safely, never grow
     // memory without bound. Cost ceiling: O(Layers × capture-window
     // area) — one screenshot plus one pixel scan per Layer.
+    //
+    // Shadow reach (#139, ADR-0018): a Layer's shadow extends its ink
+    // beyond the layout box by up to its LOCAL reach (|dx| + |dy| + 2·blur
+    // px) MAPPED THROUGH the canonical transform — the shadow paints before
+    // the transform, so the canvas-space reach is the local reach scaled by
+    // max(scaleX, scaleY) (rotation preserves lengths; the transformed
+    // reach ball's AABB is bounded by its largest semi-axis). The reach is
+    // derived from the revision facts — deterministic, no rendering
+    // consulted — and widened into the window sizing and the loud-refusal
+    // cap, so a shadowed Layer's full painted extent is captured or
+    // refused, never clipped into a smaller report.
     let painted: (Box | null)[] = [];
     if (measured.length > 0) {
       const boxes = measured.map((m) => m.box);
-      const widest = Math.max(...boxes.map((b) => b.width));
-      const tallest = Math.max(...boxes.map((b) => b.height));
+      const reaches = layers.map((l) => shadowReachPx(l.revision));
+      const widest = Math.max(...boxes.map((b, i) => b.width + 2 * reaches[i]!));
+      const tallest = Math.max(...boxes.map((b, i) => b.height + 2 * reaches[i]!));
       if (
         widest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX ||
         tallest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX
       ) {
         const bad = boxes.findIndex(
-          (b) => b.width + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX || b.height + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX,
+          (b, i) => b.width + 2 * reaches[i]! + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX ||
+            b.height + 2 * reaches[i]! + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX,
         );
+        const reach = reaches[bad]!;
         throw new Error(
-          `Layer "${layers[bad]!.name}" has a layout box ${Math.ceil(boxes[bad]!.width)}×${Math.ceil(boxes[bad]!.height)}px, ` +
-            `beyond the ${MAX_INK_VIEWPORT_PX}×${MAX_INK_VIEWPORT_PX}px painted-extent capture window. Painted extents are refused ` +
-            `instead of growing measurement memory without bound — reduce the transform scale or place the Layer nearer the canvas.`,
+          `Layer "${layers[bad]!.name}" has a layout box ${Math.ceil(boxes[bad]!.width)}×${Math.ceil(boxes[bad]!.height)}px` +
+            (reach > 0 ? ` plus up to ${reach}px of shadow extent` : "") +
+            `, beyond the ${MAX_INK_VIEWPORT_PX}×${MAX_INK_VIEWPORT_PX}px painted-extent capture window. Painted extents are refused ` +
+            `instead of growing measurement memory without bound — reduce the transform scale, the shadow extent, or place the Layer nearer the canvas.`,
         );
       }
       const captureW = Math.max(1, Math.ceil(widest + 2 * INK_PAD_PX));
@@ -392,6 +437,7 @@ export async function measureCompositionLayers(
           flipX: rev.flipX,
           flipY: rev.flipY,
         },
+        effects: { shadow: rev.shadow ?? null },
       };
     });
 

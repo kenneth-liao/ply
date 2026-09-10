@@ -4,6 +4,7 @@ import { parseArgs } from "node:util";
 import path from "node:path";
 import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
 import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
+import { parseShadowSpec } from "./layer.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
@@ -144,6 +145,24 @@ Options:
                         Layer's (x, y) top-left corner, and never changes
                         retained pixels. Combines with other edit options,
                         including --resize and content replacement.
+  --shadow <spec>       Apply a shadow to the Layer's content (#139), on
+                        image alpha and text glyphs alike: an ABSOLUTE setter
+                        "<dx>,<dy>,<blur>,<color>" — e.g. "10,10,4,#000000"
+                        or "0,2,6,#00000080" (alpha softens the shadow) —
+                        that replaces any previous shadow, and "none"
+                        removes it (the same command twice keeps the same
+                        shadow). Offsets and blur are px (blur 0..256,
+                        offsets within ±256); negative offsets are valid.
+                        The shadow paints in the Layer's LOCAL coordinate
+                        space — the transform (scale/rotation/flip) then
+                        maps content and shadow together, and the Layer's
+                        opacity fades both. It is a revision fact: sharing
+                        propagates it, forks isolate it, and removal is its
+                        own edit. Never changes retained pixels. Combines
+                        with --resize/--rotate/--flip and content
+                        replacement; cannot combine with --anchor (the
+                        anchor would resolve different ink than the edit
+                        publishes — anchor first, then add the shadow).
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -194,17 +213,22 @@ function formatAnchorTarget(anchored: AnchorResolution): string {
   return ` at y ${target.y}`;
 }
 
-/** A negative angle is a valid rotation (#134), but parseArgs refuses a
- * dash-leading option value ("--rotate -30" reads as an ambiguous flag), so
- * join a following dash-leading numeric token into "--rotate=<value>" before
- * parsing. Scoped to the introduced --rotate option; retained numeric
- * options keep their existing surface untouched (OOS-003). */
-function joinDashLeadingRotateValue(args: string[]): string[] {
+/** A negative number is a valid `--rotate` (#134) and `--shadow` dx/dy
+ * (#139) value, but parseArgs refuses a dash-leading option value ("--rotate
+ * -30" reads as an ambiguous flag), so join a following dash-leading numeric
+ * token into "--<flag>=<value>" before parsing. Scoped to these introduced
+ * options; retained numeric options keep their existing surface untouched
+ * (OOS-003). */
+function joinDashLeadingNumericValues(args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "--rotate" && args[i + 1] !== undefined && /^-(?:\.?\d)/.test(args[i + 1]!)) {
-      out.push(`--rotate=${args[i + 1]!}`);
+    if (
+      (arg === "--rotate" || arg === "--shadow") &&
+      args[i + 1] !== undefined &&
+      /^-(?:\.?\d)/.test(args[i + 1]!)
+    ) {
+      out.push(`${arg}=${args[i + 1]!}`);
       i++;
       continue;
     }
@@ -241,12 +265,13 @@ let values: {
   "resize-to"?: string;
   rotate?: string;
   flip?: string;
+  shadow?: string;
 };
 let positionals: string[];
 
 try {
   const parsed = parseArgs({
-    args: joinDashLeadingRotateValue(rawArgs),
+    args: joinDashLeadingNumericValues(rawArgs),
     allowPositionals: true,
     options: {
       project: { type: "string", short: "p" },
@@ -273,6 +298,7 @@ try {
       "resize-to": { type: "string" },
       rotate: { type: "string" },
       flip: { type: "string" },
+      shadow: { type: "string" },
     },
   });
   values = parsed.values;
@@ -315,14 +341,15 @@ async function run() {
         values.resize !== undefined ||
         values["resize-to"] !== undefined ||
         values.rotate !== undefined ||
-        values.flip !== undefined;
+        values.flip !== undefined ||
+        values.shadow !== undefined;
 
       if (!hasEditOption && !values.fork) {
         output(
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, or --fork.",
           },
           isJson,
         );
@@ -553,6 +580,23 @@ async function run() {
         flip = raw;
       }
 
+      // Shadow flag (#139, ADR-0018): syntax and well-formedness at the
+      // command boundary as a usage error (exit 2) through the SAME parser
+      // the edit path uses, so the two boundaries never disagree; the
+      // absolute-setter semantics are enforced again by the edit path before
+      // any staging.
+      let shadowSpec: string | undefined;
+      if (values.shadow !== undefined) {
+        try {
+          parseShadowSpec(values.shadow);
+        } catch (err) {
+          output({ ok: false, error: (err as Error).message }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+        shadowSpec = values.shadow;
+      }
+
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2); semantic refusals (no visible ink,
       // divergent multi-Composition geometry) happen in the read-only
@@ -577,6 +621,7 @@ async function run() {
           values["resize-to"] !== undefined ||
           values.rotate !== undefined ||
           values.flip !== undefined ||
+          values.shadow !== undefined ||
           values.image !== undefined ||
           values["from-generation"] !== undefined ||
           values["from-matte"] !== undefined ||
@@ -589,7 +634,7 @@ async function run() {
             {
               ok: false,
               error:
-                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or content edit first, then anchor.",
+                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
             },
             isJson,
           );
@@ -682,6 +727,7 @@ async function run() {
           resizeTo,
           rotateDeg,
           flip,
+          shadow: shadowSpec,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {
@@ -708,6 +754,9 @@ async function run() {
         if (res.flipped) {
           resultBody.flipped = res.flipped;
         }
+        if (res.shadowed) {
+          resultBody.shadowed = res.shadowed;
+        }
         if (anchored) {
           resultBody.anchored = anchored;
         }
@@ -733,16 +782,21 @@ async function run() {
               : "";
             const rotated = res.rotated ? `; rotation ${res.rotated.rotationDeg}°` : "";
             const flipped = res.flipped && res.flipped.flip !== "none" ? `; flip ${res.flipped.flip}` : res.flipped ? "; flip none" : "";
+            const shadowed = res.shadowed
+              ? res.shadowed.shadow
+                ? `; shadow ${res.shadowed.shadow.dx} ${res.shadowed.shadow.dy} ${res.shadowed.shadow.blur} ${res.shadowed.shadow.color}`
+                : "; shadow none"
+              : "";
             const anchorSummary = anchored
               ? `; anchored ${formatAnchorSpec(anchored.anchor)}${formatAnchorTarget(anchored)} -> placement (${anchored.placement.x}, ${anchored.placement.y})`
               : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${anchorSummary}`);
             }
           },
         );
@@ -803,7 +857,11 @@ async function run() {
                 : rev.flipX && rev.flipY
                   ? ", Flip: both"
                   : ", Flip: " + (rev.flipX ? "horizontal" : "vertical");
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}`);
+            const shadow =
+              rev.shadow === undefined
+                ? ""
+                : `, Shadow: ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}`);
           },
         );
       } catch (err) {
