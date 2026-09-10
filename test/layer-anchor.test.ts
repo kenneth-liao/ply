@@ -457,3 +457,56 @@ test(
 function sourceReportEqualsOriginalPlacement(report: { layerId: string; placement: { x: number; y: number } }): boolean {
   return report.placement.x === 150 && report.placement.y === 120;
 }
+
+/** Tracer 6b: anchored placement participates in pinned Render history — a
+ * render made after the anchored edit replays byte-identically from its
+ * pinned revision, even after the Layer is re-anchored (US-006, DEC-002). */
+test(
+  "render history stays pinned across anchored edits: replay is byte-identical",
+  async () => {
+    const redImg = path.join(tempDir, "red.png");
+    await writeFile(redImg, solidPng(100, 60, RED));
+
+    await makeComp("poster", 400, 300);
+    const addRes = await addImageLayer("poster", "hero", redImg, { x: 10, y: 10 });
+    const layerId = addRes.use.layerId as string;
+
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "center,center", "--x", "200", "--y", "150", "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(0);
+
+    const firstOut = path.join(tempDir, "first.png");
+    const firstRender = await invoke(["composition", "render", "poster", "--project", projDir, "--out", firstOut, "--json"]);
+    expect(firstRender.code).toBe(0);
+    const firstManifest = JSON.parse(firstRender.stdout).render.manifest as string;
+
+    // Re-anchor AFTER the render: the pinned history must not change.
+    const moveRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "left,top", "--x", "0", "--y", "0", "--project", projDir, "--json",
+    ]);
+    expect(moveRes.code).toBe(0);
+
+    const replayOut = path.join(tempDir, "replay.png");
+    const replayRes = await invoke([
+      "composition", "replay", firstManifest, "--project", projDir, "--out", replayOut, "--json",
+    ]);
+    expect(replayRes.code).toBe(0);
+    expect(await readFile(replayOut)).toEqual(await readFile(firstOut));
+
+    // A fresh render of current state differs (placement changed) and
+    // replays byte-identically from its own pinned revision.
+    const secondOut = path.join(tempDir, "second.png");
+    const secondRender = await invoke(["composition", "render", "poster", "--project", projDir, "--out", secondOut, "--json"]);
+    expect(secondRender.code).toBe(0);
+    const secondManifest = JSON.parse(secondRender.stdout).render.manifest as string;
+    const secondReplay = path.join(tempDir, "replay2.png");
+    const secondReplayRes = await invoke([
+      "composition", "replay", secondManifest, "--project", projDir, "--out", secondReplay, "--json",
+    ]);
+    expect(secondReplayRes.code).toBe(0);
+    expect(await readFile(secondReplay)).toEqual(await readFile(secondOut));
+    expect(await readFile(secondOut)).not.toEqual(await readFile(firstOut));
+  },
+  120_000,
+);
