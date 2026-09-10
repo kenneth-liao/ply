@@ -406,8 +406,8 @@ test("malformed stored rotation is refused loudly", async () => {
   expect(JSON.parse(stringRes.stdout).error).toContain("rotationDeg must be a finite number");
 });
 
-/** Tracer 8: genuinely pre-#134 revision documents — rotationDeg absent, and
- * also the #133-era shape with scale but no rotation — keep their exact
+/** Tracer 8: genuinely pre-#134 revision documents — rotationDeg absent
+ * (#133-era shapes both with and without scale fields) — keep their exact
  * revision ids: the hash appends the rotation field only when present, so
  * older revisions retain their original hash and paint meaning (#134). */
 test("pre-rotation revision documents keep their hash and paint meaning", async () => {
@@ -469,6 +469,34 @@ test("pre-rotation revision documents keep their hash and paint meaning", async 
   expect(scaledLayer.currentRevisionId).toBe(scaledId);
   expect(scaledLayer.currentRevision.scaleX).toBe(2);
   expect(scaledLayer.currentRevision.rotationDeg).toBe(0);
+
+  // The genuinely pre-#133 shape — neither scale nor rotation fields — also
+  // keeps its id: the conditional-append hash derives its pre-#133 id from
+  // the field-absent document, and the one reader normalizes to scale 1 and
+  // rotation 0 without changing the hash (INT-1).
+  const preScaleDoc = JSON.parse(JSON.stringify(legacyDoc)) as Record<string, unknown>;
+  delete preScaleDoc.scaleX;
+  delete preScaleDoc.scaleY;
+  delete preScaleDoc.rotationDeg;
+  const preScaleId = computeRevisionHash(preScaleDoc as unknown as LayerImageRevision);
+  expect(preScaleId).not.toBe(revId);
+  expect(preScaleId).not.toBe(legacyId);
+  expect(preScaleId).not.toBe(scaledId);
+  await writeFile(path.join(projDir, "layers", `${layerId}.revisions`, `${preScaleId}.json`), JSON.stringify(preScaleDoc, null, 2) + "\n");
+  identity.currentRevision = preScaleId;
+  await writeFile(identityFile, JSON.stringify(identity, null, 2) + "\n");
+  const preScaleInspect = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(preScaleInspect.code).toBe(0);
+  const preScaleLayer = JSON.parse(preScaleInspect.stdout).layer;
+  expect(preScaleLayer.currentRevisionId).toBe(preScaleId);
+  expect(preScaleLayer.currentRevision.scaleX).toBe(1);
+  expect(preScaleLayer.currentRevision.scaleY).toBe(1);
+  expect(preScaleLayer.currentRevision.rotationDeg).toBe(0);
+  // Identity transform: the pinned render still reproduces the original pixels.
+  const preScaleOut = path.join(tempDir, "after-prescale.png");
+  const preScaleRender = await invoke(["composition", "render", "poster", "--project", projDir, "--out", preScaleOut, "--json"]);
+  expect(preScaleRender.code).toBe(0);
+  expect(await readFile(preScaleOut)).toEqual(await readFile(outBefore));
 });
 
 /** Tracer 9: older revisions keep their original hash/paint meaning and
