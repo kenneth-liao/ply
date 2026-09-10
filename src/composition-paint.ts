@@ -109,6 +109,9 @@ export async function paintComposition(
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
     // Awaited decode: a partially painted canvas is never screenshotted.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+    // Per-Layer outline-filter region sizing (#140, ADR-0019): before any
+    // pixel leaves this page — see sizeOutlineFilterRegions.
+    await sizeOutlineFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
     const png = await page.screenshot({
       type: "png",
@@ -173,19 +176,27 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
  * graphic — a solid ring hugging the content's alpha/glyph ink, extended
  * exactly `width` px in every direction (a box structuring element: painted
  * ink ⊆ content ⊕ square(width), the bound the measurement reach relies
- * on). Filters are deduplicated per distinct (width, color) pair; the id is
- * a deterministic hash of the pair, so the same facts always emit the same
- * markup. The declared region is generous (−300%/700%): Chromium computes
- * the filter's effect bounds from the primitives and does not clip the ring
- * to the declared region (verified empirically), and the radius is the sole
- * extent control.
+ * on).
+ *
+ * One filter per OUTLINED LAYER, not per distinct (width, color) pair: the
+ * filter's declared region must cover the element's untransformed box
+ * expanded by `width` px on every side, and that box differs per Layer —
+ * a shared def would clip one Layer's ring or content to another's box
+ * (verified empirically: Chromium DOES clip both the dilate ring and the
+ * source graphic to the declared region, contrary to the pre-review
+ * comment's claim). The region is therefore declared as a placeholder here
+ * and sized in-page from the element's real untransformed border box by
+ * `sizeOutlineFilterRegions` — the SAME sizing pass in the paint and
+ * measurement flows, so render and painted extents agree exactly. The id
+ * is a deterministic hash of the pair plus the Layer's snapshot index, so
+ * the same facts always emit the same markup.
  */
-function outlineFilterId(outline: LayerOutline): string {
-  return `ply-o-${createHash("sha256").update(`${outline.width}:${outline.color}`).digest("hex").slice(0, 8)}`;
+function outlineFilterId(outline: LayerOutline, layerIndex: number): string {
+  return `ply-o-${createHash("sha256").update(`${outline.width}:${outline.color}:${layerIndex}`).digest("hex").slice(0, 16)}`;
 }
 
-function outlineFilterDef(outline: LayerOutline): string {
-  const id = outlineFilterId(outline);
+function outlineFilterDef(outline: LayerOutline, layerIndex: number): string {
+  const id = outlineFilterId(outline, layerIndex);
   return (
     `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
     `<feMorphology in="SourceAlpha" operator="dilate" radius="${outline.width}" result="dil"/>` +
@@ -207,22 +218,72 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * The deduplicated `<defs>` markup for every distinct outline in the
- * snapshot (#140, ADR-0019). Emitted once per Composition as an inline SVG
- * OUTSIDE the `#canvas` element — zero-size, so it paints nothing itself,
- * and outside so `#canvas`'s children remain exactly one element per Layer
- * (the measurement probe and the painted-ink pass index them by position).
- * Referenced from the Layer elements' CSS `filter` chains by id.
+ * The per-Layer `<defs>` markup for every outlined Layer in the snapshot
+ * (#140, ADR-0019). Emitted once per Composition as an inline SVG OUTSIDE
+ * the `#canvas` element — zero-size, so it paints nothing itself, and
+ * outside so `#canvas`'s children remain exactly one element per Layer
+ * (the measurement probe and the painted-ink pass index them by
+ * position). Referenced from the Layer elements' CSS `filter` chains by
+ * id; the region placeholder is sized in-page before any screenshot by
+ * `sizeOutlineFilterRegions`.
  */
 function outlineDefs(layers: SnapshotLayer[]): string {
-  const defs = new Map<string, string>();
-  for (const l of layers) {
-    if (l.revision.outline !== undefined) {
-      defs.set(outlineFilterId(l.revision.outline), outlineFilterDef(l.revision.outline));
-    }
-  }
-  if (defs.size === 0) return "";
-  return `<svg width="0" height="0" style="position:absolute"><defs>${[...defs.values()].join("")}</defs></svg>`;
+  const defs = layers
+    .map((l, i) => (l.revision.outline !== undefined ? outlineFilterDef(l.revision.outline, i) : ""))
+    .join("");
+  if (defs === "") return "";
+  return `<svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>`;
+}
+
+/**
+ * The per-Layer outline-filter specs handed to `sizeOutlineFilterRegions`:
+ * null for Layers without an outline.
+ */
+function outlineFilterSpecs(layers: SnapshotLayer[]): ({ id: string; width: number } | null)[] {
+  return layers.map((l, i) =>
+    l.revision.outline !== undefined
+      ? { id: outlineFilterId(l.revision.outline, i), width: l.revision.outline.width }
+      : null,
+  );
+}
+
+/**
+ * Size every outlined Layer's filter region in-page from the element's
+ * real untransformed border box (#140, ADR-0019). The filter region is the
+ * one clip Chromium applies to the dilate result AND the source graphic,
+ * and the box is only knowable in the browser (text Layers wrap), so the
+ * markup carries a placeholder and both page flows — paint and
+ * measurement — call this before any screenshot: the region is set to the
+ * untransformed box expanded by `width` px plus a 1px antialiasing pad on
+ * every side, in the element's LOCAL user space (origin at the element's
+ * own top-left, verified empirically). The same adjustment in both flows
+ * keeps render and painted extents identical, and it is a deterministic
+ * function of the same DOM, so pinned Render history replays
+ * byte-identically.
+ */
+export async function sizeOutlineFilterRegions(page: Page, layers: SnapshotLayer[]): Promise<void> {
+  const specs = outlineFilterSpecs(layers);
+  if (specs.every((s) => s === null)) return;
+  await page.evaluate((input) => {
+    const canvas = document.getElementById("canvas");
+    if (!canvas) return;
+    input.forEach((spec, i) => {
+      if (!spec) return;
+      const el = canvas.children[i] as HTMLElement | undefined;
+      const filter = document.getElementById(spec.id);
+      if (!el || !filter) return;
+      const saved = el.style.transform;
+      el.style.transform = "none";
+      const box = el.getBoundingClientRect();
+      el.style.transform = saved;
+      const pad = spec.width + 1;
+      filter.setAttribute("filterUnits", "userSpaceOnUse");
+      filter.setAttribute("x", String(-pad));
+      filter.setAttribute("y", String(-pad));
+      filter.setAttribute("width", String(box.width + 2 * pad));
+      filter.setAttribute("height", String(box.height + 2 * pad));
+    });
+  }, specs);
 }
 
 /**
@@ -254,7 +315,7 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
     )
     .join("\n");
   const els = layers
-    .map((l) => {
+    .map((l, layerIndex) => {
       const rev = l.revision;
       const base = `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};`;
       // Canonical transform (#133/#134/#135, ADR-0016): applied about the
@@ -298,7 +359,7 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
       // (the shadow-only markup is byte-identical to the #139 form).
       const outlineFn =
         rev.outline !== undefined
-          ? `url(#${outlineFilterId(rev.outline)})`
+          ? `url(#${outlineFilterId(rev.outline, layerIndex)})`
           : "";
       const shadowFn =
         rev.shadow !== undefined

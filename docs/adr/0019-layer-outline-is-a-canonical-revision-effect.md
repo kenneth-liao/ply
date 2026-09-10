@@ -43,9 +43,23 @@ accumulated ink of the previous ones), so a stamped ring overshoots
 facts alone. The dilate extends the content's alpha (image and text
 glyphs alike) by exactly `width` px in every direction (a box
 structuring element: painted ink ⊆ content ⊕ square(width)), so painted
-ink and measurement reach agree exactly. Filters are deduplicated per
-distinct `(width, color)` pair into a deterministic-hash id; the defs
-SVG is emitted once per Composition OUTSIDE the `#canvas` element, so
+ink and measurement reach agree exactly.
+
+**Filter regions are sized per Layer, in-page.** Chromium clips BOTH the
+dilate result AND the source graphic to the filter's declared region
+(verified empirically), and a region expressed in objectBoundingBox
+percentages clips whenever `width` exceeds its 3× margins — a small
+element with a large width silently loses its ring. The region must
+cover the element's real untransformed box expanded by `width` px, and
+that box is only knowable in the browser (text Layers wrap), so the
+markup declares one filter per outlined Layer (deterministic id: hash of
+width, color, and the Layer's snapshot index) with a placeholder region,
+and both page flows — paint and measurement — size every region in-page
+from the element's untransformed border box (`sizeOutlineFilterRegions`)
+before any screenshot. The same adjustment in both flows keeps render
+and painted extents identical, and being a deterministic function of the
+same DOM it preserves pinned-replay byte-identity. The defs SVG is
+emitted once per Composition OUTSIDE the `#canvas` element, so
 `#canvas`'s children remain exactly one element per Layer (the
 measurement probe and painted-ink pass index them by position). Effects
 are emitted only when they exist, so pre-#139/#140 revisions and their

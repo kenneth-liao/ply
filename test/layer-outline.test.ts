@@ -607,7 +607,6 @@ test("measure includes the scale-amplified combined outline+shadow extent: paint
   const layerId = addRes.use.layerId as string;
 
   // Scale 3× (effective 300×180) then outline 10 + shadow (10,0,0):
-  // Scale 3× (effective 300×180) then outline 10 + shadow (10,0,0):
   // combined local reach is 10 + 10 = 20 → canvas reach 60 (additive).
   // Content ink [100,400)×[100,280); local ink = [-10,120)×[-10,70)
   // (outline ⊕ square(10); the shadow (10,0) shifts it in x only);
@@ -700,4 +699,51 @@ test("anchored placement uses the outline-extended ink; --anchor and --outline a
   const state = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
   expect(state.layer.currentRevision.x).toBe(110);
   expect(state.layer.currentRevision.outline).toEqual({ width: 10, color: "#000000" });
+});
+
+/** Region-clip boundary (review CRAFT-1): the dilate ring must extend the
+ * FULL in-bounds width even when it exceeds the default objectBoundingBox
+ * filter region's margins — the per-Layer in-page region sizing covers the
+ * element's real box expanded by `width`; measurement's painted extent
+ * agrees with the rendered ink exactly. */
+test("the outline ring extends the full width past a small element's box; painted agrees with the render", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(40, 30, RED));
+
+  await makeComp("poster", 600, 600);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 100, y: 100 });
+  const layerId = addRes.use.layerId as string;
+
+  // Width 256 > 3× the 40×30 box: the shipped pre-fix markup clipped the
+  // ring to ±90px vertically. With per-Layer region sizing the ring is the
+  // exact dilate: ink [100-256, 140+256) × [100-256, 130+256), canvas-clipped.
+  const editRes = await invoke(["layer", "edit", layerId, "--outline", "256,#0000ff", "--project", projDir, "--json"]);
+  expect(editRes.code).toBe(0);
+
+  const out = path.join(tempDir, "wide.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
+  const png = decodePng(await readFile(out));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (pixel(png, x, y)[3] > 0) {
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  // The full ring reaches exactly 256px past the box on every side — the
+  // render is canvas-clipped, so its ink support is [0,396)×[0,386).
+  expect({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 })
+    .toEqual({ x: 0, y: 0, width: 396, height: 386 });
+
+  // Measurement agrees: unclipped painted is the exact ring ±256 around the
+  // box, and the on-canvas footprint matches the rendered support.
+  const measureRes = await invoke(["composition", "measure", "poster", "hero", "--project", projDir, "--json"]);
+  expect(measureRes.code).toBe(0);
+  const layer = JSON.parse(measureRes.stdout).layers[0];
+  expect(layer.painted).toEqual({ x: -156, y: -156, width: 552, height: 542 });
+  expect(layer.paintedOnCanvas).toEqual({ x: 0, y: 0, width: 396, height: 386 });
+  expect(layer.clipped).toBe(true);
+  expect(layer.box).toEqual({ x: 100, y: 100, width: 40, height: 30 });
 });

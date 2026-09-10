@@ -82,7 +82,7 @@ import { readLayerInternalFull } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
 import { decodePng } from "./png.js";
-import { buildCompositionHtml, rejectUnresolvedFonts, type SnapshotLayer } from "./composition-paint.js";
+import { buildCompositionHtml, rejectUnresolvedFonts, sizeOutlineFilterRegions, type SnapshotLayer } from "./composition-paint.js";
 import type { ResolvedLayerRevision, LayerShadow, LayerOutline } from "./layer.js";
 import type { Page } from "playwright";
 
@@ -281,6 +281,9 @@ async function measureSnapshot(
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
     // Awaited decode: a partially painted or broken image is never measured.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+    // Per-Layer outline-filter region sizing (#140, ADR-0019): the paint
+    // path's exact adjustment, so painted extents agree with the render.
+    await sizeOutlineFilterRegions(page, layers);
     // The same retained-font gate as painting: an unresolved face is a
     // loud failure, never a fallback measurement.
     await rejectUnresolvedFonts(page, layers);
