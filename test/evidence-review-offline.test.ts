@@ -28,7 +28,6 @@ describe("evidence review runs with the generation SDK forbidden (tripwire armed
     const { runUniformGeneration } = await import("../src/generation.js");
     const { reviewPublishedGeneration, reviewRetainedLayer } = await import("../src/evidence-review.js");
     const { createComposition, addGeneratedLayerToComposition } = await import("../src/composition.js");
-    const { DEFAULT_MODEL } = await import("../src/models.js");
 
     const root = await mkdtemp(path.join(tmpdir(), "ply-evidence-offline-"));
     try {
@@ -41,7 +40,7 @@ describe("evidence review runs with the generation SDK forbidden (tripwire armed
       const job = await runUniformGeneration(
         jobsRoot,
         "gen-offline-review",
-        { prompt: "p", intent: "full-canvas", model: DEFAULT_MODEL, count: 1 },
+        { prompt: "p", intent: "full-canvas", model: "gpt-image", count: 1 },
         // The provider seam itself would fail if called; the SDK mock above
         // arms the production adapter path.
         {
@@ -74,13 +73,13 @@ describe("evidence review runs with the generation SDK forbidden (tripwire armed
           request: {
             prompt: "p",
             intent: "full-canvas",
-            model: DEFAULT_MODEL,
+            model: "gpt-image",
             sizing: { kind: "size", width: 1024, height: 1024 },
             count: 1,
           },
           run: {
             ranAt: new Date().toISOString(),
-            model: DEFAULT_MODEL,
+            model: "gpt-image",
             fullPrompt: "p",
             costUsd: null,
             costMeasured: false,

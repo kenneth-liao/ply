@@ -76,7 +76,7 @@ async function publishedIds(): Promise<string[]> {
 describe("ply generate — success contract", () => {
   test("full-canvas with an explicit non-thumbnail size succeeds and publishes", async () => {
     const res = await run(
-      ["a red barn at noon", "--size", "1080x1080", "--json"],
+      ["a red barn at noon", "--model", "gpt-image", "--size", "1080x1080", "--json"],
       deps(),
     );
     expect(res.exitCode).toBe(0);
@@ -111,14 +111,14 @@ describe("ply generate — success contract", () => {
   });
 
   test("default output is compact text; --json emits strict JSON", async () => {
-    const compact = await run(["a red barn", "--size", "1024x1024"], deps());
+    const compact = await run(["a red barn", "--model", "gpt-image", "--size", "1024x1024"], deps());
     expect(compact.exitCode).toBe(0);
     // Compact: a handful of lines, not a JSON dump.
     expect(compact.text.split("\n").length).toBeLessThanOrEqual(8);
     expect(compact.text).toContain("a red barn");
     expect(compact.text).not.toContain("{");
 
-    const jsonRes = await run(["a red barn", "--size", "1024x1024", "--json"], deps());
+    const jsonRes = await run(["a red barn", "--model", "gpt-image", "--size", "1024x1024", "--json"], deps());
     expect(() => JSON.parse(JSON.stringify(jsonRes.json))).not.toThrow();
     expect((jsonRes.json as Record<string, unknown>).ok).toBe(true);
   });
@@ -135,7 +135,7 @@ describe("ply generate — success contract", () => {
   });
 
   test("model-neutral defaults: 1024x1024 for image-kind, 1:1 for multimodal", async () => {
-    const image = await run(["scene one", "--json"], deps());
+    const image = await run(["scene one", "--model", "gpt-image", "--json"], deps());
     expect((image.json as any).job.request.sizing).toEqual({
       kind: "size",
       width: 1024,
@@ -146,6 +146,66 @@ describe("ply generate — success contract", () => {
       kind: "aspectRatio",
       ratio: "1:1",
     });
+  });
+});
+
+describe("ply generate — default model selection (#141, TEST-005)", () => {
+  function capturingProvider(): UniformProvider & {
+    imageArgs: Parameters<UniformProvider["image"]>[0][];
+    textArgs: Parameters<UniformProvider["text"]>[0][];
+  } {
+    const imageArgs: Parameters<UniformProvider["image"]>[0][] = [];
+    const textArgs: Parameters<UniformProvider["text"]>[0][] = [];
+    return {
+      imageArgs,
+      textArgs,
+      image: async (args) => {
+        imageArgs.push(args);
+        return { images: [{ base64: Buffer.from(`default-${imageArgs.length}`).toString("base64") }], warnings: [] };
+      },
+      text: async (args) => {
+        textArgs.push(args);
+        return { files: [{ mediaType: "image/png", uint8Array: Buffer.from(`default-text-${textArgs.length}`) }], text: "", warnings: [] };
+      },
+    };
+  }
+
+  test("omitting --model sends nano-2 outbound and retains it as effective provenance", async () => {
+    const provider = capturingProvider();
+    const res = await run(["a red barn at noon", "--json"], deps(provider));
+    expect(res.exitCode).toBe(0);
+    // The outbound request carries nano-2's gateway id, not gpt-image's.
+    expect(provider.textArgs).toHaveLength(1);
+    expect(provider.textArgs[0].model).toBe("google/gemini-3.1-flash-image");
+    expect(provider.imageArgs).toHaveLength(0);
+    // Provenance: the selected model key and the effective resolved id.
+    const json = res.json as Record<string, any>;
+    expect(json.job.request.model).toBe("nano-2");
+    expect(json.job.run.model).toBe("google/gemini-3.1-flash-image");
+    // The default fills the multimodal sizing shape (1:1).
+    expect(json.job.request.sizing).toEqual({ kind: "aspectRatio", ratio: "1:1" });
+  });
+
+  test("an explicit --model keeps precedence over the nano-2 default", async () => {
+    const provider = capturingProvider();
+    const res = await run(
+      ["a red barn at noon", "--model", "gpt-image", "--json"],
+      deps(provider),
+    );
+    expect(res.exitCode).toBe(0);
+    // The outbound request carries the explicitly selected model's id.
+    expect(provider.imageArgs).toHaveLength(1);
+    expect(provider.imageArgs[0].model).toBe("openai/gpt-image-2");
+    expect(provider.textArgs).toHaveLength(0);
+    const json = res.json as Record<string, any>;
+    expect(json.job.request.model).toBe("gpt-image");
+    expect(json.job.run.model).toBe("openai/gpt-image-2");
+  });
+
+  test("--help identifies nano-2 as the default", async () => {
+    const res = await run(["--help"], { provider: neverProvider, jobsRoot });
+    expect(res.exitCode).toBe(0);
+    expect(res.text).toContain("(default: nano-2)");
   });
 });
 
@@ -172,24 +232,28 @@ describe("ply generate — failure contract", () => {
     expect(await publishedIds()).toEqual([]);
   });
 
-  test("domain refusals exit 1: unknown model, sizing/kind mismatch, temperature on image models", async () => {
+  test("domain refusals exit 1: unknown model, sizing/kind mismatch, temperature on image models, implicit-default size refusal", async () => {
     const unknown = await run(["a barn", "--model", "nope", "--json"], deps());
     expect(unknown.exitCode).toBe(1);
     expect((unknown.json as Record<string, any>).ok).toBe(false);
     expect((unknown.json as any).error).toMatch(/Unknown model/);
 
-    const aspect = await run(["a barn", "--aspect", "16:9", "--json"], deps());
+    const aspect = await run(["a barn", "--model", "gpt-image", "--aspect", "16:9", "--json"], deps());
     expect(aspect.exitCode).toBe(1);
     expect((aspect.json as any).error).toMatch(/--size/);
 
-    const temp = await run(["a barn", "--temperature", "0.5", "--json"], deps());
+    const temp = await run(["a barn", "--model", "gpt-image", "--temperature", "0.5", "--json"], deps());
     expect(temp.exitCode).toBe(1);
     expect((temp.json as any).error).toMatch(/temperature/i);
+
+    const sizeOnDefault = await run(["a barn", "--size", "1024x1024", "--json"], deps());
+    expect(sizeOnDefault.exitCode).toBe(1);
+    expect((sizeOnDefault.json as any).error).toMatch(/--aspect/);
     expect(await publishedIds()).toEqual([]);
   });
 
   test("a provider error exits 1 with {ok:false} and leaves no job record", async () => {
-    const res = await run(["a barn", "--json"], {
+    const res = await run(["a barn", "--model", "gpt-image", "--json"], {
       provider: {
         image: async () => {
           throw new Error("gateway 500");
@@ -206,7 +270,7 @@ describe("ply generate — failure contract", () => {
   });
 
   test("a missing-image response exits 1 and publishes nothing", async () => {
-    const res = await run(["a barn", "--json"], {
+    const res = await run(["a barn", "--model", "gpt-image", "--json"], {
       provider: { image: async () => ({ images: [], warnings: [] }), text: neverProvider.text },
       jobsRoot,
     });
@@ -241,7 +305,7 @@ describe("ply generate — failure contract", () => {
     const snapshot = await projectFingerprint(projectDir);
 
     for (const argv of [
-      ["a barn", "--json"], // provider error
+      ["a barn", "--model", "gpt-image", "--json"], // provider error
       ["a barn", "--size", "abc", "--json"], // usage error
     ]) {
       const provider: UniformProvider =
@@ -331,7 +395,7 @@ describe("ply generate --ref — ordered verified References (#105)", () => {
     const c = await ref("gamma.png", "reference-gamma-bytes");
     const provider = recordingProvider();
     const res = await run(
-      ["a lighthouse collage from these photos", "--ref", a, "--ref", b, "--ref", c, "--json"],
+      ["a lighthouse collage from these photos", "--model", "gpt-image", "--ref", a, "--ref", b, "--ref", c, "--json"],
       deps(provider),
     );
     expect(res.exitCode).toBe(0);
@@ -353,7 +417,7 @@ describe("ply generate --ref — ordered verified References (#105)", () => {
     expect(provider.imageArgs[0].size).toBe("1024x1024");
     // Reversing the flag order reverses the attachments — no reordering.
     const provider2 = recordingProvider();
-    const res2 = await run(["mirror order", "--ref", c, "--ref", a, "--json"], deps(provider2));
+    const res2 = await run(["mirror order", "--model", "gpt-image", "--ref", c, "--ref", a, "--json"], deps(provider2));
     expect(res2.exitCode).toBe(0);
     expect((provider2.imageArgs[0].prompt as { images: Uint8Array[] }).images).toEqual([
       Buffer.from("reference-gamma-bytes"),
@@ -409,7 +473,7 @@ describe("ply generate --ref — ordered verified References (#105)", () => {
       },
       text: provider.text,
     };
-    const res = await run(["a barn", "--ref", a, "--json"], deps(mutating));
+    const res = await run(["a barn", "--model", "gpt-image", "--ref", a, "--json"], deps(mutating));
     expect(res.exitCode).toBe(0);
     expect((res.json as any).job.request.references[0].contentHash).toBe(
       createHash("sha256").update("capture-bytes").digest("hex"),

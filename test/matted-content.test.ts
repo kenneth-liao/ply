@@ -43,7 +43,6 @@ import {
   resolveRetainedMattingProvenance,
   resolveRetainedMatteGenerationLineage,
 } from "../src/matting-retention.js";
-import { DEFAULT_MODEL } from "../src/models.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -132,7 +131,7 @@ async function createJob(colors: [number, number, number, number][]): Promise<Ge
     {
       prompt: "deterministic test content",
       intent: "full-canvas",
-      model: DEFAULT_MODEL,
+      model: "gpt-image",
       sizing: { kind: "size", width: 32, height: 32 },
       count: colors.length,
     },

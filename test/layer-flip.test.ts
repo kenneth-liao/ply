@@ -25,7 +25,6 @@ import { createHash } from "node:crypto";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { computeRevisionHash } from "../src/layer.js";
 import { runUniformGeneration, type GenerationJobRecord } from "../src/generation.js";
-import { DEFAULT_MODEL } from "../src/models.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -682,7 +681,7 @@ test("flip never touches retained generation lineage or source bytes", async () 
     {
       prompt: "deterministic lineage content",
       intent: "full-canvas",
-      model: DEFAULT_MODEL,
+      model: "gpt-image",
       sizing: { kind: "size", width: 32, height: 32 },
       count: 1,
     },

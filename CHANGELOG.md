@@ -123,6 +123,9 @@
 
 ### Changed
 
+- `ply generate` without `--model` now selects nano-2 — the tool-wide
+  general-generation default (spec #132, DEC-007); explicit `--model`
+  selections keep precedence. (#141)
 - Measure keeps the internal font-family derivation module-private (#149
   review): the measurement path consumes only the shared markup builder and
   font-resolution gate; no other symbol of the paint module is exported.
