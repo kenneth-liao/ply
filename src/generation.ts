@@ -557,6 +557,10 @@ export async function executeUniformGeneration(
   // ingested request cannot carry References onto an unqualified model.
   if (request.references?.length && !spec.supportsRef)
     throw new Error(referenceIncompatibilityError(spec));
+  // Same parallel re-check for quality (PROD-1, #155 review): a forged pair
+  // of quality with an unqualified spec is refused here, before any provider
+  // call — combination validation holds behind the ingestion boundary too.
+  if (request.quality !== undefined) validateQualitySupport(spec, request.quality);
   // Verify/read every Reference once, in caller order — these exact bytes are
   // what the provider receives for every candidate.
   const refBytes: Uint8Array[] = [];

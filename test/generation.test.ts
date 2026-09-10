@@ -740,6 +740,25 @@ describe("executeUniformGeneration — verified Reference bytes", () => {
     expect(provider.imageCalls).toHaveLength(0);
   });
 
+  test("an unsupported quality caught only at execution still refuses before the provider call", async () => {
+    // Defense in depth (PROD-1, #155 review): a tampered or hand-built
+    // ingested request cannot pair a quality selection with an unqualified
+    // spec past the ingestion boundary — the same parallel re-check the
+    // reference capability gets, so combination validation holds for forged
+    // shapes too, before any provider call.
+    const provider = fakeProvider();
+    const handBuilt = {
+      request: { ...base, quality: "high" },
+      spec: resolveModel("nano-2"),
+    } as unknown as IngestedUniformRequest;
+    await expect(
+      executeUniformGeneration(jobRoot(), "gen-qual-cap", handBuilt, { provider }),
+    ).rejects.toThrow(/takes no quality selection/);
+    expect(provider.imageCalls).toHaveLength(0);
+    expect(provider.textCalls).toHaveLength(0);
+    expect(existsSync(path.join(jobRoot(), "gen-qual-cap"))).toBe(false);
+  });
+
   test("published provenance records the ordered identities and honest cost for a text-only rate", async () => {
     const provider = fakeProvider();
     const { ingested } = await ingestedWithRefs();
