@@ -35,9 +35,12 @@
  *
  * Cost: loading the ~560 MB weights and the one-time CoreML MLProgram
  * compile take minutes per fresh process on Apple silicon (measured ~6 min
- * for session build + first inference). Like the live check in
- * test/segment.test.ts this runs whenever the weights are present and skips
- * otherwise, so CI without the cache stays fast.
+ * for session build + first inference). This suite runs only when
+ * explicitly requested (`PLY_RUN_LIVE=1`) AND the weights are present, and
+ * skips otherwise, so the default suite stays fast even on machines with a
+ * warm weights cache. Run it as:
+ *
+ *   PLY_RUN_LIVE=1 bun test --isolate test/matting-live.test.ts
  */
 import { describe, test, expect } from "bun:test";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -111,7 +114,8 @@ function compositeOver(rgba: Buffer, bg: Background): Buffer {
 }
 
 describe("independent Matting (live engine, #112)", () => {
-  test(
+  const liveOnly = test.skipIf(!process.env.PLY_RUN_LIVE);
+  liveOnly(
     "the public command mattes an opaque fixture with the real pinned weights, offline, to a usable true alpha",
     async () => {
       // One home for "where the weights are": the ambient override if set,
@@ -121,7 +125,7 @@ describe("independent Matting (live engine, #112)", () => {
       // would resolve a relative override there instead (INT-1).
       const models = path.resolve(process.env.PLY_MODEL_DIR ?? path.join(import.meta.dir, "../models"));
       if (!(await stat(path.join(models, SUBJECT_SEGMENTER.file)).catch(() => null))) {
-        console.log("skipped: local matting weights are not on this machine — no qualification is claimed");
+        console.log("skipped: PLY_RUN_LIVE=1 is set but local matting weights are not on this machine — no qualification is claimed");
         return;
       }
 

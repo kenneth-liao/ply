@@ -9,6 +9,8 @@
   "scripts": {
     "ply": "bun run src/cli.ts",
     "test": "for f in $(find test -name '*.test.ts'); do bun test --isolate \"$f\" || exit 1; done",
+    "test:single": "bun test",
+    "test:live": "PLY_RUN_LIVE=1 for f in $(find test -name '*.test.ts'); do bun test --isolate \"$f\" || exit 1; done",
     "project": "bun run src/project-cli.ts",
     "generate": "bun run src/generation-cli.ts",
     "matte": "bun run src/matting-cli.ts",

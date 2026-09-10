@@ -20,7 +20,7 @@ import { run, type MattingCliDeps } from "../src/matting-cli.js";
 import type { MatteEngine } from "../src/matte.js";
 import { composeMatte, NATIVE_ALPHA } from "../src/matte.js";
 import { verifyTrueAlpha } from "../src/alpha.js";
-import { encodePng, decodePng } from "./png.js";
+import { encodePng, decodePng, opaqueSubject, subjectMask } from "./png.js";
 
 let root: string;
 let matteRoot: string;
@@ -37,20 +37,10 @@ afterEach(async () => {
 });
 
 /** An opaque RGB PNG — the ordinary Matting input that needs inference. */
-const OPAQUE_SUBJECT = encodePng(
-  16,
-  16,
-  (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 30, 40, 255] : [10, 20, 30, 255]),
-  { colorType: 2 },
-);
+const OPAQUE_SUBJECT = opaqueSubject();
 
 /** Its segmentation mask: white subject, black background. */
-const MASK = encodePng(
-  16,
-  16,
-  (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [255, 255, 255, 255] : [0, 0, 0, 255]),
-  { colorType: 2 },
-);
+const MASK = subjectMask();
 
 const ALL_BLACK = encodePng(16, 16, () => [0, 0, 0, 255], { colorType: 2 });
 const ALL_WHITE = encodePng(16, 16, () => [255, 255, 255, 255], { colorType: 2 });

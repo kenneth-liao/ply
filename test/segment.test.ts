@@ -147,14 +147,19 @@ describe("weights are pinned and failures are loud", () => {
 
 /**
  * The live check. It exercises the real weights against a real recorded
- * candidate and is skipped whenever either is absent — unit tests never load
- * half a gigabyte of model, and CI without the cache stays green.
+ * candidate and runs only when explicitly requested (`PLY_RUN_LIVE=1`) with
+ * the weights and demo candidates present — unit tests never load half a
+ * gigabyte of model, and the default suite stays fast even on machines with
+ * a warm cache. Run it as:
+ *
+ *   PLY_RUN_LIVE=1 bun test --isolate test/segment.test.ts
  */
 describe("local segmentation (live)", () => {
   const demoCandidates = path.resolve("out", "jobs", "int1-alpha-demo", "candidates");
   const present = async (p: string) => !!(await stat(p).catch(() => null));
 
-  test("mattes a real opaque creator candidate to a true-alpha PNG", async () => {
+  const liveOnly = test.skipIf(!process.env.PLY_RUN_LIVE);
+  liveOnly("mattes a real opaque creator candidate to a true-alpha PNG", async () => {
     if (!(await present(weightsPath())) || !(await present(demoCandidates))) {
       console.log("skipped: local weights or the recorded demo candidates are not on this machine");
       return;

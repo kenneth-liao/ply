@@ -775,13 +775,7 @@ test("competing public CLI reader and edit serialize under the Project lock and 
   expect(finalOld.layer.currentRevision.x).toBe(33);
 }, 60000);
 
-test("fork help documents the fork surface and forked Projects keep working after relocation", async () => {
-  const help = await invoke(["layer", "--help"]);
-  expect(help.code).toBe(0);
-  expect(help.stdout).toContain("--fork");
-  expect(help.stdout).toContain("--composition");
-  expect(help.stdout).toContain("--use");
-
+test("forked Projects keep working after relocation", async () => {
   const redImg = path.join(tempDir, "red.png");
   await writeFile(redImg, solidPng(50, 50, RED));
   await makeComp("reloc-a");

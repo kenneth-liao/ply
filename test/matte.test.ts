@@ -1,23 +1,13 @@
 import { describe, test, expect } from "bun:test";
 import { composeMatte, matteCandidate, NATIVE_ALPHA, type MatteEngine } from "../src/matte.js";
 import { verifyTrueAlpha } from "../src/alpha.js";
-import { encodePng, decodePng } from "./png.js";
+import { encodePng, decodePng, opaqueSubject, subjectMask } from "./png.js";
 
 /** An opaque RGB candidate — what the tested nano recipe actually returns. */
-const OPAQUE_SUBJECT = encodePng(
-  16,
-  16,
-  (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 30, 40, 255] : [10, 20, 30, 255]),
-  { colorType: 2 },
-);
+const OPAQUE_SUBJECT = opaqueSubject();
 
 /** The segmentation mask for it: white subject, black background. */
-const MASK = encodePng(
-  16,
-  16,
-  (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [255, 255, 255, 255] : [0, 0, 0, 255]),
-  { colorType: 2 },
-);
+const MASK = subjectMask();
 
 /** A half-scale mask — models do not honour "same dimensions" reliably. */
 const HALF_MASK = encodePng(
