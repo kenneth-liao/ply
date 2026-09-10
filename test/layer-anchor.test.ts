@@ -510,3 +510,97 @@ test(
   },
   120_000,
 );
+
+/** Tracer 7a: anchored placement resolves against visible painted ink and
+ * never falls back to the layout box — a Layer with no visible ink refuses
+ * (exit 1) and live state is untouched. */
+test(
+  "a Layer with no visible ink refuses anchored placement without mutating live state",
+  async () => {
+    // 40×40 content whose every pixel is fully transparent.
+    const empty = path.join(tempDir, "empty.png");
+    await writeFile(empty, regionPng(40, 40, RED, { x: 0, y: 0, width: 0, height: 0 }));
+
+    await makeComp("poster", 400, 300);
+    const addRes = await addImageLayer("poster", "ghost", empty, { x: 10, y: 10 });
+    const layerId = addRes.use.layerId as string;
+    const revId = addRes.layer.currentRevisionId as string;
+
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "center,center", "--x", "200", "--y", "150", "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(1);
+    const editJson = JSON.parse(editRes.stdout);
+    expect(editJson.ok).toBe(false);
+    expect(editJson.error).toContain("no visible painted ink");
+    expect(editJson.error).toContain("--x/--y");
+
+    const inspectRes = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+    const layer = JSON.parse(inspectRes.stdout).layer;
+    expect(layer.currentRevisionId).toBe(revId);
+    expect(layer.currentRevision.x).toBe(10);
+    expect(layer.currentRevision.y).toBe(10);
+
+    // Opacity 0 hides the ink the same way: refusal, not a fallback box.
+    const redImg = path.join(tempDir, "red.png");
+    await writeFile(redImg, solidPng(40, 40, RED));
+    const fadeRes = await invoke([
+      "composition", "add", "poster", "faded", "--image", redImg, "--x", "5", "--y", "5", "--opacity", "0",
+      "--project", projDir, "--json",
+    ]);
+    expect(fadeRes.code).toBe(0);
+    const fadeId = JSON.parse(fadeRes.stdout).use.layerId as string;
+    const fadeEdit = await invoke([
+      "layer", "edit", fadeId, "--anchor", "center,center", "--x", "200", "--y", "150", "--project", projDir, "--json",
+    ]);
+    expect(fadeEdit.code).toBe(1);
+    expect(JSON.parse(fadeEdit.stdout).error).toContain("no visible painted ink");
+  },
+  60_000,
+);
+
+/** Tracer 7b: a text Layer shared across Compositions with different canvas
+ * widths wraps differently, so the anchored resolution disagrees — the
+ * refusal names the affected compositions and their count (blast-radius
+ * convention) and live state is untouched. */
+test(
+  "divergent wrapped-text geometry across Compositions refuses, naming the compositions",
+  async () => {
+    await makeComp("narrow", 200, 300);
+    const addRes = await invoke([
+      "composition", "add", "narrow", "banner", "--text",
+      "the quick brown fox jumps over the lazy dog again and again", "--font", "Anton",
+      "--font-size", "24", "--x", "0", "--y", "0", "--project", projDir, "--json",
+    ]);
+    expect(addRes.code).toBe(0);
+    const layerId = JSON.parse(addRes.stdout).use.layerId as string;
+    const revId = JSON.parse(addRes.stdout).layer.currentRevisionId as string;
+    const before = useReport(await measure("narrow"), "banner");
+    expect(before.painted).not.toBeNull();
+
+    await makeComp("wide", 800, 300);
+    await invoke(["composition", "import", "wide", "narrow", "--project", projDir, "--json"]);
+    // Sanity: the shared text wraps in the narrow canvas, not in the wide one.
+    const wide = useReport(await measure("wide"), "banner");
+    expect(wide.painted!.width).toBeGreaterThan(before.painted!.width);
+
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "center,bottom", "--x", "400", "--y", "280", "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(1);
+    const editJson = JSON.parse(editRes.stdout);
+    expect(editJson.ok).toBe(false);
+    expect(editJson.error).toContain("across 2 Compositions");
+    expect(editJson.error).toContain('"narrow"');
+    expect(editJson.error).toContain('"wide"');
+    expect(editJson.referringCompositions).toEqual(["narrow", "wide"]);
+    expect(editJson.referrersCount).toBe(2);
+
+    // Live state untouched.
+    const inspectRes = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+    const layer = JSON.parse(inspectRes.stdout).layer;
+    expect(layer.currentRevisionId).toBe(revId);
+    expect(layer.currentRevision.x).toBe(0);
+  },
+  120_000,
+);
