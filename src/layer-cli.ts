@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import path from "node:path";
 import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
 import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
-import { parseShadowSpec } from "./layer.js";
+import { parseShadowSpec, parseOutlineSpec } from "./layer.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
@@ -163,6 +163,22 @@ Options:
                         replacement; cannot combine with --anchor (the
                         anchor would resolve different ink than the edit
                         publishes — anchor first, then add the shadow).
+  --outline <spec>      Apply an outline to the Layer's content (#140), on
+                        image alpha and text glyphs alike: an ABSOLUTE setter
+                        "<width>,<color>" — e.g. "4,#000000" — that replaces
+                        any previous outline, and "none" removes it (the
+                        same command twice keeps the same outline). Width is
+                        px (0..256). The outline hugs the content in the
+                        Layer's LOCAL coordinate space, painted BEFORE the
+                        shadow — a shadow on the same Layer is cast from the
+                        outlined composite — and the transform then maps
+                        content, outline, and shadow together, with the
+                        Layer's opacity fading all of it. It is a revision
+                        fact: sharing propagates it, forks isolate it, and
+                        removal is its own edit. Never changes retained
+                        pixels. Combines with --resize/--rotate/--flip and
+                        content replacement; cannot combine with --anchor
+                        (anchor first, then add the outline).
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -224,7 +240,7 @@ function joinDashLeadingNumericValues(args: string[]): string[] {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (
-      (arg === "--rotate" || arg === "--shadow") &&
+      (arg === "--rotate" || arg === "--shadow" || arg === "--outline") &&
       args[i + 1] !== undefined &&
       /^-(?:\.?\d)/.test(args[i + 1]!)
     ) {
@@ -266,6 +282,7 @@ let values: {
   rotate?: string;
   flip?: string;
   shadow?: string;
+  outline?: string;
 };
 let positionals: string[];
 
@@ -299,6 +316,7 @@ try {
       rotate: { type: "string" },
       flip: { type: "string" },
       shadow: { type: "string" },
+      outline: { type: "string" },
     },
   });
   values = parsed.values;
@@ -342,14 +360,15 @@ async function run() {
         values["resize-to"] !== undefined ||
         values.rotate !== undefined ||
         values.flip !== undefined ||
-        values.shadow !== undefined;
+        values.shadow !== undefined ||
+        values.outline !== undefined;
 
       if (!hasEditOption && !values.fork) {
         output(
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, --outline, or --fork.",
           },
           isJson,
         );
@@ -597,6 +616,23 @@ async function run() {
         shadowSpec = values.shadow;
       }
 
+      // Outline flag (#140, ADR-0019): syntax and well-formedness at the
+      // command boundary as a usage error (exit 2) through the SAME parser
+      // the edit path uses, so the two boundaries never disagree; the
+      // absolute-setter semantics are enforced again by the edit path before
+      // any staging.
+      let outlineSpec: string | undefined;
+      if (values.outline !== undefined) {
+        try {
+          parseOutlineSpec(values.outline);
+        } catch (err) {
+          output({ ok: false, error: (err as Error).message }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+        outlineSpec = values.outline;
+      }
+
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2); semantic refusals (no visible ink,
       // divergent multi-Composition geometry) happen in the read-only
@@ -622,6 +658,7 @@ async function run() {
           values.rotate !== undefined ||
           values.flip !== undefined ||
           values.shadow !== undefined ||
+          values.outline !== undefined ||
           values.image !== undefined ||
           values["from-generation"] !== undefined ||
           values["from-matte"] !== undefined ||
@@ -634,7 +671,7 @@ async function run() {
             {
               ok: false,
               error:
-                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
+                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, --outline, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
             },
             isJson,
           );
@@ -728,6 +765,7 @@ async function run() {
           rotateDeg,
           flip,
           shadow: shadowSpec,
+          outline: outlineSpec,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {
@@ -756,6 +794,9 @@ async function run() {
         }
         if (res.shadowed) {
           resultBody.shadowed = res.shadowed;
+        }
+        if (res.outlined) {
+          resultBody.outlined = res.outlined;
         }
         if (anchored) {
           resultBody.anchored = anchored;
@@ -787,16 +828,21 @@ async function run() {
                 ? `; shadow ${res.shadowed.shadow.dx} ${res.shadowed.shadow.dy} ${res.shadowed.shadow.blur} ${res.shadowed.shadow.color}`
                 : "; shadow none"
               : "";
+            const outlined = res.outlined
+              ? res.outlined.outline
+                ? `; outline ${res.outlined.outline.width} ${res.outlined.outline.color}`
+                : "; outline none"
+              : "";
             const anchorSummary = anchored
               ? `; anchored ${formatAnchorSpec(anchored.anchor)}${formatAnchorTarget(anchored)} -> placement (${anchored.placement.x}, ${anchored.placement.y})`
               : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${anchorSummary}`);
             }
           },
         );
@@ -861,7 +907,11 @@ async function run() {
               rev.shadow === undefined
                 ? ""
                 : `, Shadow: ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}`);
+            const outline =
+              rev.outline === undefined
+                ? ""
+                : `, Outline: ${rev.outline.width} ${rev.outline.color}`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}`);
           },
         );
       } catch (err) {

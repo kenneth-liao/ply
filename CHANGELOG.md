@@ -4,6 +4,37 @@
 
 ### Added
 
+- Layer outlines with correct painted bounds (#140, spec #132 US-003 /
+  US-002 / US-006, DEC-002/003/004/005, ADR-0019):
+  `ply layer edit --outline "<width>,<color>"` applies a solid outline to
+  a Layer's content — image alpha and text glyph contours alike, one
+  uniform effect — as an ABSOLUTE setter that replaces any previous
+  outline (`--outline none` removes it). The outline paints in the
+  Layer's LOCAL coordinate space BEFORE the shadow — the shadow is cast
+  from the outlined composite — and the canonical transform maps content,
+  outline, and shadow together, the Layer's opacity fading all of it. The
+  ring is an exact geometry: an `feMorphology` dilate extends the
+  content's alpha by exactly `width` px in every direction, so painted
+  ink and measurement reach agree exactly. `ply composition measure`
+  includes the effect extent in painted bounds, the on-canvas
+  intersection, and `clipped` — its bounded capture window widens by the
+  combined additive reach (outline width + the shadow reach, scaled by
+  the transform's largest factor) so an effected Layer's full extent is
+  captured or refused loudly, never silently clipped — and reports the
+  effective shadow and outline settings in the `effects` facts and
+  compact text. Anchored placement resolves against the same
+  effect-extended painted ink; `--anchor`/`--outline` refuse to combine
+  in one edit. The outline is a Layer revision fact shared as a whole:
+  in-place edits propagate it, forks isolate it, cross-Project copies
+  preserve it verbatim, and it is hash-appended only when present so
+  pre-#140 revisions keep their exact ids and pinned Render history
+  replays byte-identically. Effect colors canonicalize at the one
+  ingestion boundary (INT-2 from the #139 review, applied to both
+  effects): lowercase hex with `#RGB` expanded to `#RRGGBB`, so
+  case/shorthand variants cannot mint redundant revisions. Invalid
+  settings fail at the command boundary (exit 2) through one shared
+  parser — nothing invalid mutates live state. No general filter
+  framework (DEC-006).
 - Layer shadows with correct painted bounds (#139, spec #132 US-003 /
   US-002 / US-006, DEC-002/003/004/005, ADR-0018):
   `ply layer edit --shadow "<dx>,<dy>,<blur>,<color>"` applies a drop

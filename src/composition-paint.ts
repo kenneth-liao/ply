@@ -14,7 +14,9 @@
  * A revision's shadow (#139, ADR-0018) applies to the content in its LOCAL
  * coordinate space (image alpha or text glyphs alike) before the canonical
  * transform, which maps content+shadow together, and the Layer's opacity
- * fades both.
+ * fades both. A revision's outline (#140, ADR-0019) hugs the content in the
+ * same LOCAL space, painted BEFORE the shadow — the shadow is therefore cast
+ * from the outlined composite — and both map and fade together.
  * Areas no Layer covers stay transparent. Text Layers (#81) paint as DOM text
  * with their retained font bytes declared under an internal @font-face
  * family (never re-consulting assets/fonts/), and every text layer's family
@@ -30,7 +32,8 @@ import { withRenderPage } from "./browser.js";
 import { familyResolved } from "./fonts.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
-import type { ResolvedLayerRevision } from "./layer.js";
+import { createHash } from "node:crypto";
+import type { LayerOutline, ResolvedLayerRevision } from "./layer.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
   png: "image/png",
@@ -163,6 +166,36 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
   }
 }
 
+/**
+ * The outline's SVG-filter id and def (#140, ADR-0019): one `feMorphology`
+ * dilate over `SourceAlpha` (radius = outline width, in the element's LOCAL
+ * px), flooded with the outline color and composited back under the source
+ * graphic — a solid ring hugging the content's alpha/glyph ink, extended
+ * exactly `width` px in every direction (a box structuring element: painted
+ * ink ⊆ content ⊕ square(width), the bound the measurement reach relies
+ * on). Filters are deduplicated per distinct (width, color) pair; the id is
+ * a deterministic hash of the pair, so the same facts always emit the same
+ * markup. The declared region is generous (−300%/700%): Chromium computes
+ * the filter's effect bounds from the primitives and does not clip the ring
+ * to the declared region (verified empirically), and the radius is the sole
+ * extent control.
+ */
+function outlineFilterId(outline: LayerOutline): string {
+  return `ply-o-${createHash("sha256").update(`${outline.width}:${outline.color}`).digest("hex").slice(0, 8)}`;
+}
+
+function outlineFilterDef(outline: LayerOutline): string {
+  const id = outlineFilterId(outline);
+  return (
+    `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
+    `<feMorphology in="SourceAlpha" operator="dilate" radius="${outline.width}" result="dil"/>` +
+    `<feFlood flood-color="${outline.color}" result="flood"/>` +
+    `<feComposite in="flood" in2="dil" operator="in" result="ring"/>` +
+    `<feMerge><feMergeNode in="ring"/><feMergeNode in="SourceGraphic"/></feMerge>` +
+    `</filter>`
+  );
+}
+
 /** Minimal HTML escaping for text layer content (#81). */
 function escapeHtml(text: string): string {
   return text
@@ -171,6 +204,25 @@ function escapeHtml(text: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+/**
+ * The deduplicated `<defs>` markup for every distinct outline in the
+ * snapshot (#140, ADR-0019). Emitted once per Composition as an inline SVG
+ * OUTSIDE the `#canvas` element — zero-size, so it paints nothing itself,
+ * and outside so `#canvas`'s children remain exactly one element per Layer
+ * (the measurement probe and the painted-ink pass index them by position).
+ * Referenced from the Layer elements' CSS `filter` chains by id.
+ */
+function outlineDefs(layers: SnapshotLayer[]): string {
+  const defs = new Map<string, string>();
+  for (const l of layers) {
+    if (l.revision.outline !== undefined) {
+      defs.set(outlineFilterId(l.revision.outline), outlineFilterDef(l.revision.outline));
+    }
+  }
+  if (defs.size === 0) return "";
+  return `<svg width="0" height="0" style="position:absolute"><defs>${[...defs.values()].join("")}</defs></svg>`;
 }
 
 /**
@@ -231,22 +283,36 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
         transformParts.length > 0
           ? `transform:${transformParts.join(" ")};transform-origin:0 0;`
           : "";
-      // Canonical shadow (#139, ADR-0018): drop-shadow applies to the
-      // Layer's content in its LOCAL coordinate space — the transform above
-      // then maps content+shadow together, and the element's opacity fades
-      // both. Emitted only when a shadow exists, so pre-#139 revisions and
-      // their pinned Render history paint exactly as before.
-      const shadowFilter =
-        rev.shadow !== undefined
-          ? `filter:drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color});`
+      // Canonical effects (#139/#140, ADR-0018/0019): one `filter` chain on
+      // the Layer element. The outline comes FIRST — its feMorphology dilate
+      // filter hugs the content's alpha/glyph ink and composites the ring
+      // under the source graphic (def above, referenced by id) — and the
+      // shadow's single drop-shadow comes LAST, so it is cast from the
+      // outlined composite. CSS filter-list chaining feeds each function's
+      // output to the next, so the chain builds the union exactly once per
+      // primitive — dilate extends exactly `width` px in every direction
+      // with no scallop and no compounding. The transform above then maps
+      // content+outline+shadow together, and the element's opacity fades
+      // all of it. Emitted only when an effect exists, so pre-#139/#140
+      // revisions and their pinned Render history paint exactly as before
+      // (the shadow-only markup is byte-identical to the #139 form).
+      const outlineFn =
+        rev.outline !== undefined
+          ? `url(#${outlineFilterId(rev.outline)})`
           : "";
+      const shadowFn =
+        rev.shadow !== undefined
+          ? `drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color})`
+          : "";
+      const effectsFns = [outlineFn, shadowFn].filter(Boolean).join(" ");
+      const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
       if (rev.kind === "text") {
         const style =
-          `${base}${transformed}${shadowFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
+          `${base}${transformed}${effectsFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
           `font-size:${rev.fontSize}px;color:${rev.color};white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
-      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${shadowFilter}">`;
+      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;
     })
     .join("");
   return (
@@ -255,6 +321,6 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
     `html,body{margin:0;padding:0;background:transparent}` +
     `#canvas{position:relative;width:${canvas.width}px;height:${canvas.height}px;overflow:hidden}` +
     `</style></head>` +
-    `<body><div id="canvas">${els}</div></body></html>`
+    `<body>${outlineDefs(layers)}<div id="canvas">${els}</div></body></html>`
   );
 }
