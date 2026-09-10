@@ -601,7 +601,7 @@ async function run() {
                 facts.push(`flip ${t.flipX && t.flipY ? "both" : t.flipX ? "horizontal" : "vertical"}`);
               }
               console.log(
-                `  ${idx + 1}. "${layer.name}" (${contentContentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height}` +
+                `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height}` +
                   (facts.length > 0 ? ` [${facts.join(", ")}]` : ""),
               );
             });
@@ -715,6 +715,6 @@ function parseNumericArgument(value: string | undefined): number {
 }
 
 /** Compact content description for a measured Layer. */
-function contentContentLabel(layer: { kind: string; content: { width: number; height: number } }): string {
+function contentLabel(layer: { kind: string; content: { width: number; height: number } }): string {
   return layer.kind === "text" ? `text ${layer.content.width}×${layer.content.height}` : `image content ${layer.content.width}×${layer.content.height}`;
 }

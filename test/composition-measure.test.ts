@@ -25,6 +25,8 @@ import { createHash } from "node:crypto";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { computeRevisionHash, LAYER_SCHEMA_VERSION } from "../src/layer.js";
 import type { LayerTextRevision } from "../src/layer.js";
+import { measureCompositionLayers } from "../src/composition-measure.js";
+import { getBrowser, closeBrowser } from "../src/browser.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -396,4 +398,61 @@ test("measure exposes scoped help, compact text output, and usage errors", async
   const unknown = await invoke(["composition", "frobnicate", "--project", projDir]);
   expect(unknown.code).toBe(2);
   expect(unknown.stderr).toContain("measure");
+});
+
+test("text measurement follows scale and flip through the canonical transform", async () => {
+  await makeComp("textx", 500, 400);
+  await addTextLayer("textx", "t", "Ply", { fontSize: 48, x: 100, y: 50 });
+  const layerId = JSON.parse(
+    (await invoke(["composition", "inspect", "textx", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0].layerId as string;
+
+  // Identity: the box is the content box at the placement point.
+  let { json } = await measure("textx");
+  const content = { width: json.layers[0].content.width, height: json.layers[0].content.height };
+  expect(json.layers[0].box).toEqual({ x: 100, y: 50, width: content.width, height: content.height });
+
+  // Scale 2×: the text content box is untransformed; the footprint doubles
+  // right and down from (x, y). (--resize-to is image-only: text has no
+  // intrinsic pixel size, so scaling is relative --resize, per ADR-0016.)
+  expect((await invoke(["layer", "edit", layerId, "--resize", "2", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  ({ json } = await measure("textx"));
+  expect(json.layers[0].content).toEqual(content);
+  expect(json.layers[0].box.x).toBe(100);
+  expect(json.layers[0].box.y).toBe(50);
+  expect(json.layers[0].box.width).toBeCloseTo(content.width * 2, 1);
+  expect(json.layers[0].box.height).toBeCloseTo(content.height * 2, 1);
+
+  // Halve, then horizontal flip: the footprint mirrors across the placement
+  // axis — [100, 100+w/2] becomes [100−w/2, 100].
+  expect((await invoke(["layer", "edit", layerId, "--resize", "0.25", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  expect((await invoke(["layer", "edit", layerId, "--flip", "horizontal", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  ({ json } = await measure("textx"));
+  expect(json.layers[0].transform).toMatchObject({ flipX: true, scaleX: 0.5 });
+  expect(json.layers[0].content).toEqual(content);
+  expect(json.layers[0].box.x).toBeCloseTo(100 - content.width / 2, 1);
+  expect(json.layers[0].box.y).toBe(50);
+  expect(json.layers[0].box.width).toBeCloseTo(content.width / 2, 1);
+  expect(json.layers[0].box.height).toBeCloseTo(content.height / 2, 1);
+});
+
+test("measuring completes with every browser network route aborted (offline evidence)", async () => {
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(32, 32, RED));
+  await makeComp("off", 200, 200);
+  await addImageLayer("off", "bg", img, { x: 10, y: 10 });
+  await addTextLayer("off", "t", "hi", { fontSize: 32, x: 5, y: 5 });
+
+  const browser = await getBrowser();
+  const ctx = await browser.newContext({ deviceScaleFactor: 1 });
+  await ctx.route("**/*", (route) => route.abort());
+  const page = await ctx.newPage();
+  try {
+    const result = await measureCompositionLayers(projDir, "off", undefined, { page });
+    expect(result.layers).toHaveLength(2);
+    expect(result.layers[0]!.box).toEqual({ x: 10, y: 10, width: 32, height: 32 });
+  } finally {
+    await ctx.close();
+    await closeBrowser();
+  }
 });

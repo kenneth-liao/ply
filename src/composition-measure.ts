@@ -164,21 +164,28 @@ export async function measureCompositionLayers(
   projectPath: string,
   compName: string,
   useName?: string,
+  options: { page?: Page } = {},
 ): Promise<MeasureCompositionResult> {
   const resolvedRoot = await resolveProjectRoot(projectPath);
-  return withProjectLock(resolvedRoot, async () => {
+  // The snapshot is resolved under the Project lock exactly once, then the
+  // lock is released before the browser measurement — the documented
+  // read-snapshot pattern (`renderComposition`): measuring reads only the
+  // in-memory snapshot and writes nothing, so no Project state is held
+  // during the browser pass.
+  const { comp, layers } = await withProjectLock(resolvedRoot, async () => {
     const comp = await readCompositionInternalFull(resolvedRoot, compName);
-
     const layers: SnapshotLayer[] = comp.layers.map((use) => ({
       name: use.name,
       layerId: use.layerId,
       revision: use.revision,
       contentBytes: use.contentBytes,
     }));
+    return { comp, layers };
+  });
 
-    const measured = await measureSnapshot(comp.canvas, layers);
+  const measured = await measureSnapshot(comp.canvas, layers, options);
 
-    const bounds: MeasuredLayerBounds[] = layers.map((l, i) => {
+  const bounds: MeasuredLayerBounds[] = layers.map((l, i) => {
       const m = measured[i]!;
       const rev = l.revision;
       return {
@@ -210,17 +217,16 @@ export async function measureCompositionLayers(
       };
     });
 
-    const selected = useName
-      ? bounds.filter((b) => b.name === useName)
-      : bounds;
-    if (useName && selected.length === 0) {
-      const names = bounds.map((b) => `"${b.name}"`).join(", ");
-      throw new Error(
-        `Use "${useName}" not found in composition "${comp.name}".` +
-          (bounds.length > 0 ? ` Available uses: ${names}.` : " The Composition has no Layers."),
-      );
-    }
+  const selected = useName
+    ? bounds.filter((b) => b.name === useName)
+    : bounds;
+  if (useName && selected.length === 0) {
+    const names = bounds.map((b) => `"${b.name}"`).join(", ");
+    throw new Error(
+      `Use "${useName}" not found in composition "${comp.name}".` +
+        (bounds.length > 0 ? ` Available uses: ${names}.` : " The Composition has no Layers."),
+    );
+  }
 
-    return { composition: comp.name, canvas: comp.canvas, layers: selected };
-  });
+  return { composition: comp.name, canvas: comp.canvas, layers: selected };
 }
