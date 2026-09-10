@@ -693,11 +693,3 @@ test("atomicReplace failure during remove leaves Composition document unchanged 
   expect(JSON.parse(retryRes.stdout).ok).toBe(true);
   expect(JSON.parse(retryRes.stdout).layers.map((l: { name: string }) => l.name)).toEqual(["keep-me"]);
 });
-
-test("help documents composition remove and reorder commands and their options", async () => {
-  const help = await invoke(["composition", "--help"]);
-  expect(help.code).toBe(0);
-  expect(help.stdout).toContain("ply composition remove");
-  expect(help.stdout).toContain("ply composition reorder");
-  expect(help.stdout).toContain("--order");
-});

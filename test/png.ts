@@ -69,6 +69,30 @@ export function encodePng(
 
 export const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+/**
+ * Shared matting fixtures — one home for the opaque-subject + mask pair
+ * used by the matte unit suite and the matting CLI suite. The subject is an
+ * opaque RGB candidate (the shape models actually return); the mask selects
+ * its 8×8 center as subject. Both are 16×16 RGB (`colorType: 2`).
+ */
+export function opaqueSubject(): Buffer {
+  return encodePng(
+    16,
+    16,
+    (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 30, 40, 255] : [10, 20, 30, 255]),
+    { colorType: 2 },
+  );
+}
+
+export function subjectMask(): Buffer {
+  return encodePng(
+    16,
+    16,
+    (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [255, 255, 255, 255] : [0, 0, 0, 255]),
+    { colorType: 2 },
+  );
+}
+
 /** A minimal (8-bit, non-interlaced) IHDR payload for hand-built PNGs. */
 export function ihdr(width: number, height: number): Buffer {
   const h = Buffer.alloc(13);

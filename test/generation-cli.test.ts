@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { initProject, inspectProject } from "../src/project.js";
 import { run, type GenerationCliDeps } from "../src/generation-cli.js";
+import { MODELS, referenceCapableModels } from "../src/models.js";
 import type { UniformProvider } from "../src/generation.js";
 
 let root: string;
@@ -576,3 +577,23 @@ async function projectFingerprint(projectDir: string): Promise<Record<string, st
   await walk(projectDir);
   return out;
 }
+describe("the model registry is the one capability source (DEC-018/DEC-020)", () => {
+  test("GPT Image 2 capability and measured-cost facts reflect the #52 evidence", async () => {
+    const gpt = MODELS["gpt-image"];
+    expect(gpt.supportsRef).toBe(true);
+    // The run-summary rate stays the measured text-only plate figure.
+    expect(gpt.approxCost).toBe(0.0045);
+    expect(gpt.costMeasured).toBe(true);
+    // The reference-call evidence is recorded as an account-window delta with
+    // its basis stated — never presented as a per-image rate or run cost.
+    expect(gpt.note).toMatch(/account-window delta/);
+    expect(gpt.note).toMatch(/not a per-image rate/);
+  });
+
+  test("the qualified reference-capable list is derived from the registry, never duplicated", async () => {
+    for (const { key, spec } of referenceCapableModels()) {
+      expect(spec.supportsRef).toBe(true);
+      expect(MODELS[key]).toBe(spec);
+    }
+  });
+});
