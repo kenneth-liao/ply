@@ -359,6 +359,8 @@ export async function addLayerToComposition(
         x,
         y,
         opacity,
+        scaleX: 1,
+        scaleY: 1,
       };
     }).then(({ layerId, layer }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer }));
   });
@@ -420,6 +422,8 @@ export async function addTextLayerToComposition(
         x,
         y,
         opacity,
+        scaleX: 1,
+        scaleY: 1,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -509,6 +513,8 @@ export async function addGeneratedLayerToComposition(
         x,
         y,
         opacity,
+        scaleX: 1,
+        scaleY: 1,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -591,6 +597,8 @@ export async function addMattedLayerToComposition(
         x,
         y,
         opacity,
+        scaleX: 1,
+        scaleY: 1,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -842,13 +850,17 @@ export interface ImportCompositionResult {
 /**
  * Build a destination revision document for a cross-Project copy (#86, US-005).
  * The canonical revision construction for copies: immutable source facts are
- * preserved verbatim (kind, contentHash, placement, opacity, and text fields),
- * bound to the new destination identity with a fresh createdAt, and text
- * fields are re-validated through the one shared text validator used at
- * ingestion. The retained content bytes are copied separately — no bundled
- * face resolution and no re-reading of `assets/fonts/` happens during a copy.
+ * preserved verbatim (kind, contentHash, placement, opacity, transform scale,
+ * and text fields), bound to the new destination identity with a fresh
+ * createdAt, and text fields are re-validated through the one shared text
+ * validator used at ingestion. The retained content bytes are copied
+ * separately — no bundled face resolution and no re-reading of `assets/fonts/`
+ * happens during a copy. The source snapshot comes from the canonical Layer
+ * resolver, so its transform scale is already normalized (#133, ADR-0016):
+ * resize metadata survives cross-Project import instead of being dropped by
+ * revision reconstruction.
  */
-function buildCopiedRevision(newLayerId: string, createdAt: string, source: LayerRevision): LayerRevision {
+function buildCopiedRevision(newLayerId: string, createdAt: string, source: ResolvedLayerRevision): LayerRevision {
   if (source.kind === "text") {
     validateTextContent(source.text, source.fontSize, source.color);
     return {
@@ -863,6 +875,8 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Laye
       x: source.x,
       y: source.y,
       opacity: source.opacity,
+      scaleX: source.scaleX,
+      scaleY: source.scaleY,
     };
   }
   if (source.kind !== "image") {
@@ -877,6 +891,8 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Laye
     x: source.x,
     y: source.y,
     opacity: source.opacity,
+    scaleX: source.scaleX,
+    scaleY: source.scaleY,
   };
 }
 
@@ -930,7 +946,7 @@ async function copyCrossProject(
   // Map each DISTINCT source Layer identity to one destination identity from
   // the verified snapshot — no second Full resolution; duplicate uses share
   // the single mapped identity.
-  const identityMap = new Map<string, { revision: LayerRevision; contentBytes: Buffer }>();
+  const identityMap = new Map<string, { revision: ResolvedLayerRevision; contentBytes: Buffer }>();
   for (const layer of sourceFull.layers) {
     if (!identityMap.has(layer.layerId)) {
       identityMap.set(layer.layerId, { revision: layer.revision, contentBytes: layer.contentBytes });

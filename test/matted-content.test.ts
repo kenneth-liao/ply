@@ -182,13 +182,16 @@ test("adds a matte's verified output as an ordinary image Layer with verbatim re
   expect((await readFile(retained)).toString()).toEqual((await readFile(path.join(matteRoot, matte.matteId, "matte.json"))).toString());
 
   // No new identity/category/approval fields on the stored documents: the
-  // revision is an ordinary image revision.
+  // revision is an ordinary image revision with the canonical placement and
+  // transform-scale facts (scale 1 at add time, #133).
   const revisionRaw = JSON.parse(
     await readFile(path.join(projDir, "layers", `${json.use.layerId}.revisions`, `${json.layer.currentRevisionId}.json`), "utf8"),
   );
   expect(Object.keys(revisionRaw).sort()).toEqual(
-    ["contentHash", "createdAt", "kind", "layerId", "opacity", "schemaVersion", "x", "y"].sort(),
+    ["contentHash", "createdAt", "kind", "layerId", "opacity", "scaleX", "scaleY", "schemaVersion", "x", "y"].sort(),
   );
+  expect(revisionRaw.scaleX).toBe(1);
+  expect(revisionRaw.scaleY).toBe(1);
   expect(revisionRaw.kind).toBe("image");
 
   // The Layer renders the matted pixels: opaque red subject, transparent cut.

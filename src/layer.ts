@@ -51,6 +51,21 @@ interface LayerRevisionBase {
   x: number;
   y: number;
   opacity: number;
+  /**
+   * Canonical transform scale (#133, ADR-0016): the Layer's effective painted
+   * size is its content size multiplied by these factors, applied about the
+   * Layer's (x, y) top-left placement point. These are revision facts shared
+   * as a whole (DEC-002); width/height conveniences normalize to them at the
+   * command boundary and are never stored.
+   *
+   * Optional in the stored shape only for revisions written before #133 —
+   * absent fields mean scale 1 and are normalized by the one revision reader,
+   * so no downstream reader needs a fallback. Every newly written revision
+   * records both fields explicitly, keeping the revision hash covering the
+   * full canonical transform (a resize-only edit is a new revision).
+   */
+  scaleX?: number;
+  scaleY?: number;
 }
 
 /**
@@ -83,9 +98,53 @@ export interface LayerTextRevision extends LayerRevisionBase {
 
 export type LayerRevision = LayerImageRevision | LayerTextRevision;
 
+/** Canonical normalized transform scale: the one shape every consumer reads. */
+export interface LayerTransformScale {
+  scaleX: number;
+  scaleY: number;
+}
+
+/**
+ * Canonical stored-scale validation and normalization (#133, ADR-0016). This
+ * is the one normalization boundary for transform scale: stored documents
+ * written before #133 lack the fields (only a missing field is absent — a
+ * present `null` or any other non-number is a malformed document, never a
+ * silent default) and normalize to scale 1 here; every downstream reader
+ * projects through this function and never re-derives a default. Stored
+ * fields must be present together and be finite positive numbers — a partial
+ * or invalid pair is a malformed document, refused loudly before the revision
+ * hash is consulted.
+ */
+export function normalizeStoredScale(revision: {
+  scaleX?: unknown;
+  scaleY?: unknown;
+}): LayerTransformScale {
+  const hasX = revision.scaleX !== undefined;
+  const hasY = revision.scaleY !== undefined;
+  if (hasX !== hasY) {
+    throw new Error(
+      `Malformed revision document: scaleX and scaleY must be present together (got scaleX ${JSON.stringify(revision.scaleX)}, scaleY ${JSON.stringify(revision.scaleY)}).`,
+    );
+  }
+  if (!hasX) {
+    return { scaleX: 1, scaleY: 1 };
+  }
+  const scaleX = revision.scaleX;
+  const scaleY = revision.scaleY;
+  if (
+    typeof scaleX !== "number" || !Number.isFinite(scaleX) || scaleX <= 0 ||
+    typeof scaleY !== "number" || !Number.isFinite(scaleY) || scaleY <= 0
+  ) {
+    throw new Error(
+      `Malformed revision document: scaleX and scaleY must be finite numbers greater than 0 (got ${JSON.stringify(scaleX)}, ${JSON.stringify(scaleY)}).`,
+    );
+  }
+  return { scaleX, scaleY };
+}
+
 export type ResolvedLayerRevision =
-  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number })
-  | (LayerTextRevision & { revisionId: string; fontBytes: number });
+  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number })
+  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number });
 
 export interface ResolvedLayer {
   id: string;
@@ -267,12 +326,16 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
   }
 }
 
-/** Compute content-derived revision hash for an immutable revision record. */
+/** Compute content-derived revision hash for an immutable revision record.
+ * The scale fields are appended only when present, so revisions written
+ * before #133 hash to exactly their pre-resize ids: older revisions retain
+ * their original hash and paint meaning (#133). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
-  const payload =
-    rev.kind === "text" ? `${base}:${rev.text}:${rev.fontSize}:${rev.color}` : base;
-  return `rev_${createHash("sha256").update(payload).digest("hex").slice(0, 16)}`;
+  const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
+  const scaleFields =
+    rev.scaleX !== undefined || rev.scaleY !== undefined ? `:${rev.scaleX}:${rev.scaleY}` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -473,6 +536,10 @@ export async function readRevisionInternalFull(
       `Malformed revision document "${revisionId}" for layer "${layerId}": opacity must be a finite number between 0 and 1.`,
     );
   }
+  // Canonical transform scale: validated and normalized at this one boundary
+  // (#133, ADR-0016) — malformed stored pairs are refused loudly before the
+  // revision hash is consulted.
+  const scale = normalizeStoredScale(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -536,6 +603,8 @@ export async function readRevisionInternalFull(
             x: revision.x,
             y: revision.y,
             opacity: revision.opacity,
+            scaleX: scale.scaleX,
+            scaleY: scale.scaleY,
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -552,6 +621,8 @@ export async function readRevisionInternalFull(
           x: revision.x,
           y: revision.y,
           opacity: revision.opacity,
+          scaleX: scale.scaleX,
+          scaleY: scale.scaleY,
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -613,6 +684,21 @@ export interface EditLayerOptions {
   y?: number;
   opacity?: number;
   /**
+   * Resize by a relative scale factor (#133, ADR-0016): multiplies the
+   * Layer's current canonical scale. Mutually exclusive with `resizeTo` and
+   * with content-replacement options — resizing changes placement, never
+   * retained pixels, and one edit carries one intent.
+   */
+  resizeFactor?: number;
+  /**
+   * Resize to an absolute effective size in px (#133, ADR-0016): image Layers
+   * only (text has no intrinsic pixel size until measurement exists). One
+   * omitted axis preserves the aspect ratio from the retained content's
+   * intrinsic size; both axes deliberately change it. Normalized to canonical
+   * scale here at the edit boundary; never stored as authoritative fields.
+   */
+  resizeTo?: { width?: number; height?: number };
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -670,6 +756,13 @@ export interface EditLayerResult {
   referrersCount: number;
   /** Present only when the edit published a fork. */
   fork?: ForkInfo;
+  /**
+   * Present when the edit resized the Layer (#133): the absolute effective
+   * scale (auditable across repeated relative resizes) and, for image Layers,
+   * the absolute effective size in px. The scale is always reported; the
+   * effective pixel size for text Layers awaits read-only measurement.
+   */
+  resized?: { scaleX: number; scaleY: number; width?: number; height?: number };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -756,6 +849,109 @@ function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision)
   return { x, y, opacity };
 }
 
+/** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
+export function roundEffective(px: number): number {
+  return Math.round(px * 100) / 100;
+}
+
+/**
+ * Canonical resize normalization (#133, ADR-0016): scale factors are the one
+ * authoritative transform representation; width/height conveniences become
+ * scale here at the edit boundary, against the retained content's intrinsic
+ * size. Every refusal runs before any staging, so an invalid or conflicting
+ * resize never advances live state.
+ *
+ * Omitted resize options preserve the current revision's scale. Aspect-ratio
+ * rules: a relative factor preserves it by definition; an absolute target
+ * with one omitted axis preserves it from the intrinsic size; both axes
+ * supplied deliberately change it.
+ */
+function resolveEditScale(
+  options: EditLayerOptions,
+  prevRev: ResolvedLayerRevision,
+  layerId: string,
+): LayerTransformScale {
+  const hasFactor = options.resizeFactor !== undefined;
+  const hasTarget = options.resizeTo !== undefined;
+  if (!hasFactor && !hasTarget) {
+    return { scaleX: prevRev.scaleX, scaleY: prevRev.scaleY };
+  }
+
+  if (hasFactor && hasTarget) {
+    throw new Error("--resize and --resize-to are mutually exclusive resize forms: use one per edit.");
+  }
+  const replacesContent =
+    options.image !== undefined || options.fromGeneration !== undefined || options.fromMatte !== undefined;
+  if (replacesContent) {
+    throw new Error(
+      `Resize and content replacement are separate edits: Layer "${layerId}" cannot replace its source and resize in one edit, because the resize reference size would be ambiguous.`,
+    );
+  }
+
+  if (hasFactor) {
+    const factor = options.resizeFactor!;
+    if (!Number.isFinite(factor) || factor <= 0 || factor > MAX_DIMENSION) {
+      throw new Error(
+        `Invalid resize factor ${factor}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+      );
+    }
+    return boundedScale({ scaleX: prevRev.scaleX * factor, scaleY: prevRev.scaleY * factor }, prevRev, layerId);
+  }
+
+  if (prevRev.kind === "text") {
+    throw new Error(
+      `--resize-to needs an intrinsic pixel size: Layer "${layerId}" is a text Layer — use --resize <factor>.`,
+    );
+  }
+  const { width, height } = options.resizeTo!;
+  for (const [label, value] of [["width", width], ["height", height]] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION)) {
+      throw new Error(
+        `Invalid resize target ${label} ${value}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+      );
+    }
+  }
+  if (width === undefined && height === undefined) {
+    throw new Error("Invalid resize target: --resize-to needs at least one of width or height.");
+  }
+  let scaleX: number;
+  let scaleY: number;
+  if (width !== undefined && height !== undefined) {
+    // Both axes supplied: the aspect change is deliberate, not accidental.
+    scaleX = width / prevRev.width;
+    scaleY = height / prevRev.height;
+  } else if (width !== undefined) {
+    // One axis supplied: preserve the aspect ratio from the intrinsic size.
+    scaleX = width / prevRev.width;
+    scaleY = scaleX;
+  } else {
+    scaleY = height! / prevRev.height;
+    scaleX = scaleY;
+  }
+  return boundedScale({ scaleX, scaleY }, prevRev, layerId);
+}
+
+/** Shared effective-size bound (#133): the scaled result shares the existing
+ * content-dimension cap so no second constant exists. Refuses before staging. */
+function boundedScale(
+  scale: LayerTransformScale,
+  prevRev: ResolvedLayerRevision,
+  layerId: string,
+): LayerTransformScale {
+  if (prevRev.kind === "image") {
+    const width = roundEffective(prevRev.width * scale.scaleX);
+    const height = roundEffective(prevRev.height * scale.scaleY);
+    if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+      throw new Error(
+        `Resize result ${width}×${height}px is over the ${MAX_DIMENSION}px per-axis limit for Layer "${layerId}".`,
+      );
+    }
+  } else if (scale.scaleX > MAX_DIMENSION || scale.scaleY > MAX_DIMENSION) {
+    throw new Error(`Resize scale over the ${MAX_DIMENSION} limit for Layer "${layerId}".`);
+  }
+  return scale;
+}
+
 /**
  * Canonical edited-revision construction shared by in-place and fork editing
  * (#85): one home for kind stability, content ingestion/validation, and
@@ -768,11 +964,12 @@ function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision)
  */
 async function buildEditedRevision(
   resolvedRoot: string,
-  prevRev: LayerRevision,
+  prevRev: ResolvedLayerRevision,
   layerId: string,
   createdAt: string,
   options: EditLayerOptions,
   placement: { x: number; y: number; opacity: number },
+  scale: LayerTransformScale,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -865,9 +1062,12 @@ async function buildEditedRevision(
       x,
       y,
       opacity,
+      scaleX: scale.scaleX,
+      scaleY: scale.scaleY,
     };
     const unchanged =
-      contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity;
+      contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
+      scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY;
     return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
@@ -915,6 +1115,8 @@ async function buildEditedRevision(
       x,
       y,
       opacity,
+      scaleX: scale.scaleX,
+      scaleY: scale.scaleY,
     };
     const unchanged =
       contentHash === prevRev.contentHash &&
@@ -923,7 +1125,9 @@ async function buildEditedRevision(
       color === prevRev.color &&
       x === prevRev.x &&
       y === prevRev.y &&
-      opacity === prevRev.opacity;
+      opacity === prevRev.opacity &&
+      scale.scaleX === prevRev.scaleX &&
+      scale.scaleY === prevRev.scaleY;
     return { revision, unchanged, retainedGeneration: null };
   }
 
@@ -1081,8 +1285,22 @@ export async function editLayerInternal(
     throw err;
   }
 
-  // 3. Placement options: preserve existing values if omitted
+  // 3. Placement and transform-scale options: preserve existing values if omitted
   const placement = resolveEditPlacement(options, prevRev);
+  const scale = resolveEditScale(options, prevRev, layerId);
+  // Absolute effective facts for the result (#133): the scale is authoritative
+  // and always reported; image Layers additionally report the effective size
+  // the scale produces from the retained content's intrinsic dimensions.
+  const resizedReport =
+    prevRev.kind === "image"
+      ? {
+          scaleX: scale.scaleX,
+          scaleY: scale.scaleY,
+          width: roundEffective(prevRev.width * scale.scaleX),
+          height: roundEffective(prevRev.height * scale.scaleY),
+        }
+      : { scaleX: scale.scaleX, scaleY: scale.scaleY };
+  const hasResize = options.resizeFactor !== undefined || options.resizeTo !== undefined;
 
   if (intent.mode === "fork") {
     // Canonical target/use→original-id validation before any content work.
@@ -1098,6 +1316,7 @@ export async function editLayerInternal(
       createdAt,
       options,
       placement,
+      scale,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
@@ -1106,17 +1325,18 @@ export async function editLayerInternal(
       referringCompositions,
       referrersCount,
     });
+    const withResized = hasResize ? { ...forkResult, resized: resizedReport } : forkResult;
     return options.fromGeneration !== undefined
-      ? { ...forkResult, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withResized, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
         ? {
-            ...forkResult,
+            ...withResized,
             mattedFrom,
             ...(retainedGeneration
               ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
               : {}),
           }
-        : forkResult;
+        : withResized;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
@@ -1127,6 +1347,7 @@ export async function editLayerInternal(
     new Date().toISOString(),
     options,
     placement,
+    scale,
   );
 
   // No-op check: if all fields are identical to previous revision, avoid storage churn
@@ -1136,6 +1357,7 @@ export async function editLayerInternal(
       layer: resolved,
       referringCompositions,
       referrersCount,
+      ...(hasResize ? { resized: resizedReport } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -1184,6 +1406,7 @@ export async function editLayerInternal(
     layer: updatedLayer,
     referringCompositions,
     referrersCount,
+    ...(hasResize ? { resized: resizedReport } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),
