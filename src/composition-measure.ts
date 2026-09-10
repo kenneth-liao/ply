@@ -68,6 +68,7 @@
  */
 import { withRenderPage } from "./browser.js";
 import { readCompositionInternalFull } from "./composition.js";
+import { readLayerInternalFull } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
 import { decodePng } from "./png.js";
@@ -179,6 +180,12 @@ const INK_PAD_PX = 16;
  * Composition-scale Layer produces.
  */
 const MAX_INK_VIEWPORT_PX = 8192;
+
+/** Standalone measurement canvas edge (px): large enough that a text Layer's
+ * pre-wrap shrink-to-fit line cannot wrap inside it (the containing block
+ * width caps the line), while staying inside the bounded ink-capture window
+ * with its pad. Used only by `measureStandaloneLayer` (#138). */
+const STANDALONE_CANVAS_PX = MAX_INK_VIEWPORT_PX - 2 * INK_PAD_PX;
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -400,4 +407,62 @@ export async function measureCompositionLayers(
   }
 
   return { composition: comp.name, canvas: comp.canvas, layers: selected };
+}
+
+/**
+ * Measure one Layer standalone — outside any Composition, at placement
+ * (0, 0) on an effectively unwrapped canvas (#138). The read-snapshot
+ * pattern is unchanged: the Layer's current revision and verified bytes are
+ * resolved once under the Project lock, then measured from that snapshot;
+ * nothing is written. The painted box of the (0, 0) copy IS the ink's
+ * offset from the placement point, which is what anchored placement
+ * (#138) needs for a Layer with no referring Composition.
+ *
+ * Documented semantics: the standalone line does not wrap (the canvas
+ * exceeds any line a Composition could give the Layer while staying inside
+ * the bounded ink-capture window), so an unreferenced text Layer resolves
+ * against its unwrapped ink; once the Layer is added to a Composition,
+ * anchoring there re-resolves against that Composition's wrapping. A Layer
+ * whose layout box exceeds the bounded capture window is refused loudly,
+ * exactly as in Composition measurement.
+ */
+export async function measureStandaloneLayer(
+  projectPath: string,
+  layerId: string,
+  options: { page?: Page } = {},
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number } }> {
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  const { currentRevision, contentBytes } = await withProjectLock(resolvedRoot, () =>
+    readLayerInternalFull(resolvedRoot, layerId),
+  );
+  const standalone: SnapshotLayer = {
+    name: layerId,
+    layerId,
+    revision: { ...currentRevision, x: 0, y: 0 },
+    contentBytes,
+  };
+  const canvas = { width: STANDALONE_CANVAS_PX, height: STANDALONE_CANVAS_PX };
+  const [measured] = await measureSnapshot(canvas, [standalone], options);
+  if (!measured) {
+    throw new Error(`Standalone measurement of Layer "${layerId}" produced no geometry.`);
+  }
+  return {
+    painted: measured.painted ? roundBox(measured.painted) : null,
+    box: {
+      x: round2(measured.box.x),
+      y: round2(measured.box.y),
+      width: round2(measured.box.width),
+      height: round2(measured.box.height),
+    },
+    content: {
+      width:
+        currentRevision.kind === "image"
+          ? currentRevision.width
+          : round2(measured.content.width),
+      height:
+        currentRevision.kind === "image"
+          ? currentRevision.height
+          : round2(measured.content.height),
+    },
+  };
 }

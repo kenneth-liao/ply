@@ -3,6 +3,7 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
+import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
 
@@ -21,7 +22,8 @@ layer — Layer management and inspection within a Project
       same command twice is still the same angle (unlike the relative resize
       factor), and 0 removes the rotation. --flip sets an ABSOLUTE reflection
       state (horizontal, vertical, both, or none): it replaces the current
-      flip state, and none removes the reflection.
+      flip state, and none removes the reflection. --anchor places the
+      Layer's visible painted ink at a target position (see below).
 
   bun run ply layer inspect <layer-id> [options]
       Inspect a Layer's identity, current revision, and content details
@@ -71,6 +73,42 @@ Options:
   --x <num>             X position on canvas
   --y <num>             Y position on canvas
   --opacity <num>       Layer opacity between 0 and 1
+  --anchor <h>[,<v>]    Anchored placement: resolve the Layer's VISIBLE
+                        PAINTED INK against the target position instead of
+                        targeting the top-left corner. Horizontal values are
+                        left|center|right (anchoring --x), vertical values
+                        are top|center|bottom (anchoring --y); a pair like
+                        "center,center" anchors both, in that order. A
+                        single value anchors one axis only (left/right are
+                        horizontal, top/bottom vertical; a bare "center" is
+                        ambiguous and refused — name both, e.g.
+                        "center,center").
+
+                        The anchor box is the PAINTED INK box (alpha > 0 /
+                        tight glyph ink, unclipped), never the layout
+                        content box: transparent padding does not count, so
+                        a padded image's visible subject lands at the
+                        target while its layout box extends into the
+                        padding. A Layer with no visible ink refuses instead
+                        of falling back to the layout box. Resolution runs
+                        against the Layer's CURRENT transform and the
+                        rendering geometry of the referring Composition(s) —
+                        or standalone on an unwrapped line when the Layer is
+                        unreferenced (a text Layer's ink depends on each
+                        Composition's canvas width; disagreement across
+                        Compositions refuses). Resolved through the
+                        paint-identical ink measurement, accurate to its
+                        pixel grid (~1px).
+
+                        Anchored placement is a ONE-SHOT resolution written
+                        into plain placement (x, y) — no anchor facts are
+                        stored, and "ply composition measure" verifies where
+                        the ink landed. It is its own edit: it cannot be
+                        combined with --resize, --rotate, --flip, or content
+                        replacement (the reference ink would be ambiguous);
+                        make the transform/content edit first, then anchor.
+                        --opacity combines freely. A subsequent content edit
+                        keeps the resolved x/y literally.
   --resize <factor>     Scale the Layer by a RELATIVE factor: the new scale
                         is the current scale multiplied by <factor>, so the
                         same command twice keeps enlarging (e.g. 2 then 2
@@ -137,6 +175,23 @@ function parseNumericArgument(value: string | undefined): number {
   return value?.trim() ? Number(value) : NaN;
 }
 
+/** Compact anchor spec for the edit report: pair form "h,v", single form
+ * otherwise. */
+function formatAnchorSpec(anchor: ParsedAnchor): string {
+  if (anchor.horizontal !== undefined && anchor.vertical !== undefined) {
+    return `${anchor.horizontal},${anchor.vertical}`;
+  }
+  return anchor.horizontal ?? anchor.vertical ?? "";
+}
+
+/** Compact target for the edit report, restricted to the anchored axes. */
+function formatAnchorTarget(anchored: AnchorResolution): string {
+  const { target } = anchored;
+  if (target.x !== undefined && target.y !== undefined) return ` at (${target.x}, ${target.y})`;
+  if (target.x !== undefined) return ` at x ${target.x}`;
+  return ` at y ${target.y}`;
+}
+
 /** A negative angle is a valid rotation (#134), but parseArgs refuses a
  * dash-leading option value ("--rotate -30" reads as an ambiguous flag), so
  * join a following dash-leading numeric token into "--rotate=<value>" before
@@ -179,6 +234,7 @@ let values: {
   x?: string;
   y?: string;
   opacity?: string;
+  anchor?: string;
   resize?: string;
   "resize-to"?: string;
   rotate?: string;
@@ -210,6 +266,7 @@ try {
       x: { type: "string" },
       y: { type: "string" },
       opacity: { type: "string" },
+      anchor: { type: "string" },
       resize: { type: "string" },
       "resize-to": { type: "string" },
       rotate: { type: "string" },
@@ -252,6 +309,7 @@ async function run() {
         values.x !== undefined ||
         values.y !== undefined ||
         values.opacity !== undefined ||
+        values.anchor !== undefined ||
         values.resize !== undefined ||
         values["resize-to"] !== undefined ||
         values.rotate !== undefined ||
@@ -262,7 +320,7 @@ async function run() {
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --resize, --resize-to, --rotate, --flip, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, or --fork.",
           },
           isJson,
         );
@@ -493,7 +551,96 @@ async function run() {
         flip = raw;
       }
 
+      // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
+      // command boundary (exit 2); semantic refusals (no visible ink,
+      // divergent multi-Composition geometry) happen in the read-only
+      // resolution BEFORE the edit is invoked (exit 1) — so no anchored
+      // input ever mutates live state.
+      let parsedAnchor: ParsedAnchor | undefined;
+      if (values.anchor !== undefined) {
+        try {
+          parsedAnchor = parseAnchorSpec(values.anchor);
+        } catch (err) {
+          output({ ok: false, error: (err as Error).message }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+        // Anchored placement is its own edit: transform and content edits
+        // change the reference ink, so combining them in one edit is a
+        // conflicting request (the same precedent as resize + content
+        // replacement). --opacity combines freely: opacity scales alpha
+        // values, never the ink support.
+        const conflicting =
+          values.resize !== undefined ||
+          values["resize-to"] !== undefined ||
+          values.rotate !== undefined ||
+          values.flip !== undefined ||
+          values.image !== undefined ||
+          values["from-generation"] !== undefined ||
+          values["from-matte"] !== undefined ||
+          values.text !== undefined ||
+          values.font !== undefined ||
+          values["font-size"] !== undefined ||
+          values.color !== undefined;
+        if (conflicting) {
+          output(
+            {
+              ok: false,
+              error:
+                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or content edit first, then anchor.",
+            },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+        if (parsedAnchor.horizontal !== undefined && x === undefined) {
+          output(
+            { ok: false, error: `--x <target> is required to anchor horizontally: the ${parsedAnchor.horizontal} ink edge/center lands at the requested x.` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+        if (parsedAnchor.vertical !== undefined && y === undefined) {
+          output(
+            { ok: false, error: `--y <target> is required to anchor vertically: the ${parsedAnchor.vertical} ink edge/center lands at the requested y.` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+      }
+
       try {
+        // Anchored placement (#138, ADR-0017): resolve ONCE against the
+        // live state's painted ink (read-only), then publish plain x/y
+        // through the ordinary edit lifecycle — the edit path never sees an
+        // anchor, so no alternate placement representation can exist.
+        let anchored: AnchorResolution | undefined;
+        let editX = x;
+        let editY = y;
+        if (parsedAnchor !== undefined) {
+          try {
+            anchored = await resolveAnchoredPlacement(targetProj, layerId, {
+              anchor: parsedAnchor,
+              targetX: x,
+              targetY: y,
+              contextComposition: values.fork ? values.composition : undefined,
+            });
+          } catch (err) {
+            const errObj = err as Error & { referringCompositions?: string[]; referrersCount?: number };
+            const result: { ok: false; error: string; [key: string]: unknown } = { ok: false, error: errObj.message };
+            if (errObj.referringCompositions !== undefined) result.referringCompositions = errObj.referringCompositions;
+            if (errObj.referrersCount !== undefined) result.referrersCount = errObj.referrersCount;
+            output(result, isJson);
+            process.exitCode = 1;
+            return;
+          }
+          if (parsedAnchor.horizontal !== undefined) editX = anchored.placement.x;
+          if (parsedAnchor.vertical !== undefined) editY = anchored.placement.y;
+        }
+
         const res = await editLayer(targetProj, layerId, {
           inPlace: values["in-place"],
           fork: values.fork,
@@ -516,8 +663,8 @@ async function run() {
           font: values.font,
           fontSize,
           color: values.color,
-          x,
-          y,
+          x: editX,
+          y: editY,
           opacity,
           resizeFactor,
           resizeTo,
@@ -549,6 +696,9 @@ async function run() {
         if (res.flipped) {
           resultBody.flipped = res.flipped;
         }
+        if (anchored) {
+          resultBody.anchored = anchored;
+        }
 
         output(
           resultBody,
@@ -571,13 +721,16 @@ async function run() {
               : "";
             const rotated = res.rotated ? `; rotation ${res.rotated.rotationDeg}°` : "";
             const flipped = res.flipped && res.flipped.flip !== "none" ? `; flip ${res.flipped.flip}` : res.flipped ? "; flip none" : "";
+            const anchorSummary = anchored
+              ? `; anchored ${formatAnchorSpec(anchored.anchor)}${formatAnchorTarget(anchored)} -> placement (${anchored.placement.x}, ${anchored.placement.y})`
+              : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${anchorSummary}`);
             }
           },
         );
