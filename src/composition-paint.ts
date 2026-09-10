@@ -117,6 +117,12 @@ export async function paintComposition(
  * Internal @font-face family name for a retained font blob (#81). Derived
  * from the content hash — the retained bytes are the only font identity, so
  * the renderer never needs the bundled registry or the original family name.
+ *
+ * Deliberately module-private: family names are minted only inside this
+ * builder (the one font/geometry authority, DEC-004), never by callers that
+ * only consume the builder's markup. If painted-bounds work (#137) ever
+ * needs the family outside this module, that ticket re-exports it with its
+ * own consuming evidence — no speculative surface now.
  */
 function internalFontFamily(contentHash: string): string {
   return `ply-face-${contentHash.slice(0, 16)}`;
@@ -127,8 +133,12 @@ function internalFontFamily(contentHash: string): string {
  * the shared family-resolution probe. Garbage bytes, undecodable faces, or a
  * failed load fall through to a fallback font — detected here and rejected
  * before any output is published.
+ *
+ * Shared with layout measurement (#136, DEC-004): measurement applies the
+ * exact same retained-font resolution gate as painting, so an unresolved
+ * face can never yield measured numbers.
  */
-async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[]): Promise<void> {
+export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[]): Promise<void> {
   const byFamily = new Map<string, string[]>();
   for (const l of layers) {
     if (l.revision.kind !== "text") continue;
@@ -164,8 +174,16 @@ function escapeHtml(text: string): string {
  * every interpolated value is a validated finite number, a whitelisted MIME
  * type, a hash-derived internal family, or the strict-hex validated color —
  * except text content, which is HTML-escaped.
+ *
+ * This builder is the ONE geometry-and-font authority for Composition
+ * layout (DEC-004): current-state painting (#80), historical replay (#87),
+ * and read-only layout measurement (#136) all render and measure through
+ * the exact markup it produces — the same retained font bytes under the
+ * same internal @font-face families, the same emitted rotate∘flip∘scale
+ * transforms about (x, y) with transform-origin 0 0, the same canvas and
+ * text wrapping. There is no second markup builder to drift from.
  */
-function buildCompositionHtml(canvas: { width: number; height: number }, layers: SnapshotLayer[]): string {
+export function buildCompositionHtml(canvas: { width: number; height: number }, layers: SnapshotLayer[]): string {
   const faces = new Map<string, Buffer>();
   for (const l of layers) {
     if (l.revision.kind === "text" && !faces.has(l.revision.contentHash)) {

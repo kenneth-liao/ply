@@ -218,6 +218,34 @@ ply layer edit <layerId> --flip none         # remove the reflection
   participates in pinned Render history — replaying a pre-flip Render still
   reproduces its original pixels exactly.
 
+## Layer measurement (new surface)
+
+`ply composition measure` reports read-only Layer layout bounds in
+Composition coordinates, including the current scale, rotation, and
+reflection (DEC-004 — measurement and painting share one geometry and font
+authority):
+
+```bash
+ply composition measure poster                       # every Layer
+ply composition measure poster headline              # one use
+ply composition measure poster --json                # machine-readable
+```
+
+- For each Layer it reports the untransformed **content box** (image:
+  intrinsic retained size; text: the line-box layout extent of the Layer's
+  retained font bytes at its font size), the **box** (axis-aligned bounding
+  box of the transformed content rectangle, unclipped), and the
+  transformed rectangle's **corners**.
+- These are LAYOUT boxes, not painted extents: image boxes include
+  transparent padding, text boxes are line-box extents rather than tight
+  glyph ink, and effects, opacity fading, and canvas clipping are not
+  reflected. Visible painted bounds are separate functionality.
+- Text dimensions are measured with the same retained font bytes painting
+  uses — never a second measuring authority. Corrupt content or an
+  unresolved font fails instead of producing misleading numbers.
+- The query writes nothing to the Project, works offline, and never
+  requires a billed operation.
+
 ## Setup
 
 ```bash
