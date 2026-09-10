@@ -48,16 +48,19 @@ Single-context repo: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/
   whole suite is verified 10/10, so `--isolate` is defense-in-depth (module
   isolation), not a flake mask. On Bun 1.3.14 the single-process topology
   still hangs (~60% of runs) — upgrade with `bun upgrade` before trusting a
-  bare `bun test`. The shared render page (`src/browser.ts` withRenderPage)
+  bare `bun test`. `bun run test:fast` is that single-process topology for
+  Bun ≥1.4.0 only; the default per-file `bun run test` stays the entrypoint. The shared render page (`src/browser.ts` withRenderPage)
   serializes and self-heals; a hung or crashed run is worth reporting, not
   silently re-running.
 - Model costs: measure from real Gateway billing (`✓` figures only) — never copy from price tables.
 - The tool must keep working offline for everything except generation itself.
   Creator isolation is local inference (BiRefNet via `onnxruntime-node`,
   ADR-0006): weights are cached under `models/` (gitignored), pinned by
-  sha-256 in `src/segment.ts`, and never loaded by the unit suite — tests
-  inject a fake `MatteEngine`, and the live check in `test/segment.test.ts`
-  skips when the weights are absent.
+  sha-256 in `src/segment.ts`, and never loaded by the default suite — tests
+  inject a fake `MatteEngine`. The weight-backed live checks
+  (`test/matting-live.test.ts`, the live block in `test/segment.test.ts`)
+  run only with `PLY_RUN_LIVE=1` (`bun run test:live`) and skip otherwise,
+  even with a warm weights cache.
 - Final composition stays local. ADR-0014 allows caller-chosen text pixels;
   the category-specific generation gates were retired with their commands
   (#114) — the caller's own policy lives in the consuming repositories and
