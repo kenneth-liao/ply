@@ -245,3 +245,40 @@ test(
   },
   240_000,
 );
+
+/** Tracer 3: the anchor box is the PAINTED INK box, never the layout content
+ * box — transparent padding does not count, so a padded image's visible
+ * subject lands at the target while its layout box extends into the padding. */
+test(
+  "a padded image's visible ink (not its transparent padding) lands at the target",
+  async () => {
+    // 100×60 content whose visible ink occupies only (30, 20)-(70, 40):
+    // 30px left padding, 20px top, 30px right, 20px bottom.
+    const padImg = path.join(tempDir, "padded.png");
+    await writeFile(padImg, regionPng(100, 60, RED, { x: 30, y: 20, width: 40, height: 20 }));
+
+    await makeComp("poster", 400, 300);
+    const addRes = await addImageLayer("poster", "hero", padImg, { x: 10, y: 10 });
+    const layerId = addRes.use.layerId as string;
+
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "center,center", "--x", "200", "--y", "150", "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(0);
+    const editJson = JSON.parse(editRes.stdout);
+
+    // Resolved placement: ink center (not content center) at the target.
+    // Ink offset from the placement point is (30, 20), ink is 40×20.
+    expect(editJson.anchored.placement).toEqual({ x: 150, y: 120 });
+    expect(editJson.anchored.painted).toEqual({ x: 40, y: 30, width: 40, height: 20 });
+
+    // Post-edit measurement proves the documented consequence: the visible
+    // ink centers on (200, 150) while the layout content box (100×60,
+    // padding included) extends into the padding side.
+    const after = useReport(await measure("poster"), "hero");
+    expect(after.painted).toEqual({ x: 180, y: 140, width: 40, height: 20 });
+    expect(after.box).toEqual({ x: 150, y: 120, width: 100, height: 60 });
+    expect(after.content).toEqual({ width: 100, height: 60 });
+  },
+  60_000,
+);
