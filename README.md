@@ -68,7 +68,8 @@ and provenance under `out/generation/` — see
 [docs/generation-publication-contract.md](docs/generation-publication-contract.md)
 for the record schema and publication contract.
 
-Omitting `--model` selects **nano-2** — the tool-wide default for general
+Omitting `--model` selects **nano-2** (effective
+`google/gemini-3.1-flash-image`) — the tool-wide default for general
 generation. An explicit `--model` selection always takes precedence over
 the default.
 

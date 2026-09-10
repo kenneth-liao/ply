@@ -202,6 +202,34 @@ describe("ply generate — default model selection (#141, TEST-005)", () => {
     expect(json.job.run.model).toBe("openai/gpt-image-2");
   });
 
+  test("provider failures on the default path surface the error and never switch models", async () => {
+    // The text seam (nano-2's call shape) throws: the provider error surfaces
+    // as {ok:false}, nothing is published, and the image seam is never
+    // touched — a refusal is surfaced, changing models is a caller choice.
+    const throwing = capturingProvider();
+    const res = await run(["a barn", "--json"], deps({ ...throwing, text: async () => {
+      throw new Error("gateway 503 on gemini");
+    } }));
+    expect(res.exitCode).toBe(1);
+    expect((res.json as Record<string, unknown>).ok).toBe(false);
+    expect((res.json as any).error).toMatch(/gateway 503/);
+    expect(res.text).toMatch(/gateway 503/);
+    expect(throwing.imageArgs).toHaveLength(0);
+    expect(await publishedIds()).toEqual([]);
+
+    // A text-seam response with no image fails the same way — still no
+    // model switch.
+    const empty = capturingProvider();
+    const res2 = await run(["a barn", "--json"], deps({
+      ...empty,
+      text: async () => ({ files: [], text: "", warnings: [] }),
+    }));
+    expect(res2.exitCode).toBe(1);
+    expect((res2.json as any).error).toMatch(/returned no image/i);
+    expect(empty.imageArgs).toHaveLength(0);
+    expect(await publishedIds()).toEqual([]);
+  });
+
   test("--help identifies nano-2 as the default", async () => {
     const res = await run(["--help"], { provider: neverProvider, jobsRoot });
     expect(res.exitCode).toBe(0);
