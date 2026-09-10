@@ -197,6 +197,12 @@ export function normalizeStoredRotation(revision: { rotationDeg?: unknown }): nu
   return rotation;
 }
 
+/** Canonical normalized transform reflection: the one shape every consumer reads. */
+export interface LayerTransformFlip {
+  flipX: boolean;
+  flipY: boolean;
+}
+
 /**
  * Canonical stored-reflection validation and normalization (#135, ADR-0016).
  * The one normalization boundary for transform reflection: documents written
@@ -228,12 +234,6 @@ export function normalizeStoredFlip(revision: {
     );
   }
   return { flipX, flipY };
-}
-
-/** Canonical normalized transform reflection: the one shape every consumer reads. */
-export interface LayerTransformFlip {
-  flipX: boolean;
-  flipY: boolean;
 }
 
 export type ResolvedLayerRevision =
@@ -1507,8 +1507,10 @@ export async function editLayerInternal(
   const hasResize = options.resizeFactor !== undefined || options.resizeTo !== undefined;
   const hasRotate = options.rotateDeg !== undefined;
   const rotatedReport = { rotationDeg };
-  const hasFlip = options.flip !== undefined;
-  const flippedReport = { flip: options.flip } as { flip: "horizontal" | "vertical" | "both" | "none" };
+  // Narrowed once: a defined flip is always a validated literal mode, so the
+  // report never needs a cast (and absence means no --flip option was given).
+  const flippedReport =
+    options.flip !== undefined ? { flip: options.flip } : undefined;
 
   if (intent.mode === "fork") {
     // Canonical target/use→original-id validation before any content work.
@@ -1537,7 +1539,7 @@ export async function editLayerInternal(
     });
     const withResized = hasResize ? { ...forkResult, resized: resizedReport } : forkResult;
     const withRotated = hasRotate ? { ...withResized, rotated: rotatedReport } : withResized;
-    const withFlipped = hasFlip ? { ...withRotated, flipped: flippedReport } : withRotated;
+    const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
     return options.fromGeneration !== undefined
       ? { ...withFlipped, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
@@ -1573,7 +1575,7 @@ export async function editLayerInternal(
       referrersCount,
       ...(hasResize ? { resized: resizedReport } : {}),
       ...(hasRotate ? { rotated: rotatedReport } : {}),
-      ...(hasFlip ? { flipped: flippedReport } : {}),
+      ...(flippedReport ? { flipped: flippedReport } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -1624,7 +1626,7 @@ export async function editLayerInternal(
     referrersCount,
     ...(hasResize ? { resized: resizedReport } : {}),
     ...(hasRotate ? { rotated: rotatedReport } : {}),
-    ...(hasFlip ? { flipped: flippedReport } : {}),
+    ...(flippedReport ? { flipped: flippedReport } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),

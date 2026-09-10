@@ -24,6 +24,8 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { computeRevisionHash } from "../src/layer.js";
+import { runUniformGeneration, type GenerationJobRecord } from "../src/generation.js";
+import { DEFAULT_MODEL } from "../src/models.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -43,6 +45,17 @@ async function invoke(args: string[], cwd?: string) {
 
 const RED: [number, number, number, number] = [255, 0, 0, 255];
 const GREEN: [number, number, number, number] = [0, 255, 0, 255];
+
+function solidPng(width: number, height: number, rgba: [number, number, number, number]): Buffer {
+  const buf = Buffer.alloc(width * height * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = rgba[0]!;
+    buf[i + 1] = rgba[1]!;
+    buf[i + 2] = rgba[2]!;
+    buf[i + 3] = rgba[3]!;
+  }
+  return encodePngRgba(width, height, buf);
+}
 
 /** An asymmetric image: solid left half RED, solid right half GREEN — its
  * horizontal reflection swaps the halves; its vertical reflection is
@@ -618,4 +631,201 @@ test("invalid flip modes fail without mutation; scoped help exposes the option",
   expect(help.stdout).toContain("--flip <mode>");
   expect(help.stdout).toContain("ABSOLUTE reflection state");
   expect(help.stdout).toContain("none removes the reflection");
+});
+
+/** Tracer 9: flip is independent of content size — it combines freely with
+ * --resize and content replacement in one edit, with both facts reported. */
+test("flip combines with resize and content replacement in one edit", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, leftRedRightGreenPng(100, 60));
+  const greenImg = path.join(tempDir, "green.png");
+  await writeFile(greenImg, topRedBottomGreenPng(70, 70));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 10, y: 10 });
+  const layerId = addRes.use.layerId as string;
+
+  // Flip + resize: both revision facts land, both reports present.
+  const combo = await invoke([
+    "layer", "edit", layerId, "--resize", "2", "--flip", "horizontal", "--project", projDir, "--json",
+  ]);
+  expect(combo.code).toBe(0);
+  const comboJson = JSON.parse(combo.stdout);
+  expect(comboJson.layer.currentRevision.scaleX).toBe(2);
+  expect(comboJson.layer.currentRevision.flipX).toBe(true);
+  expect(comboJson.resized).toEqual({ scaleX: 2, scaleY: 2, width: 200, height: 120 });
+  expect(comboJson.flipped).toEqual({ flip: "horizontal" });
+
+  // Flip + content replacement: the source is replaced and the flip set —
+  // the flip is an absolute state on the new content, not a toggle.
+  const replace = await invoke([
+    "layer", "edit", layerId, "--image", greenImg, "--flip", "vertical", "--project", projDir, "--json",
+  ]);
+  expect(replace.code).toBe(0);
+  const replaceJson = JSON.parse(replace.stdout);
+  expect(replaceJson.layer.currentRevision.width).toBe(70);
+  expect(replaceJson.layer.currentRevision.flipX).toBe(false);
+  expect(replaceJson.layer.currentRevision.flipY).toBe(true);
+  expect(replaceJson.flipped).toEqual({ flip: "vertical" });
+});
+
+/** Tracer 10 (US-001, DEC-005): a Layer carrying real Generation Job lineage
+ * keeps that lineage — retained record and its reporting — through flips,
+ * with source bytes untouched (fake provider; never billed). */
+test("flip never touches retained generation lineage or source bytes", async () => {
+  const jobId = "gen-flip-lineage";
+  const jobsRoot = path.join(tempDir, "out", "generation");
+  const generatedPng = solidPng(32, 32, GREEN);
+  const job: GenerationJobRecord = await runUniformGeneration(
+    jobsRoot,
+    jobId,
+    {
+      prompt: "deterministic lineage content",
+      intent: "full-canvas",
+      model: DEFAULT_MODEL,
+      sizing: { kind: "size", width: 32, height: 32 },
+      count: 1,
+    },
+    {
+      provider: {
+        image: async () => ({ images: [{ base64: generatedPng.toString("base64") }], warnings: [] }),
+        text: async () => {
+          throw new Error("TRIPWIRE: flip must never generate");
+        },
+      },
+    },
+  );
+  const output = job.run.outputs[0]!;
+
+  await makeComp("gen", 300, 200);
+  const addRes = await invoke(
+    ["composition", "add", "gen", "hero", "--from-generation", jobId, "--project", projDir, "--json"],
+    tempDir,
+  );
+  expect(addRes.code).toBe(0);
+  const addJson = JSON.parse(addRes.stdout);
+  const layerId = addJson.use.layerId as string;
+  expect(addJson.generatedFrom).toEqual({ jobId, contentHash: output.contentHash });
+
+  // The job record is retained verbatim in the Project at ingest time.
+  const retainedRecord = path.join(projDir, "generation", jobId, "job.json");
+  const recordBefore = await readFile(retainedRecord);
+  expect(recordBefore).toEqual(await readFile(path.join(jobsRoot, jobId, "job.json")));
+
+  // Flip twice: content identity and retained bytes never change...
+  const flip1 = await invoke(["layer", "edit", layerId, "--flip", "horizontal", "--project", projDir, "--json"]);
+  expect(flip1.code).toBe(0);
+  const flip2 = await invoke(["layer", "edit", layerId, "--flip", "both", "--project", projDir, "--json"]);
+  expect(flip2.code).toBe(0);
+  const flip2Json = JSON.parse(flip2.stdout);
+  expect(flip2Json.layer.currentRevision.contentHash).toBe(output.contentHash);
+  expect(flip2Json.layer.currentRevision.flipX).toBe(true);
+  expect(flip2Json.layer.currentRevision.flipY).toBe(true);
+  expect((await readFile(path.join(projDir, "content", output.contentHash))).equals(generatedPng)).toBe(true);
+  const contentFiles = await readdir(path.join(projDir, "content"));
+  expect(contentFiles).toEqual([output.contentHash]);
+
+  // ...and the retained lineage record survives byte-identically, still
+  // reported by the evidence surface.
+  expect(await readFile(retainedRecord)).toEqual(recordBefore);
+  const reviewOut = path.join(tempDir, "review.html");
+  const reviewRes = await invoke(
+    ["layer", "review", layerId, "--out", reviewOut, "--project", projDir],
+    tempDir,
+  );
+  expect(reviewRes.code).toBe(0);
+  expect(reviewRes.stdout).toContain(`generated by: ${jobId}`);
+});
+
+/** Tracer 11 (TEST-002 matrix): horizontal flip on a text Layer mirrors the
+ * ink about the vertical line through the Layer's x placement (x = 100, far
+ * enough from the canvas edge that nothing clips) — all ink strictly left of
+ * x = 100, both edges near the exact mirror columns, row extent unchanged. */
+test("text Layer flips horizontally: ink mirrors left of the placement line", async () => {
+  await makeComp("doc", 300, 200);
+  const addRes = await addTextLayer("doc", "heading", "Hello", { font: "Anton", fontSize: 40, x: 100, y: 40 });
+  const layerId = addRes.use.layerId as string;
+  const fontHash = addRes.layer.currentRevision.contentHash as string;
+
+  const beforeOut = path.join(tempDir, "text-h-before.png");
+  const beforeRes = await invoke(["composition", "render", "doc", "--project", projDir, "--out", beforeOut, "--json"]);
+  expect(beforeRes.code).toBe(0);
+  const before = decodePng(await readFile(beforeOut));
+
+  const editRes = await invoke(["layer", "edit", layerId, "--flip", "horizontal", "--project", projDir, "--json"]);
+  expect(editRes.code).toBe(0);
+  const editJson = JSON.parse(editRes.stdout);
+  expect(editJson.layer.currentRevision.contentHash).toBe(fontHash);
+  expect(editJson.layer.currentRevision.flipX).toBe(true);
+  expect(editJson.flipped).toEqual({ flip: "horizontal" });
+
+  const afterOut = path.join(tempDir, "text-h-after.png");
+  const afterRes = await invoke(["composition", "render", "doc", "--project", projDir, "--out", afterOut, "--json"]);
+  expect(afterRes.code).toBe(0);
+  const after = decodePng(await readFile(afterOut));
+
+  const extent = (png: ReturnType<typeof decodePng>) => {
+    let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity, ink = 0;
+    for (let y = 0; y < png.height; y++) {
+      for (let x = 0; x < png.width; x++) {
+        if (png.rgba[((y * png.width) + x) * 4 + 3]! > 0) {
+          ink++;
+          if (y < minRow) minRow = y;
+          if (y > maxRow) maxRow = y;
+          if (x < minCol) minCol = x;
+          if (x > maxCol) maxCol = x;
+        }
+      }
+    }
+    return { minRow, maxRow, minCol, maxCol, ink };
+  };
+  const b = extent(before);
+  const a = extent(after);
+
+  // Sanity: the unflipped text paints right of the placement line x = 100.
+  expect(b.minCol).toBeGreaterThanOrEqual(100);
+  expect(b.ink).toBeGreaterThan(0);
+  // The flip mirrors ALL ink strictly left of x = 100, and both edges land
+  // within 2 columns of the exact mirror columns (200 − col; the residual is
+  // glyph-hinting phase, not geometry).
+  expect(a.maxCol).toBeLessThanOrEqual(100);
+  expect(Math.abs(a.minCol - (200 - b.maxCol))).toBeLessThanOrEqual(2);
+  expect(Math.abs(a.maxCol - (200 - b.minCol))).toBeLessThanOrEqual(2);
+  // The row extent is unchanged: a horizontal flip never drifts vertically.
+  expect(Math.abs(a.minRow - b.minRow)).toBeLessThanOrEqual(2);
+  expect(Math.abs(a.maxRow - b.maxRow)).toBeLessThanOrEqual(2);
+  // Ink still exists and stays a text-sized band, not a resample or smear.
+  expect(a.ink).toBeGreaterThan(0);
+  expect(a.maxCol - a.minCol).toBeGreaterThanOrEqual(Math.floor((b.maxCol - b.minCol) / 2));
+});
+
+/** Tracer 12 (acceptance criterion 3): removing the reflection restores the
+ * original pixels exactly — render, flip, flip none, render again. */
+test("--flip none restores the pre-flip painted pixels exactly", async () => {
+  const img = path.join(tempDir, "asym.png");
+  await writeFile(img, leftRedRightGreenPng(100, 60));
+  const before = path.join(tempDir, "pre-flip.png");
+  const after = path.join(tempDir, "post-none.png");
+
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", img, { x: 150, y: 100 });
+  const layerId = addRes.use.layerId as string;
+
+  const render1 = await invoke(["composition", "render", "poster", "--project", projDir, "--out", before, "--json"]);
+  expect(render1.code).toBe(0);
+
+  const flip = await invoke(["layer", "edit", layerId, "--flip", "horizontal", "--project", projDir, "--json"]);
+  expect(flip.code).toBe(0);
+  const flippedRev = JSON.parse(flip.stdout).layer.currentRevisionId as string;
+
+  const remove = await invoke(["layer", "edit", layerId, "--flip", "none", "--project", projDir, "--json"]);
+  expect(remove.code).toBe(0);
+  const removedRev = JSON.parse(remove.stdout).layer.currentRevisionId as string;
+  expect(removedRev).not.toBe(flippedRev);
+  expect(JSON.parse(remove.stdout).layer.currentRevision.flipX).toBe(false);
+
+  const render2 = await invoke(["composition", "render", "poster", "--project", projDir, "--out", after, "--json"]);
+  expect(render2.code).toBe(0);
+  // Identity-transform emission: no flip parts, byte-identical to pre-flip.
+  expect(await readFile(after)).toEqual(await readFile(before));
 });
