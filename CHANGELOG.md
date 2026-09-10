@@ -19,6 +19,12 @@
   unresolved fonts fail loudly instead of producing misleading numbers. The
   query writes no Project state, works offline, and ships compact text,
   valid `--json`, and scoped help.
+
+### Changed
+
+- Measure keeps the internal font-family derivation module-private (#149
+  review): the measurement path consumes only the shared markup builder and
+  font-resolution gate; no other symbol of the paint module is exported.
 - Layer flip without replacing source content (#135, spec #132, ADR-0016):
   `ply layer edit --flip <horizontal|vertical|both|none>` sets an **absolute**
   reflection state about the Layer's `(x, y)` placement point — it replaces

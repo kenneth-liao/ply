@@ -118,11 +118,13 @@ export async function paintComposition(
  * from the content hash — the retained bytes are the only font identity, so
  * the renderer never needs the bundled registry or the original family name.
  *
- * Shared with layout measurement (#136, DEC-004): the measure path declares
- * the same internal family for the same retained bytes — there is no second
- * font identity or name derivation.
+ * Deliberately module-private: family names are minted only inside this
+ * builder (the one font/geometry authority, DEC-004), never by callers that
+ * only consume the builder's markup. If painted-bounds work (#137) ever
+ * needs the family outside this module, that ticket re-exports it with its
+ * own consuming evidence — no speculative surface now.
  */
-export function internalFontFamily(contentHash: string): string {
+function internalFontFamily(contentHash: string): string {
   return `ply-face-${contentHash.slice(0, 16)}`;
 }
 
