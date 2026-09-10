@@ -655,3 +655,38 @@ test(
   },
   180_000,
 );
+
+/** Tracer 9: an unreferenced Layer resolves standalone (documented unwrapped
+ * line, ink offset measured at placement (0, 0)), and --opacity combines
+ * freely with anchoring (opacity scales alpha values, never the ink support). */
+test(
+  "an unreferenced Layer anchors standalone; --opacity combines freely",
+  async () => {
+    const redImg = path.join(tempDir, "red.png");
+    await writeFile(redImg, solidPng(100, 60, RED));
+
+    await makeComp("poster", 400, 300);
+    const addRes = await addImageLayer("poster", "wanderer", redImg, { x: 10, y: 10 });
+    const layerId = addRes.use.layerId as string;
+
+    // Remove the Layer's only use: it is now unreferenced (0 referrers).
+    const removeRes = await invoke(["composition", "remove", "poster", "wanderer", "--project", projDir, "--json"]);
+    expect(removeRes.code).toBe(0);
+
+    // Standalone resolution: the ink offset measured at placement (0, 0) is
+    // the painted box of a (0, 0)-placed copy — identical to the in-composition
+    // geometry for a full-ink image. --opacity combines freely.
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "right,bottom", "--x", "400", "--y", "300", "--opacity", "0.5",
+      "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(0);
+    const editJson = JSON.parse(editRes.stdout);
+    expect(editJson.anchored.contexts).toEqual(["standalone"]);
+    // right → 400 - 0 - 100 = 300; bottom → 300 - 0 - 60 = 240.
+    expect(editJson.anchored.placement).toEqual({ x: 300, y: 240 });
+    expect(editJson.anchored.painted).toEqual({ x: 0, y: 0, width: 100, height: 60 });
+    expect(editJson.layer.currentRevision.opacity).toBe(0.5);
+  },
+  60_000,
+);
