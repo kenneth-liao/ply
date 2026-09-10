@@ -258,6 +258,56 @@ ply composition measure poster --json                # machine-readable
 - The query writes nothing to the Project, works offline, and never
   requires a billed operation.
 
+## Layer anchors (new surface)
+
+`ply layer edit --anchor` places a Layer's **visible painted ink** at a
+requested target position, instead of targeting the top-left corner of its
+content box (ADR-0017):
+
+```bash
+ply layer edit <layerId> --anchor center,center --x 960 --y 540
+ply layer edit <layerId> --anchor center,bottom --x 960 --y 1070
+ply layer edit <layerId> --anchor right --x 300  # horizontal only: --x is the target
+ply layer edit <layerId> --anchor center,top --x 100 --y 200
+```
+
+- Horizontal values are `left|center|right` (anchoring `--x`), vertical
+  values `top|center|bottom` (anchoring `--y`); a pair like
+  `center,center` anchors both, in that order. A single value anchors one
+  axis only (`left`/`right` are horizontal, `top`/`bottom` vertical); a
+  coordinate supplied for the unanchored axis still applies as a plain
+  placement edit, and the report states exactly what publishes. A
+  bare `center` is ambiguous and refused — name both, e.g. `center,center`.
+- **The anchor box is the painted ink box** (alpha > 0 for images, tight
+  glyph ink for text — exactly the `painted` extents `ply composition
+  measure` reports, unclipped), never the layout content box: transparent
+  padding does not count. A padded image's visible subject lands at the
+  target while its layout box extends into the padding side; a centered
+  headline centers its glyph ink. A Layer with no visible ink (fully
+  transparent content, opacity 0) refuses instead of falling back to the
+  layout box.
+- **Transform interaction:** resolution runs against the Layer's CURRENT
+  scale/rotation/reflection (the rotated ink box is what gets anchored),
+  and anchored placement is its own edit — it cannot be combined with
+  `--resize`, `--rotate`, `--flip`, or content replacement in one edit,
+  because the reference ink would be ambiguous. `--opacity` combines
+  freely. A later transform or content edit keeps the resolved x/y
+  literally; re-anchor explicitly after changing the geometry.
+- **Resolution contexts:** a text Layer's ink depends on the referring
+  Composition's canvas width (text wraps), and placement is one shared
+  fact, so the resolution measures the Layer in every referring
+  Composition and refuses — naming the affected compositions — when the
+  resolved placements disagree. Unreferenced Layers resolve standalone on
+  an unwrapped line. A fork resolves in its target Composition.
+- **One-shot representation (ADR-0017):** anchored placement is resolved
+  once through the paint-identical ink measurement (accurate to its pixel
+  grid, ~1px) and written into plain canonical placement (x, y). No anchor
+  facts are stored, so sharing, forks, cross-Project import, and pinned
+  Render history preserve anchored placement verbatim with no alternate
+  per-Composition placement state, and pinned replay stays deterministic.
+  `ply composition measure` verifies where the ink landed; invalid inputs
+  (exit 2) and semantic refusals (exit 1) never mutate live state.
+
 ## Setup
 
 ```bash
