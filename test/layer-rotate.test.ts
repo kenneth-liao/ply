@@ -162,12 +162,18 @@ test("image Layer --rotate sets an absolute angle, keeps content bytes, and repo
   expect(removeJson.layer.currentRevision.rotationDeg).toBe(0);
   expect(removeJson.rotated).toEqual({ rotationDeg: 0 });
 
-  // Inspect reports the rotation for auditability.
+  // Inspect reports the rotation for auditability — and hides it again at 0,
+  // mirroring the scale display convention (identity transform, no clutter).
   const setRes = await invoke(["layer", "edit", layerId, "--rotate", "45", "--project", projDir, "--json"]);
   expect(setRes.code).toBe(0);
-  const inspectRes = await invoke(["layer", "inspect", layerId, "--project", projDir]);
-  expect(inspectRes.code).toBe(0);
-  expect(inspectRes.stdout).toContain("Rotation: 45°");
+  const shownInspect = await invoke(["layer", "inspect", layerId, "--project", projDir]);
+  expect(shownInspect.code).toBe(0);
+  expect(shownInspect.stdout).toContain("Rotation: 45°");
+  const hideRes = await invoke(["layer", "edit", layerId, "--rotate", "0", "--project", projDir, "--json"]);
+  expect(hideRes.code).toBe(0);
+  const hiddenInspect = await invoke(["layer", "inspect", layerId, "--project", projDir]);
+  expect(hiddenInspect.code).toBe(0);
+  expect(hiddenInspect.stdout).not.toContain("Rotation:");
 });
 /** Tracer 2: the rotated Layer paints clockwise about its (x, y) top-left
  * placement point, from unchanged retained bytes. A 90° clockwise rotation
@@ -417,14 +423,17 @@ test("pre-rotation revision documents keep their hash and paint meaning", async 
   const renderBefore = await invoke(["composition", "render", "poster", "--project", projDir, "--out", outBefore, "--json"]);
   expect(renderBefore.code).toBe(0);
 
-  // Hand-write the stored document into the exact pre-#134 shape: no
-  // rotationDeg, pinned by the id the pre-#134 hash algorithm derives from it.
+  // Hand-write the stored document into the exact pre-#134 shape: the add
+  // path records rotationDeg: 0 explicitly (ADR-0016), so deleting it yields
+  // a genuinely pre-#134 document, pinned by the id the pre-#134 hash
+  // algorithm derives from it — a different id than the recorded one.
   const revFile = path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`);
   const legacyDoc = JSON.parse(await readFile(revFile, "utf8")) as Record<string, unknown>;
   expect(legacyDoc.scaleX).toBe(1);
+  expect(legacyDoc.rotationDeg).toBe(0);
   delete legacyDoc.rotationDeg;
   const legacyId = computeRevisionHash(legacyDoc as unknown as LayerImageRevision);
-  expect(legacyId).toBe(revId);
+  expect(legacyId).not.toBe(revId);
   const legacyFile = path.join(projDir, "layers", `${layerId}.revisions`, `${legacyId}.json`);
   await writeFile(legacyFile, JSON.stringify(legacyDoc, null, 2) + "\n");
   const identityFile = path.join(projDir, "layers", `${layerId}.json`);

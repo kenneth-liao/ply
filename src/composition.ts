@@ -361,6 +361,7 @@ export async function addLayerToComposition(
         opacity,
         scaleX: 1,
         scaleY: 1,
+        rotationDeg: 0,
       };
     }).then(({ layerId, layer }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer }));
   });
@@ -424,6 +425,7 @@ export async function addTextLayerToComposition(
         opacity,
         scaleX: 1,
         scaleY: 1,
+        rotationDeg: 0,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -515,6 +517,7 @@ export async function addGeneratedLayerToComposition(
         opacity,
         scaleX: 1,
         scaleY: 1,
+        rotationDeg: 0,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -599,6 +602,7 @@ export async function addMattedLayerToComposition(
         opacity,
         scaleX: 1,
         scaleY: 1,
+        rotationDeg: 0,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,

@@ -178,15 +178,16 @@ test("adds a generated output as an ordinary image Layer with verbatim retained 
 
   // No new identity/category/approval fields on the stored documents: the
   // revision is an ordinary image revision with the canonical placement and
-  // transform-scale facts (scale 1 at add time, #133).
+  // transform facts (scale 1 and rotation 0 at add time, #133/#134).
   const revisionRaw = JSON.parse(
     await readFile(path.join(projDir, "layers", `${json.use.layerId}.revisions`, `${json.layer.currentRevisionId}.json`), "utf8"),
   );
   expect(Object.keys(revisionRaw).sort()).toEqual(
-    ["contentHash", "createdAt", "kind", "layerId", "opacity", "scaleX", "scaleY", "schemaVersion", "x", "y"].sort(),
+    ["contentHash", "createdAt", "kind", "layerId", "opacity", "rotationDeg", "scaleX", "scaleY", "schemaVersion", "x", "y"].sort(),
   );
   expect(revisionRaw.scaleX).toBe(1);
   expect(revisionRaw.scaleY).toBe(1);
+  expect(revisionRaw.rotationDeg).toBe(0);
   expect(revisionRaw.kind).toBe("image");
 
   // The Layer renders the generated pixels.
