@@ -877,6 +877,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       opacity: source.opacity,
       scaleX: source.scaleX,
       scaleY: source.scaleY,
+      rotationDeg: source.rotationDeg,
     };
   }
   if (source.kind !== "image") {
@@ -893,6 +894,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     opacity: source.opacity,
     scaleX: source.scaleX,
     scaleY: source.scaleY,
+    rotationDeg: source.rotationDeg,
   };
 }
 

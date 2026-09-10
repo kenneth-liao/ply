@@ -4,6 +4,17 @@
 
 ### Added
 
+- Layer rotation without replacing source content (#134, spec #132,
+  ADR-0016): `ply layer edit --rotate <deg>` sets an **absolute** rotation in
+  degrees about the Layer's `(x, y)` top-left placement point — the same
+  command twice is still the same angle (unlike the relative resize factor),
+  and `--rotate 0` removes the rotation. Rotation applies after scale, works
+  on image and text Layers, and combines freely with other edit options
+  including `--resize` and content replacement. Rotation never changes
+  retained pixels, lineage, or pinned Render history: `rotationDeg` is a
+  canonical revision fact appended to the revision hash only when present, so
+  pre-#134 revisions (with or without scale fields) keep their exact ids;
+  it survives sharing, forks, and cross-Project import.
 - Layer resize without replacing source content (#133, spec #132, ADR-0016):
   `ply layer edit --resize <factor>` scales image and text Layers by a
   relative factor and `--resize-to <WxH>` sets an absolute effective size

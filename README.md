@@ -164,6 +164,31 @@ ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
   participates in pinned Render history — replaying a pre-resize Render
   still reproduces its original pixels exactly.
 
+## Layer rotation (new surface)
+
+`ply layer edit` rotates Layers about their `(x, y)` top-left placement
+point without ever replacing source content (ADR-0016) — rotation changes
+placement, never retained pixels:
+
+```bash
+ply layer edit <layerId> --rotate 45    # set rotation to 45°
+ply layer edit <layerId> --rotate -30   # negative = counter-clockwise
+ply layer edit <layerId> --rotate 0     # remove the rotation
+```
+
+- `--rotate <deg>` takes an **absolute** angle in degrees: it replaces any
+  previous rotation, so the same command twice is still the same angle
+  (`--rotate 45` twice is 45° — unlike the relative `--resize` factor, it is
+  never incremental), and `--rotate 0` removes the rotation. Positive degrees
+  rotate clockwise. Works on image and text Layers and combines with other
+  edit options, including `--resize` and content replacement.
+- Rotation applies **after scale**: the content stretches along its own axes
+  and the stretched result then rotates. Rotation is a Layer revision fact
+  shared as a whole (in-place edits propagate, forks isolate), survives
+  sharing and cross-Project import, and participates in pinned Render
+  history — replaying a pre-rotation Render still reproduces its original
+  pixels exactly.
+
 ## Setup
 
 ```bash

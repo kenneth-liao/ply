@@ -17,7 +17,9 @@ layer — Layer management and inspection within a Project
       Resize changes placement, never retained pixels: --resize <factor>
       multiplies the current scale (relative), --resize-to <WxH> sets an
       absolute effective size (image Layers only; one omitted axis preserves
-      the aspect ratio).
+      the aspect ratio). --rotate sets an ABSOLUTE rotation in degrees: the
+      same command twice is still the same angle (unlike the relative resize
+      factor), and 0 removes the rotation.
 
   bun run ply layer inspect <layer-id> [options]
       Inspect a Layer's identity, current revision, and content details
@@ -81,6 +83,15 @@ Options:
                         Mutually exclusive with --resize and with
                         content-replacement options. The Layer's (x, y) stays
                         its top-left corner: it grows/shrinks right and down.
+  --rotate <deg>        Rotate the Layer to an ABSOLUTE angle in degrees,
+                        replacing any previous rotation: --rotate 45 twice is
+                        still 45° (never 90° — unlike the relative --resize
+                        factor), and --rotate 0 removes the rotation. Positive
+                        degrees rotate clockwise. Rotation applies after
+                        scale, about the Layer's (x, y) top-left corner, and
+                        never changes retained pixels. Combines with other
+                        edit options, including --resize and content
+                        replacement.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -114,6 +125,25 @@ function parseNumericArgument(value: string | undefined): number {
   return value?.trim() ? Number(value) : NaN;
 }
 
+/** A negative angle is a valid rotation (#134), but parseArgs refuses a
+ * dash-leading option value ("--rotate -30" reads as an ambiguous flag), so
+ * join a following dash-leading numeric token into "--rotate=<value>" before
+ * parsing. Scoped to the introduced --rotate option; retained numeric
+ * options keep their existing surface untouched (OOS-003). */
+function joinDashLeadingRotateValue(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--rotate" && args[i + 1] !== undefined && /^-(?:\.?\d)/.test(args[i + 1]!)) {
+      out.push(`--rotate=${args[i + 1]!}`);
+      i++;
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
+
 const rawArgs = process.argv.slice(2);
 const isJson = rawArgs.includes("--json");
 
@@ -139,12 +169,13 @@ let values: {
   opacity?: string;
   resize?: string;
   "resize-to"?: string;
+  rotate?: string;
 };
 let positionals: string[];
 
 try {
   const parsed = parseArgs({
-    args: rawArgs,
+    args: joinDashLeadingRotateValue(rawArgs),
     allowPositionals: true,
     options: {
       project: { type: "string", short: "p" },
@@ -168,6 +199,7 @@ try {
       opacity: { type: "string" },
       resize: { type: "string" },
       "resize-to": { type: "string" },
+      rotate: { type: "string" },
     },
   });
   values = parsed.values;
@@ -207,14 +239,15 @@ async function run() {
         values.y !== undefined ||
         values.opacity !== undefined ||
         values.resize !== undefined ||
-        values["resize-to"] !== undefined;
+        values["resize-to"] !== undefined ||
+        values.rotate !== undefined;
 
       if (!hasEditOption && !values.fork) {
         output(
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --resize, --resize-to, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --resize, --resize-to, --rotate, or --fork.",
           },
           isJson,
         );
@@ -410,6 +443,23 @@ async function run() {
         };
       }
 
+      // Rotate flag (#134): syntax and well-formedness at the command
+      // boundary; the finite-number semantic check is enforced again by the
+      // edit path before any staging, so an invalid angle never advances
+      // live state.
+      let rotateDeg: number | undefined;
+      if (values.rotate !== undefined) {
+        rotateDeg = parseNumericArgument(values.rotate);
+        if (!Number.isFinite(rotateDeg)) {
+          output(
+            { ok: false, error: `Rotation (--rotate) must be a finite number of degrees, clockwise positive (got "${values.rotate}").` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+      }
+
       try {
         const res = await editLayer(targetProj, layerId, {
           inPlace: values["in-place"],
@@ -438,6 +488,7 @@ async function run() {
           opacity,
           resizeFactor,
           resizeTo,
+          rotateDeg,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {
@@ -457,6 +508,9 @@ async function run() {
         }
         if (res.resized) {
           resultBody.resized = res.resized;
+        }
+        if (res.rotated) {
+          resultBody.rotated = res.rotated;
         }
 
         output(
@@ -478,13 +532,14 @@ async function run() {
                 ? `; scale ${res.resized.scaleX}×, effective ${res.resized.width}×${res.resized.height}px`
                 : `; scale ${res.resized.scaleX}×`
               : "";
+            const rotated = res.rotated ? `; rotation ${res.rotated.rotationDeg}°` : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}`);
             }
           },
         );
@@ -537,7 +592,9 @@ async function run() {
                 : rev.kind === "text"
                   ? `, Scale: ${scalePart}`
                   : `, Scale: ${scalePart} (effective ${roundEffective(rev.width * rev.scaleX)}×${roundEffective(rev.height * rev.scaleY)})`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}`);
+            const rotation =
+              rev.rotationDeg === 0 ? "" : `, Rotation: ${rev.rotationDeg}°`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}`);
           },
         );
       } catch (err) {
