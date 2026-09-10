@@ -139,3 +139,101 @@ would close it.
   not need them.
 - Nothing in this change touches `src/`, docs, or the ISA. Uncommitted:
   `examples/` (this folder). Review and commit as one unit.
+
+## Documentation, CLI surface, and agent-skill findings (added 2026-09-09)
+
+A separate review of the docs, the help tree, and the skill inventory,
+run against the same shipped surface. The run above found what the tool
+cannot yet do; this section covers what an agent cannot yet learn or
+navigate. Numbering continues the F-series so specs can cite either set
+uniformly.
+
+**F10 — No skill teaches an agent to operate Ply.** The only Ply skill is
+`.agents/skills/visual-authoring/SKILL.md`, and it covers content practice
+(identity-anchor prompting, editorial-versus-decorative text, safe
+regions, likeness review). It names no command and describes no workflow.
+Nothing documents the generate → matte → layer → render path as a single
+sequence — the exact path this run had to discover by reading the whole
+surface. Directly related to F7: a headless agent is placing blind partly
+because nothing tells it how the pieces connect. F5's "candidate skill
+note" would land in this skill if it existed.
+
+**F11 — The skill is invisible to Claude Code.** `visual-authoring` exists
+in `.agents/skills/` but is not mirrored into `.claude/skills/`, unlike
+the other seventeen skills, which exist in both. A Claude Code session in
+this repo never loads it. ISC-24 is checked and its probe passes, because
+the probe only tests `.agents/`.
+
+**F12 — Two modules have no working help.** Root help instructs the caller
+to run `ply <module> --help`. For `scene` and `jobs` that returns
+`{"ok":false,...}` with the message "unknown command --help", and the
+entire help text is embedded inside a JSON string field with escaped
+newlines. ISC-22 fails on its own probe.
+
+**F13 — An unknown flag crashes with a stack trace.** `ply library list
+--json` throws an uncaught `ERR_PARSE_ARGS_UNKNOWN_OPTION` TypeError from
+`src/library-cli.ts:94` and prints a Bun stack trace. A usage error is the
+expected shape.
+
+**F14 — Three output contracts across eight modules.** `project`,
+`composition`, `layer`, `generate`, and `matte` print compact text and
+accept `--json`. `scene` and `jobs` always print JSON. `library` always
+prints text and rejects `--json` (see F13). This is ISC-20's gap, measured.
+
+**F15 — Three invocation spellings in the help text itself.** Root help
+writes `ply project init`. The `project`, `composition`, and `layer` help
+write `bun run ply project init`. The `generate`, `matte`, `scene`,
+`library`, and `jobs` help write `bun run generate`. An agent copies
+whichever form it read most recently. Not covered by any ISC.
+
+**F16 — Help screens carry contract prose.** The `scene` help runs about
+150 lines and explains lock-file recovery, byte-comparison before commit,
+and the 64 MB encoded input cap. Those facts have a home under `docs/`.
+In the help tree they defeat ISC-22's requirement that using one part
+never requires reading the whole surface, and they are expensive for an
+agent to page through. Root help also labels `scene`, `library`, and
+`jobs` legacy without saying which surface a caller should start from.
+
+**F17 — README contradicts the shipped surface.** Line 9 states that
+"generation unification and the matting/region-gate migration remain
+unimplemented," which spec #102 shipped and the rest of the same file
+documents. Line 174 has an orphan heading ("Generate source content and
+matte it:") with no code block under it. Structurally the legacy Scene
+workflow still holds the largest share of the file, including the full
+JSON example and the Quick start, while the composer surface gets a
+shorter section. No page walks the end-to-end path this run actually
+took. No ISA claim covers documentation accuracy, so nothing catches this
+drift.
+
+**F18 — Negative-coordinate parsing (see F4) is one instance of a wider
+argument-handling gap.** F4, F13, and F15 are all the same layer: option
+parsing and its error presentation are per-module rather than shared.
+
+### ISA coverage of this section
+
+- F12, F16 → ISC-22 (open; its probe is manual).
+- F14 → ISC-20 (open).
+- F10, F11, F13, F15, F17, F18 → no claim covers them.
+- ISC-21 cannot be probed yet: its token budget is still in "Not yet
+  specified," pending a measurement of current `inspect` output.
+
+### ISA bookkeeping observed while mapping
+
+- ISC-18 (output shape as a request parameter) and ISC-19 (matting as a
+  caller-invoked operation on any image) appear satisfied by this run's
+  evidence but remain unchecked.
+- ISC-17 still fails, for a different reason than it was written for. The
+  probe greps `src/` for `plate`/`object`/`creator`; the hits are now
+  concentrated in the retained legacy code, heaviest in `src/assets.ts`
+  and `src/library-cli.ts`. It is blocked on retiring the legacy surface,
+  not on generation work.
+- F4's rationale says the agent operates the tool, but its three claims
+  (ISC-20/21/22) are all about output format and help text. Nothing in
+  the ISA would be false if no agent could determine the workflow, which
+  is the gap F10 names.
+
+### Backlog state at time of writing
+
+No open issues. Everything through #115 is closed, so nothing is
+currently scheduled against any finding in this document, from either
+section.
