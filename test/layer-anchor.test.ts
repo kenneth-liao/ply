@@ -326,3 +326,42 @@ test(
   },
   60_000,
 );
+
+/** Tracer 5: anchors resolve against the CURRENT transform — a rotated
+ * Layer's ink box is the rotated AABB, and the anchored edge/center of THAT
+ * box lands at the target. Anchor + rotate in one edit is refused (separate
+ * edits), so rotation is already live when the anchor resolves. */
+test(
+  "a rotated Layer anchors against its rotated painted ink box",
+  async () => {
+    const redImg = path.join(tempDir, "red.png");
+    await writeFile(redImg, solidPng(100, 60, RED));
+
+    await makeComp("poster", 400, 300);
+    const addRes = await addImageLayer("poster", "tilt", redImg, { x: 50, y: 50 });
+    const layerId = addRes.use.layerId as string;
+
+    // Rotate first: rotate(90deg) about the placement point maps the
+    // 100×60 content to a 60×100 AABB extending left of the placement point.
+    const rotRes = await invoke(["layer", "edit", layerId, "--rotate", "90", "--project", projDir, "--json"]);
+    expect(rotRes.code).toBe(0);
+    const before = useReport(await measure("poster"), "tilt");
+    expect(before.painted).toEqual({ x: -10, y: 50, width: 60, height: 100 });
+
+    // Anchor the rotated ink's right edge at x=200 and its center at y=150.
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "right,center", "--x", "200", "--y", "150", "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(0);
+    const editJson = JSON.parse(editRes.stdout);
+
+    // Resolution: ink offset from placement is (-60, 0), ink 60×100.
+    // right → 200 - (-60) - 60 = 200; center → 150 - 0 - 50 = 100.
+    expect(editJson.anchored.placement).toEqual({ x: 200, y: 100 });
+    const target = useReport(await measure("poster"), "tilt");
+    expect(target.painted).toEqual({ x: 140, y: 100, width: 60, height: 100 });
+    expect(target.painted!.x + target.painted!.width).toBe(200);
+    expect(target.painted!.y + target.painted!.height / 2).toBe(150);
+  },
+  60_000,
+);
