@@ -17,7 +17,6 @@ import { runUniformGeneration } from "../src/generation.js";
 import { runMatting } from "../src/matting.js";
 import { composeMatte, type MatteEngine } from "../src/matte.js";
 import { reviewPublishedGeneration } from "../src/evidence-review.js";
-import { DEFAULT_MODEL } from "../src/models.js";
 
 let root: string;
 let page: Page;
@@ -42,7 +41,7 @@ beforeAll(async () => {
   const job = await runUniformGeneration(
     jobsRoot,
     "gen-browser-review",
-    { prompt: "wide candidate", intent: "full-canvas", model: DEFAULT_MODEL, count: 1, references: [ref] },
+    { prompt: "wide candidate", intent: "full-canvas", model: "gpt-image", count: 1, references: [ref] },
     { provider },
   );
 

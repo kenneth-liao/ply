@@ -144,7 +144,7 @@ describe("generate review — published evidence", () => {
     const job = await runUniformGeneration(
       jobsRoot,
       "gen-review-3",
-      { prompt: "two candidates", intent: "full-canvas", model: DEFAULT_MODEL, count: 2 },
+      { prompt: "two candidates", intent: "full-canvas", model: "gpt-image", count: 2 },
       { provider: { image: async () => { const s = seed++; const b = encodePng(24, 24, (x, y) => [s, y, x, 255]); return { images: [{ base64: b.toString("base64") }], warnings: [] }; }, text: async () => ({ files: [], text: "", warnings: [] }) } },
     );
     expect(job.run.outputs).toHaveLength(2);

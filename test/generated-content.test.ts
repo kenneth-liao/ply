@@ -37,7 +37,6 @@ import { encodePngRgba, decodePng } from "../src/png.js";
 import { initProject } from "../src/project.js";
 import { runUniformGeneration, loadGenerationJob, type GenerationJobRecord } from "../src/generation.js";
 import { resolveRetainedProvenance } from "../src/generation-retention.js";
-import { DEFAULT_MODEL } from "../src/models.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -104,7 +103,7 @@ async function createJob(colors: [number, number, number, number][]): Promise<Ge
     {
       prompt: "deterministic test content",
       intent: "full-canvas",
-      model: DEFAULT_MODEL,
+      model: "gpt-image",
       sizing: { kind: "size", width: 32, height: 32 },
       count: colors.length,
     },

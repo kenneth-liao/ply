@@ -68,8 +68,13 @@ and provenance under `out/generation/` — see
 [docs/generation-publication-contract.md](docs/generation-publication-contract.md)
 for the record schema and publication contract.
 
+Omitting `--model` selects **nano-2** (effective
+`google/gemini-3.1-flash-image`) — the tool-wide default for general
+generation. An explicit `--model` selection always takes precedence over
+the default.
+
 ```bash
-ply generate "a red barn at noon" --size 1080x1080
+ply generate "a red barn at noon" --model gpt-image --size 1080x1080
 ply generate "a presenter portrait" --intent isolated --model nano-2
 ply generate "restyle this room" --ref room.png --ref palette.png
 ply generate show <jobId>   # offline inspection of the published record

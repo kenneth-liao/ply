@@ -50,7 +50,6 @@ import { encodePngRgba, readPngHeader, decodePng } from "../src/png.js";
 import { runUniformGeneration, type UniformProvider } from "../src/generation.js";
 import { runMatting } from "../src/matting.js";
 import { composeMatte, type MatteEngine } from "../src/matte.js";
-import { DEFAULT_MODEL } from "../src/models.js";
 import { encodePng } from "./png.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
@@ -302,7 +301,7 @@ darwinOnly(
       {
         prompt: "a calm green studio background",
         intent: "full-canvas",
-        model: DEFAULT_MODEL,
+        model: "gpt-image",
         sizing: { kind: "size", width: 64, height: 64 },
         count: 1,
       },
@@ -314,7 +313,7 @@ darwinOnly(
       {
         prompt: "a bold title panel with text",
         intent: "full-canvas",
-        model: DEFAULT_MODEL,
+        model: "gpt-image",
         sizing: { kind: "size", width: 64, height: 64 },
         count: 1,
       },
@@ -329,7 +328,7 @@ darwinOnly(
       {
         prompt: "an alternate accent panel",
         intent: "full-canvas",
-        model: DEFAULT_MODEL,
+        model: "gpt-image",
         sizing: { kind: "size", width: 64, height: 64 },
         count: 1,
       },
@@ -854,7 +853,7 @@ darwinOnly(
       {
         prompt: "offline evidence source",
         intent: "full-canvas",
-        model: DEFAULT_MODEL,
+        model: "gpt-image",
         sizing: { kind: "size", width: 32, height: 32 },
         count: 1,
       },

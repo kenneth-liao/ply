@@ -123,7 +123,16 @@ export const MODELS: Record<string, ModelSpec> = {
   },
 };
 
-export const DEFAULT_MODEL = "gpt-image";
+/**
+ * The tool-wide default for general generation (DEC-007): omitting an
+ * explicit model selects nano-2, per the reviewed comparison (spec #132).
+ * This is the one canonical home for that default — the generate CLI applies
+ * it at request normalization (`parsed.model ?? DEFAULT_MODEL`), so an
+ * explicit --model selection always takes precedence and one change here
+ * moves every reader. The Kenny-likeness caller default (GPT Image 2 low) is
+ * NOT a tool default: it lives in the caller's own workflow (DEC-007).
+ */
+export const DEFAULT_MODEL = "nano-2";
 
 /**
  * The canonical qualified reference-capable list (DEC-018): every registry
