@@ -365,3 +365,95 @@ test(
   },
   60_000,
 );
+
+/** Tracer 6a: the resolved placement is an ordinary canonical revision fact —
+ * a fork carries it into the new identity, a shared in-place edit propagates
+ * it to every referring Composition, and cross-Project import preserves it
+ * verbatim. No alternate per-Composition placement state exists (DEC-002,
+ * ADR-0017). */
+test(
+  "resolved anchor placement survives forks, sharing, and cross-Project import",
+  async () => {
+    const redImg = path.join(tempDir, "red.png");
+    await writeFile(redImg, solidPng(100, 60, RED));
+
+    await makeComp("source", 400, 300);
+    const addRes = await addImageLayer("source", "hero", redImg, { x: 10, y: 10 });
+    const layerId = addRes.use.layerId as string;
+
+    // Anchor in place, single referrer.
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "center,top", "--x", "200", "--y", "0", "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(0);
+    const anchoredRev = JSON.parse(editRes.stdout).layer.currentRevision;
+    expect(anchoredRev.x).toBe(150);
+    expect(anchoredRev.y).toBe(0);
+
+    // Cross-Project import: the destination revision preserves the resolved
+    // placement verbatim in the copied revision document.
+    const otherProj = path.join(tempDir, "proj2");
+    await invoke(["project", "init", otherProj, "--name", "anchor-import-proj"]);
+    await invoke(["composition", "create", "landing", "--width", "400", "--height", "300", "--project", otherProj, "--json"]);
+    const importRes = await invoke([
+      "composition", "import", "landing", "source", "--from-project", projDir, "--project", otherProj, "--json",
+    ]);
+    expect(importRes.code).toBe(0);
+    const importedLayerId = JSON.parse(importRes.stdout).importedUses[0].layerId as string;
+    const imported = JSON.parse((await invoke(["layer", "inspect", importedLayerId, "--project", otherProj, "--json"])).stdout);
+    expect(imported.layer.currentRevision.x).toBe(150);
+    expect(imported.layer.currentRevision.y).toBe(0);
+    const copiedDoc = JSON.parse(
+      await readFile(path.join(otherProj, "layers", `${importedLayerId}.revisions`, `${imported.layer.currentRevisionId}.json`), "utf8"),
+    );
+    expect(copiedDoc.x).toBe(150);
+    expect(copiedDoc.y).toBe(0);
+
+    // Live sharing: a second Composition in this Project references the same
+    // Layer. The anchored edit must resolve identically across both (image
+    // ink is composition-independent) and propagate with explicit --in-place.
+    await makeComp("mirror", 400, 300);
+    await invoke(["composition", "import", "mirror", "source", "--project", projDir, "--json"]);
+    const shareRes = await invoke([
+      "layer", "edit", layerId, "--anchor", "center,center", "--x", "200", "--y", "150", "--in-place", "--project", projDir, "--json",
+    ]);
+    expect(shareRes.code).toBe(0);
+    const shareJson = JSON.parse(shareRes.stdout);
+    expect(shareJson.anchored.contexts).toEqual(["mirror", "source"]);
+    expect(shareJson.anchored.placement).toEqual({ x: 150, y: 120 });
+    for (const comp of ["source", "mirror"]) {
+      const report = useReport(await measure(comp), "hero");
+      expect(report.painted).toEqual({ x: 150, y: 120, width: 100, height: 60 });
+    }
+
+    // Fork: the forked identity carries the resolved placement; the original
+    // keeps its own; only the target use is retargeted.
+    const preForkRev = shareJson.layer.currentRevisionId as string;
+    const forkRes = await invoke([
+      "layer", "edit", layerId, "--fork", "--composition", "mirror", "--use", "hero",
+      "--anchor", "left,bottom", "--x", "0", "--y", "300", "--project", projDir, "--json",
+    ]);
+    expect(forkRes.code).toBe(0);
+    const forkJson = JSON.parse(forkRes.stdout);
+    expect(forkJson.fork).toBeDefined();
+    // Ink offset from placement is (0, 0) for a solid full-ink image.
+    expect(forkJson.layer.currentRevision.x).toBe(0);
+    expect(forkJson.layer.currentRevision.y).toBe(240); // 300 - 60
+    expect(forkJson.anchored.placement).toEqual({ x: 0, y: 240 });
+    expect(forkJson.anchored.contexts).toEqual(["mirror"]);
+    const forkMeasure = useReport(await measure("mirror"), "hero");
+    expect(forkMeasure.painted).toEqual({ x: 0, y: 240, width: 100, height: 60 });
+    // The original Layer and the source Composition are untouched.
+    const original = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
+    expect(original.layer.currentRevisionId).toBe(preForkRev);
+    const sourceMeasure = useReport(await measure("source"), "hero");
+    expect(sourceReportEqualsOriginalPlacement(sourceMeasure)).toBe(true);
+  },
+  120_000,
+);
+
+/** The source Composition's use keeps referencing the original Layer at its
+ * pre-fork placement. */
+function sourceReportEqualsOriginalPlacement(report: { layerId: string; placement: { x: number; y: number } }): boolean {
+  return report.placement.x === 150 && report.placement.y === 120;
+}
