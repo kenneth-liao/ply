@@ -604,3 +604,54 @@ test(
   },
   120_000,
 );
+
+/** Tracer 8: invalid or conflicting anchored-placement inputs are usage
+ * errors (exit 2) — bad components, ambiguous bare "center", wrong pair
+ * order, missing target coordinates, and same-edit combination with
+ * transform/content options — and every one leaves live state unchanged. */
+test(
+  "invalid or conflicting anchor inputs are usage errors that leave live state unchanged",
+  async () => {
+    const redImg = path.join(tempDir, "red.png");
+    await writeFile(redImg, solidPng(100, 60, RED));
+
+    await makeComp("poster", 400, 300);
+    const addRes = await addImageLayer("poster", "hero", redImg, { x: 10, y: 10 });
+    const layerId = addRes.use.layerId as string;
+    const revId = addRes.layer.currentRevisionId as string;
+
+    const badInputs: { args: string[]; errorPart: string }[] = [
+      { args: ["--anchor", "middle,center", "--x", "1", "--y", "1"], errorPart: "--anchor takes" },
+      { args: ["--anchor", "center", "--x", "1", "--y", "1"], errorPart: "could be either axis" },
+      { args: ["--anchor", "top,left", "--x", "1", "--y", "1"], errorPart: "first component must be horizontal" },
+      { args: ["--anchor", "left"], errorPart: "--x <target> is required" },
+      { args: ["--anchor", "left,top", "--x", "1"], errorPart: "--y <target> is required" },
+      { args: ["--anchor", "center,center"], errorPart: "--x <target> is required" },
+      { args: ["--anchor", "center,center", "--x", "1", "--y", "1", "--resize", "2"], errorPart: "its own edit" },
+      { args: ["--anchor", "center,center", "--x", "1", "--y", "1", "--rotate", "10"], errorPart: "its own edit" },
+      { args: ["--anchor", "center,center", "--x", "1", "--y", "1", "--image", redImg], errorPart: "its own edit" },
+      { args: ["--anchor", "center,center", "--x", "1", "--y", "1", "--text", "hi"], errorPart: "its own edit" },
+    ];
+    for (const bad of badInputs) {
+      const res = await invoke(["layer", "edit", layerId, ...bad.args, "--project", projDir, "--json"]);
+      expect(res.code).toBe(2);
+      expect(JSON.parse(res.stdout).ok).toBe(false);
+      expect(JSON.parse(res.stdout).error).toContain(bad.errorPart);
+    }
+
+    const inspectRes = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+    const layer = JSON.parse(inspectRes.stdout).layer;
+    expect(layer.currentRevisionId).toBe(revId);
+    expect(layer.currentRevision.x).toBe(10);
+    expect(layer.currentRevision.y).toBe(10);
+
+    // Scoped help documents the anchor surface (US-004).
+    const helpRes = await invoke(["layer", "edit", "--help"]);
+    expect(helpRes.code).toBe(0);
+    expect(helpRes.stdout).toContain("--anchor");
+    expect(helpRes.stdout).toContain("PAINTED INK");
+    expect(helpRes.stdout).toContain("transparent padding does not count");
+    expect(helpRes.stdout).toContain("ONE-SHOT resolution");
+  },
+  180_000,
+);
