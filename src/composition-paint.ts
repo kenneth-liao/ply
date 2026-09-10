@@ -183,16 +183,24 @@ function buildCompositionHtml(canvas: { width: number; height: number }, layers:
     .map((l) => {
       const rev = l.revision;
       const base = `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};`;
-      // Canonical transform (#133/#134, ADR-0016): applied about the Layer's
-      // (x, y) top-left placement point. Scale applies first, then rotation —
-      // CSS composes left-to-right as rotate∘scale, so the content stretches
-      // along its own axes and the stretched result rotates. Each factor is
-      // emitted only when non-identity, so revisions written before #133/#134
-      // and identity-transform revisions paint exactly as before (pinned
-      // history stays byte-identical).
+      // Canonical transform (#133/#134/#135, ADR-0016): applied about the
+      // Layer's (x, y) top-left placement point. Flip and scale act on the
+      // content along its own axes first (both are diagonal transforms and
+      // commute, so their emitted order among themselves is immaterial), then
+      // rotation rotates the transformed result — CSS composes left-to-right
+      // as rotate∘flip∘scale. Each factor is emitted only when non-identity,
+      // so revisions written before #133/#134/#135 and identity-transform
+      // revisions paint exactly as before (pinned history stays
+      // byte-identical).
       const transformParts: string[] = [];
       if (rev.rotationDeg !== 0) {
         transformParts.push(`rotate(${rev.rotationDeg}deg)`);
+      }
+      if (rev.flipX) {
+        transformParts.push("scaleX(-1)");
+      }
+      if (rev.flipY) {
+        transformParts.push("scaleY(-1)");
       }
       if (rev.scaleX !== 1 || rev.scaleY !== 1) {
         transformParts.push(`scale(${rev.scaleX},${rev.scaleY})`);

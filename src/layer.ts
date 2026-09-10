@@ -82,6 +82,23 @@ interface LayerRevisionBase {
    * written before #134 (with or without scale fields) keep their exact ids.
    */
   rotationDeg?: number;
+  /**
+   * Canonical transform reflection (#135, ADR-0016): whether the Layer's
+   * content is mirrored along its own horizontal axis (`flipX`, left–right)
+   * and/or vertical axis (`flipY`, top–bottom), about its `(x, y)` top-left
+   * placement point. Two axes of the one reflection operation — one shared
+   * representation, no separate lifecycle. The command sets an ABSOLUTE
+   * reflection state that replaces any previous one.
+   *
+   * Optional in the stored shape only for revisions written before #135 —
+   * absent means false and is normalized by the one revision reader, so no
+   * downstream reader needs a fallback. Every newly written revision records
+   * both fields explicitly (always together, like scale), and the hash
+   * appends them only when present, so revisions written before #135 keep
+   * their exact ids.
+   */
+  flipX?: boolean;
+  flipY?: boolean;
 }
 
 /**
@@ -180,9 +197,48 @@ export function normalizeStoredRotation(revision: { rotationDeg?: unknown }): nu
   return rotation;
 }
 
+/**
+ * Canonical stored-reflection validation and normalization (#135, ADR-0016).
+ * The one normalization boundary for transform reflection: documents written
+ * before #135 lack the fields (only a missing field is absent — a present
+ * `null` or any other non-boolean is a malformed document, never a silent
+ * default) and normalize to false here; every downstream reader projects
+ * through this function and never re-derives a default. A present pair must
+ * be two booleans, recorded together like scale.
+ */
+export function normalizeStoredFlip(revision: {
+  flipX?: unknown;
+  flipY?: unknown;
+}): LayerTransformFlip {
+  const hasX = revision.flipX !== undefined;
+  const hasY = revision.flipY !== undefined;
+  if (hasX !== hasY) {
+    throw new Error(
+      `Malformed revision document: flipX and flipY must be present together (got flipX ${JSON.stringify(revision.flipX)}, flipY ${JSON.stringify(revision.flipY)}).`,
+    );
+  }
+  if (!hasX) {
+    return { flipX: false, flipY: false };
+  }
+  const flipX = revision.flipX;
+  const flipY = revision.flipY;
+  if (typeof flipX !== "boolean" || typeof flipY !== "boolean") {
+    throw new Error(
+      `Malformed revision document: flipX and flipY must be booleans when present (got flipX ${JSON.stringify(flipX)}, flipY ${JSON.stringify(flipY)}).`,
+    );
+  }
+  return { flipX, flipY };
+}
+
+/** Canonical normalized transform reflection: the one shape every consumer reads. */
+export interface LayerTransformFlip {
+  flipX: boolean;
+  flipY: boolean;
+}
+
 export type ResolvedLayerRevision =
-  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number })
-  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number });
+  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
+  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean });
 
 export interface ResolvedLayer {
   id: string;
@@ -369,14 +425,18 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
  * before #133 hash to exactly their pre-resize ids: older revisions retain
  * their original hash and paint meaning (#133). The rotation field is
  * likewise appended only when present, so revisions written before #134 —
- * with or without scale fields — keep their exact ids (#134). */
+ * with or without scale fields — keep their exact ids (#134). The flip
+ * fields are appended only when present, so revisions written before #135
+ * keep their exact ids (#135). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
   const scaleFields =
     rev.scaleX !== undefined || rev.scaleY !== undefined ? `:${rev.scaleX}:${rev.scaleY}` : "";
   const rotationField = rev.rotationDeg !== undefined ? `:${rev.rotationDeg}` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}`).digest("hex").slice(0, 16)}`;
+  const flipFields =
+    rev.flipX !== undefined || rev.flipY !== undefined ? `:${rev.flipX}:${rev.flipY}` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -585,6 +645,10 @@ export async function readRevisionInternalFull(
   // boundary (#134, ADR-0016) — a malformed stored field is refused loudly
   // before the revision hash is consulted.
   const rotationDeg = normalizeStoredRotation(revision);
+  // Canonical transform reflection: validated and normalized at this same one
+  // boundary (#135, ADR-0016) — malformed stored fields are refused loudly
+  // before the revision hash is consulted.
+  const flip = normalizeStoredFlip(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -651,6 +715,8 @@ export async function readRevisionInternalFull(
             scaleX: scale.scaleX,
             scaleY: scale.scaleY,
             rotationDeg,
+            flipX: flip.flipX,
+            flipY: flip.flipY,
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -670,6 +736,8 @@ export async function readRevisionInternalFull(
           scaleX: scale.scaleX,
           scaleY: scale.scaleY,
           rotationDeg,
+          flipX: flip.flipX,
+          flipY: flip.flipY,
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -756,6 +824,17 @@ export interface EditLayerOptions {
    */
   rotateDeg?: number;
   /**
+   * Flip the Layer to an ABSOLUTE reflection state (#135, ADR-0016): sets the
+   * Layer's canonical reflection, replacing any previous state — `horizontal`
+   * mirrors along the content's own vertical axis (left–right), `vertical`
+   * along its horizontal axis (top–bottom), `both` mirrors both axes, and
+   * `none` removes the reflection. Like rotation this is never incremental:
+   * the same command twice keeps the same state. Flip is independent of the
+   * retained content's size, so it combines freely with other edit options,
+   * including content replacement and resize.
+   */
+  flip?: "horizontal" | "vertical" | "both" | "none";
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -823,6 +902,9 @@ export interface EditLayerResult {
   /** Present when the edit rotated the Layer (#134): the absolute rotation in
    * degrees now recorded on the revision. */
   rotated?: { rotationDeg: number };
+  /** Present when the edit flipped the Layer (#135): the absolute reflection
+   * state now recorded on the revision. */
+  flipped?: { flip: "horizontal" | "vertical" | "both" | "none" };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -924,6 +1006,32 @@ function resolveEditRotation(options: EditLayerOptions, prevRev: ResolvedLayerRe
     throw new Error(`Invalid rotation ${deg}: --rotate takes a finite number of degrees (clockwise positive).`);
   }
   return deg;
+}
+
+/**
+ * Canonical reflection normalization (#135, ADR-0016): `--flip` sets an
+ * ABSOLUTE reflection state, replacing any previous one. Omitted option
+ * preserves the current revision's reflection. The refusal runs before any
+ * staging, so an invalid mode never advances live state.
+ */
+function resolveEditFlip(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerTransformFlip {
+  if (options.flip === undefined) {
+    return { flipX: prevRev.flipX, flipY: prevRev.flipY };
+  }
+  switch (options.flip) {
+    case "horizontal":
+      return { flipX: true, flipY: false };
+    case "vertical":
+      return { flipX: false, flipY: true };
+    case "both":
+      return { flipX: true, flipY: true };
+    case "none":
+      return { flipX: false, flipY: false };
+    default:
+      throw new Error(
+        `Invalid flip "${String(options.flip)}": --flip takes horizontal, vertical, both, or none.`,
+      );
+  }
 }
 
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
@@ -1052,6 +1160,7 @@ async function buildEditedRevision(
   placement: { x: number; y: number; opacity: number },
   scale: LayerTransformScale,
   rotationDeg: number,
+  flip: LayerTransformFlip,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -1147,11 +1256,14 @@ async function buildEditedRevision(
       scaleX: scale.scaleX,
       scaleY: scale.scaleY,
       rotationDeg,
+      flipX: flip.flipX,
+      flipY: flip.flipY,
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
       scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY &&
-      rotationDeg === prevRev.rotationDeg;
+      rotationDeg === prevRev.rotationDeg &&
+      flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY;
     return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
@@ -1202,6 +1314,8 @@ async function buildEditedRevision(
       scaleX: scale.scaleX,
       scaleY: scale.scaleY,
       rotationDeg,
+      flipX: flip.flipX,
+      flipY: flip.flipY,
     };
     const unchanged =
       contentHash === prevRev.contentHash &&
@@ -1213,7 +1327,9 @@ async function buildEditedRevision(
       opacity === prevRev.opacity &&
       scale.scaleX === prevRev.scaleX &&
       scale.scaleY === prevRev.scaleY &&
-      rotationDeg === prevRev.rotationDeg;
+      rotationDeg === prevRev.rotationDeg &&
+      flip.flipX === prevRev.flipX &&
+      flip.flipY === prevRev.flipY;
     return { revision, unchanged, retainedGeneration: null };
   }
 
@@ -1375,6 +1491,7 @@ export async function editLayerInternal(
   const placement = resolveEditPlacement(options, prevRev);
   const scale = resolveEditScale(options, prevRev, layerId);
   const rotationDeg = resolveEditRotation(options, prevRev);
+  const flip = resolveEditFlip(options, prevRev);
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -1390,6 +1507,8 @@ export async function editLayerInternal(
   const hasResize = options.resizeFactor !== undefined || options.resizeTo !== undefined;
   const hasRotate = options.rotateDeg !== undefined;
   const rotatedReport = { rotationDeg };
+  const hasFlip = options.flip !== undefined;
+  const flippedReport = { flip: options.flip } as { flip: "horizontal" | "vertical" | "both" | "none" };
 
   if (intent.mode === "fork") {
     // Canonical target/use→original-id validation before any content work.
@@ -1407,6 +1526,7 @@ export async function editLayerInternal(
       placement,
       scale,
       rotationDeg,
+      flip,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
@@ -1417,17 +1537,18 @@ export async function editLayerInternal(
     });
     const withResized = hasResize ? { ...forkResult, resized: resizedReport } : forkResult;
     const withRotated = hasRotate ? { ...withResized, rotated: rotatedReport } : withResized;
+    const withFlipped = hasFlip ? { ...withRotated, flipped: flippedReport } : withRotated;
     return options.fromGeneration !== undefined
-      ? { ...withRotated, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withFlipped, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
         ? {
-            ...withRotated,
+            ...withFlipped,
             mattedFrom,
             ...(retainedGeneration
               ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
               : {}),
           }
-        : withRotated;
+        : withFlipped;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
@@ -1440,6 +1561,7 @@ export async function editLayerInternal(
     placement,
     scale,
     rotationDeg,
+    flip,
   );
 
   // No-op check: if all fields are identical to previous revision, avoid storage churn
@@ -1451,6 +1573,7 @@ export async function editLayerInternal(
       referrersCount,
       ...(hasResize ? { resized: resizedReport } : {}),
       ...(hasRotate ? { rotated: rotatedReport } : {}),
+      ...(hasFlip ? { flipped: flippedReport } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -1501,6 +1624,7 @@ export async function editLayerInternal(
     referrersCount,
     ...(hasResize ? { resized: resizedReport } : {}),
     ...(hasRotate ? { rotated: rotatedReport } : {}),
+    ...(hasFlip ? { flipped: flippedReport } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),

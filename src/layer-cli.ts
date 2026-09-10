@@ -19,7 +19,9 @@ layer — Layer management and inspection within a Project
       absolute effective size (image Layers only; one omitted axis preserves
       the aspect ratio). --rotate sets an ABSOLUTE rotation in degrees: the
       same command twice is still the same angle (unlike the relative resize
-      factor), and 0 removes the rotation.
+      factor), and 0 removes the rotation. --flip sets an ABSOLUTE reflection
+      state (horizontal, vertical, both, or none): it replaces the current
+      flip state, and none removes the reflection.
 
   bun run ply layer inspect <layer-id> [options]
       Inspect a Layer's identity, current revision, and content details
@@ -92,6 +94,16 @@ Options:
                         never changes retained pixels. Combines with other
                         edit options, including --resize and content
                         replacement.
+  --flip <mode>         Flip the Layer to an ABSOLUTE reflection state,
+                        replacing any previous flip: horizontal mirrors
+                        left–right along the content's own vertical axis,
+                        vertical mirrors top–bottom, both mirrors both axes,
+                        and none removes the reflection (the same command
+                        twice keeps the same state — unlike a toggle). Flip
+                        applies with scale, before rotation, about the
+                        Layer's (x, y) top-left corner, and never changes
+                        retained pixels. Combines with other edit options,
+                        including --resize and content replacement.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -170,6 +182,7 @@ let values: {
   resize?: string;
   "resize-to"?: string;
   rotate?: string;
+  flip?: string;
 };
 let positionals: string[];
 
@@ -200,6 +213,7 @@ try {
       resize: { type: "string" },
       "resize-to": { type: "string" },
       rotate: { type: "string" },
+      flip: { type: "string" },
     },
   });
   values = parsed.values;
@@ -240,14 +254,15 @@ async function run() {
         values.opacity !== undefined ||
         values.resize !== undefined ||
         values["resize-to"] !== undefined ||
-        values.rotate !== undefined;
+        values.rotate !== undefined ||
+        values.flip !== undefined;
 
       if (!hasEditOption && !values.fork) {
         output(
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --resize, --resize-to, --rotate, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --resize, --resize-to, --rotate, --flip, or --fork.",
           },
           isJson,
         );
@@ -460,6 +475,24 @@ async function run() {
         }
       }
 
+      // Flip flag (#135): the reflection mode is validated at the command
+      // boundary as a usage error (exit 2), so an invalid mode never reaches
+      // the edit path; the absolute-setter semantics are enforced again by
+      // the edit path before any staging.
+      let flip: "horizontal" | "vertical" | "both" | "none" | undefined;
+      if (values.flip !== undefined) {
+        const raw = values.flip.trim().toLowerCase();
+        if (raw !== "horizontal" && raw !== "vertical" && raw !== "both" && raw !== "none") {
+          output(
+            { ok: false, error: `Flip (--flip) takes horizontal, vertical, both, or none (got "${values.flip}").` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+        flip = raw;
+      }
+
       try {
         const res = await editLayer(targetProj, layerId, {
           inPlace: values["in-place"],
@@ -489,6 +522,7 @@ async function run() {
           resizeFactor,
           resizeTo,
           rotateDeg,
+          flip,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {
@@ -512,6 +546,9 @@ async function run() {
         if (res.rotated) {
           resultBody.rotated = res.rotated;
         }
+        if (res.flipped) {
+          resultBody.flipped = res.flipped;
+        }
 
         output(
           resultBody,
@@ -533,13 +570,14 @@ async function run() {
                 : `; scale ${res.resized.scaleX}×`
               : "";
             const rotated = res.rotated ? `; rotation ${res.rotated.rotationDeg}°` : "";
+            const flipped = res.flipped && res.flipped.flip !== "none" ? `; flip ${res.flipped.flip}` : res.flipped ? "; flip none" : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}`);
             }
           },
         );
@@ -594,7 +632,13 @@ async function run() {
                   : `, Scale: ${scalePart} (effective ${roundEffective(rev.width * rev.scaleX)}×${roundEffective(rev.height * rev.scaleY)})`;
             const rotation =
               rev.rotationDeg === 0 ? "" : `, Rotation: ${rev.rotationDeg}°`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}`);
+            const flip =
+              !rev.flipX && !rev.flipY
+                ? ""
+                : rev.flipX && rev.flipY
+                  ? ", Flip: both"
+                  : ", Flip: " + (rev.flipX ? "horizontal" : "vertical");
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}`);
           },
         );
       } catch (err) {

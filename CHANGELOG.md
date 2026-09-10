@@ -4,6 +4,18 @@
 
 ### Added
 
+- Layer flip without replacing source content (#135, spec #132, ADR-0016):
+  `ply layer edit --flip <horizontal|vertical|both|none>` sets an **absolute**
+  reflection state about the Layer's `(x, y)` placement point — it replaces
+  any previous flip (never a toggle), and `none` removes the reflection.
+  Flip applies with scale, before rotation, works on image and text Layers,
+  and combines freely with other edit options including `--resize`,
+  `--rotate`, and content replacement. Flipping never changes retained
+  pixels, lineage, or pinned Render history: `flipX`/`flipY` are canonical
+  revision facts appended to the revision hash only when present, so
+  pre-#135 revisions (including rotation-era ones) keep their exact ids;
+  they survive sharing, forks, and cross-Project import.
+
 - Layer rotation without replacing source content (#134, spec #132,
   ADR-0016): `ply layer edit --rotate <deg>` sets an **absolute** rotation in
   degrees about the Layer's `(x, y)` top-left placement point — the same

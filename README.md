@@ -189,6 +189,35 @@ ply layer edit <layerId> --rotate 0     # remove the rotation
   history — replaying a pre-rotation Render still reproduces its original
   pixels exactly.
 
+## Layer flip (new surface)
+
+`ply layer edit` flips Layers about their `(x, y)` placement point without
+ever replacing source content (ADR-0016) — flipping changes placement, never
+retained pixels:
+
+```bash
+ply layer edit <layerId> --flip horizontal   # mirror left–right
+ply layer edit <layerId> --flip vertical     # mirror top–bottom
+ply layer edit <layerId> --flip both         # mirror both axes
+ply layer edit <layerId> --flip none         # remove the reflection
+```
+
+- `--flip <mode>` takes an **absolute** reflection state: it replaces any
+  previous flip, so the same command twice keeps the same state (it is never
+  a toggle), and `none` removes the reflection. Horizontal mirrors along the
+  content's own vertical axis, vertical along its horizontal axis. Works on
+  image and text Layers and combines with other edit options, including
+  `--resize`, `--rotate`, and content replacement.
+- Flip applies **with scale, before rotation**: the content reflects along
+  its own axes, then scale stretches and rotation rotates the reflected
+  result. The footprint mirrors to the other side of the placement point's
+  axis line (a 100px-wide Layer at `x=100` flipped horizontally paints
+  `x ∈ [0, 100]`), exactly as rotation moves its footprint about the same
+  origin. Flip is a Layer revision fact shared as a whole (in-place edits
+  propagate, forks isolate), survives sharing and cross-Project import, and
+  participates in pinned Render history — replaying a pre-flip Render still
+  reproduces its original pixels exactly.
+
 ## Setup
 
 ```bash
