@@ -4,6 +4,35 @@
 
 ### Added
 
+- Anchored Layer placement (#138, spec #132 US-002 / US-006, DEC-002/003/004,
+  ADR-0017): `ply layer edit --anchor <h>[,<v>] --x <tx> --y <ty>` places a
+  Layer's visible painted ink at the requested target instead of targeting
+  the top-left corner — left/center/right and top/center/bottom on image and
+  text Layers. The anchor box is the PAINTED INK box (alpha > 0 / tight
+  glyph ink, unclipped), never the layout content box: transparent padding
+  does not count, a padded image's visible subject lands at the target, a
+  centered headline centers its glyph ink, and a Layer with no visible ink
+  refuses instead of falling back to the layout box. Anchored placement is a
+  ONE-SHOT command-boundary resolution (the `--resize-to` shape under
+  ADR-0016): it resolves once through the paint-identical ink measurement
+  (accurate to its pixel grid, ~1px) against the Layer's current transform
+  and writes plain canonical placement (x, y) — no anchor facts are stored,
+  no schema change, and sharing, forks, cross-Project import, and pinned
+  Render history preserve the resolved placement verbatim with no alternate
+  per-Composition placement state. It is its own edit: combining --anchor
+  with --resize/--rotate/--flip or content replacement is a usage error;
+  --opacity combines freely. A text Layer's ink depends on the referring
+  Composition's canvas width, so resolution measures every referring
+  Composition and refuses — naming the affected compositions and their
+  count — when the resolved placements disagree; unreferenced Layers
+  resolve standalone on an unwrapped line. Invalid or conflicting inputs
+  (exit 2) and semantic refusals (exit 1) never mutate live state; scoped
+  help documents the anchor box, transform interaction, padding, and
+  resolution contexts; the edit report carries `anchored: {anchor, target,
+  placement, painted, contexts}` for audit.
+
+### Added
+
 - Painted footprints and canvas clipping (#137, spec #132 US-002 / US-006,
   DEC-004): `ply composition measure` now reports each Layer's painted
   extents alongside its layout boxes — the visible-ink (alpha > 0)
