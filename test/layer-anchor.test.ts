@@ -207,3 +207,41 @@ test("rendered pixels agree with the anchored resolution", async () => {
   expect(px(149, 150)).toEqual([0, 0, 0, 0]);
   expect(px(250, 150)).toEqual([0, 0, 0, 0]);
 });
+/** Tracer 2: the full horizontal × vertical anchor matrix on image Layers —
+ * every required combination lands the ink edge/center at the target. */
+test(
+  "the horizontal x vertical anchor matrix lands image ink at each requested target",
+  async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(80, 40, RED));
+
+  await makeComp("poster", 400, 300);
+  // One Layer per combination, all in one Composition (measurement of one
+  // Layer never depends on its neighbors).
+  const combos: { anchor: string; tx: number; ty: number; want: { x: number; y: number } }[] = [
+    { anchor: "left,top", tx: 100, ty: 100, want: { x: 100, y: 100 } },
+    { anchor: "center,top", tx: 200, ty: 100, want: { x: 160, y: 100 } },
+    { anchor: "right,top", tx: 300, ty: 100, want: { x: 220, y: 100 } },
+    { anchor: "left,center", tx: 100, ty: 150, want: { x: 100, y: 130 } },
+    { anchor: "center,center", tx: 200, ty: 150, want: { x: 160, y: 130 } },
+    { anchor: "right,center", tx: 300, ty: 150, want: { x: 220, y: 130 } },
+    { anchor: "left,bottom", tx: 100, ty: 200, want: { x: 100, y: 160 } },
+    { anchor: "center,bottom", tx: 200, ty: 200, want: { x: 160, y: 160 } },
+    { anchor: "right,bottom", tx: 300, ty: 200, want: { x: 220, y: 160 } },
+  ];
+  for (const [i, combo] of combos.entries()) {
+    const addRes = await addImageLayer("poster", `m${i}`, redImg, { x: 0, y: 0 });
+    const layerId = addRes.use.layerId as string;
+    const editRes = await invoke([
+      "layer", "edit", layerId, "--anchor", combo.anchor, "--x", String(combo.tx), "--y", String(combo.ty),
+      "--project", projDir, "--json",
+    ]);
+    expect(editRes.code).toBe(0);
+    const editJson = JSON.parse(editRes.stdout);
+    expect(editJson.anchored.placement).toEqual(combo.want);
+    const after = useReport(await measure("poster"), `m${i}`);
+    expect(after.painted).toEqual({ x: combo.want.x, y: combo.want.y, width: 80, height: 40 });
+  }
+  },
+  240_000,
+);
