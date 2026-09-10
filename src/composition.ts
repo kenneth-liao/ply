@@ -362,6 +362,8 @@ export async function addLayerToComposition(
         scaleX: 1,
         scaleY: 1,
         rotationDeg: 0,
+        flipX: false,
+        flipY: false,
       };
     }).then(({ layerId, layer }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer }));
   });
@@ -426,6 +428,8 @@ export async function addTextLayerToComposition(
         scaleX: 1,
         scaleY: 1,
         rotationDeg: 0,
+        flipX: false,
+        flipY: false,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -518,6 +522,8 @@ export async function addGeneratedLayerToComposition(
         scaleX: 1,
         scaleY: 1,
         rotationDeg: 0,
+        flipX: false,
+        flipY: false,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -603,6 +609,8 @@ export async function addMattedLayerToComposition(
         scaleX: 1,
         scaleY: 1,
         rotationDeg: 0,
+        flipX: false,
+        flipY: false,
       };
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -882,6 +890,8 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       scaleX: source.scaleX,
       scaleY: source.scaleY,
       rotationDeg: source.rotationDeg,
+      flipX: source.flipX,
+      flipY: source.flipY,
     };
   }
   if (source.kind !== "image") {
@@ -899,6 +909,8 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     scaleX: source.scaleX,
     scaleY: source.scaleY,
     rotationDeg: source.rotationDeg,
+    flipX: source.flipX,
+    flipY: source.flipY,
   };
 }
 
