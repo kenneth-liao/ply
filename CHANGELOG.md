@@ -4,6 +4,15 @@
 
 ### Added
 
+- The complete operating workflow as a discoverable skill (#144, spec #132
+  US-004, DEC-007/008): `.agents/skills/ply-operating/SKILL.md` teaches the
+  canonical import/generate → optional Matte → Layer ingestion →
+  measurement/edit → Render/pixel-review route with shipped commands and the
+  shipped defaults, links the content-policy authorities and predecessor
+  command contracts instead of copying them, and explains that measurement
+  supports placement but does not replace visual review. The
+  `visual-authoring` skill and the README composer section cross-link to it;
+  no product code changes.
 - Explicit GPT Image 2 quality selection (#142, spec #132 US-005, DEC-007):
   `ply generate --quality low|medium|high` accepts an explicit quality for
   `gpt-image` and forwards the requested value through the provider seam —
