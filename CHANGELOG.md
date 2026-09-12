@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MPS-unavailable Matting failures name the fix (#166, spec #159 US-006 /
+  TEST-003): the single inference process's MPS refusal
+  (`scripts/matte-birefnet-dynamic.py`) now carries the expected weights
+  path, pin, fetch command, and the MPS/no-fallback requirement, and
+  `parseInferenceResult` appends the same diagnostic when an older process
+  text lacks it — so compact text and `--json` error output expose all
+  four facts for missing weights, wrong hash, and unavailable MPS alike.
+  Weight-free CLI coverage proves each of the three fails nonzero through
+  the public `ply matte` seam with the source byte-identical and nothing
+  published. Still one pinned `uv` process per matte, no second preflight
+  process, no CPU/CoreML fallback; the pin is unchanged.
+
 ### Added
 
 - Local Matting runs BiRefNet Dynamic on PyTorch/MPS (#162, spec #159
