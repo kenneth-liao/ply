@@ -14,7 +14,7 @@ async function invoke(...args: string[]) {
 }
 
 test("ply routes scene commands with their arguments and JSON intact", async () => {
-  const result = await invoke("scene", "schema");
+  const result = await invoke("scene", "schema", "--json");
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout)).toBeObject();
   expect(result.stderr).toBe("");
@@ -30,16 +30,22 @@ test("ply help names only available modules", async () => {
     ["layer", 0],
     ["generate", 0],
     ["matte", 0],
-    ["scene", 2],
+    ["scene", 0],
     ["library", 0],
-    ["jobs", 2],
+    ["jobs", 0],
   ] as const) {
     expect(result.stdout).toContain(module);
-    // Preserve the existing surfaces: scene/jobs classify help as usage (2).
-    // The introduced generate surface follows the project/composition pattern (0).
+    // Help succeeds on every exposed module (F12); exit 0, focused text.
     const help = await invoke(module, "--help");
     expect(help.code).toBe(code);
     expect(help.stdout).toContain(module);
+    // --help --json is one valid JSON result containing the help (F12).
+    const helpJson = await invoke(module, "--help", "--json");
+    expect(helpJson.code).toBe(0);
+    expect(JSON.parse(helpJson.stdout)).toMatchObject({ ok: true });
+    expect(JSON.parse(helpJson.stdout).help).toContain(module);
+    // Canonical invocation spellings in help (F15): no legacy script forms.
+    expect(help.stdout).not.toContain("bun run");
   }
 });
 
@@ -47,7 +53,11 @@ test("ply rejects unknown modules and preserves module failures", async () => {
   expect((await invoke("not-a-module")).code).toBe(2);
   const result = await invoke("scene", "validate", "does-not-exist.scene.json");
   expect(result.code).toBe(1);
-  expect(JSON.parse(result.stdout).ok).toBe(false);
+  expect(result.stderr).toContain("does-not-exist");
+  // The structured failure stays available under --json.
+  const asJson = await invoke("scene", "validate", "does-not-exist.scene.json", "--json");
+  expect(asJson.code).toBe(1);
+  expect(JSON.parse(asJson.stdout).ok).toBe(false);
 });
 
 test("generate rejects a missing prompt through the public entry point", async () => {

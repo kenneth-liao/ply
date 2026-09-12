@@ -3,12 +3,13 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { initProject, inspectProject, type ProjectInfo } from "./project.js";
+import { helpResult, usageMessage, wantsJson } from "./cli-present.js";
 
 const HELP = `
 project — self-contained Project management
 
-  bun run ply project init [dir] [options]       Initialize a new Project at [dir] (defaults to current directory)
-  bun run ply project inspect [options]         Inspect a Project's state and statistics
+  ply project init [dir] [options]       Initialize a new Project at [dir] (defaults to current directory)
+  ply project inspect [options]         Inspect a Project's state and statistics
 
 Options:
   --project, -p <dir>   Path to the Project root directory (default: current working directory)
@@ -59,12 +60,13 @@ try {
   values = parsed.values;
   positionals = parsed.positionals;
 } catch (err) {
-  output({ ok: false, error: (err as Error).message }, isJson);
+  output({ ok: false, error: usageMessage((err as Error).message, "project") }, isJson);
   process.exit(2);
 }
 
 if (values.help || positionals.length === 0) {
-  console.log(HELP);
+  if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
+  else console.log(HELP);
   process.exit(0);
 }
 

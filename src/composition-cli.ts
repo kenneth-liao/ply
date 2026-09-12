@@ -20,42 +20,43 @@ import {
 import { renderComposition, replayRender } from "./composition-render.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { closeCliBrowser } from "./cli-browser.js";
+import { helpResult, usageMessage } from "./cli-present.js";
 
 const HELP = `
 composition — Composition authoring and inspection
 
-  bun run ply composition create <name> --width <w> --height <h> [options]
+  ply composition create <name> --width <w> --height <h> [options]
       Create a new Composition with explicit canvas dimensions
 
-  bun run ply composition add <comp> <name> --image <path> [options]
+  ply composition add <comp> <name> --image <path> [options]
       Add a local image Layer to a Composition with optional placement
 
-  bun run ply composition add <comp> <name> --text <str> --font <family> [options]
+  ply composition add <comp> <name> --text <str> --font <family> [options]
       Add a locally rendered text Layer. The bundled font family's bytes are
       retained into the Project, so rendering never needs the original font
       files. Mutually exclusive with --image.
 
-  bun run ply composition import <target> <source> [options]
+  ply composition import <target> <source> [options]
       Import a Composition's Layer references into another Composition
       within the same Project as individually editable uses
 
-  bun run ply composition import <target> <source> --from-project <dir>
+  ply composition import <target> <source> --from-project <dir>
       Copy a Composition's Layers from another Project into the target
       Composition as independent destination Layer identities with retained
       content bytes (source edits never propagate; no live links)
 
-  bun run ply composition remove <comp> <name> [options]
+  ply composition remove <comp> <name> [options]
       Remove a Layer use from a Composition without deleting the Layer,
       retained revisions, or other Compositions' uses
 
-  bun run ply composition reorder <comp> --order <name1,name2,...> [options]
+  ply composition reorder <comp> --order <name1,name2,...> [options]
       Reorder Layer uses within a Composition to change painting order
       (exact full-order permutation of all existing local use names)
 
-  bun run ply composition inspect <name> [options]
+  ply composition inspect <name> [options]
       Inspect a Composition's canvas and ordered Layers
 
-  bun run ply composition measure <comp> [use-name] [options]
+  ply composition measure <comp> [use-name] [options]
       Measure Layer geometry read-only in Composition coordinates, including
       the current scale, rotation, and reflection. Reports each Layer's
       LAYOUT boxes (untransformed content box, the axis-aligned bounding box
@@ -85,13 +86,13 @@ composition — Composition authoring and inspection
       fails instead of producing misleading numbers. Writes nothing to the
       Project.
 
-  bun run ply composition render <name> [options]
+  ply composition render <name> [options]
       Render a Composition to a PNG at its exact canvas dimensions and
       capture a retained Render manifest under the Project's renders/
       (default: a fresh file under renders/; --out exports the PNG elsewhere,
       history is always kept in renders/)
 
-  bun run ply composition replay <manifest-path> [options]
+  ply composition replay <manifest-path> [options]
       Replay a retained Render manifest: regenerate the Render's pixels
       byte-identically from its pinned historical inputs, independent of
       current Layer revisions and Composition documents. Requires the exact
@@ -100,7 +101,7 @@ composition — Composition authoring and inspection
       Works after Project relocation, without the original source files, and
       without the original PNG
 
-  bun run ply composition list [options]
+  ply composition list [options]
       List all Compositions in the Project
 
 Options:
@@ -165,9 +166,32 @@ function output(
   }
 }
 
-const rawArgs = process.argv.slice(2);
-const isJson = rawArgs.includes("--json");
+/** A negative number is a valid coordinate value (#128): parseArgs refuses a
+ * dash-leading option value ("--y -40" reads as an ambiguous flag), so join a
+ * following dash-leading numeric token into "--<flag>=<value>" before parsing.
+ * The regex only matches numerics — a following option is never consumed as a
+ * value — and a missing value falls through to the parser's own concise
+ * missing-value error. Layer effects have the same join in layer-cli. */
+function joinDashLeadingNumericValues(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (
+      (arg === "--x" || arg === "--y") &&
+      args[i + 1] !== undefined &&
+      /^-(?:\.?\d)/.test(args[i + 1]!)
+    ) {
+      out.push(`${arg}=${args[i + 1]!}`);
+      i++;
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
 
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2));
+const isJson = rawArgs.includes("--json");
 let values: {
   project?: string;
   width?: string;
@@ -220,12 +244,13 @@ try {
   values = parsed.values;
   positionals = parsed.positionals;
 } catch (err) {
-  output({ ok: false, error: (err as Error).message }, isJson);
+  output({ ok: false, error: usageMessage((err as Error).message, "composition") }, isJson);
   process.exit(2);
 }
 
 if (values.help || positionals.length === 0) {
-  console.log(HELP);
+  if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
+  else console.log(HELP);
   process.exit(0);
 }
 

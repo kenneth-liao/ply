@@ -322,8 +322,8 @@ function isolationRecovery(): string {
   return (
     `Isolated content requires true alpha (a transparent-background PNG with a real matte) — ` +
     `RGB chroma-key color distance alone cannot qualify an output (REQ-015, REQ-017). ` +
-    `Generation and adoption are retired: record a uniform Generation Job with "bun run generate" ` +
-    `(use --intent isolated for isolated output), matte it explicitly with "bun run matte", ` +
+    `Generation and adoption are retired: record a uniform Generation Job with "ply generate" ` +
+    `(use --intent isolated for isolated output), matte it explicitly with "ply matte", ` +
     `and ingest the verified result as an ordinary Project Layer ` +
     `("ply composition add <comp> <name> --from-matte <matteId>").`
   );

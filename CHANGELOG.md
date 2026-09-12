@@ -4,6 +4,31 @@
 
 ### Fixed
 
+- The retained CLI surfaces are coherent (#128, from
+  `examples/thumbnail-luigi-go/HANDOFF.md` F4/F12–F16/F18, spec #132's
+  measured findings): `scene` and `jobs` print compact text by default with
+  the full structured result one `--json` away — `--help`/`-h` exits 0 on
+  every module (Scene and Job help no longer exit 2 embedded in an 11k-char
+  JSON error), usage errors are concise and actionable — the correction plus
+  a `ply <module> --help` pointer, never the embedded manual — with no
+  uncaught stack traces, `library` supports `--json` on every command
+  (`ply library list --json` crashed before) and reports usage-shaped
+  argument failures as exit 2 (operational failures stay exit 1),
+  `--help --json` returns one valid JSON result containing the help on root
+  and every module, and every command's default output is compact text while
+  `--json` emits exactly one valid JSON result on stdout. Scene's lengthy
+  operational help moved verbatim to `docs/scene-cli.md` (linked from the
+  help); all help and maintained examples use canonical `ply ...` spellings.
+  Numeric placement arguments (`--x`, `--y`) accept both `--x -40` and
+  `--x=-40` equivalently (negative integers and fractions); a following
+  option is never consumed as a number, missing/invalid values are concise
+  usage errors, and Layer effects keep their existing negative-value
+  support. Scene and Job default-output migration for machine consumers is
+  documented in README (Legacy surface). `library list` also lists retained
+  objects in text and JSON (previously silently omitted).
+
+### Fixed
+
 - Generation Job records report the charge the provider actually returned
   (#126): the provider seam carries the AI Gateway's own per-request billing,
   and `run.cost` states its basis — the summed actual charge, the registry
