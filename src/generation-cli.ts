@@ -30,6 +30,7 @@ import {
   listGenerationJobs,
   loadGenerationJob,
   runUniformGeneration,
+  type ProviderBilling,
   type UniformGenerationRequest,
   type UniformProvider,
   type UniformSizing,
@@ -101,6 +102,28 @@ export interface GenerationCliDeps {
   matteRoot: string;
 }
 
+/**
+ * The provider response's own billing (#126): the one boundary where the
+ * Gateway's external metadata becomes the trusted seam amount. The Gateway
+ * reports its per-request charge inside the response it already returns with
+ * the bytes (`providerMetadata.gateway.cost`, observed as a decimal string —
+ * "0.006255" — in the #126 comparison receipts). Anything absent or unreadable
+ * yields no billing claim, so a malformed response can never become a zero
+ * charge — and no separate lookup is made, so a missing receipt is never
+ * re-requested.
+ */
+export function billingFromProviderMetadata(metadata: Record<string, unknown> | undefined): ProviderBilling | undefined {
+  const gateway = metadata?.gateway;
+  if (gateway === null || typeof gateway !== "object") return undefined;
+  const raw = (gateway as { cost?: unknown }).cost;
+  // An empty or blank string parses as 0 through Number — the one coercion
+  // that would invent a zero charge, so it is refused before parsing.
+  const costUsd =
+    typeof raw === "string" ? (raw.trim() === "" ? Number.NaN : Number(raw)) : raw;
+  if (typeof costUsd !== "number" || !Number.isFinite(costUsd) || costUsd < 0) return undefined;
+  return { costUsd };
+}
+
 /** The real provider paths: the AI SDK call shapes the seam forwards to. */
 export const PRODUCTION_UNIFORM_PROVIDER: UniformProvider = {
   async image(args) {
@@ -119,7 +142,12 @@ export const PRODUCTION_UNIFORM_PROVIDER: UniformProvider = {
         ? { providerOptions: { openai: { quality: args.quality } } }
         : {}),
     });
-    return { images: result.images, warnings: result.warnings };
+    const billing = billingFromProviderMetadata(result.providerMetadata);
+    return {
+      images: result.images,
+      warnings: result.warnings,
+      ...(billing ? { billing } : {}),
+    };
   },
   async text(args) {
     const result = await generateText({
@@ -141,7 +169,13 @@ export const PRODUCTION_UNIFORM_PROVIDER: UniformProvider = {
         : { prompt: args.prompt }),
       ...(args.temperature !== undefined ? { temperature: args.temperature } : {}),
     });
-    return { files: result.files, text: result.text, warnings: result.warnings ?? [] };
+    const billing = billingFromProviderMetadata(result.providerMetadata);
+    return {
+      files: result.files,
+      text: result.text,
+      warnings: result.warnings ?? [],
+      ...(billing ? { billing } : {}),
+    };
   },
 };
 

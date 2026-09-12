@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Generation Job records report the charge the provider actually returned
+  (#126): the provider seam carries the AI Gateway's own per-request billing,
+  and `run.cost` states its basis — the summed actual charge, the registry
+  estimate, or unknown — so a historical rate is never presented as a charge
+  measured on the request. Record schema version 2; pre-#126 records still
+  read, as an estimate or unknown, with their bytes untouched.
+
 - MPS-unavailable Matting failures name the fix (#166, spec #159 US-006 /
   TEST-003): the single inference process's MPS refusal
   (`scripts/matte-birefnet-dynamic.py`) now carries the expected weights

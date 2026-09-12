@@ -21,8 +21,10 @@ import {
   ingestUniformRequest,
   listGenerationJobs,
   loadGenerationJob,
+  parseGenerationJobRecord,
   runUniformGeneration,
   validateUniformRequest,
+  type GenerationJobRecord,
   type IngestedUniformRequest,
   type UniformGenerationRequest,
   type UniformProvider,
@@ -253,6 +255,329 @@ describe("buildUniformPrompt", () => {
   });
 });
 
+/**
+ * #126 — the cost a published record claims, and the basis it claims it on.
+ * The provider seam carries the per-request billing the provider response
+ * itself reported; a registry rate is only ever an estimate.
+ */
+describe("published run cost", () => {
+  test("a provider receipt is recorded as the actual charge, never the registry rate", async () => {
+    const provider = fakeProvider({
+      image: async () => ({
+        images: [{ base64: Buffer.from("billed-bytes").toString("base64") }],
+        warnings: [],
+        billing: { costUsd: 0.006255 },
+      }),
+    });
+    const job = await runUniformGeneration(jobRoot(), "gen-billed", base, { provider });
+    expect(job.run.cost).toEqual({ basis: "actual-charge", usd: 0.006255 });
+  });
+
+  test("one receipt per call sums to the run's actual charge", async () => {
+    let call = 0;
+    const provider = fakeProvider({
+      image: async () => ({
+        images: [{ base64: Buffer.from(`billed-${call}`).toString("base64") }],
+        warnings: [],
+        billing: { costUsd: 0.001 * ++call },
+      }),
+    });
+    const job = await runUniformGeneration(jobRoot(), "gen-billed-two", { ...base, count: 2 }, { provider });
+    expect(job.run.cost).toEqual({ basis: "actual-charge", usd: 0.003 });
+  });
+
+  test("a receipt outranks the call-shape rule: a billed reference call records its charge", async () => {
+    const p = path.join(root, "ref.png");
+    await writeFile(p, "reference-bytes");
+    const provider = fakeProvider({
+      image: async () => ({
+        images: [{ base64: Buffer.from("billed-ref").toString("base64") }],
+        warnings: [],
+        billing: { costUsd: 0.016 },
+      }),
+    });
+    const job = await runUniformGeneration(jobRoot(), "gen-billed-ref", { ...base, references: [p] }, { provider });
+    expect(job.run.cost).toEqual({ basis: "actual-charge", usd: 0.016 });
+    expect(job.run.warnings.join("\n")).not.toMatch(/recorded as unknown/);
+  });
+
+  test("an unregistered raw id claims no cost: its placeholder rate is not a rate", async () => {
+    const provider = fakeProvider();
+    const job = await runUniformGeneration(
+      jobRoot(),
+      "gen-raw",
+      { ...base, model: "bytedance/seedream-5.0-lite", sizing: { kind: "aspectRatio", ratio: "1:1" } },
+      { provider },
+    );
+    // The raw id's registry placeholder (approxCost 0, no capability or cost
+    // claim) must never become a recorded zero charge.
+    expect(job.run.cost).toEqual({ basis: "unknown" });
+    expect(job.run.warnings.join("\n")).toMatch(/no rate/i);
+  });
+
+  test("a multimodal run records the receipt its text-seam response carried", async () => {
+    const provider = fakeProvider({
+      text: async () => ({
+        files: [{ mediaType: "image/png", uint8Array: Buffer.from("nano-billed") }],
+        text: "",
+        warnings: [],
+        billing: { costUsd: 0.0676365 },
+      }),
+    });
+    const job = await runUniformGeneration(
+      jobRoot(),
+      "gen-nano-billed",
+      { ...base, model: "nano-2", sizing: { kind: "aspectRatio", ratio: "1:1" } },
+      { provider },
+    );
+    expect(job.run.cost).toEqual({ basis: "actual-charge", usd: 0.0676365 });
+  });
+
+  test("a partial receipt is not the run's charge — the estimate is recorded and the gap stated", async () => {
+    let call = 0;
+    const provider = fakeProvider({
+      image: async () => {
+        call++;
+        return {
+          images: [{ base64: Buffer.from(`partial-${call}`).toString("base64") }],
+          warnings: [],
+          ...(call === 1 ? { billing: { costUsd: 0.006255 } } : {}),
+        };
+      },
+    });
+    const job = await runUniformGeneration(jobRoot(), "gen-partial", { ...base, count: 2 }, { provider });
+    // One receipt out of two: summing it would understate the run, and calling
+    // it the run's charge would be false — so the estimate is recorded, with
+    // the missing receipt stated.
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
+    expect(job.run.warnings.join("\n")).toMatch(/only 1 of 2 provider responses carried a usable billing receipt/i);
+  });
+
+  test("an unusable receipt is no receipt — it can never make a charge (CRAFT-4)", async () => {
+    let call = 0;
+    const provider = fakeProvider({
+      image: async () => {
+        call++;
+        return {
+          images: [{ base64: Buffer.from(`malformed-${call}`).toString("base64") }],
+          warnings: [],
+          // A malformed amount from a non-production adapter: the domain's own
+          // guard must reject it rather than record a negative charge or sum it.
+          ...(call === 1 ? { billing: { costUsd: -1 } } : { billing: { costUsd: 0.006255 } }),
+        };
+      },
+    });
+    const job = await runUniformGeneration(jobRoot(), "gen-malformed-receipt", { ...base, count: 2 }, { provider });
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
+    expect(job.run.warnings.join("\n")).toMatch(/carried a usable billing receipt/i);
+  });
+
+  test("a response with no receipt is never re-requested — no second generation", async () => {
+    const provider = fakeProvider();
+    const job = await runUniformGeneration(jobRoot(), "gen-no-receipt", { ...base, count: 2 }, { provider });
+    // Reading the charge is never a reason to generate again: exactly the
+    // caller's count of calls runs, and the run publishes what it got.
+    expect(provider.imageCalls).toHaveLength(2);
+    expect(provider.textCalls).toHaveLength(0);
+    expect(job.run.outputs).toHaveLength(2);
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
+  });
+
+  test("a failed run leaves no record and no cost claim — a failure costs nothing recorded", async () => {
+    // The first candidate is billed and persisted; the second fails. The
+    // publication discipline still holds — the whole run is removed, so no
+    // cost is claimed for it, and specifically no zero-cost inference from the
+    // failure remains readable anywhere.
+    let call = 0;
+    const provider = fakeProvider({
+      image: async () => {
+        call++;
+        if (call === 2) throw new Error("provider exploded on the second candidate");
+        return {
+          images: [{ base64: Buffer.from("first-candidate").toString("base64") }],
+          warnings: [],
+          billing: { costUsd: 0.006255 },
+        };
+      },
+    });
+    await expect(
+      runUniformGeneration(jobRoot(), "gen-test", { ...base, count: 2 }, { provider }),
+    ).rejects.toThrow(/exploded/);
+    await expectNoPublication();
+    expect(await listGenerationJobs(jobRoot())).toEqual([]);
+  });
+});
+
+/**
+ * #126 — how a recorded cost is read. A pre-#126 record can never read as a
+ * charge measured on its request, and a version 2 record carries exactly one
+ * cost shape, so the two can never be mixed or guessed at.
+ */
+describe("cost basis on read (#126)", () => {
+  /** A record in the exact pre-#126 shape: on disk as the old writer published it. */
+  function v1Record(costUsd: number | null, costMeasured: boolean): Record<string, unknown> {
+    return {
+      schemaVersion: 1,
+      jobId: "gen-legacy",
+      kind: "generation",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      request: {
+        prompt: "a lighthouse at dusk",
+        intent: "full-canvas",
+        model: "gpt-image",
+        sizing: { kind: "size", width: 1080, height: 1080 },
+        count: 1,
+      },
+      run: {
+        ranAt: "2026-01-01T00:00:05.000Z",
+        model: "openai/gpt-image-2",
+        fullPrompt: "a lighthouse at dusk",
+        costUsd,
+        costMeasured,
+        warnings: [],
+        outputs: [
+          { contentHash: "a".repeat(64), file: `outputs/${"a".repeat(64)}.png`, mediaType: "image/png" },
+        ],
+      },
+    };
+  }
+
+  /** A record in the basis-bearing shape, with the given cost (absent when undefined). */
+  function v2Record(cost: unknown): Record<string, unknown> {
+    const record = v1Record(0.0045, true);
+    record.schemaVersion = 2;
+    const run = record.run as Record<string, unknown>;
+    delete run.costUsd;
+    delete run.costMeasured;
+    if (cost !== undefined) run.cost = cost;
+    return record;
+  }
+
+  async function writeRecord(jobId: string, record: Record<string, unknown>): Promise<void> {
+    await mkdir(path.join(jobRoot(), jobId), { recursive: true });
+    await writeFile(path.join(jobRoot(), jobId, "job.json"), JSON.stringify(record, null, 2) + "\n");
+  }
+
+  test("a pre-#126 record reads as an estimate — never a charge measured on its request", async () => {
+    await writeRecord("gen-legacy", v1Record(0.0045, true));
+    const job = await loadGenerationJob(jobRoot(), "gen-legacy");
+    // The recorded version is preserved as written; the cost is the canonical
+    // interpretation of that version's shape.
+    expect(job.schemaVersion).toBe(1);
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 });
+    // The misleading pre-#126 pair is not propagated to any reader.
+    expect("costUsd" in job.run).toBe(false);
+    expect("costMeasured" in job.run).toBe(false);
+  });
+
+  test("a pre-#126 record whose amount was unknown stays unknown", async () => {
+    await writeRecord("gen-legacy-unknown", v1Record(null, false));
+    const job = await loadGenerationJob(jobRoot(), "gen-legacy-unknown");
+    expect(job.run.cost).toEqual({ basis: "unknown" });
+    expect(job.run.cost).not.toHaveProperty("usd");
+  });
+
+  test("a pre-#126 placeholder zero reads as unknown, not as a zero estimate", async () => {
+    // The old writer recorded `approxCost 0 × outputs` for an unregistered raw
+    // gateway id. That 0 was never a rate, so reading it as a zero estimate
+    // would be the zero-cost claim the current writer refuses to make.
+    await writeRecord("gen-legacy-zero", v1Record(0, false));
+    expect((await loadGenerationJob(jobRoot(), "gen-legacy-zero")).run.cost).toEqual({ basis: "unknown" });
+  });
+
+  test("the committed example records — real pre-#126 bytes — read as estimates, not charges", async () => {
+    const exampleRoot = path.resolve(import.meta.dir, "..", "examples");
+    const records: GenerationJobRecord[] = [];
+    for (const example of await readdir(exampleRoot, { withFileTypes: true })) {
+      if (!example.isDirectory()) continue;
+      const generationRoot = path.join(exampleRoot, example.name, "generation");
+      for (const jobId of await readdir(generationRoot).catch(() => [])) {
+        const raw = await readFile(path.join(generationRoot, jobId, "job.json"), "utf8");
+        records.push(parseGenerationJobRecord(raw, jobId));
+      }
+    }
+    // The example Projects retain the exact records the pre-#126 writer
+    // published: reading them must never turn a historical rate into a charge.
+    // (A later example generated by the current writer is version 2 and may
+    // legitimately carry a receipt — the assertion is about the pre-#126
+    // corpus, which is what proves a historical record stays honest.)
+    const legacy = records.filter((record) => record.schemaVersion === 1);
+    expect(legacy.length).toBeGreaterThanOrEqual(4);
+    for (const record of legacy) {
+      expect(["registry-estimate", "unknown"]).toContain(record.run.cost.basis);
+    }
+  });
+
+  test("a stated account-window-delta basis reads as a delta, never a receipt", async () => {
+    // Ply's writer has no balance-reading path (#126, out of scope), so no run
+    // records a delta — but a record that states one must not be misread as a
+    // per-request charge, and the vocabulary keeps that distinction readable.
+    await writeRecord("gen-delta", v2Record({ basis: "account-window-delta", usd: 0.016 }));
+    const job = await loadGenerationJob(jobRoot(), "gen-delta");
+    expect(job.run.cost).toEqual({ basis: "account-window-delta", usd: 0.016 });
+  });
+
+  test("a version 2 record whose cost is not exactly one basis fails closed", async () => {
+    const cases: Record<string, unknown> = {
+      "gen-cost-missing": undefined,
+      "gen-cost-null": null,
+      "gen-cost-no-basis": { usd: 0.5 },
+      "gen-cost-unknown-with-amount": { basis: "unknown", usd: 0.5 },
+      "gen-cost-amount-less": { basis: "actual-charge" },
+      "gen-cost-negative": { basis: "registry-estimate", usd: -1 },
+      "gen-cost-not-a-number": { basis: "registry-estimate", usd: "0.5" },
+      "gen-cost-invented-basis": { basis: "measured", usd: 0.5 },
+    };
+    for (const [jobId, cost] of Object.entries(cases)) {
+      await writeRecord(jobId, v2Record(cost));
+      await expect(loadGenerationJob(jobRoot(), jobId)).rejects.toThrow(/cost/i);
+    }
+  });
+
+  test("the two cost shapes may not be mixed, in either direction", async () => {
+    const basisBesidePair = v2Record({ basis: "actual-charge", usd: 0.0045 });
+    (basisBesidePair.run as Record<string, unknown>).costMeasured = true;
+    await writeRecord("gen-mixed-v2", basisBesidePair);
+    await expect(loadGenerationJob(jobRoot(), "gen-mixed-v2")).rejects.toThrow(/contradictory|cannot be trusted/i);
+
+    const pairBesideBasis = v1Record(0.0045, true);
+    (pairBesideBasis.run as Record<string, unknown>).cost = { basis: "actual-charge", usd: 0.0045 };
+    await writeRecord("gen-mixed-v1", pairBesideBasis);
+    await expect(loadGenerationJob(jobRoot(), "gen-mixed-v1")).rejects.toThrow(/contradictory|cannot be trusted/i);
+
+    for (const [field, jobId] of [
+      ["costUsd", "gen-v1-no-cost"],
+      ["costMeasured", "gen-v1-no-flag"],
+    ] as const) {
+      const incomplete = v1Record(0.0045, true);
+      delete (incomplete.run as Record<string, unknown>)[field];
+      await writeRecord(jobId, incomplete);
+      await expect(loadGenerationJob(jobRoot(), jobId)).rejects.toThrow(new RegExp(field));
+    }
+  });
+
+  test("an unknown record version fails closed rather than being read under another contract", async () => {
+    const future = v2Record({ basis: "actual-charge", usd: 0.5 });
+    future.schemaVersion = 3;
+    await writeRecord("gen-v3", future);
+    await expect(loadGenerationJob(jobRoot(), "gen-v3")).rejects.toThrow(/schemaVersion 3/);
+    const older = v1Record(0.0045, true);
+    older.schemaVersion = 0;
+    await writeRecord("gen-v0", older);
+    await expect(loadGenerationJob(jobRoot(), "gen-v0")).rejects.toThrow(/schemaVersion 0/);
+  });
+
+  test("the writer publishes the basis-bearing shape only — the pre-#126 pair is gone", async () => {
+    const provider = fakeProvider();
+    const job = await runUniformGeneration(jobRoot(), "gen-v2", base, { provider });
+    expect(job.schemaVersion).toBe(2);
+    const onDisk = JSON.parse(await readFile(path.join(jobRoot(), "gen-v2", "job.json"), "utf8"));
+    expect(onDisk.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 });
+    expect("costUsd" in onDisk.run).toBe(false);
+    expect("costMeasured" in onDisk.run).toBe(false);
+  });
+});
+
 describe("runUniformGeneration", () => {
   test("full-canvas publishes the effective request, model, outputs, and provenance", async () => {
     const provider = fakeProvider();
@@ -272,8 +597,9 @@ describe("runUniformGeneration", () => {
     expect(job.run.model).toBe("openai/gpt-image-2");
     expect(job.run.fullPrompt).toBe("a lighthouse at dusk");
     expect(job.run.outputs).toHaveLength(2);
-    expect(job.run.costMeasured).toBe(true);
-    expect(job.run.costUsd).toBeCloseTo(0.0045 * 2, 10);
+    // No provider receipt in this run: the recorded cost is the registry
+    // estimate, marked as an estimate — never presented as a measured charge.
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
     for (const out of job.run.outputs) {
       expect(out.file).toMatch(/^outputs\/[a-f0-9]{64}\.png$/);
       expect(out.contentHash).toMatch(/^[a-f0-9]{64}$/);
@@ -765,16 +1091,16 @@ describe("executeUniformGeneration — verified Reference bytes", () => {
     const job = await executeUniformGeneration(jobRoot(), "gen-refs", ingested, { provider });
     expect(job.request.references).toEqual(ingested.request.references);
     expect(job.request.references?.map((r) => r.path)).toEqual(ingested.request.references!.map((r) => r.path));
-    // gpt-image's measured rate covers text-only calls (costCoversRefs: false):
-    // a reference call records unknown cost with its basis stated.
-    expect(job.run.costUsd).toBeNull();
-    expect(job.run.costMeasured).toBe(false);
+    // gpt-image's rate covers text-only calls (costCoversRefs: false): with no
+    // provider receipt, a reference call records unknown cost with its basis
+    // stated — never the text-only rate claimed as a charge.
+    expect(job.run.cost).toEqual({ basis: "unknown" });
     expect(job.run.warnings.join("\n")).toMatch(/reference-call cost recorded as unknown/);
     const onDisk = JSON.parse(await readFile(path.join(jobRoot(), "gen-refs", "job.json"), "utf8"));
     expect(onDisk).toEqual(job);
   });
 
-  test("a reference-capable model with a ref-covering rate keeps the measured cost", async () => {
+  test("a reference-capable model with a ref-covering rate records the registry estimate", async () => {
     const provider = fakeProvider();
     const p = path.join(root, "a.png");
     await writeFile(p, "bytes");
@@ -785,8 +1111,9 @@ describe("executeUniformGeneration — verified Reference bytes", () => {
       references: [p],
     });
     const job = await executeUniformGeneration(jobRoot(), "gen-covered", ingested, { provider });
-    expect(job.run.costMeasured).toBe(true);
-    expect(job.run.costUsd).toBeCloseTo(0.067, 10);
+    // The rate describes this call shape, so it is a usable estimate — still
+    // an estimate, and never a charge measured on the request.
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.067 });
   });
 });
 
