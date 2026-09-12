@@ -65,6 +65,11 @@ from typing import NoReturn
 # runtime pin then cannot vouch for.
 MODEL_REPO = "ZhengPeng7/BiRefNet_dynamic"
 MODEL_REVISION = "280306042f57b7a33854319da62fd86aaa89ec4c"
+# The pinned weights identity (spec #159 US-001, ADR-0020). Mirrors
+# DYNAMIC_SEGMENTER.sha256 / .source in src/segment.ts — never drift one
+# without the other (test/matting-prereq-failures.test.ts binds them).
+WEIGHTS_SHA256 = "e3d2e4884e51ff30f0cd630edc6b1e41b06b7f23a0a2a5169f7b7cb33a711c2d"
+WEIGHTS_SOURCE = f"https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}/model.safetensors"
 MAX_SIDE = 2048
 PAD_MULTIPLE = 32
 
@@ -89,20 +94,36 @@ def fail(msg: str) -> NoReturn:
     raise SystemExit(1)
 
 
-def assert_mps(torch: object) -> str:
+def assert_mps(torch: object, weights: str) -> str:
     """MPS must be the running device. Checked before weights load and before
-    any mask is written — a CPU-only run is a failure, not a warning."""
+    any mask is written — a CPU-only run is a failure, not a warning.
+
+    The refusal names the fix (expected weights path, pin, fetch command,
+    MPS requirement — spec #159 US-006): it is the process's own error text,
+    so the TypeScript caller surfaces it verbatim."""
     import torch as t
 
     assert torch is t
     built = t.backends.mps.is_built()
     avail = t.backends.mps.is_available()
     if not (built and avail):
+        from pathlib import Path as _Path
+
+        _parent = str(_Path(weights).parent) if weights else ""
+        parent = _parent if _parent not in ("", ".") else "models"
         fail(
             "MPS is required for local matting but is not the running device "
             f"(mps built: {built}, available: {avail}). "
             "There is no CPU or CoreML fallback — run on Apple Silicon with a "
-            "PyTorch MPS build."
+            "PyTorch MPS build.\n"
+            f"Expected weights: {weights}\n"
+            f"sha-256: {WEIGHTS_SHA256}\n"
+            f"Fetch the exact pinned bytes at revision {MODEL_REVISION}:\n"
+            f"  {WEIGHTS_SOURCE}\n"
+            f"  mkdir -p {parent}\n"
+            f"  curl -L --fail -o {weights} {WEIGHTS_SOURCE}\n"
+            "Then warm the pinned architecture cache once (small, needs network once):\n"
+            "  uv run --locked --script scripts/matte-birefnet-dynamic.py --warm-cache"
         )
     return "mps"
 
@@ -218,7 +239,7 @@ def main() -> None:
     from PIL import Image
 
     # Backend first: before weights load, before any mask is written.
-    device = assert_mps(torch)
+    device = assert_mps(torch, a.weights)
     weights = a.weights
     if not Path(weights).is_file():
         fail(f"the weights file is not there: {weights}")

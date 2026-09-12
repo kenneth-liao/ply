@@ -148,6 +148,36 @@ async function verifyWeights(): Promise<void> {
   verified.set(file, { size: info.size, mtimeMs: info.mtimeMs });
 }
 
+/** Whether process output reports an unavailable-MPS refusal. Word-boundary:
+ * bare /mps/i also matches ordinary words (samples, amps, dumps). */
+function isMpsUnavailable(text: string): boolean {
+  return /\bmps\b/i.test(text);
+}
+
+/** Whether the text already names the fix (path, pin, fetch) — the new
+ * script shape carries them, so the seam must not duplicate the block. */
+function hasPrereqFacts(text: string): boolean {
+  return (
+    text.includes(DYNAMIC_SEGMENTER.sha256) &&
+    text.includes(DYNAMIC_SEGMENTER.revision) &&
+    text.includes(DYNAMIC_SEGMENTER.source)
+  );
+}
+
+/**
+ * Enrich an MPS-unavailable refusal with the actionable diagnostic (spec
+ * #159 US-006, ADR-0020): expected weights path, pin, fetch command, and
+ * the MPS/no-fallback requirement. Defense in depth behind the script's
+ * own message — the one diagnostic text (`missingWeightsMessage`) stays
+ * the single home for the fix, so all three prerequisite failures read
+ * the same. A process text that already names the fix passes through
+ * untouched, keeping the message compact.
+ */
+function withMpsDiagnostic(base: string, procText: string, why: string): string {
+  if (hasPrereqFacts(procText)) return base;
+  return `${base}\n${missingWeightsMessage(why)}`;
+}
+
 /** What the one-shot inference process reported on stdout. */
 export interface InferenceObservation {
   maskPath: string;
@@ -158,7 +188,10 @@ export interface InferenceObservation {
  * Parse the single-process boundary: the process speaks MPS or the matte
  * fails. A non-MPS observation is a loud backend failure, never a silent
  * device switch; a nonzero exit carries stderr; unparseable or negative
- * output never produces a mask.
+ * output never produces a mask. MPS-unavailable refusals always carry the
+ * actionable diagnostic (expected weights path, pin, fetch command, MPS
+ * requirement): the script names them itself, and this seam appends the
+ * one diagnostic text when an older process text lacks them.
  */
 export function parseInferenceResult(
   stdout: string,
@@ -166,10 +199,19 @@ export function parseInferenceResult(
   exitCode: number,
 ): InferenceObservation {
   const tail = stderr.trim().slice(-2000);
-  if (exitCode !== 0)
-    throw new Error(
-      `Local matting failed (exit ${exitCode}): ${tail || "the inference process reported no error"}`,
-    );
+  if (exitCode !== 0) {
+    const base =
+      `Local matting failed (exit ${exitCode}): ${tail || "the inference process reported no error"}`;
+    if (isMpsUnavailable(`${stdout}\n${tail}`))
+      throw new Error(
+        withMpsDiagnostic(
+          base,
+          `${stdout}\n${tail}`,
+          "MPS is not available on this machine — the single inference process refused before writing any mask",
+        ),
+      );
+    throw new Error(base);
+  }
   let rec: unknown;
   try {
     rec = JSON.parse(stdout);
@@ -179,15 +221,32 @@ export function parseInferenceResult(
     );
   }
   const r = rec as { ok?: unknown; error?: unknown; mask?: unknown; device_observable?: unknown };
-  if (typeof r !== "object" || r === null || r.ok !== true)
-    throw new Error(
-      `Local matting failed: ${typeof (r as { error?: unknown } | null)?.error === "string" && (r as { error: string }).error !== "" ? (r as { error: string }).error : "the inference process reported failure"}${tail ? `\nstderr: ${tail}` : ""}`,
-    );
+  if (typeof r !== "object" || r === null || r.ok !== true) {
+    const detail =
+      typeof (r as { error?: unknown } | null)?.error === "string" &&
+      (r as { error: string }).error !== ""
+        ? (r as { error: string }).error
+        : "the inference process reported failure";
+    const base = `Local matting failed: ${detail}${tail ? `\nstderr: ${tail}` : ""}`;
+    if (isMpsUnavailable(`${detail}\n${tail}`))
+      throw new Error(
+        withMpsDiagnostic(
+          base,
+          `${detail}\n${tail}`,
+          "MPS is not available on this machine — the single inference process refused before writing any mask",
+        ),
+      );
+    throw new Error(base);
+  }
   if (r.device_observable !== BACKEND_MPS)
     throw new Error(
-      `Local matting ran on backend ${JSON.stringify(r.device_observable)}, not MPS — ` +
-        `there is no CPU or CoreML fallback, so nothing was published. ` +
-        `Run on Apple Silicon with a PyTorch MPS build.`,
+      withMpsDiagnostic(
+        `Local matting ran on backend ${JSON.stringify(r.device_observable)}, not MPS — ` +
+          `there is no CPU or CoreML fallback, so nothing was published. ` +
+          `Run on Apple Silicon with a PyTorch MPS build.`,
+        tail,
+        `the inference process ran on ${JSON.stringify(r.device_observable)} instead of MPS — inference needs Apple Silicon with a PyTorch MPS build`,
+      ),
     );
   if (typeof r.mask !== "string" || r.mask === "")
     throw new Error(`Local matting reported success but named no mask file — nothing was published`);
