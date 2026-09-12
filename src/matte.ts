@@ -36,6 +36,28 @@ export interface MatteEngineResult {
   engine: string;
   /** Anything worth recording on the run (e.g. the segmenter fell back to CPU). */
   warnings?: string[];
+  /**
+   * The backend that ran inference, as declared by the engine itself — a
+   * non-empty string, never a product enum (spec #159 ticket #160, US-004).
+   * Omitted only by engines that predate the version 2 publication contract;
+   * publication refuses an inference record without it.
+   */
+  backend?: string;
+  /**
+   * A timing figure with a stated boundary (`scope` names what was measured —
+   * fresh-process vs already-loaded figures must never share a scope).
+   * Omitted only by pre-contract engines; publication refuses an inference
+   * record without it.
+   */
+  timing?: MatteTiming;
+}
+
+/** A timing figure whose boundary is stated by its scope. */
+export interface MatteTiming {
+  /** Wall-clock milliseconds over the scope's boundary. Finite, ≥ 0. */
+  millis: number;
+  /** What the figure measures (e.g. the engine call after preflight). Non-empty. */
+  scope: string;
 }
 
 /**
@@ -74,6 +96,10 @@ export interface MatteOutcome {
   warnings: string[];
   /** The true-alpha report measured while verifying the returned bytes. */
   alpha: AlphaReport;
+  /** The inference backend, as declared by the engine. Absent on the native-alpha route (no inference ran). */
+  backend?: string;
+  /** The engine's timing figure with its stated boundary. Absent on the native-alpha route. */
+  timing?: MatteTiming;
 }
 
 /** Rec. 709 luminance — a predicted mask is read as brightness, white = subject. */
@@ -190,5 +216,5 @@ export async function matteCandidate(
       { cause: err },
     );
   }
-  return { bytes: result.bytes, engine: result.engine, warnings: result.warnings ?? [], alpha: report };
+  return { bytes: result.bytes, engine: result.engine, warnings: result.warnings ?? [], alpha: report, backend: result.backend, timing: result.timing };
 }

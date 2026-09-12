@@ -64,6 +64,8 @@ beforeAll(async () => {
   const engine: MatteEngine = async ({ bytes, label }) => ({
     bytes: composeMatte(bytes, mask, label),
     engine: "test/segmenter",
+    backend: "test-backend",
+    timing: { millis: 42, scope: "test-engine-call" },
   });
   const outputFile = path.join(jobsRoot, "gen-browser-review", job.run.outputs[0]!.file);
   await runMatting(matteRoot, "matte-browser-review", outputFile, { engine });

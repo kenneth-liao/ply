@@ -119,7 +119,12 @@ function countingEngine(mask: Buffer): { engine: MatteEngine; calls: () => numbe
   let n = 0;
   const engine: MatteEngine = async ({ bytes, label }) => {
     n++;
-    return { bytes: composeMatte(bytes, mask, label), engine: "test/segmenter" };
+    return {
+      bytes: composeMatte(bytes, mask, label),
+      engine: "test/segmenter",
+      backend: "test-backend",
+      timing: { millis: 42, scope: "test-engine-call" },
+    };
   };
   return { engine, calls: () => n };
 }

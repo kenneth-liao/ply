@@ -47,7 +47,10 @@ refused at the pass that produced it.
 
 The source bytes are never modified: the result is published content-addressed
 beside matte.json — the provenance record tracing the source identity and the
-engine (docs/matting-publication-contract.md). Failures publish nothing and
+engine (docs/matting-publication-contract.md). Inference records also retain
+a content-addressed copy of the exact source bytes (sources/<sha256>.png) so
+rematting never depends on the original path: run "ply matte" on that
+retained path to publish a new matte id. Failures publish nothing and
 exit nonzero.
 `;
 
@@ -113,9 +116,11 @@ function usage(message: string): { kind: "usage"; message: string; error: string
 /** Build the compact default text for a published/loaded matte. */
 function matteText(matte: {
   matteId: string;
-  request: { source: { path: string; contentHash: string } };
+  request: { source: { path: string; contentHash: string; file?: string } };
   result: {
     engine: string;
+    backend?: string;
+    timing?: { millis: number; scope: string };
     alpha: { width: number; height: number; transparentPx: number; opaquePx: number };
     outputs: { file: string; contentHash: string }[];
     warnings: string[];
@@ -126,6 +131,11 @@ function matteText(matte: {
     `  source: ${matte.request.source.path} (${matte.request.source.contentHash.slice(0, 12)})`,
     `  engine: ${matte.result.engine}`,
   ];
+  if (matte.request.source.file !== undefined)
+    lines.push(`  source-copy: ${matte.request.source.file}`);
+  if (matte.result.backend !== undefined) lines.push(`  backend: ${matte.result.backend}`);
+  if (matte.result.timing !== undefined)
+    lines.push(`  timing: ${matte.result.timing.millis} ms (${matte.result.timing.scope})`);
   for (const o of matte.result.outputs)
     lines.push(`  output: ${o.file} (${o.contentHash.slice(0, 12)}) · ${matte.result.alpha.width}×${matte.result.alpha.height}`);
   for (const w of matte.result.warnings) lines.push(`  warning: ${w}`);

@@ -59,6 +59,8 @@ describe("matted-content ingestion runs with the engine and generation SDK forbi
       const engine: MatteEngine = async ({ bytes, label }) => ({
         bytes: composeMatte(bytes, mask, label),
         engine: "test/segmenter",
+        backend: "test-backend",
+        timing: { millis: 42, scope: "test-engine-call" },
       });
       // The matte itself runs through the injected seam (no weights); its
       // ingestion below must run with the forbidden modules unloaded.

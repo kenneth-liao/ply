@@ -21,9 +21,21 @@ root; the default is `<cwd>/out/matting`):
 ```
 out/matting/<matteId>/
 ├── matte.json                # the record (schema below) — the commit point
-└── outputs/                  # content-addressed matted bytes (sha-256)
-    └── <sha256>.png
+├── outputs/                  # content-addressed matted bytes (sha-256)
+│   └── <sha256>.png
+└── sources/                  # content-addressed source copy (schemaVersion 2
+    └── <sha256>.png          #   inference records only, when distinct — see §2)
 ```
+
+A `schemaVersion` 2 inference record stores a copy of the exact source bytes
+that were read at `sources/<sha256>.png`, where the filename hash is the
+record's `request.source.contentHash` — the copy *is* the source identity,
+not a second hash. When a distinct copy exists, the record names its path in
+`request.source.file`, so rematting is ordinary `ply matte` on that retained
+path (no new command) and never depends on the caller's original file.
+Native-alpha records (`source` hash equals output hash) store one blob under
+`outputs/` and omit `sources/` — two identical blobs are never stored.
+`schemaVersion` 1 records have no source copy.
 
 Matte ids match `^[a-z0-9][a-z0-9-]*$`; the auto id is
 `matte-<yyyymmdd>-<8 hex>`. Creating over an existing matte id (`matte.json`
@@ -31,22 +43,29 @@ present) is refused — matting a new image records a new matte; nothing is ever
 overwritten. A stale directory without `matte.json` (a hard crash) holds no
 lineage and may be reclaimed by a retry of the same id.
 
-## 2. Record schema (schemaVersion 1, kind "matting")
+## 2. Record schema (schemaVersion 2, kind "matting")
+
+New records are `schemaVersion` 2. The parser reads versions 1 and 2:
+version 1 records stay readable with no backfill, and missing source copy /
+backend / timing on a version 1 record is not an error.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "matteId": "matte-20260908-ab12cd34",
   "kind": "matting",
   "createdAt": "2026-09-08T12:00:00.000Z",
   "request": {
     "source": {
       "path": "caller-supplied path as written",
-      "contentHash": "sha-256 derived once at the operation boundary"
+      "contentHash": "sha-256 derived once at the operation boundary",
+      "file": "sources/<sha256>.png"
     }
   },
   "result": {
     "engine": "native-alpha | local-segmentation:<weights filename>",
+    "backend": "the engine-declared backend that ran inference",
+    "timing": { "millis": 1234, "scope": "engine" },
     "alpha": { "width": 1024, "height": 1024, "transparentPx": 402391, "opaquePx": 500001 },
     "warnings": [],
     "outputs": [
@@ -67,6 +86,27 @@ Facts and their one home:
   operation boundary from the exact bytes read. The source file is never
   modified — the source remains where the caller put it, and its identity
   lets #108 trace lineage even after the file moves.
+- **`request.source.file` names the retained source copy**, present if and
+  only if a distinct copy was stored (`sources/<contentHash>.png`). The
+  filename hash must equal `request.source.contentHash` — enforced by the
+  parser, so the copy can never drift into a second identity.
+- **`result.backend` names the backend that ran inference.** It is an
+  engine-declared non-empty string, not a product enum: each engine reports
+  what it actually used. It is required on version 2 inference records and
+  must be absent on native-alpha records (no inference ran — nothing to name).
+  The observed production backend is the engine-swap ticket's ownership.
+- **`result.timing` is a timing figure with a stated boundary**
+  (`{ millis, scope }`, `millis` finite and ≥ 0, `scope` non-empty).
+  Fresh-process vs already-loaded figures must never be mixed under one
+  scope: for the shipped engine, scope `"engine"` means wall time of the
+  engine call after preflight (the session is already loaded there, so cold
+  weight-load/compile is excluded by construction). Required on version 2
+  inference records; must be absent on native-alpha records.
+- **Version 2 inference records require all three new facts.** A version 2
+  inference record that omits `request.source.file`, `result.backend`, or a
+  well-formed `result.timing` fails to parse. A version 2 native-alpha
+  record must omit `request.source.file`, `result.backend`, and
+  `result.timing`, and its output hash must equal the source hash.
 - **`result.engine` records the engine**, `native-alpha` when the source's own
   alpha was the matte (no inference, and the published bytes are the exact
   source bytes — their content hash equals the source's), or the engine name
@@ -98,8 +138,9 @@ Facts and their one home:
 
 ## 4. Publication discipline and failure boundary
 
-- Output bytes are persisted first; `matte.json` is the commit point, written
-  last. There is no moment where a record exists without its output.
+- Output bytes and the retained source copy (version 2 inference records)
+  are persisted first; `matte.json` is the commit point, written last.
+  There is no moment where a record exists without its output.
 - Any caught failure (invalid id, duplicate id, unreadable or non-PNG source,
   preflight refusal, unusable matte, write failure) removes the freshly
   created matte directory and reports `{ok: false}` with a nonzero exit — the
@@ -118,6 +159,10 @@ Facts and their one home:
 - Default output is compact human text; `--json` emits `{ok: true, matteId,
   matteDir, matte}` / `{ok: false, error}`. Exit codes: 0 ok, 1 failure,
   2 usage.
+- Compact text names the retained source path (`source-copy:`) when a distinct
+  copy was stored, and the inference backend and timing (`backend:`,
+  `timing: <millis> ms (<scope>)`) on inference records. `--json` exposes
+  the same facts through the embedded record.
 - Richer evidence presentation is #109's ownership, delivered as
   `ply generate review <job-id>` (docs/generation-publication-contract.md
   §7) for published evidence — it associates a matte by the same derived
