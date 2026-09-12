@@ -18,10 +18,10 @@
  *     verified against the true-alpha gate *here*, at the boundary, so a
  *     degenerate matte can never be recorded as one.
  *
- * The engine is a seam. The shipped one runs a BiRefNet ONNX segmenter
- * **locally** (`src/segment.ts`) — no model call leaves the machine at
- * matting time, so a matting attempt spends nothing and a failed one has no
- * cost to lose (ADR-0006). Tests inject their own engine.
+ * The engine is a seam. The shipped one runs the pinned BiRefNet Dynamic
+ * checkpoint locally on PyTorch/MPS (`src/segment.ts`, ADR-0020) — no model
+ * call leaves the machine at matting time, so a matting attempt spends
+ * nothing and a failed one has no cost to lose. Tests inject their own engine.
  */
 import { decodePng, encodePngRgba, PngParseError } from "./png.js";
 import { verifyTrueAlpha, type AlphaReport } from "./alpha.js";

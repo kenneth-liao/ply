@@ -1,6 +1,7 @@
 # ADR-0009: Local segmentation runs BiRefNet HR
 
-- Status: Accepted (from ticket #44)
+- Status: Superseded by ADR-0020 (BiRefNet Dynamic on PyTorch/MPS, spec #159)
+- Original status: Accepted (from ticket #44)
 - Context: the local matting pass (ADR-0006) is a pin behind a fixed seam, and
   ticket #44 benchmarked candidate segmenters for cutout quality on real
   headshots (hair edges, profile silhouettes, fingers/watch/tattoo detail).
