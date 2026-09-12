@@ -224,6 +224,23 @@ describe("parseInferenceResult — MPS-unavailable errors carry the fix", () => 
     expect(err.message).not.toContain(DYNAMIC_SEGMENTER.source);
   });
 
+  test("a genuine MPS inference failure stays unenriched — names the device, not the refusal", () => {
+    // After assert_mps succeeds the script can still fail inference on MPS
+    // (OOM, etc.): that is not an unavailable-MPS machine, so the operator
+    // must not be told to re-fetch weights (INT-1).
+    const err = (() => {
+      try {
+        parseInferenceResult("", "matte-birefnet-dynamic: inference failed on mps: MPS out of memory", 1);
+        throw new Error("unreachable");
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+    expect(err.message).toContain("inference failed on mps");
+    expect(err.message).not.toContain(DYNAMIC_SEGMENTER.sha256);
+    expect(err.message).not.toContain(DYNAMIC_SEGMENTER.source);
+  });
+
   test("an MPS failure record carries path, pin, fetch, and the MPS requirement", () => {
     const err = (() => {
       try {

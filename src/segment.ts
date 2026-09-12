@@ -148,10 +148,14 @@ async function verifyWeights(): Promise<void> {
   verified.set(file, { size: info.size, mtimeMs: info.mtimeMs });
 }
 
-/** Whether process output reports an unavailable-MPS refusal. Word-boundary:
- * bare /mps/i also matches ordinary words (samples, amps, dumps). */
+/** Whether process output is the MPS-unavailable *refusal* (the
+ * `assert_mps` fail text), not merely a message that names the device.
+ * Matches the refusal phrases — never the bare token: after a successful
+ * assertion the script can still `fail(f"inference failed on {device}…")`
+ * with device == "mps" (OOM, etc.), and that genuine inference failure
+ * must not be misdiagnosed as a missing-MPS machine (INT-1). */
 function isMpsUnavailable(text: string): boolean {
-  return /\bmps\b/i.test(text);
+  return /mps is required|not the running device|no cpu or coreml fallback/i.test(text);
 }
 
 /** Whether the text already names the fix (path, pin, fetch) — the new
