@@ -1,6 +1,11 @@
 # ADR-0014: Uniform Layers with caller-owned content policy
 
-- Status: Accepted — target design; existing gates remain until separately migrated
+- Status: Accepted — uniform generation with caller-owned content policy is
+  shipped ([spec #102](https://github.com/kenneth-liao/ply/issues/102)), including
+  the #114 retirement of the category-specific generation entry points. Still
+  target: named Variant sets and the legacy approval/trial-output markers leave
+  the schema, and caller-parameterized region checking replaces the hardcoded
+  region scope (ADR-0015).
 - Supersedes: ADR-0001, ADR-0004, ADR-0008, ADR-0011
 
 Ply is a general-purpose image composer over one Layer primitive, not a

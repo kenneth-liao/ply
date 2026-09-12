@@ -2,37 +2,43 @@
 
 Ply is becoming a general-purpose layered image composer.
 [ISA.md](ISA.md) defines the destination; [CONTEXT.md](CONTEXT.md) defines its
-accepted vocabulary. The composer foundation ([spec #77](https://github.com/kenneth-liao/ply/issues/77))
-is shipped and acceptance-audited: self-contained Projects, independently
-editable and reusable Layers, arbitrary-size Compositions, and replayable
-Render history, including integrated relocation/offline qualification.
-Generation unification and the matting/region-gate migration remain unimplemented.
+accepted vocabulary. Two shipments are acceptance-audited against `main`:
+
+- the composer foundation ([spec #77](https://github.com/kenneth-liao/ply/issues/77))
+  — self-contained Projects, independently editable and reusable Layers,
+  arbitrary-size Compositions, and replayable Render history, including
+  integrated relocation/offline qualification;
+- uniform source-image generation with caller-owned content policy, and
+  independent local Matting ([spec #102](https://github.com/kenneth-liao/ply/issues/102))
+  — including the retirement of the category-specific generation entry points.
+
+Caller-parameterized region checking is the remaining separately scoped target
+migration named by ADR-0015; the legacy Scene surface still runs as documented
+under [Legacy surface](#legacy-surface-preserved), and ADR-0014 records what
+remains target for it.
 
 ## Current implementation
 
-The new Project workflow below supports caller-selected canvas dimensions,
-local image and text Layers, shared edits and forks, and independent cross-Project
-copies. Rendering is local and deterministic.
-
-The preserved legacy workflow uses a versioned **Scene** for 1280×720 images:
-an ordered list of image, text, shape, connector, and group Layers.
+The composer surface is **Project**, **Composition**, and **Layer**:
+caller-selected canvas dimensions, local image and text Layers, generated and
+independently matted content ingested as ordinary Layers, shared edits and
+forks, independent cross-Project copies, and local deterministic Rendering.
+New work starts here — see [Quick start](#quick-start), the sections below, and
+the `ply-operating` skill.
 
 Models are optional source-asset producers. **Generation** is one uniform
 operation (`ply generate`) with no subject category (ADR-0014): full-canvas or
 isolated output intent is a request parameter, and no content policy is imposed
-on the prompt. Final text and final composition stay local. The legacy
-category-specific generation commands (`jobs plates|objects|creators|rerun`)
-are retired; their records remain inspectable (see below).
+on the prompt. **Matting** is a separate caller-invoked local operation
+(`ply matte`, ADR-0015). Final text and final composition stay local.
+Category-specific generation and adoption are retired: the legacy
+`jobs plates|objects|creators|rerun|adopt` and `library adopt` commands no
+longer run, and their existing records remain inspectable (see below).
 
-The legacy workflow is:
-
-1. Supply existing image files or candidate Assets.
-2. Author a Scene.
-3. Validate and render locally.
-4. Iterate with Scene edits or Variants, without another model call.
-
-The legacy terms and commands below describe what runs today, not the target
-glossary. Architectural decisions are in [docs/adr/](docs/adr/).
+The preserved legacy workflow uses a versioned **Scene** for 1280×720 images
+and is documented under [Legacy surface](#legacy-surface-preserved). It is not
+the entry path for new work, and its terms are not the target glossary.
+Architectural decisions are in [docs/adr/](docs/adr/).
 
 ## Projects and Compositions (new surface)
 
@@ -43,26 +49,10 @@ defaults — is taught in [.agents/skills/ply-operating/SKILL.md](.agents/skills
 authority: see [.agents/skills/visual-authoring/SKILL.md](.agents/skills/visual-authoring/SKILL.md).
 
 The composer workflow runs through `ply project`, `ply composition`, and
-`ply layer` — see `ply <module> --help` and
+`ply layer` — see [Quick start](#quick-start) for the commands,
+`ply <module> --help` for each module's operations, and
 [docs/project-storage-contract.md](docs/project-storage-contract.md) for the
-full contracts. In brief:
-
-```bash
-ply project init ~/projects/my-poster
-ply composition create poster --width 1080 --height 1080 -p ~/projects/my-poster
-ply composition add poster headline --text "Hello" --font Anton -p ~/projects/my-poster
-ply composition render poster -p ~/projects/my-poster
-# Every successful render retains a manifest under the Project's renders/:
-ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster
-```
-
-A render manifest pins the exact ordered Layer revisions, canvas, and
-rendering-environment identity used for that paint. Replay regenerates the
-pixels byte-identically from those pinned inputs — after source Layers are
-edited, uses are removed or reordered, the Project is relocated, or the
-original source files and the rendered PNG are gone — and refuses missing,
-corrupted, or malformed history, or a different rendering environment,
-instead of silently substituting content.
+full contracts.
 
 ## Uniform generation (new surface)
 
@@ -426,9 +416,10 @@ cp .env.local.example .env.local
 ```
 
 Run `bun run ply --help`, or use `bun link` to install the `ply` executable.
-For example, `ply scene schema` delegates to the existing Scene command.
-The existing `bun run scene`, `bun run library`, and `bun run jobs` scripts
-remain supported. The repository is `kenneth-liao/ply`; the local checkout is
+The composer modules are `ply project`, `ply composition`, `ply layer`,
+`ply generate`, and `ply matte`; the existing `bun run scene`, `bun run library`,
+and `bun run jobs` legacy scripts remain supported. The repository is
+`kenneth-liao/ply`; the local checkout is
 `/Users/kennethliao/projects/tools/ply`.
 
 `PLY_LIBRARY_ROOT` relocates the current asset library; `PLY_MODEL_DIR`
@@ -453,9 +444,53 @@ The weights are gitignored and pinned by sha-256 in `src/segment.ts`.
 
 ## Quick start
 
-Generate source content and matte it:
+Create a Project, build a Composition, render it locally, and replay the result:
 
-Create and render a Scene:
+```bash
+ply project init ~/projects/my-poster
+ply composition create poster --width 1080 --height 1080 -p ~/projects/my-poster
+ply composition add poster headline --text "Hello" --font Anton -p ~/projects/my-poster
+ply composition render poster -p ~/projects/my-poster
+# Every successful render retains a manifest under the Project's renders/:
+ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster
+```
+
+A render manifest pins the exact ordered Layer revisions, canvas, and
+rendering-environment identity used for that paint. Replay regenerates the
+pixels byte-identically from those pinned inputs — after source Layers are
+edited, uses are removed or reordered, the Project is relocated, or the
+original source files and the rendered PNG are gone — and refuses missing,
+corrupted, or malformed history, or a different rendering environment,
+instead of silently substituting content.
+
+Content enters a Composition as ordinary Layers: import a local image, or
+generate one and matte it first when true alpha is needed (the generation and
+Matting sections above document both operations). The `ply-operating` skill
+teaches that route and its chosen defaults. The legacy Scene workflow is
+preserved under [Legacy surface](#legacy-surface-preserved).
+
+## Legacy surface (preserved)
+
+The legacy workflow is:
+
+1. Supply existing image files or candidate Assets.
+2. Author a Scene.
+3. Validate and render locally.
+4. Iterate with Scene edits or Variants, without another model call.
+
+It keeps a versioned **Scene** for 1280×720 images: an ordered list of image,
+text, shape, connector, and group Layers. It is preserved for existing work and
+works offline; it is not the entry path for new callers, and the terms below
+describe what runs today, not the target glossary. Retired generation and
+adoption commands stay documented as inspect/review-only records: none of them
+starts a generation run, and new generated content enters only through the
+composer surface.
+
+Scene and `jobs` commands write machine-readable JSON to stdout; `generate` and
+`matte` print compact text by default and emit machine-readable JSON only under
+`--json`.
+
+### Scene quick start
 
 ```bash
 bun run scene init headline-card --out thumbnail.scene.json
@@ -464,12 +499,9 @@ bun run scene validate thumbnail.scene.json
 bun run scene render thumbnail.scene.json
 ```
 
-Scene and `jobs` commands write machine-readable JSON to stdout;
-`generate` and `matte` print compact text by default and emit
-machine-readable JSON only under `--json`. Successful renders are exactly
-1280×720 and include a portable manifest.
+Successful Scene renders are exactly 1280×720 and include a portable manifest.
 
-## Scenes
+### Scenes
 
 A Scene is plain JSON. Layer order is paint order; later Layers appear on top.
 
@@ -522,7 +554,7 @@ bun run scene author <scene.json>
 bun run scene rerender <manifest.json>
 ```
 
-### Variants
+#### Variants
 
 A Scene can hold named sparse changes against stable Layer IDs. Render one or
 more without starting generation:
@@ -534,7 +566,7 @@ bun run scene render thumbnail.scene.json --variant headline-a,headline-b
 
 A multi-Variant render also creates a contact sheet.
 
-### Reference Thumbnails
+#### Reference Thumbnails
 
 A Reference Thumbnail is review metadata, not a Render input. Import normalizes
 a local PNG, JPEG, or WebP to the exact 1280×720 PNG profile. Non-16:9 images
@@ -550,7 +582,7 @@ bun run scene author thumbnail.scene.json
 `compare` and `author` provide side-by-side and alpha-overlay review. They do
 not alter final Render pixels.
 
-### Fonts and output
+#### Fonts and output
 
 Bundled OFL fonts live under `assets/fonts/` and load from local bytes. Unknown
 or unresolved font families fail instead of silently falling back.
@@ -559,7 +591,7 @@ Rendering keeps the 1280×720 dimensions and enforces the 2 MB output limit.
 Oversized PNGs are optimized locally. Each final Render gets a manifest with
 the exact Scene and Asset identities needed for offline rerendering.
 
-## Generation Jobs (legacy records)
+### Generation Jobs (legacy records)
 
 Category-specific generation is retired (spec #102, #114): the one generation
 operation is `ply generate` (see above), and isolation is `ply matte`. The
@@ -579,7 +611,7 @@ and matted content enters Projects as ordinary Layers
 (`ply composition add --from-generation` / `--from-matte`), and the records
 below stay reviewable evidence only.
 
-### Arbitrary reference files
+#### Arbitrary reference files
 
 The uniform surface replaces the old typed-reference syntax. Callers pass
 references directly with `ply generate --ref <path>`, repeatable, in caller
@@ -593,7 +625,7 @@ Reference URLs are not fetched by Ply. Download or authenticate outside the
 tool, then pass a local file. This keeps fetching, credentials, caching, and
 mutable remote content outside the composition boundary.
 
-### Legacy records and the library
+#### Legacy records and the library
 
 Existing plate/object/creator records stay reviewable:
 
@@ -613,7 +645,7 @@ through the explicit edit contract; caller workflow guidance (real-photo
 selection, identity anchors, approval practice) lives in the consuming
 repositories' own instructions.
 
-## Asset library
+### Asset library
 
 The shared library is the `assets/` directory. The filesystem is the registry;
 there is no catalog for generation references.
