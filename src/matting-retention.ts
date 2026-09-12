@@ -148,6 +148,15 @@ export async function selectMatteOutput(matteRoot: string, matteId: string): Pro
   let sourceBytes: Buffer | null = null;
   const sourceFile = matte.request.source.file;
   if (sourceFile !== undefined) {
+    // Only version 2 inference records name a source copy: version 1
+    // records predate the copy, so a v1 record naming one is contradictory
+    // lineage — fail closed here, before any Project write, instead of
+    // treating it as a copy to retain (no v1 backfill).
+    if (matte.schemaVersion === 1) {
+      throw new Error(
+        `Matte "${matteId}" is contradictory: a schemaVersion 1 record must not name a source copy ("${sourceFile}") — refusing to ingest`,
+      );
+    }
     // Shape refusal happens here, before any Project write — a record
     // naming a non-`sources/<hash>.png` copy never stages anything.
     if (!/^sources\/[a-f0-9]{64}\.png$/.test(sourceFile)) {
@@ -252,6 +261,13 @@ export async function retainMattingSourceBytes(
 ): Promise<void> {
   const sourceFile = matte.request.source.file;
   if (sourceFile === undefined) return;
+  // Same version gate as the resolution boundary: a version 1 record naming
+  // a copy is contradictory, never a copy to retain.
+  if (matte.schemaVersion === 1) {
+    throw new Error(
+      `Matte "${matte.matteId}" is contradictory: a schemaVersion 1 record must not name a source copy ("${sourceFile}") — refusing to ingest`,
+    );
+  }
   if (!/^sources\/[a-f0-9]{64}\.png$/.test(sourceFile)) {
     throw new Error(
       `Matte "${matte.matteId}" names an unrecognized source copy "${sourceFile}" — the record cannot be trusted`,

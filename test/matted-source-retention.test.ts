@@ -264,6 +264,45 @@ test("schemaVersion 1 retained records are unchanged — no source copy is backf
   expect(existsSync(path.join(projDir, "matting", v1Id, "sources"))).toBe(false);
 });
 
+test("a version 1 record naming a source copy is refused as contradictory with nothing staged", async () => {
+  // A v1 record that carries a v2-only `file` field with a present,
+  // hash-matching copy: pre-gate code would stage it as a v1 backfill.
+  // Fail-closed refusal must happen before any Project write instead.
+  const sourceHash = sha256(OPAQUE_SUBJECT);
+  const outputBytes = Buffer.from(NATIVE_ALPHA_PNG);
+  const outputHash = sha256(outputBytes);
+  const v1Id = "matte-v1-with-file";
+  await Bun.spawn(["mkdir", "-p", path.join(matteRoot, v1Id, "outputs"), path.join(matteRoot, v1Id, "sources")]).exited;
+  await writeFile(path.join(matteRoot, v1Id, `sources/${sourceHash}.png`), OPAQUE_SUBJECT);
+  await writeFile(path.join(matteRoot, v1Id, `outputs/${outputHash}.png`), outputBytes);
+  await writeFile(path.join(matteRoot, v1Id, "matte.json"), JSON.stringify({
+    schemaVersion: 1,
+    matteId: v1Id,
+    kind: "matting",
+    createdAt: "2026-09-08T12:00:00.000Z",
+    request: { source: { path: "caller.png", contentHash: sourceHash, file: `sources/${sourceHash}.png` } },
+    result: {
+      engine: "test/segmenter",
+      alpha: { width: 16, height: 16, transparentPx: 192, opaquePx: 64 },
+      warnings: [],
+      outputs: [{ contentHash: outputHash, file: `outputs/${outputHash}.png`, mediaType: "image/png" }],
+    },
+  }, null, 2) + "\n");
+  await makeComp("thumb");
+
+  const res = await invoke([
+    "composition", "add", "thumb", "hero", "--from-matte", v1Id,
+    "--project", projDir, "--json",
+  ]);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toMatch(/contradictory|version 1/i);
+
+  // Fail-closed before any Project write: no record, no source copy, no
+  // live Layer reference.
+  expect(existsSync(path.join(projDir, "matting", v1Id))).toBe(false);
+  expect(JSON.parse(await readFile(path.join(projDir, "compositions", "thumb.json"), "utf8")).layers).toEqual([]);
+});
+
 test("ingesting a matte does not rewrite existing Layer bytes or Renders", async () => {
   const plain = path.join(root, "plain.png");
   await writeFile(plain, NATIVE_ALPHA_PNG);
