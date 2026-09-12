@@ -43,6 +43,14 @@ order and content identity; the caller owns their discovery and organization.
 A caller-invoked local operation that isolates image content using alpha.
 It is independent of generation and applies to any image.
 
+**Cost basis**:
+How a Generation Job's recorded cost was obtained: the provider's own
+per-request billing receipt for the run, the model registry's per-image
+estimate, an observed account-window delta, or unknown. Ply records no delta —
+balance reading is out of scope — but the vocabulary keeps a delta from ever
+reading as a receipt. A registry rate is never a charge measured on the
+request.
+
 ## Cross-cutting invariants
 
 - A Layer is the only composition primitive. Anything requiring independent
@@ -63,5 +71,8 @@ It is independent of generation and applies to any image.
   Ply does not infer subject policy or impose likeness approval (ADR-0014).
 - Generation References come from the caller. Their identities are derived at
   Job creation and their bytes verified and read once at generation.
+- A recorded cost states its own basis. Missing billing metadata never turns a
+  historical estimate into a measured charge, and a failed generation makes no
+  cost claim at all.
 - Matting and region geometry remain local correctness machinery, not
   use-case or subject-policy gates (ADR-0015).

@@ -11,11 +11,24 @@ export type ModelKind = "multimodal" | "image";
 export interface ModelSpec {
   id: string;
   kind: ModelKind;
-  /** Per-image cost at 1K, for the run summary. */
+  /**
+   * Per-image cost at 1K, for the run summary — the estimate a run falls back
+   * to when no provider billing receipt is available. A value of 0 is not a
+   * free rate but the absence of any rate claim (an unregistered raw gateway
+   * id): a run on such a model records unknown cost, never a zero estimate
+   * (#126).
+   */
   approxCost: number;
   /**
+   * The rate's own provenance, and only that:
+   *
    * true  — taken from real AI Gateway billing records
    * false — from the Gateway's published pricing table, not yet observed
+   *
+   * This describes the *rate* — never a charge measured on a request — and is
+   * deliberately not copied into any run record (#126): a record says how its
+   * own amount was obtained (its cost basis), not how the registry once
+   * measured a rate.
    */
   costMeasured: boolean;
   /**
