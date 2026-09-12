@@ -1,6 +1,9 @@
 # ADR-0015: Matting and region checking are caller-invoked local machinery
 
-- Status: Accepted — target design; not yet implemented
+- Status: Accepted — independent Matting is shipped
+  ([spec #102](https://github.com/kenneth-liao/ply/issues/102)). Still target:
+  caller-parameterized region checking — the hardcoded YouTube-region scope
+  remains in place until that migration.
 - Supersedes: ADR-0006; ADR-0005's hardcoded YouTube-region scope
 
 Matting is an explicit local operation on any image, independent of generation

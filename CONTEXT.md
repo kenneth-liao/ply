@@ -2,7 +2,9 @@
 
 Canonical vocabulary and cross-cutting invariants for the accepted general-purpose
 composer destination. Project-scoped sharing and retained Render history have
-shipped; generation, Matting, and content-policy migration remain target behavior.
+shipped, as have uniform source-image generation with caller-owned content policy
+and independently invoked local Matting; caller-parameterized region checking
+remains target behavior.
 `README.md` documents the current command surface;
 `ISA.md` owns destination criteria and progress. Decisions live in `docs/adr/`.
 

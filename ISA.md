@@ -1,10 +1,10 @@
 ---
 thing: Ply — general-purpose layered image composer
 phase: active
-progress: 16/28
+progress: 18/28
 principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
 started: 2026-09-07
-updated: 2026-09-08
+updated: 2026-09-12
 ---
 
 # Ideal State — Ply
@@ -157,9 +157,9 @@ Why: a module that produces content and holds no opinions about it.
 - [ ] ISC-17: One generation command exists; `plate`, `object`, and `creator`
   are not kinds anywhere in `src/`.
   Probe: `rg` over `src/`. bash
-- [ ] ISC-18: Output shape — full-canvas or isolated — is a request parameter.
+- [x] ISC-18: Output shape — full-canvas or isolated — is a request parameter.
   Probe: both shapes from the same command. bash
-- [ ] ISC-19: Matting is an operation the caller invokes on any image, not a
+- [x] ISC-19: Matting is an operation the caller invokes on any image, not a
   pass welded to generation.
   Probe: matte a local file with no generation involved. bash
 
@@ -219,6 +219,11 @@ Why: cutting enforcement must not cut correctness or lose hard-won knowledge.
   edit module grows.
 - **The contact sheet.** Kept as a comparison command, but its shape after
   Variants are gone is undecided.
+- **Shared-library promotion versus caller-owned library.** ISC-16 assumes
+  promoting a Layer to a shared library is an explicit Ply operation, while
+  ADR-0014's destination owns no asset catalog and leaves reusable libraries to
+  the caller. Whether the destination keeps a Ply-owned promotion path or
+  leaves promotion entirely to caller-organized libraries is undecided.
 
 ## Decisions
 
@@ -307,9 +312,12 @@ criterion-now: ISC-5 (anti-flatten), ISC-7 and ISC-8 (import brings layers in in
 
 Foundation probes below passed in separate `bun test --isolate <file>` invocations
 on 2026-09-08 at `637cb17`; [spec #77's acceptance audit](https://github.com/kenneth-liao/ply/issues/77)
-records the integrated delivery evidence. These closures concern the new
-Composition model, not retirement of the legacy Scene surface. Whole-product
-ISC-2/3/4/17–23/27 remain open; ISC-16's explicit promotion is not implemented.
+records the integrated delivery evidence. The generation/Matting closures carry
+their own evidence and dates below. These closures concern the new Composition
+model and the shipped generation/Matting operations, not retirement of the
+legacy Scene surface. Whole-product ISC-2/3/4/17, 20–23, and 27 remain open;
+ISC-16's explicit promotion rests on an unresolved destination question (see
+Not yet specified).
 
 - ISC-1: `test/composition-render.test.ts` — exact 1080×1080 and 2560×1440 output.
 - ISC-5: `test/composition-import.test.ts` — individual shared IDs without baking; transitive import.
@@ -323,5 +331,13 @@ ISC-2/3/4/17–23/27 remain open; ISC-16's explicit promotion is not implemented
 - ISC-13: `test/composition-import.test.ts` — A → B → C renders with individual Layer addressability.
 - ISC-14: `test/render-history.test.ts` — byte-identical replay after edits and relocation, within the recorded rendering environment.
 - ISC-15: `test/composition.test.ts`; #77 acceptance audit US-002 — Project-local publication, no implicit library entry.
+- ISC-18: `test/generation-cli.test.ts` — full-canvas and isolated both come from
+  the one `generate` command, and isolated records the no-matte warning (re-run
+  2026-09-12); [spec #102's acceptance audit](https://github.com/kenneth-liao/ply/issues/102)
+  US-001 (2026-09-09).
+- ISC-19: `test/matting-cli.test.ts` — `ply matte` on a caller-selected local PNG
+  with no Generation Job or adoption state (re-run 2026-09-12); real inference on
+  the current BiRefNet Dynamic/MPS engine is recorded by
+  [spec #159](https://github.com/kenneth-liao/ply/issues/159) (#162/#164).
 - ISC-24/25/26: `693bc03` — authoring skill, superseding ADRs, and target glossary preparation.
 - ISC-28: #77 acceptance audit DEC-005 — prior logo export retained in the consuming repository's history.
