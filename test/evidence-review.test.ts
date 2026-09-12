@@ -64,7 +64,12 @@ function fakeProvider(): UniformProvider {
 /** A fake matte engine applying a hard-edged mask (true alpha, passes the gate). */
 function fakeEngine(mask: (x: number, y: number) => boolean): MatteEngine {
   const m = encodePng(24, 24, (x, y) => (mask(x, y) ? [255, 255, 255, 255] : [0, 0, 0, 255]));
-  return async ({ bytes, label }) => ({ bytes: composeMatte(bytes, m, label), engine: "test/segmenter" });
+  return async ({ bytes, label }) => ({
+    bytes: composeMatte(bytes, m, label),
+    engine: "test/segmenter",
+    backend: "test-backend",
+    timing: { millis: 42, scope: "test-engine-call" },
+  });
 }
 
 async function publishJob(jobId: string, refs: string[]): Promise<{ outputHash: string; outputFile: string }> {

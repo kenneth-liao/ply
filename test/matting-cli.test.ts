@@ -52,7 +52,12 @@ const NATIVE_ALPHA_PNG = encodePng(16, 16, (x, y) =>
 
 /** Fake engine that mattes through a given mask (the test seam's normal shape). */
 const engineOf = (mask: Uint8Array, engine = "test/segmenter"): MatteEngine =>
-  async ({ bytes, label }) => ({ bytes: composeMatte(bytes, mask, label), engine });
+  async ({ bytes, label }) => ({
+    bytes: composeMatte(bytes, mask, label),
+    engine,
+    backend: "test-backend",
+    timing: { millis: 42, scope: "test-engine-call" },
+  });
 
 /** An engine that must never be called — proves native alpha needs no inference. */
 const neverEngine: MatteEngine = Object.assign(
@@ -101,7 +106,7 @@ describe("ply matte — success through the public operation", () => {
 
     const record = json.matte;
     expect(record.kind).toBe("matting");
-    expect(record.schemaVersion).toBe(1);
+    expect(record.schemaVersion).toBe(2);
     expect(record.request.source.path).toBe(source);
     expect(record.request.source.contentHash).toBe(sha256(OPAQUE_SUBJECT));
     expect(record.result.engine).toBe("test/segmenter");

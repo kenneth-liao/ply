@@ -110,7 +110,7 @@ async function loadWeights(): Promise<Uint8Array> {
 }
 
 /** One session per process: loading half a gigabyte per candidate is absurd. */
-let sessionPromise: Promise<{ session: InferenceSession; warnings: string[] }> | undefined;
+let sessionPromise: Promise<{ session: InferenceSession; warnings: string[]; backend: string }> | undefined;
 
 /**
  * CoreML provider configuration for the HR segmenter. MLProgram + GPU
@@ -121,7 +121,7 @@ let sessionPromise: Promise<{ session: InferenceSession; warnings: string[] }> |
  */
 const COREML_FLAGS = 0x010 | 0x020;
 
-async function getSession(): Promise<{ session: InferenceSession; warnings: string[] }> {
+async function getSession(): Promise<{ session: InferenceSession; warnings: string[]; backend: string }> {
   sessionPromise ??= (async () => {
     const [ort, weights] = await Promise.all([import("onnxruntime-node"), loadWeights()]);
     const warnings: string[] = [];
@@ -132,6 +132,7 @@ async function getSession(): Promise<{ session: InferenceSession; warnings: stri
           graphOptimizationLevel: "all",
         }),
         warnings,
+        backend: "coreml",
       };
     } catch (err) {
       // CPU still produces the same matte, just slower — worth saying out loud
@@ -142,6 +143,7 @@ async function getSession(): Promise<{ session: InferenceSession; warnings: stri
       return {
         session: await ort.InferenceSession.create(weights, { executionProviders: ["cpu"] }),
         warnings,
+        backend: "cpu",
       };
     }
   })().catch((err) => {
@@ -235,8 +237,8 @@ export function maskPngFrom(data: Float32Array | Uint8Array, size: number): Uint
 /** Predict the subject mask for one candidate, as a grayscale PNG. */
 export async function predictSubjectMask(
   bytes: Uint8Array,
-): Promise<{ mask: Uint8Array; warnings: string[] }> {
-  const { session, warnings } = await getSession();
+): Promise<{ mask: Uint8Array; warnings: string[]; backend: string }> {
+  const { session, warnings, backend } = await getSession();
   const ort = await import("onnxruntime-node");
   const { size } = SUBJECT_SEGMENTER;
   const input = new ort.Tensor("float32", preprocess(bytes), [1, 3, size, size]);
@@ -252,7 +254,7 @@ export async function predictSubjectMask(
     throw new Error(
       `The segmenter returned ${data.length} values, not the ${size}×${size} mask the model declares`,
     );
-  return { mask: maskPngFrom(data, size), warnings };
+  return { mask: maskPngFrom(data, size), warnings, backend };
 }
 
 /**
@@ -275,11 +277,20 @@ export async function ensureSegmenterReady(): Promise<void> {
  */
 export function localSegmentationMatteEngine(): MatteEngine {
   const engine = async ({ bytes, label }: { bytes: Uint8Array; label: string }) => {
-    const { mask, warnings } = await predictSubjectMask(bytes);
+    // Scope "engine": wall time of this call after preflight. The matting
+    // pass always prefights before invoking the engine, so the session is
+    // already loaded here and cold weight-load/compile is excluded by
+    // construction — see docs/matting-publication-contract.md §2.
+    // Monotonic clock: a wall-clock step must never produce a negative figure.
+    const started = performance.now();
+    const { mask, warnings, backend } = await predictSubjectMask(bytes);
+    const composed = composeMatte(bytes, mask, label);
     return {
-      bytes: composeMatte(bytes, mask, label),
+      bytes: composed,
       engine: `local-segmentation:${SUBJECT_SEGMENTER.file}`,
       warnings,
+      backend,
+      timing: { millis: Math.max(0, Math.round(performance.now() - started)), scope: "engine" },
     };
   };
   return Object.assign(engine, { preflight: ensureSegmenterReady });

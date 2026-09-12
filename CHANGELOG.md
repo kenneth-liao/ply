@@ -4,6 +4,23 @@
 
 ### Added
 
+- Version 2 Matting publication records (#160, spec #159 US-003/US-004):
+  new `ply matte` inference records retain a content-addressed copy of the
+  exact source bytes at `sources/<sha256>.png` beside the output (named by
+  `request.source.file`, whose filename hash is the source identity — never
+  a second hash), so rematting is ordinary `ply matte` on that retained
+  path and never depends on the caller's original file. New inference
+  records also carry the engine-declared `result.backend` and a
+  `result.timing` figure with a stated boundary (`{millis, scope}`);
+  compact text and `--json` expose both, plus the retained source path when
+  distinct. Native-alpha records store one blob under `outputs/` and omit
+  the inference facts. The parser reads versions 1 and 2: version 1 records
+  stay readable with no backfill (missing new facts on v1 is not an error),
+  while a version 2 inference record omitting the new required facts fails
+  to parse. Engines that declare no backend/timing are refused before
+  anything is published. Project retention of source bytes stays #161's
+  ownership. Canonical contract: `docs/matting-publication-contract.md`.
+
 - The complete operating workflow as a discoverable skill (#144, spec #132
   US-004, DEC-007/008): `.agents/skills/ply-operating/SKILL.md` teaches the
   canonical import/generate → optional Matte → Layer ingestion →

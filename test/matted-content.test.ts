@@ -112,6 +112,8 @@ const closeTo = (a: number, b: number, tol = 2) => Math.abs(a - b) <= tol;
 const fakeEngine: MatteEngine = async ({ bytes, label }) => ({
   bytes: composeMatte(bytes, MASK, label),
   engine: "test/segmenter",
+  backend: "test-backend",
+  timing: { millis: 42, scope: "test-engine-call" },
 });
 
 /** Create a deterministic matte of the given source file through the public operation. */
