@@ -741,7 +741,7 @@ test.skipIf(process.platform !== "darwin")("cross-Project copy, complete source/
 test.skipIf(process.platform !== "darwin")("every introduced CLI module and help surface operates cleanly under process-level network denial", async () => {
   const topHelp = await invokeOffline(["--help"]);
   expect(topHelp.code).toBe(0);
-  expect(topHelp.stdout).toContain("Ply — local image composition");
+  expect(topHelp.stdout).toContain("Ply — the local image composer");
 
   for (const mod of ["project", "composition", "layer"] as const) {
     const modHelp = await invokeOffline([mod, "--help"]);

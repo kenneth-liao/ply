@@ -437,7 +437,7 @@ export async function approveCutout(
 export function trialCreatorError(id: string | undefined): string {
   return (
     `library cutout "${id ?? "?"}" is a trial Creator Asset (approval: "trial") — normal and final rendering reject it.\n` +
-    `Approve it explicitly with "bun run library approve ${id ?? "<id>"}", or render with --experimental for a clearly-marked non-final render.`
+    `Approve it explicitly with ("ply library approve ${id ?? "<id>"}", or render with --experimental for a clearly-marked non-final render.`
   );
 }
 
@@ -655,7 +655,7 @@ export async function resolveAsset(
       throw new Error(
         `unknown library ${opts?.kind ?? "asset"} "${parsed.id}". In library: ${
           pool.map((e) => e.meta.id).join(", ") ||
-          "(empty — add assets with bun run library)"
+          "(empty — add assets with ply library)"
         } — for a project-local file, use a project-relative path like ./<file>`,
       );
     }

@@ -264,7 +264,7 @@ describe("reviewJob — object", () => {
     expect(html).toContain("cannot qualify");
     // The refusal's guidance points at the replacement workflow, never the
     // retired adoption path.
-    expect(html).toMatch(/bun run matte/);
+    expect(html).toMatch(/ply matte/);
     expect(html).not.toMatch(/jobs adopt|library adopt/);
   });
 

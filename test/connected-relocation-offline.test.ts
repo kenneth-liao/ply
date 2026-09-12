@@ -876,7 +876,7 @@ darwinOnly(
     // coverage belongs to the #88 foundation qualification, not this slice).
     const topHelp = await invokeOffline(["--help"], root);
     expect(topHelp.code).toBe(0);
-    expect(topHelp.stdout).toContain("Ply — local image composition");
+    expect(topHelp.stdout).toContain("Ply — the local image composer");
     for (const mod of ["project", "composition", "layer", "generate", "matte"] as const) {
       const help = await invokeOffline([mod, "--help"], root);
       expect(help.code).toBe(0);

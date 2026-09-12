@@ -21,11 +21,12 @@ import path from "node:path";
 import { runMatting, MATTE_ID_PATTERN } from "./matting.js";
 import { localSegmentationMatteEngine, ENGINE_ID } from "./segment.js";
 import type { MatteEngine } from "./matte.js";
+import { usageMessage } from "./cli-present.js";
 
 const HELP = `
 ply matte — one independent local Matting operation (no Generation Job, no adoption)
 
-  bun run matte <image> [options]   Isolate the image's subject with a true-alpha
+  ply matte <image> [options]   Isolate the image's subject with a true-alpha
                                     matte and publish the result and provenance
                                     under out/matting/<matteId>/
 
@@ -111,7 +112,9 @@ function parse(args: string[]): Parsed {
 }
 
 function usage(message: string): { kind: "usage"; message: string; error: string } {
-  return { kind: "usage", message: `${message}\n${HELP.trim()}`, error: message };
+  // Concise and actionable: the correction plus a pointer — never the whole
+  // module manual embedded in the message (#128, F12/F16).
+  return { kind: "usage", message: usageMessage(message, "matte"), error: message };
 }
 
 /** Build the compact default text for a published/loaded matte. */

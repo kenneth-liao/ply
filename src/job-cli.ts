@@ -22,33 +22,29 @@
 import path from "node:path";
 import { loadJob, listJobs } from "./jobs.js";
 import { reviewJob } from "./review.js";
+import { extractGlobalFlags, helpResult, usageMessage, wantsJson, printResult } from "./cli-present.js";
 
 const HELP = `
-ply jobs — inspect the legacy Generation Job records
+ply jobs — inspect the legacy Generation Job records (read-only)
 
-  bun run jobs show <jobId>                 Full job record: request, typed references, runs
-  bun run jobs list                         Summarize recorded jobs
-  bun run jobs review <jobId>               Candidate review for any job kind — every
-                                            distinct candidate at full size and at
-                                            168px, its recorded isolation evidence
-                                            (the matte, checkerboard-showing the
-                                            alpha), and — for creators — face detail
-                                            against the identity anchors
-                                            (writes <jobDir>/review.html, offline)
+  ply jobs show <jobId>       Full job record: request, typed references, runs
+  ply jobs list               Summarize recorded jobs
+  ply jobs review <jobId>     Candidate review for any job kind — every distinct candidate
+                              at full size and at 168px, its recorded isolation evidence,
+                              and — for creators — face detail against the identity
+                              anchors (writes <jobDir>/review.html, offline)
 
-Category-specific generation and candidate adoption are retired: "jobs
-plates", "jobs objects", "jobs creators", "jobs rerun", and "jobs adopt" no
-longer exist. To produce isolated content, generate source images with the
-one uniform operation — "bun run generate <prompt> [options]" (full-canvas or
---intent isolated, optional ordered --ref local files) — isolate explicitly
-with "bun run matte <image>", and ingest the verified result as an ordinary
-Project Layer ("ply composition add <comp> <name> --from-generation <jobId>"
-or "--from-matte <matteId>"). Published records live under out/generation/
-(inspect with "bun run generate show|list|review"). This command only reads
-records that already exist under out/jobs/; it does not start generation and
-it publishes nothing.
+Category-specific generation ("jobs plates|objects|creators"), kind-dispatched
+"jobs rerun", and candidate adoption ("jobs adopt", "library adopt") are retired.
+New content: generate with "ply generate", isolate with "ply matte", and ingest
+as an ordinary Project Layer ("ply composition add ... --from-generation" or
+"--from-matte"). This command only reads records that already exist under
+out/jobs/ — it does not start generation and publishes nothing. Published
+records live under out/generation/ (inspect with "ply generate show|list|review").
 
-Every command prints JSON: { "ok": true, ... } or { "ok": false, "errors": [...]}.
+Output is compact text by default; --json emits one valid JSON result:
+{"ok": true, ...} or {"ok": false, "errors": [...]}. Exit codes: 0 ok,
+1 failure, 2 usage error.
 `;
 
 interface CliResult {
@@ -59,7 +55,9 @@ interface CliResult {
 const ok = (output: unknown): CliResult => ({ exitCode: 0, output });
 const usageError = (message: string): CliResult => ({
   exitCode: 2,
-  output: { ok: false, errors: [{ path: "argv", message: `${message}\n\n${HELP.trim()}` }] },
+  // Concise and actionable: the correction plus a pointer — never the whole
+  // module manual embedded in the message (#128, F12/F16).
+  output: { ok: false, errors: [{ path: "argv", message: usageMessage(message, "jobs") }] },
 });
 const failure = (message: string, path = "jobs"): CliResult => ({
   exitCode: 1,
@@ -108,8 +106,8 @@ async function dispatch(args: string[], deps: JobCliDeps): Promise<CliResult> {
 
   return usageError(
     cmd === undefined
-      ? `missing command — expected ${REMAINING_COMMANDS}. Generation and adoption are retired — generate with "bun run generate", matte with "bun run matte", and ingest as a Layer with "ply composition add --from-generation|--from-matte"`
-      : `unknown command "${cmd}" — expected ${REMAINING_COMMANDS}. Generation and adoption are retired — generate with "bun run generate", matte with "bun run matte", and ingest as a Layer with "ply composition add --from-generation|--from-matte"`,
+      ? `missing command — expected ${REMAINING_COMMANDS}. Generation and adoption are retired — generate with "ply generate", matte with "ply matte", and ingest as a Layer with "ply composition add --from-generation|--from-matte"`
+      : `unknown command "${cmd}" — expected ${REMAINING_COMMANDS}. Generation and adoption are retired — generate with "ply generate", matte with "ply matte", and ingest as a Layer with "ply composition add --from-generation|--from-matte"`,
   );
 }
 
@@ -121,19 +119,67 @@ export async function run(
   args: string[],
   deps?: Partial<JobCliDeps>,
 ): Promise<CliResult> {
+  // --json / --help / -h are module-global presentation flags: stripped before
+  // dispatch, which hand-parses only each command's own arguments (#128).
+  const { help, rest } = extractGlobalFlags(args);
+  const [cmd] = rest;
   const resolved: JobCliDeps = {
     jobsRoot: deps?.jobsRoot ?? path.resolve("out", "jobs"),
   };
-  const [cmd] = args;
   try {
-    return await dispatch(args, resolved);
+    if (help) return { exitCode: 0, output: helpResult(HELP.trim()) };
+    return await dispatch(rest, resolved);
   } catch (err) {
     return failure((err as Error).message || String(err), cmd ?? "jobs");
   }
 }
 
+/** Compact default text for one structured jobs result (#128, ISC-20). */
+function jobsText(cmd: string, output: unknown): string {
+  const out = output as {
+    ok: boolean;
+    errors?: { message: string }[];
+    help?: string;
+    job?: { jobId: string; kind: string; createdAt: string; runs: unknown[] };
+    jobs?: { jobId: string; kind: string; subject: string; createdAt: string; runs: number; candidates: number }[];
+    review?: string;
+    candidates?: unknown[];
+    anchors?: unknown[];
+  };
+  if (out.ok === false) return (out.errors ?? []).map((e) => e.message).join("\n");
+  if (typeof out.help === "string") return out.help;
+  switch (cmd) {
+    case "show": {
+      const job = out.job!;
+      return `Job ${job.jobId} (${job.kind}, ${job.createdAt}): ${job.runs.length} runs — the full record prints under --json.`;
+    }
+    case "list": {
+      const jobs = out.jobs ?? [];
+      if (jobs.length === 0) return "No recorded jobs.";
+      return (
+        `Jobs (${jobs.length}):\n` +
+        jobs
+          .map((j) => `  ${j.jobId} (${j.kind}, ${j.createdAt}): ${j.runs} runs, ${j.candidates} candidates — "${j.subject.slice(0, 48)}"`)
+          .join("\n")
+      );
+    }
+    case "review":
+      return (
+        `Review: ${out.review}\nCandidates (${(out.candidates ?? []).length}):` +
+        (out.candidates as { file: string }[]).map((c) => `\n  ${c.file}`).join("") +
+        `\nAnchors (${(out.anchors ?? []).length})`
+      );
+    default:
+      // An unrendered command result is visible rather than silently blank;
+      // every ordinary command has a case above, so this is a bug marker.
+      return JSON.stringify(out, null, 2);
+  }
+}
+
 if (import.meta.main) {
-  const { exitCode, output } = await run(process.argv.slice(2));
-  console.log(JSON.stringify(output, null, 2));
+  const argv = process.argv.slice(2);
+  const isJson = wantsJson(argv);
+  const { exitCode, output } = await run(argv);
+  printResult({ exitCode, text: jobsText(extractGlobalFlags(argv).rest[0] ?? "", output), json: output }, isJson);
   process.exit(exitCode);
 }

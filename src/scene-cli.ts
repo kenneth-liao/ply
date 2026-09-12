@@ -48,160 +48,55 @@ import {
 import { finalizeRender, type Optimization } from "./finalize.js";
 import { outsideDir } from "./paths.js";
 import { closeBrowser } from "./browser.js";
+import { extractGlobalFlags, helpResult, usageMessage, wantsJson, printResult } from "./cli-present.js";
 
 const HELP = `
-ply scene — versioned, locally rendered thumbnail compositions
+ply scene — versioned, locally rendered thumbnail compositions (legacy, preserved)
 
-  bun run scene schema                  Print the Scene JSON Schema document
-  bun run scene themes                  List bundled themes (name, description, revision)
-  bun run scene templates               List bundled scene templates
-  bun run scene init     <template>     Initialize a Scene from a template
-  bun run scene inspect  <scene.json>   Structured layer summary (resolved asset hashes,
-                                        theme-pinned identity, effective values)
-  bun run scene validate <scene.json>   Validate: field-specific errors before any render
-  bun run scene compare  <scene.json>   Compare the Scene's Render with its associated Reference
-                                        Thumbnail (reference.path): writes an offline sheet
-                                        (side by side at full size and 168px, an adjustable
-                                        alpha overlay, and a per-channel difference view) plus
-                                        the diff and render PNGs into out/. Review artifacts
-                                        only — never a manifest, never the final Render.
-  bun run scene author  <scene.json>   Open the live authoring session: validates the Scene and
-                                        its Reference Thumbnail, renders once in memory, then
-                                        serves the Render and Reference side by side plus an
-                                        adjustable overlay on a capability-scoped loopback URL
-                                        (printed as one-line JSON). Geometry edits preview
-                                        from session state; the view's Save control persists
-                                        them through the ordinary gate atomically, or refuses
-                                        with the offending field. Ctrl-C or SIGTERM closes it.
-  bun run scene reference import <scene.json> <file>
-                                        Normalize a local raster image (PNG, JPEG, or
-                                        WebP) to the canonical Reference Thumbnail profile
-                                        (exact 1280×720 PNG), store the copy inside the scene's
-                                        directory, and associate it with the Scene atomically.
-                                        --source <text> records user-supplied provenance.
-  bun run scene render   <scene.json>   Render to PNG (1280×720). The output must fit
-                                        YouTube's 2 MB limit: compliant renders pass
-                                        through untouched; oversized ones are optimized
-                                        locally (lossless first, then deterministic
-                                        palette quantization — dimensions never change);
-                                        a render that cannot comply fails with its size.
-  bun run scene guidelines <scene.json> Render the safe-area guideline view: the Scene
-                                        exactly as render would draw it, plus the
-                                        protected regions (duration badge, progress bar)
-                                        outlined. A review artifact — written to its own
-                                        file, never the final output, never a manifest.
-  bun run scene rerender <manifest.json>
-                         Re-render from a Render manifest: verifies the scene
-                         bytes and every recorded Asset identity first — a
-                         missing or changed input fails instead of silently
-                         resolving newer content — then rewrites the recorded
-                         outputs at their recorded paths. Works after moving
-                         the whole project directory.
+  ply scene schema                  Print the Scene JSON Schema document
+  ply scene themes                  List bundled themes (name, description, revision)
+  ply scene templates               List bundled scene templates
+  ply scene init     <template>     Initialize a Scene from a template
+  ply scene inspect  <scene.json>   Structured layer summary (resolved asset hashes,
+                                    theme-pinned identity, effective values)
+  ply scene validate <scene.json>   Validate: field-specific errors before any render
+  ply scene compare  <scene.json>   Compare the Scene's Render with its Reference Thumbnail:
+                                    an offline side-by-side, overlay, and per-channel
+                                    difference sheet written into out/
+  ply scene author  <scene.json>    Open the live authoring session on a loopback URL;
+                                    Ctrl-C or SIGTERM closes it
+  ply scene reference import <scene.json> <file>
+                                    Normalize a local raster (PNG, JPEG, or WebP) to the
+                                    canonical 1280×720 Reference Thumbnail and associate
+                                    it with the Scene atomically (--source <text> records
+                                    provenance)
+  ply scene render   <scene.json>   Render to PNG (1280×720, YouTube 2 MB compliance)
+  ply scene guidelines <scene.json> Render the safe-area guideline view (review artifact)
+  ply scene rerender <manifest.json>
+                                    Re-render from a Render manifest after relocation
 
 Options
-  --out <path>   init: where to write the Scene — inside the current
-                 directory; an existing file needs --force
-                 (default: print as "scene")
-                 render: output path inside the scene's directory
-                 (default: <scene-dir>/out/<scene-basename>.png;
-                 with one --variant: <scene-dir>/out/<scene>.<variant>.png)
-                 guidelines: output path inside the scene's directory
-                 (default: <scene-dir>/out/<scene-basename>.guidelines.png)
+  --out <path>     init: where to write the Scene (inside the current directory;
+                   an existing file needs --force; default: print as "scene")
+                   render/guidelines: output path inside the scene's directory
   --variant <name[,name...]>
-                 render: render one or more named Variants instead of the
-                 base Scene. One variant renders alone; several render as a
-                 batch plus a contact sheet (<scene-dir>/out/<scene>.contact.png)
-                 showing every output at 168px wide with its name.
-                 inspect: inspect the Scene resolved with that Variant —
-                 the variant's stored sparse changes come back verbatim.
-  --force        init: allow --out to overwrite an existing file
-  --experimental render only: permit trial Creator Assets (approval:
-                 "trial") in this render. The output is explicitly non-final:
-                 the default output name carries a .trial suffix, and when
-                 trial Creator Asset(s) were actually used, the result and
-                 manifest record "experimental": true and every output's
-                 warnings say the Render is non-final (rerender keeps the
-                 marker). validate, inspect, guidelines, and a non-
-                 experimental rerender never relax the gate — approve the
-                 asset (bun run library approve <id>) instead.
+                   render: one or more named Variants (several render as a batch plus
+                   a contact sheet). inspect: inspect the Scene resolved with that
+                   Variant — the variant's stored sparse changes come back verbatim
+  --force          init: allow --out to overwrite an existing file
+  --experimental   render only: permit trial Creator Assets (approval: "trial") in
+                   this render; the output is explicitly non-final (.trial suffix,
+                   "experimental": true). validate, inspect, guidelines, and a non-
+                   experimental rerender never relax the gate — approve the asset
+                   (ply library approve <id>) instead
+  --json           Emit machine-readable JSON on stdout: {"ok": true, ...} or
+                   {"ok": false, "errors": [...]}
+  --help, -h       Show this help
 
-Themes and templates
-  A Scene may pin a bundled theme: "theme": { "name", "revision" }. Precedence
-  is one rule — explicit layer value, then theme default, then the renderer's
-  built-in default. The revision is the sha-256 of the theme's content;
-  loading re-derives it and fails loudly on drift, so old Scenes never render
-  with silently changed theme content. "scene init" bakes a template's layers
-  into a plain Scene (no runtime template reference) with the theme pin set.
-
-Output is JSON on stdout: { "ok": true, ... } or { "ok": false, "errors": [...] }.
-Successful renders carry a "warnings" array (e.g. an auto-fit layer that
-could not fit at its min floor, or a safe-area violation naming the layer
-that intersects YouTube's duration-badge or progress-bar region) and write
-a Render manifest beside the output(s) (<out>.manifest.json) recording the
-scene identity, selected variants, exact Asset identities, tool version,
-and outputs — every path in it is relative to the manifest itself, so the
-project can be relocated and re-rendered offline via "scene rerender".
-"scene validate" reports the structured safeAreaViolations array. Exit
-codes: 0 ok, 1 invalid scene or render failure, 2 usage error.
-Rendering, validation, inspection, and rerendering are offline and never
-start generation.
-
-Safe areas (REQ-012)
-  The YouTube duration-badge and progress regions are defined once in
-  src/safe-area.ts. validate and render report visible layers whose painted
-  footprint intersects a region — as structured violations and as warnings
-  respectively. Violations never fail a render: a full-canvas plate
-  legitimately intersects, and accepting the overlap is the reviewer's call
-  (ADR-0005). "scene guidelines" renders the regions for visual review
-  without entering the final output.
-
-Reference Thumbnail import (DEC-001..004)
-  "scene reference import <scene> <file>" is one normalization boundary plus
-  one atomic transaction, serialized per Scene by a lock file (<scene>.lock —
-  leave it in place: it relocates with the bundle, and a crashed import's
-  lock is recovered automatically). Supported input is exactly a regular
-  local PNG, JPEG, or WebP file; it may live anywhere — it is external
-  source material. Ingestion is resource-bounded: the file is opened and the
-  opened handle is measured (regular files only), the 64 MB encoded cap is
-  enforced on that measurement and re-bounded by the read window itself, and
-  the header's declared geometry must fit the decoded-pixel budget before
-  the browser rasterizes anything. Normalization is non-distorting and
-  non-subjective: a 16:9 input is uniformly rescaled to exactly 1280×720
-  (1:1 when already exact); any other aspect is refused before anything is
-  written, because fitting it would require an unstated subjective crop or a
-  distortion — crop or resize locally with stated intent, then import. The
-  copy is stored inside the scene's directory as <scene>.reference.png (a
-  -2, -3… suffix is used when a name is taken — the reservation is an
-  exclusive no-replace create, so an existing file, directory, or symlink
-  alias is never overwritten or written through, and the previous
-  association's file always survives). --source records user-supplied
-  provenance as reference.source free text: never resolved as a path — no
-  external file dependency — and never a second stored hash (identity derives
-  from bytes). Before the Scene file is replaced, the complete resulting
-  Scene passes the same validation gate as "scene validate", and the Scene's
-  current bytes are compared to the bytes this import first read — an
-  intervening edit fails closed. Any failure — missing or unreadable input,
-  refused normalization, failed validation, a changed Scene, or a failed
-  commit — rolls the new copy back and leaves the previous Scene and its
-  associated files byte-identical and usable; a rollback whose removal fails
-  is reported as a second error naming the retained path. The renderer never
-  reads the reference, and the Render manifest never records it as a Render
-  input (DEC-009): importing changes neither rendered pixels nor resolved
-  Asset identities — the manifest's scene byte identity (its sha256)
-  necessarily changes, because the reference metadata is part of the Scene
-  bytes.
-
-Scene replacement and the per-Scene lock
-  Every in-repo writer that can replace an existing Scene participates in the
-  same per-Scene transaction lock (<scene>.lock beside the scene's real path):
-  "scene reference import" and "scene init --force" (over an existing file).
-  On contention a writer waits only to the bounded timeout and then fails with
-  the retained lock path named — a crashed holder's lock requires explicit
-  operator cleanup, never automatic stealing. Fresh "scene init" publication
-  is an atomic no-replace create: a writer that appears between the existence
-  check and publication gets a refusal, never a silent overwrite. External
-  (non-participating) edits to the Scene are still caught by the import's
-  Scene-byte comparison immediately before commit.
+Exit codes: 0 ok, 1 invalid scene or render failure, 2 usage error. Rendering,
+validation, inspection, and rerendering are offline and never start generation.
+Lock recovery, the reference-import transaction, safe-area reporting, theme
+precedence, and the 2 MB/64 MB limits: docs/scene-cli.md.
 `;
 
 interface CliResult {
@@ -212,7 +107,9 @@ interface CliResult {
 const ok = (output: unknown): CliResult => ({ exitCode: 0, output });
 const usageError = (message: string): CliResult => ({
   exitCode: 2,
-  output: { ok: false, errors: [{ path: "argv", message: `${message}\n\n${HELP.trim()}` }] },
+  // Concise and actionable: the correction plus a pointer — never the whole
+  // module manual embedded in the message (#128, F12/F16).
+  output: { ok: false, errors: [{ path: "argv", message: usageMessage(message, "scene") }] },
 });
 const invalid = (errors: SceneError[]): CliResult => ({
   exitCode: 1,
@@ -1214,9 +1111,13 @@ export async function run(
   args: string[],
   deps?: { libraryRoot?: string; sceneLockTimeoutMs?: number },
 ): Promise<CliResult> {
-  const [cmd] = args;
+  // --json / --help / -h are module-global presentation flags: stripped before
+  // dispatch, which hand-parses only each command's own options (#128).
+  const { help, rest } = extractGlobalFlags(args);
+  const [cmd] = rest;
   try {
-    return await dispatch(args, deps);
+    if (help) return { exitCode: 0, output: helpResult(HELP.trim()) };
+    return await dispatch(rest, deps);
   } catch (err) {
     return invalid([
       {
@@ -1227,9 +1128,120 @@ export async function run(
   }
 }
 
+/** One compact line per invalid-scene/usage error: "<path>: <message>". */
+function errorsText(errors: { path?: string; message: string }[]): string {
+  return errors.map((e) => `${e.path ?? "scene"}: ${e.message}`).join("\n");
+}
+
+/** One compact inspect line for a layer summary. */
+function layerLine(l: Record<string, unknown>): string {
+  const pos = l.position as { x?: number; y?: number } | undefined;
+  const size = l.size as { width?: number; height?: number } | undefined;
+  const asset = l.resolvedAsset as { hash?: string } | undefined;
+  return (
+    `  - ${l.id} ${l.type}` +
+    (pos !== undefined ? ` @ (${pos.x}, ${pos.y})` : "") +
+    (size ? ` ${size.width}×${size.height}` : "") +
+    (l.opacity !== undefined ? ` opacity ${l.opacity}` : "") +
+    (asset && asset.hash ? ` asset ${asset.hash.slice(0, 12)}` : "")
+  );
+}
+
+/**
+ * Compact default text for one structured Scene result (#128, ISC-20).
+ * Every command's full information stays available under --json; the text
+ * is the human-sized view of the same result.
+ */
+function sceneText(cmd: string, output: unknown): string {
+  const out = output as {
+    ok: boolean;
+    errors?: { path?: string; message: string }[];
+    [key: string]: unknown;
+  };
+  // The schema result IS the JSON Schema document itself (no ok wrapper) —
+  // recognized before the ok-shaped result handling.
+  if (cmd === "schema")
+    return `Scene JSON Schema (v${SCHEMA_VERSION}) — the full document prints under --json.`;
+  if (!out.ok) return errorsText((out.errors ?? []) as { path?: string; message: string }[]);
+  // The --help result renders as its help text in the default presentation.
+  if (typeof out.help === "string") return out.help;
+  switch (cmd) {
+    case "themes":
+      return (
+        `Themes (${(out.themes as unknown[]).length}):\n` +
+        (out.themes as { name: string; revision: string; description: string }[])
+          .map((t) => `  ${t.name} (rev ${t.revision.slice(0, 8)}) — ${t.description}`)
+          .join("\n")
+      );
+    case "templates":
+      return (
+        `Templates (${(out.templates as unknown[]).length}):\n` +
+        (out.templates as { name: string; description: string; theme?: string }[])
+          .map((t) => `  ${t.name}${t.theme ? ` (theme: ${t.theme})` : ""} — ${t.description}`)
+          .join("\n")
+      );
+    case "init":
+      return typeof out.output === "string"
+        ? `Scene written: ${out.output} (${out.layerCount} layers, schema v${out.schemaVersion})`
+        : `Scene ready: ${out.layerCount} layers, schema v${out.schemaVersion} — the full document prints under --json.`;
+    case "inspect": {
+      const canvas = out.canvas as { width: number; height: number };
+      const layers = (out.layers as Record<string, unknown>[]) ?? [];
+      return (
+        `Scene ${canvas.width}×${canvas.height}: ${out.layerCount} layers` +
+        (out.variant ? ` (variant ${((out.variant as { name: string }).name)})` : "") +
+        (out.theme ? ` theme ${(out.theme as { name: string }).name}` : "") +
+        `\n` +
+        layers.map((l) => layerLine(l)).join("\n")
+      );
+    }
+    case "validate":
+      return (
+        `Scene valid: ${out.layerCount} layers` +
+        (out.variantCount ? `, ${out.variantCount} variants` : "") +
+        (out.reference ? `, reference ${out.reference}` : "") +
+        ((out.safeAreaViolations as unknown[]).length
+          ? `\nSafe-area violations (${(out.safeAreaViolations as unknown[]).length}) — see --json for the structured set`
+          : "")
+      );
+    case "render":
+    case "rerender":
+      return (
+        (out.outputs as { variant?: string; output: string; width: number; height: number; bytes: number; warnings: string[] }[])
+          .map(
+            (r) =>
+              `Rendered ${r.output} (${r.width}×${r.height}, ${r.bytes} bytes${r.variant ? `, variant ${r.variant}` : ""})` +
+              r.warnings.map((w) => `\n  warning: ${w}`).join(""),
+          )
+          .join("\n") +
+        `\nManifest: ${out.manifest}` +
+        (out.contact ? `\nContact sheet: ${(out.contact as { output: string }).output}` : "") +
+        (out.experimental ? `\nNon-final render (experimental)` : "")
+      );
+    case "guidelines":
+      return (
+        `Guidelines: ${out.output} (${out.width}×${out.height}) — review artifact, never the final render` +
+        `\nRegions: ${(out.regions as unknown[]).map((r) => (r as { id: string }).id).join(", ")}`
+      );
+    case "compare":
+      return (
+        `Compare sheet: ${out.output}\nRender: ${out.render}\nDiff: ${out.diff}` +
+        (out.warnings as string[]).map((w) => `\n  warning: ${w}`).join("")
+      );
+    case "reference":
+      return `Reference imported: ${out.stored} → ${out.reference}\nScene: ${out.scene}`;
+    default:
+      // An unrendered command result is visible rather than silently blank;
+      // every ordinary command has a case above, so this is a bug marker.
+      return JSON.stringify(out, null, 2);
+  }
+}
+
 if (import.meta.main) {
-  const { exitCode, output } = await run(process.argv.slice(2));
-  console.log(JSON.stringify(output, null, 2));
+  const argv = process.argv.slice(2);
+  const isJson = wantsJson(argv);
+  const { exitCode, output } = await run(argv);
+  printResult({ exitCode, text: sceneText(extractGlobalFlags(argv).rest[0] ?? "", output), json: output }, isJson);
   await closeBrowser();
   process.exit(exitCode);
 }
