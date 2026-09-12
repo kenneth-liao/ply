@@ -21,9 +21,10 @@
   cropped from the predicted alpha before bilinear resize back; aligned
   sizes (including square 1024 and 1024x1536) are a pad-free, resample-free
   no-op (numeric contract locked in `src/dynamic-geometry.ts` without
-  weights). Missing weights, a wrong sha-256, or no MPS fail loud in
-  preflight with the pin, the backend requirement, and the fetch command —
-  before inference and before publish, with no CPU or CoreML fallback.
+  weights). Missing weights or a wrong sha-256 fail loud in preflight with
+  the pin and the fetch command; a machine without MPS fails inside the
+  single inference process before any mask is written — before publish,
+  with no CPU or CoreML fallback.
   Cached Matting makes no network call (kernel-denial proven). The HR export
   script and the `onnxruntime-node` dependency are retired: no dual stack.
   New ADR-0020 supersedes ADR-0009. Existing mattes, Layers, content blobs,

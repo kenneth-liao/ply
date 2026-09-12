@@ -107,8 +107,10 @@ longer exist; `jobs` now only inspects its existing records.
 local PNG: no Generation Job, no library adoption, no network, no billed hop
 (DEC-004, ADR-0015). A source that already carries a real matte is kept as-is
 with no inference (engine `native-alpha`); anything else runs through the
-pinned BiRefNet Dynamic segmenter on PyTorch/MPS with engine preflight — missing or mismatched
-weights, or a machine without MPS, are refused before anything is published. The source bytes are never
+pinned BiRefNet Dynamic segmenter on PyTorch/MPS — engine preflight verifies the
+weights before inference, and the single inference process asserts MPS before
+writing any mask. Missing or mismatched weights, or a machine without MPS,
+are refused before anything is published. The source bytes are never
 modified; the verified true-alpha result and its provenance are published
 under `out/matting/` — see
 [docs/matting-publication-contract.md](docs/matting-publication-contract.md)

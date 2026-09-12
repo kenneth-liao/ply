@@ -198,7 +198,8 @@ export function parseInferenceResult(
  * Run the one production inference: exactly one `uv` process per matte.
  * MPS is asserted inside that process before any mask is written; the Hub is
  * never contacted (`HF_HUB_OFFLINE=1` — architecture and weights come from
- * the local caches warmed once at fetch time).
+ * the local caches warmed once at fetch time), and uv itself runs
+ * `--offline`, so PyPI is never contacted either.
  */
 async function runDynamicInference(
   bytes: Uint8Array,
@@ -222,6 +223,10 @@ async function runDynamicInference(
           "uv",
           "run",
           "--locked",
+          // Cache-only: with weights present, a matte must make no network
+          // call — neither the Hub (see HF_HUB_OFFLINE below) nor PyPI.
+          // First fetch and --warm-cache stay online; they are manual steps.
+          "--offline",
           "--script",
           dynamicScriptPath(),
           "--weights",

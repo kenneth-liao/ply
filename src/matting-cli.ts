@@ -40,9 +40,10 @@ The input is a caller-selected local PNG — convert other formats locally with
 an offline tool first. A source that already carries a real matte is kept
 as-is with no inference (engine "native-alpha"); anything else runs through
 the pinned BiRefNet Dynamic segmenter (${ENGINE_ID}) on PyTorch/MPS on this
-machine — no network, no generation. Engine preflight runs before inference:
-missing or mismatched weights, or a machine without MPS, are refused with
-the fix, before anything is published. An unusable result (everything opaque, everything transparent) is
+machine — no network, no generation. Engine preflight verifies the weights
+before inference; the single inference process then asserts MPS before
+writing any mask. Missing or mismatched weights, or a machine without MPS,
+are refused with the fix, and nothing is published. An unusable result (everything opaque, everything transparent) is
 refused at the pass that produced it.
 
 The source bytes are never modified: the result is published content-addressed

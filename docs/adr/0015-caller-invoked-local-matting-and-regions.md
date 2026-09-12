@@ -10,7 +10,8 @@ correctness mechanism.
 
 Local segmentation remains the isolation mechanism: requesting transparency
 from an image model can produce opaque pixels or a painted checkerboard, not
-alpha. Keep the pinned BiRefNet HR engine decision (ADR-0009), local inference,
+alpha. Keep the pinned BiRefNet Dynamic engine decision (ADR-0020,
+which supersedes ADR-0009), local inference,
 true-alpha output, and loud failure for missing or mismatched weights. Engine
 preflight belongs before the matting operation; generation alone no longer
 requires a working matting engine. Existing genuine alpha need not be replaced

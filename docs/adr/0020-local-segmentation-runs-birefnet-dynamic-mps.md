@@ -56,7 +56,8 @@ a successful inference records backend `mps`.
   but `mps` refuses the matte). There is no second `uv --check` process:
   that would double cold start and miss the seconds-level bar.
 - **Offline after cache.** The process never contacts the Hub at matte time
-  (`local_files_only`, `HF_HUB_OFFLINE=1`); architecture code is warmed once
+  (`local_files_only`, `HF_HUB_OFFLINE=1`), and the production spawn passes
+  `uv --offline`, so PyPI is never contacted either. Architecture code is warmed once
   (`--warm-cache`) and weights fetched once. Kernel-denial with a negative
   control remains the offline proof.
 - **Timing scope `engine` is always fresh.** The figure covers the one and
