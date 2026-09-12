@@ -15,13 +15,20 @@
  *
  * This module owns three boundaries:
  * - `selectMatteOutput` — external source resolution: the record is read
- *   through the one published-record parser (`parseMattingRecord`), its
- *   single output's file is read and hash-verified against the recorded
- *   identity. Missing, corrupt, or mismatched lineage is refused here,
- *   before any Project state is touched.
+ *   through the one published-record parser, its single output's file is
+ *   read and hash-verified against the recorded identity, and — when the
+ *   record names a distinct retained source copy (`request.source.file`,
+ *   version 2 inference records) — that copy is read and hash-verified
+ *   against the recorded source identity too. Missing, corrupt, or
+ *   mismatched lineage is refused here, before any Project state is touched.
  * - `retainMattingRecord` — under the Project lock: stage the retained
  *   record atomically; an existing retained record must be byte-identical or
  *   the ingestion is refused (retained provenance is immutable).
+ * - `retainMattingSourceBytes` — under the Project lock: stage the published
+ *   source copy beside the verbatim record (`matting/<matteId>/sources/`,
+ *   the same relative path the publication contract names), so a relocated
+ *   Project can rematte without the original path. Native-alpha and version 1
+ *   records name no copy and stage nothing.
  * - `retainGenerationLineage` — derived predecessor linkage (#108): when the
  *   matte's source content identity matches exactly one published Generation
  *   Job's output, that job's record is retained verbatim through the existing
@@ -66,6 +73,13 @@ export interface SelectedMatteOutput {
   bytes: Buffer;
   /** The verbatim record bytes — what retention stores. */
   recordBytes: Buffer;
+  /**
+   * The verified raw bytes of the published source copy, when the record
+   * names a distinct one (`request.source.file`, version 2 inference
+   * records). Null on native-alpha records (the output already is the
+   * source's bytes) and on version 1 records (no copy was published).
+   */
+  sourceBytes: Buffer | null;
 }
 
 /**
@@ -128,7 +142,65 @@ export async function selectMatteOutput(matteRoot: string, matteId: string): Pro
       `Matte "${matteId}" output "${output.file}" does not match its recorded content identity ${output.contentHash.slice(0, 12)} (actual ${actualHash.slice(0, 12)}) — the source and result are mismatched or the lineage is corrupted; refusing to ingest`,
     );
   }
-  return { matte, output, bytes, recordBytes };
+  // A version 2 inference record names its retained source copy; read and
+  // verify it under the same gates so Project retention never copies
+  // untrusted bytes. Native-alpha and version 1 records name no copy.
+  let sourceBytes: Buffer | null = null;
+  const sourceFile = matte.request.source.file;
+  if (sourceFile !== undefined) {
+    // Only version 2 inference records name a source copy: version 1
+    // records predate the copy, so a v1 record naming one is contradictory
+    // lineage — fail closed here, before any Project write, instead of
+    // treating it as a copy to retain (no v1 backfill).
+    if (matte.schemaVersion === 1) {
+      throw new Error(
+        `Matte "${matteId}" is contradictory: a schemaVersion 1 record must not name a source copy ("${sourceFile}") — refusing to ingest`,
+      );
+    }
+    // Shape refusal happens here, before any Project write — a record
+    // naming a non-`sources/<hash>.png` copy never stages anything.
+    if (!/^sources\/[a-f0-9]{64}\.png$/.test(sourceFile)) {
+      throw new Error(
+        `Matte "${matteId}" names an unrecognized source copy "${sourceFile}" — the record cannot be trusted`,
+      );
+    }
+    const sourcePath = path.join(matteDir, sourceFile);
+    if (outsideDir(matteDir, sourcePath)) {
+      throw new Error(
+        `Matte "${matteId}" source path "${sourceFile}" escapes the matte directory — the record cannot be trusted`,
+      );
+    }
+    let sourceStat: Awaited<ReturnType<typeof stat>>;
+    try {
+      sourceStat = await stat(sourcePath);
+    } catch {
+      throw new Error(
+        `Matte "${matteId}" source "${sourceFile}" is missing — the matte's lineage is incomplete; refusing to ingest`,
+      );
+    }
+    if (!sourceStat.isFile()) {
+      throw new Error(`Matte "${matteId}" source "${sourceFile}" is not a regular file; refusing to ingest`);
+    }
+    if (sourceStat.size > MAX_ENCODED_BYTES) {
+      throw new Error(
+        `Matte "${matteId}" source "${sourceFile}" is ${(sourceStat.size / 1024 / 1024).toFixed(1)} MB — over the ${MAX_ENCODED_BYTES / 1024 / 1024} MB limit`,
+      );
+    }
+    if (await escapesDirReal(matteDir, sourcePath)) {
+      throw new Error(
+        `Matte "${matteId}" source path "${sourceFile}" escapes the matte directory — the record cannot be trusted`,
+      );
+    }
+    const rawSource = await readFile(sourcePath);
+    const rawSourceHash = createHash("sha256").update(rawSource).digest("hex");
+    if (rawSourceHash !== matte.request.source.contentHash) {
+      throw new Error(
+        `Matte "${matteId}" source "${sourceFile}" does not match its recorded source identity ${matte.request.source.contentHash.slice(0, 12)} (actual ${rawSourceHash.slice(0, 12)}) — the source and result are mismatched or the lineage is corrupted; refusing to ingest`,
+      );
+    }
+    sourceBytes = rawSource;
+  }
+  return { matte, output, bytes, recordBytes, sourceBytes };
 }
 
 /**
@@ -168,6 +240,68 @@ export async function retainMattingRecord(
   }
   await mkdir(recordDir, { recursive: true });
   await atomicCreate(recordPath, recordBytes);
+}
+
+/**
+ * Retain a published matte's source copy beside its verbatim record under
+ * `matting/<matteId>/sources/<sha256>.png` — the same relative path the
+ * publication contract names, so rematting is ordinary `ply matte` on the
+ * retained path after the original is gone and the Project has moved.
+ * Caller must hold the Project lock and must have verified the bytes
+ * already (via `selectMatteOutput`). Records that name no distinct copy
+ * (native-alpha — the output already is the source's bytes — and version 1,
+ * which predates the copy) stage nothing: no second blob, no backfill.
+ * An existing retained copy must be byte-identical or the ingestion is
+ * refused, like the verbatim record itself.
+ */
+export async function retainMattingSourceBytes(
+  resolvedProjectRoot: string,
+  matte: MattingRecord,
+  sourceBytes: Buffer,
+): Promise<void> {
+  const sourceFile = matte.request.source.file;
+  if (sourceFile === undefined) return;
+  // Same version gate as the resolution boundary: a version 1 record naming
+  // a copy is contradictory, never a copy to retain.
+  if (matte.schemaVersion === 1) {
+    throw new Error(
+      `Matte "${matte.matteId}" is contradictory: a schemaVersion 1 record must not name a source copy ("${sourceFile}") — refusing to ingest`,
+    );
+  }
+  if (!/^sources\/[a-f0-9]{64}\.png$/.test(sourceFile)) {
+    throw new Error(
+      `Matte "${matte.matteId}" names an unrecognized source copy "${sourceFile}" — the record cannot be trusted`,
+    );
+  }
+  const actualHash = createHash("sha256").update(sourceBytes).digest("hex");
+  if (actualHash !== matte.request.source.contentHash) {
+    throw new Error(
+      `Matte "${matte.matteId}" source copy does not match its recorded source identity ${matte.request.source.contentHash.slice(0, 12)} (actual ${actualHash.slice(0, 12)}) — refusing to ingest`,
+    );
+  }
+  const destPath = path.join(resolvedProjectRoot, RETAINED_MATTING_DIR, matte.matteId, sourceFile);
+  if (outsideDir(resolvedProjectRoot, destPath)) {
+    throw new Error(`Security error: retained source for "${matte.matteId}" escapes project boundary.`);
+  }
+  let existing: Buffer | null = null;
+  try {
+    existing = await readFile(destPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (existing) {
+    if (await escapesDirReal(resolvedProjectRoot, destPath)) {
+      throw new Error(`Security error: retained source for "${matte.matteId}" escapes project boundary.`);
+    }
+    if (!existing.equals(sourceBytes)) {
+      throw new Error(
+        `Retained Matting source for "${matte.matteId}" already exists in this Project and does not match the source copy — retained provenance is immutable, so refusing to ingest`,
+      );
+    }
+    return;
+  }
+  await mkdir(path.dirname(destPath), { recursive: true });
+  await atomicCreate(destPath, sourceBytes);
 }
 
 export interface RetainedMattingProvenance {

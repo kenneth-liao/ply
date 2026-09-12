@@ -45,6 +45,18 @@
   to parse. Engines that declare no backend/timing are refused before
   anything is published. Project retention of source bytes stays #161's
   ownership. Canonical contract: `docs/matting-publication-contract.md`.
+- Project retention of matte source bytes (#161, spec #159 US-003):
+  ingesting a published version 2 matte via `--from-matte` (Layer add and
+  Layer edit) retains the verified published source copy beside the verbatim
+  record at `matting/<matteId>/sources/<sha256>.png` — the same relative
+  path the publication contract names, verified against the record's
+  `request.source.contentHash`, so the copy is that identity and never a
+  second hash. After the caller's original file is deleted and the Project
+  is relocated, rematting is ordinary `ply matte` on the retained path: a
+  new matte id, with the old record unchanged. Native-alpha ingest stages
+  no second blob and version 1 records gain no copy (no backfill); existing
+  Layer bytes and Renders are not rewritten. Canonical contract:
+  `docs/project-storage-contract.md`.
 
 - The complete operating workflow as a discoverable skill (#144, spec #132
   US-004, DEC-007/008): `.agents/skills/ply-operating/SKILL.md` teaches the

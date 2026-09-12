@@ -32,6 +32,7 @@ import {
 import {
   selectMatteOutput,
   retainMattingRecord,
+  retainMattingSourceBytes,
   findGenerationPredecessor,
 } from "./matting-retention.js";
 
@@ -579,14 +580,17 @@ export async function addMattedLayerToComposition(
         `Matte "${selectedOutput.matte.matteId}" output "${selectedOutput.output.file}"`,
       );
       // Everything that can refuse the source (record parse, output hash,
-      // decode, predecessor ambiguity) runs before any Project write, so a
-      // refusal leaves no partial retention.
+      // source-copy shape/hash/size/traversal, decode, predecessor ambiguity)
+      // runs before any Project write, so a refusal leaves no partial retention.
       const predecessor = await findGenerationPredecessor(
         source.generationRoot,
         selectedOutput.matte.request.source.contentHash,
       );
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainMattingRecord(resolvedRoot, selectedOutput.matte.matteId, selectedOutput.recordBytes);
+      if (selectedOutput.sourceBytes) {
+        await retainMattingSourceBytes(resolvedRoot, selectedOutput.matte, selectedOutput.sourceBytes);
+      }
       if (predecessor) {
         await retainGenerationRecord(resolvedRoot, predecessor.job.jobId, predecessor.recordBytes);
         retainedGeneration = {
