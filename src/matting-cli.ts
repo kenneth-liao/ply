@@ -19,7 +19,7 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { runMatting, MATTE_ID_PATTERN } from "./matting.js";
-import { localSegmentationMatteEngine, SUBJECT_SEGMENTER } from "./segment.js";
+import { localSegmentationMatteEngine, ENGINE_ID } from "./segment.js";
 import type { MatteEngine } from "./matte.js";
 
 const HELP = `
@@ -39,10 +39,10 @@ options
 The input is a caller-selected local PNG — convert other formats locally with
 an offline tool first. A source that already carries a real matte is kept
 as-is with no inference (engine "native-alpha"); anything else runs through
-the pinned local BiRefNet segmenter (${SUBJECT_SEGMENTER.file}) on this
+the pinned BiRefNet Dynamic segmenter (${ENGINE_ID}) on PyTorch/MPS on this
 machine — no network, no generation. Engine preflight runs before inference:
-missing or mismatched weights are refused with the fix, before anything is
-published. An unusable result (everything opaque, everything transparent) is
+missing or mismatched weights, or a machine without MPS, are refused with
+the fix, before anything is published. An unusable result (everything opaque, everything transparent) is
 refused at the pass that produced it.
 
 The source bytes are never modified: the result is published content-addressed

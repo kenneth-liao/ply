@@ -60,7 +60,7 @@ describe("composeMatte", () => {
   });
 
   test("interpolates when downscaling the mask — detail between mask pixels survives", () => {
-    // The HR segmenter predicts a mask larger than the candidate, so every
+    // A segmenter can predict a mask larger than the candidate, so every
     // candidate pixel lands *between* mask pixels. Nearest-neighbour would
     // alias fine structure (hair strands flicker subject/background); bilinear
     // reads the surrounding mask values. A mask whose coverage steps down

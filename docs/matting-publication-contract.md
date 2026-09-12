@@ -94,14 +94,17 @@ Facts and their one home:
   engine-declared non-empty string, not a product enum: each engine reports
   what it actually used. It is required on version 2 inference records and
   must be absent on native-alpha records (no inference ran — nothing to name).
-  The observed production backend is the engine-swap ticket's ownership.
+  The shipped engine observes its device inside its single inference process
+  and records `mps`; anything else fails the matte instead of recording.
 - **`result.timing` is a timing figure with a stated boundary**
   (`{ millis, scope }`, `millis` finite and ≥ 0, `scope` non-empty).
   Fresh-process vs already-loaded figures must never be mixed under one
   scope: for the shipped engine, scope `"engine"` means wall time of the
-  engine call after preflight (the session is already loaded there, so cold
-  weight-load/compile is excluded by construction). Required on version 2
-  inference records; must be absent on native-alpha records.
+  engine call after preflight. The shipped engine is a one-shot process, so
+  this figure ALWAYS includes startup, weight load, inference, and mask
+  write — it is always fresh, and must never be compared with a warm-loaded
+  figure. Required on version 2 inference records; must be absent on
+  native-alpha records.
 - **Version 2 inference records require all three new facts.** A version 2
   inference record that omits `request.source.file`, `result.backend`, or a
   well-formed `result.timing` fails to parse. A version 2 native-alpha
@@ -110,7 +113,9 @@ Facts and their one home:
 - **`result.engine` records the engine**, `native-alpha` when the source's own
   alpha was the matte (no inference, and the published bytes are the exact
   source bytes — their content hash equals the source's), or the engine name
-  the real segmenter records (`local-segmentation:birefnet-hr-fp16.onnx`).
+  the real segmenter records
+  (`local-segmentation:birefnet-dynamic@280306042f57b7a33854319da62fd86aaa89ec4c` —
+  the pinned BiRefNet Dynamic revision on PyTorch/MPS, ADR-0020).
 - **The result passes the true-alpha gate before publication**: the alpha
   report in the record is measured by the same gate (`src/alpha.ts`) the
   retired adoption path applied, run at the pass that produced the bytes. An
@@ -119,8 +124,10 @@ Facts and their one home:
 - **Outputs are content-addressed** by sha-256 of the exact bytes on disk;
   `contentHash` is verifiable against the file at any time.
 - **`engine.preflight` runs at this operation, before inference.** Missing or
-  mismatched weights fail with the pinned filename, sha-256, and fetch/export
-  command before anything is written.
+  mismatched weights fail with the pinned filename, sha-256, and fetch
+  command before anything is written; a machine without MPS fails inside the
+  single inference process before any mask is written. There is exactly one
+  inference process per matte and no second preflight process.
 
 ## 3. Input contract
 

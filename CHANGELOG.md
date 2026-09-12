@@ -4,6 +4,30 @@
 
 ### Added
 
+- Local Matting runs BiRefNet Dynamic on PyTorch/MPS (#162, spec #159
+  US-001/US-002/US-005/US-006): the pinned engine behind the MatteEngine
+  seam is `ZhengPeng7/BiRefNet_dynamic` at revision
+  `280306042f57b7a33854319da62fd86aaa89ec4c` (MIT, ~444 MB), run in a
+  one-shot pinned `uv` Python process (`scripts/matte-birefnet-dynamic.py`
+  with a hashed lockfile) — no daemon, no warm session. Fresh
+  whole-command time is seconds (~4 s medians on Apple silicon, `ply matte`
+  through publish), not the retired six-minute ONNX/CoreML regime.
+  Successful inference records engine
+  `local-segmentation:birefnet-dynamic@<revision>`, backend `mps` (observed
+  inside the single inference process), and timing scope `"engine"`
+  (always fresh: startup, weight load, inference, and mask write — never
+  mixed with a warm-loaded figure). Non-square inputs are replicate-padded
+  right/bottom to multiples of 32 and never stretched, with the padding
+  cropped from the predicted alpha before bilinear resize back; aligned
+  sizes (including square 1024 and 1024x1536) are a pad-free, resample-free
+  no-op (numeric contract locked in `src/dynamic-geometry.ts` without
+  weights). Missing weights, a wrong sha-256, or no MPS fail loud in
+  preflight with the pin, the backend requirement, and the fetch command —
+  before inference and before publish, with no CPU or CoreML fallback.
+  Cached Matting makes no network call (kernel-denial proven). The HR export
+  script and the `onnxruntime-node` dependency are retired: no dual stack.
+  New ADR-0020 supersedes ADR-0009. Existing mattes, Layers, content blobs,
+  Renders, and `examples/thumbnail-luigi-go/` are untouched.
 - Version 2 Matting publication records (#160, spec #159 US-003/US-004):
   new `ply matte` inference records retain a content-addressed copy of the
   exact source bytes at `sources/<sha256>.png` beside the output (named by

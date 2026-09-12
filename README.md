@@ -107,8 +107,8 @@ longer exist; `jobs` now only inspects its existing records.
 local PNG: no Generation Job, no library adoption, no network, no billed hop
 (DEC-004, ADR-0015). A source that already carries a real matte is kept as-is
 with no inference (engine `native-alpha`); anything else runs through the
-pinned local BiRefNet segmenter with engine preflight — missing or mismatched
-weights are refused before anything is published. The source bytes are never
+pinned BiRefNet Dynamic segmenter on PyTorch/MPS with engine preflight — missing or mismatched
+weights, or a machine without MPS, are refused before anything is published. The source bytes are never
 modified; the verified true-alpha result and its provenance are published
 under `out/matting/` — see
 [docs/matting-publication-contract.md](docs/matting-publication-contract.md)
@@ -437,12 +437,14 @@ is introduced by the rename.
 Add a Vercel AI Gateway key to `.env.local` only if you use generation.
 Scene, library, review, Matting, and render operations work offline.
 
-Matting needs the local BiRefNet HR model:
+Matting needs the local BiRefNet Dynamic weights (MIT, ~444 MB):
 
 ```bash
 mkdir -p models
-uv run --locked --script scripts/export-birefnet-hr.py \
-  --out models/birefnet-hr-fp16.onnx
+curl -L --fail -o models/birefnet-dynamic.safetensors \
+  https://huggingface.co/ZhengPeng7/BiRefNet_dynamic/resolve/280306042f57b7a33854319da62fd86aaa89ec4c/model.safetensors
+# Warm the pinned architecture cache once (small, needs network once):
+uv run --locked --script scripts/matte-birefnet-dynamic.py --warm-cache
 ```
 
 The weights are gitignored and pinned by sha-256 in `src/segment.ts`.

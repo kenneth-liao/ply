@@ -54,8 +54,8 @@ Single-context repo: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/
   silently re-running.
 - Model costs: measure from real Gateway billing (`✓` figures only) — never copy from price tables.
 - The tool must keep working offline for everything except generation itself.
-  Creator isolation is local inference (BiRefNet via `onnxruntime-node`,
-  ADR-0006): weights are cached under `models/` (gitignored), pinned by
+  Creator isolation is local inference (BiRefNet Dynamic on PyTorch/MPS,
+  ADR-0020): weights are cached under `models/` (gitignored), pinned by
   sha-256 in `src/segment.ts`, and never loaded by the default suite — tests
   inject a fake `MatteEngine`. The weight-backed live checks
   (`test/matting-live.test.ts`, the live block in `test/segment.test.ts`)
