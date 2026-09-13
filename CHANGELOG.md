@@ -2,7 +2,44 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING for machine consumers:** `scene` and `jobs` commands no longer
+  print machine-readable JSON by default — the default output is now compact
+  text, and the structured result (including structured errors) is one
+  `--json` flag away (#128). Callers that parsed Scene/Job stdout directly
+  must add `--json`; before/after examples are in README (Legacy surface).
+  Exit codes keep their meanings (0 ok, 1 operational failure, 2 usage
+  error) and the Scene/Job structured shape is unchanged under `--json`;
+  `library` usage failures move 1 → 2 and module help exits 0 — see README
+  for the exit-code contract. The minor bump (4.15.0) is a maintainer
+  decision recorded at plan alignment for issue #128.
+
 ### Fixed
+
+- The retained CLI surfaces are coherent (#128, from
+  `examples/thumbnail-luigi-go/HANDOFF.md` F4/F12–F16/F18, spec #132's
+  measured findings): `scene` and `jobs` print compact text by default with
+  the full structured result one `--json` away — `--help`/`-h` exits 0 on
+  every module (Scene and Job help no longer exit 2 embedded in an 11k-char
+  JSON error), usage errors are concise and actionable — the correction plus
+  a `ply <module> --help` pointer, never the embedded manual — with no
+  uncaught stack traces, `library` supports `--json` on every command
+  (`ply library list --json` crashed before) and reports usage-shaped
+  argument failures as exit 2 (operational failures stay exit 1),
+  `--help --json` returns one valid JSON result containing the help on root
+  and every module, and every command's default output is compact text while
+  `--json` emits exactly one valid JSON result on stdout. Scene's operational
+  help prose moved to `docs/scene-cli.md` (linked from the help); all help
+  and maintained examples use canonical `ply ...` spellings. Numeric
+  placement arguments (`--x`, `--y`) accept both `--x -40` and
+  `--x=-40` equivalently (negative integers and fractions); a following
+  option is never consumed as a number, missing/invalid values are concise
+  usage errors, and Layer effects keep their existing negative-value
+  support. The default-output migration for machine consumers is documented
+  in README (Legacy surface) and summarized under Changed above.
+  `library list` also lists retained objects in text and JSON (previously
+  silently omitted).
 
 - Generation Job records report the charge the provider actually returned
   (#126): the provider seam carries the AI Gateway's own per-request billing,

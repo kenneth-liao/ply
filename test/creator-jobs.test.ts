@@ -137,8 +137,8 @@ describe("resolveIsolationEvidence for creator records", () => {
     expect(evidence.reason).toMatch(/no matte/i);
     // The refusal directs callers at the replacement workflow, not the
     // retired commands.
-    expect(evidence.reason).toMatch(/bun run generate/);
-    expect(evidence.reason).toMatch(/bun run matte/);
+    expect(evidence.reason).toMatch(/ply generate/);
+    expect(evidence.reason).toMatch(/ply matte/);
     expect(evidence.reason).toMatch(/--from-matte/);
     expect(evidence.reason).not.toMatch(/jobs rerun/);
     expect(evidence.reason).not.toMatch(/jobs adopt|library adopt/);

@@ -141,7 +141,7 @@ interface RunResult {
 
 /** Run the real CLI subprocess to exit (pre-listen cases never open a session). */
 async function runAuthorToExit(scenePath: string, timeoutMs = 30_000): Promise<RunResult> {
-  const proc = Bun.spawn(["bun", CLI, "author", scenePath], {
+  const proc = Bun.spawn(["bun", CLI, "author", scenePath, "--json"], {
     cwd: ROOT,
     stdout: "pipe",
     stderr: "pipe",

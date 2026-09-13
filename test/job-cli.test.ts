@@ -33,8 +33,8 @@ describe("retired generation entry points (#114)", () => {
       expect(message).toMatch(/retired/);
       // Help and diagnostics direct callers to the new workflow, with no
       // hidden path back into the superseded lifecycle.
-      expect(message).toMatch(/bun run generate/);
-      expect(message).toMatch(/bun run matte/);
+      expect(message).toMatch(/ply generate/);
+      expect(message).toMatch(/ply matte/);
     }
   });
 
@@ -50,7 +50,7 @@ describe("retired generation entry points (#114)", () => {
     expect(out.ok).toBe(false);
     const message = out.errors[0].message as string;
     expect(message).toMatch(/retired/);
-    expect(message).toMatch(/bun run generate/);
+    expect(message).toMatch(/ply generate/);
     // The refusal must not have touched the record — the lineage stands.
     const shown = (await run(["show", "lineage-job"])) as Record<string, any>;
     expect((shown.output as Record<string, any>).job.runs).toHaveLength(1);
@@ -60,7 +60,7 @@ describe("retired generation entry points (#114)", () => {
     const res = await run([]);
     expect(res.exitCode).toBe(2);
     const message = ((res.output as Record<string, any>).errors[0].message as string);
-    for (const expected of ["show", "list", "review", "bun run generate", "bun run matte", "retired"])
+    for (const expected of ["show", "list", "review", "ply generate", "ply matte", "retired"])
       expect(message).toContain(expected);
   });
 
@@ -132,8 +132,8 @@ describe("retired adoption entry points (#115)", () => {
     expect(message).toMatch(/retired/);
     // Accurate replacement guidance: uniform generation, explicit matting,
     // ordinary Project Layer ingestion — not the retired adoption path.
-    expect(message).toMatch(/bun run generate/);
-    expect(message).toMatch(/bun run matte/);
+    expect(message).toMatch(/ply generate/);
+    expect(message).toMatch(/ply matte/);
     expect(message).toMatch(/--from-generation|--from-matte/);
     // The retained commands are named; the retired command is not offered.
     expect(message).toMatch(/show, list, or review/);

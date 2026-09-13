@@ -37,17 +37,18 @@ import {
 } from "./generation.js";
 import { reviewPublishedGeneration } from "./evidence-review.js";
 import { isImageQuality, MODELS, DEFAULT_MODEL } from "./models.js";
+import { usageMessage } from "./cli-present.js";
 
 const HELP = `
 ply generate — one uniform source-image generation operation (Generation Jobs)
 
-  bun run generate <prompt> [options]   Generate source images — optionally from
+  ply generate <prompt> [options]   Generate source images — optionally from
                                         ordered local References — and publish a
                                         Generation Job record with the effective
                                         request, outputs, and provenance
-  bun run generate show <jobId>         Print one published record (offline)
-  bun run generate list                 Summarize published jobs (offline)
-  bun run generate review <jobId>       Build the evidence review sheet for one
+  ply generate show <jobId>         Print one published record (offline)
+  ply generate list                 Summarize published jobs (offline)
+  ply generate review <jobId>       Build the evidence review sheet for one
                                         job — ordered References, outputs, and
                                         associated matte (offline)
 
@@ -345,7 +346,10 @@ function parse(args: string[]): Parsed {
 }
 
 function usage(message: string): { kind: "usage"; message: string; error: string } {
-  return { kind: "usage", message: `${message}\n${HELP.trim()}`, error: message };
+  // Concise and actionable in both presentations: the correction plus a
+  // pointer — never the whole module manual embedded in the message
+  // (#128, F12/F16), and the same actionable message in text and JSON.
+  return { kind: "usage", message: usageMessage(message, "generate"), error: usageMessage(message, "generate") };
 }
 
 /** Build the compact default text for a published/loaded job. */
@@ -487,7 +491,10 @@ export async function run(
 }
 
 function usageResult(message: string): CliResult {
-  return { exitCode: 2, text: `${message}\n${HELP.trim()}`, json: { ok: false, error: message } };
+  // Concise and actionable in both presentations: the correction plus a
+  // pointer — never the whole module manual embedded in the message
+  // (#128, F12/F16), and the same actionable message in text and JSON.
+  return { exitCode: 2, text: usageMessage(message, "generate"), json: { ok: false, error: usageMessage(message, "generate") } };
 }
 
 function autoJobId(): string {
