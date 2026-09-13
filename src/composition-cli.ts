@@ -20,7 +20,7 @@ import {
 import { renderComposition, replayRender } from "./composition-render.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { closeCliBrowser } from "./cli-browser.js";
-import { helpResult, usageMessage } from "./cli-present.js";
+import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
 const HELP = `
 composition — Composition authoring and inspection
@@ -166,31 +166,9 @@ function output(
   }
 }
 
-/** A negative number is a valid coordinate value (#128): parseArgs refuses a
- * dash-leading option value ("--y -40" reads as an ambiguous flag), so join a
- * following dash-leading numeric token into "--<flag>=<value>" before parsing.
- * The regex only matches numerics — a following option is never consumed as a
- * value — and a missing value falls through to the parser's own concise
- * missing-value error. Layer effects have the same join in layer-cli. */
-function joinDashLeadingNumericValues(args: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (
-      (arg === "--x" || arg === "--y") &&
-      args[i + 1] !== undefined &&
-      /^-(?:\.?\d)/.test(args[i + 1]!)
-    ) {
-      out.push(`${arg}=${args[i + 1]!}`);
-      i++;
-      continue;
-    }
-    out.push(arg);
-  }
-  return out;
-}
-
-const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2));
+/** A negative number is a valid coordinate value (#128) — the shared join in
+ * cli-present.ts handles it, scoped here to the composition placement flags. */
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y"]);
 const isJson = rawArgs.includes("--json");
 let values: {
   project?: string;

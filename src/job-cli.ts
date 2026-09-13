@@ -180,6 +180,15 @@ if (import.meta.main) {
   const argv = process.argv.slice(2);
   const isJson = wantsJson(argv);
   const { exitCode, output } = await run(argv);
-  printResult({ exitCode, text: jobsText(extractGlobalFlags(argv).rest[0] ?? "", output), json: output }, isJson);
+  // The text rendering runs outside run()'s error boundary, so a renderer
+  // shape drift can never print a raw stack trace: it falls back to the
+  // structured JSON rendering (a visible bug marker, not a crash) (#128).
+  let text: string;
+  try {
+    text = jobsText(extractGlobalFlags(argv).rest[0] ?? "", output);
+  } catch {
+    text = JSON.stringify(output, null, 2);
+  }
+  printResult({ exitCode, text, json: output }, isJson);
   process.exit(exitCode);
 }

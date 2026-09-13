@@ -395,6 +395,12 @@ async function dispatch(
   const library = () => scanLibrary(deps?.libraryRoot ?? LIBRARY_ROOT);
   const [cmd, file, ...rest] = args;
 
+  // A dash-leading token in the file position is an unrecognized option (or a
+  // missing value), never a scene/template path — a usage error, not a
+  // failed file read dressed up as an operational failure (#128, criterion 2).
+  if (file?.startsWith("--"))
+    return usageError(`"scene ${cmd}" takes a scene file, not the option "${file}"`);
+
   if (cmd === "schema" && file === undefined) return ok(SCENE_SCHEMA);
   if (cmd === "schema" && file) return usageError(`"scene schema" takes no arguments`);
 
@@ -1241,7 +1247,16 @@ if (import.meta.main) {
   const argv = process.argv.slice(2);
   const isJson = wantsJson(argv);
   const { exitCode, output } = await run(argv);
-  printResult({ exitCode, text: sceneText(extractGlobalFlags(argv).rest[0] ?? "", output), json: output }, isJson);
+  // The text rendering runs outside run()'s error boundary, so a renderer
+  // shape drift can never print a raw stack trace: it falls back to the
+  // structured JSON rendering (a visible bug marker, not a crash) (#128).
+  let text: string;
+  try {
+    text = sceneText(extractGlobalFlags(argv).rest[0] ?? "", output);
+  } catch {
+    text = JSON.stringify(output, null, 2);
+  }
+  printResult({ exitCode, text, json: output }, isJson);
   await closeBrowser();
   process.exit(exitCode);
 }

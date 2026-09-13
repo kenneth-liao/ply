@@ -87,13 +87,22 @@ test("library argument failures are usage errors — exit 2, concise, no stack t
     expect(res.stderr).not.toContain("TypeError");
     expect(res.stderr).not.toContain("throw");
     expect(res.stderr).toContain("ply library --help");
-    expect(res.stderr.length).toBeLessThan(600);
+    expect(res.stderr.length).toBeLessThan(400);
   }
   // The same failures in JSON mode are one valid structured result on stdout.
   const jsonFail = await invoke(["library", "badcommand", "--json"], { env });
   expect(jsonFail.code).toBe(2);
   expect(JSON.parse(jsonFail.stdout).ok).toBe(false);
   expect(jsonFail.stderr).toBe("");
+  // generate's usage errors are concise too — never the embedded manual.
+  const genUsage = await invoke(["generate", "--bogus"]);
+  expect(genUsage.code).toBe(2);
+  expect(genUsage.stderr).toContain('ply generate --help');
+  expect(genUsage.stderr.length).toBeLessThan(400);
+  // The same actionable message (correction + pointer) in the JSON result.
+  const genUsageJson = await invoke(["generate", "--bogus", "--json"]);
+  expect(genUsageJson.code).toBe(2);
+  expect(JSON.parse(genUsageJson.stdout).error).toContain("ply generate --help");
 });
 
 test("scene and jobs --help succeed with focused text; --help --json is valid JSON (F12)", async () => {
@@ -117,7 +126,7 @@ test("scene usage failures are concise, exit 2, no embedded manual (F12, F16)", 
   expect(bad.code).toBe(2);
   expect(bad.stderr).toContain("unknown command");
   expect(bad.stderr).toContain('ply scene --help');
-  expect(bad.stderr.length).toBeLessThan(600);
+  expect(bad.stderr.length).toBeLessThan(400);
   const jsonBad = await invoke(["scene", "badcommand", "--json"]);
   expect(jsonBad.code).toBe(2);
   const parsed = JSON.parse(jsonBad.stdout);
@@ -125,6 +134,11 @@ test("scene usage failures are concise, exit 2, no embedded manual (F12, F16)", 
   expect(parsed.errors[0].message).not.toContain("Safe areas");
   // --json is accepted alongside valid commands (scene dispatch never sees it).
   expect((await invoke(["scene", "schema", "--json"])).code).toBe(0);
+  // An unrecognized option in the file position is a usage error (exit 2),
+  // never a failed file read dressed up as an operational failure (SPEC-1).
+  const optionLike = await invoke(["scene", "render", "--bogus"]);
+  expect(optionLike.code).toBe(2);
+  expect(optionLike.stderr).toContain('ply scene --help');
 });
 
 test("scene results are compact text by default and one valid JSON under --json (ISC-20)", async () => {

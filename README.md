@@ -511,6 +511,14 @@ ply scene inspect thumbnail.scene.json --json | jq '.layers'
 ply library list --json
 ```
 
+Exit codes keep their module-wide meanings — 0 ok, 1 operational failure, 2
+usage error — and the structured shape under `--json` is unchanged, but two
+exit-code contracts moved for `library` and help: `library` usage-shaped
+argument failures (unknown command, missing/invalid `--id`, invalid file,
+missing ref) now exit 2 where they exited 1, and every module's `--help`/`-h`
+now exits 0 where Scene/Job help exited 2. A wrapper treating "any nonzero
+exit as operational failure" must distinguish 2 (usage) from 1 (operational).
+
 ### Scene quick start
 
 ```bash

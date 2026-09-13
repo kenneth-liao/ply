@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** Ply's entry point delegates to the command surfaces. */
 import { fileURLToPath } from "node:url";
-import { helpResult, wantsJson } from "./cli-present.js";
+import { helpResult, wantsJson, usageMessage } from "./cli-present.js";
 
 const commands = {
   project: "project-cli.ts",
@@ -39,22 +39,28 @@ Every command prints compact text by default and one valid JSON result under
 
 const [command, ...args] = process.argv.slice(2);
 const isJson = wantsJson(args) || command === "--json";
+const routedModule = command === "--json" && args.length > 0 ? args[0]! : command;
+// `ply --json <module> ...` routes with the presentation flag preserved for
+// the module's own scan: the module position is consumed here.
+const routedArgs = command === "--json" && args.length > 0 ? ["--json", ...args.slice(1)] : args;
 const usageExit = (message: string): never => {
-  if (isJson) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
-  else console.error(`${message}\nRun "ply --help" for the module list.`);
+  const actionable = `${message}\nRun "ply --help" for the module list.`;
+  // The same actionable message (correction + pointer) in both presentations.
+  if (isJson) console.log(JSON.stringify({ ok: false, error: actionable }, null, 2));
+  else console.error(actionable);
   process.exitCode = 2;
   process.exit(2);
 };
 
-if (!command || command === "--help" || command === "-h" || command === "--json") {
+if (!routedModule || routedModule === "--help" || routedModule === "-h") {
   // --help / -h (with or without --json) succeed with the routing help (#128).
   if (isJson) console.log(JSON.stringify(helpResult(HELP), null, 2));
   else console.log(HELP);
-} else if (!Object.hasOwn(commands, command)) {
-  usageExit(`Unknown module: ${command}.`);
+} else if (!Object.hasOwn(commands, routedModule)) {
+  usageExit(`Unknown module: ${routedModule}.`);
 } else {
-  const script = new URL(commands[command as keyof typeof commands], import.meta.url);
-  const child = Bun.spawn([process.execPath, fileURLToPath(script), ...args], {
+  const script = new URL(commands[routedModule as keyof typeof commands], import.meta.url);
+  const child = Bun.spawn([process.execPath, fileURLToPath(script), ...routedArgs], {
     stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
   process.exitCode = await child.exited;

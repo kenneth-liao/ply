@@ -7,7 +7,7 @@ import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type 
 import { parseShadowSpec, parseOutlineSpec } from "./layer.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
-import { helpResult, usageMessage } from "./cli-present.js";
+import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
 const HELP = `
 layer — Layer management and inspection within a Project
@@ -230,32 +230,9 @@ function formatAnchorTarget(anchored: AnchorResolution): string {
   return ` at y ${target.y}`;
 }
 
-/** A negative number is a valid numeric value: `--rotate` (#134), `--shadow`
- * (#139), `--outline` (#142), and the coordinate options (#128) all accept
- * dash-leading values, but parseArgs refuses them ("--rotate -30" reads as
- * an ambiguous flag), so join a following dash-leading numeric token into
- * "--<flag>=<value>" before parsing. The regex only matches numerics — a
- * following option is never consumed as a value — and a missing value falls
- * through to the parser's own concise missing-value error. */
-function joinDashLeadingNumericValues(args: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (
-      (arg === "--x" || arg === "--y" || arg === "--rotate" || arg === "--shadow" || arg === "--outline") &&
-      args[i + 1] !== undefined &&
-      /^-(?:\.?\d)/.test(args[i + 1]!)
-    ) {
-      out.push(`${arg}=${args[i + 1]!}`);
-      i++;
-      continue;
-    }
-    out.push(arg);
-  }
-  return out;
-}
-
-const rawArgs = process.argv.slice(2);
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), [
+  "--x", "--y", "--rotate", "--shadow", "--outline",
+]);
 const isJson = rawArgs.includes("--json");
 
 let values: {
@@ -290,7 +267,7 @@ let positionals: string[];
 
 try {
   const parsed = parseArgs({
-    args: joinDashLeadingNumericValues(rawArgs),
+    args: rawArgs,
     allowPositionals: true,
     options: {
       project: { type: "string", short: "p" },

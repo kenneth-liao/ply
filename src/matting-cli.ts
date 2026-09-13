@@ -112,9 +112,10 @@ function parse(args: string[]): Parsed {
 }
 
 function usage(message: string): { kind: "usage"; message: string; error: string } {
-  // Concise and actionable: the correction plus a pointer — never the whole
-  // module manual embedded in the message (#128, F12/F16).
-  return { kind: "usage", message: usageMessage(message, "matte"), error: message };
+  // Concise and actionable in both presentations: the correction plus a
+  // pointer — never the whole module manual embedded in the message
+  // (#128, F12/F16), and the same actionable message in text and JSON.
+  return { kind: "usage", message: usageMessage(message, "matte"), error: usageMessage(message, "matte") };
 }
 
 /** Build the compact default text for a published/loaded matte. */

@@ -346,7 +346,10 @@ function parse(args: string[]): Parsed {
 }
 
 function usage(message: string): { kind: "usage"; message: string; error: string } {
-  return { kind: "usage", message: `${message}\n${HELP.trim()}`, error: message };
+  // Concise and actionable in both presentations: the correction plus a
+  // pointer — never the whole module manual embedded in the message
+  // (#128, F12/F16), and the same actionable message in text and JSON.
+  return { kind: "usage", message: usageMessage(message, "generate"), error: usageMessage(message, "generate") };
 }
 
 /** Build the compact default text for a published/loaded job. */
@@ -488,9 +491,10 @@ export async function run(
 }
 
 function usageResult(message: string): CliResult {
-  // Concise and actionable: the correction plus a pointer — never the whole
-  // module manual embedded in the message (#128, F12/F16).
-  return { exitCode: 2, text: usageMessage(message, "generate"), json: { ok: false, error: message } };
+  // Concise and actionable in both presentations: the correction plus a
+  // pointer — never the whole module manual embedded in the message
+  // (#128, F12/F16), and the same actionable message in text and JSON.
+  return { exitCode: 2, text: usageMessage(message, "generate"), json: { ok: false, error: usageMessage(message, "generate") } };
 }
 
 function autoJobId(): string {

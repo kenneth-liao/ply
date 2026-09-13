@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
 import { mkdir, writeFile, readFile, copyFile } from "node:fs/promises";
 import path from "node:path";
-import { wantsJson, usageMessage } from "./cli-present.js";
+import { wantsJson, usageMessage, helpResult } from "./cli-present.js";
 import {
   LIBRARY_ROOT,
   scanLibrary,
@@ -73,7 +73,7 @@ const isJson = wantsJson(process.argv.slice(2));
 
 /** Usage-shaped failure: the caller's arguments are wrong — exit 2. */
 function usageExit(message: string): never {
-  if (isJson) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+  if (isJson) console.log(JSON.stringify({ ok: false, error: usageMessage(message, "library") }, null, 2));
   else console.error(usageMessage(message, "library"));
   process.exit(2);
 }
@@ -134,12 +134,8 @@ try {
 }
 
 if (values.help || positionals.length === 0) {
-  if (isJson) console.log(JSON.stringify({ ok: true, help: HELP.trim() }, null, 2));
+  if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
   else console.log(HELP);
-  process.exit(0);
-}
-if (values.help || positionals.length === 0) {
-  console.log(HELP);
   process.exit(0);
 }
 
@@ -238,7 +234,7 @@ ${section(
       figure("cutouts", c.meta.id, path.basename(c.imagePath), `${c.meta.id} [${c.meta.tags.join(", ")}] ${c.meta.approval}`),
     )
     .join("\n"),
-  "(none — add one with ply add-cutout <cutout.png> --id <name>)",
+  "(none — add one with ply library add-cutout <cutout.png> --id <name>)",
 )}
 ${section(
   "masks",
@@ -247,7 +243,7 @@ ${section(
       figure("masks", m.meta.id, path.basename(m.imagePath), `${m.meta.id} [${m.meta.tags.join(", ")}]`),
     )
     .join("\n"),
-  "(none — add one with ply add-mask <mask.png> --id <name>)",
+  "(none — add one with ply library add-mask <mask.png> --id <name>)",
 )}
 </body>`;
   await writeFile(path.join(LIBRARY_ROOT, "index.html"), html);

@@ -437,7 +437,7 @@ export async function approveCutout(
 export function trialCreatorError(id: string | undefined): string {
   return (
     `library cutout "${id ?? "?"}" is a trial Creator Asset (approval: "trial") — normal and final rendering reject it.\n` +
-    `Approve it explicitly with ("ply library approve ${id ?? "<id>"}", or render with --experimental for a clearly-marked non-final render.`
+    `Approve it explicitly with "ply library approve ${id ?? "<id>"}", or render with --experimental for a clearly-marked non-final render.`
   );
 }
 

@@ -21,7 +21,8 @@ export function wantsJson(args: string[]): boolean {
 /**
  * The module-global presentation flags, extracted before per-module dispatch:
  * `--json` switches output presentation, `--help`/`-h` request help. Anything
- * else is the caller's command line, unchanged.
+ * else is the caller's command line, unchanged. Scanning is by exact token —
+ * a value is never confused with the flag, and a path never starts with `-`.
  */
 export function extractGlobalFlags(args: string[]): {
   json: boolean;
@@ -34,6 +35,33 @@ export function extractGlobalFlags(args: string[]): {
     help: args.includes("--help") || args.includes("-h"),
     rest,
   };
+}
+
+/**
+ * A negative number is a valid value for these numeric options (#128), but
+ * parseArgs refuses a dash-leading option value ("--y -40" reads as an
+ * ambiguous flag), so join a following dash-leading numeric token into
+ * "--<flag>=<value>" before parsing. The regex only matches numerics — a
+ * following option is never consumed as a value — and a missing value falls
+ * through to the parser's own concise missing-value error. Equals-form
+ * values pass through untouched, so both syntaxes reach the same parser.
+ */
+export function joinDashLeadingNumericValues(args: string[], flags: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (
+      flags.includes(arg) &&
+      args[i + 1] !== undefined &&
+      /^-(?:\.?\d)/.test(args[i + 1]!)
+    ) {
+      out.push(`${arg}=${args[i + 1]!}`);
+      i++;
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
 }
 
 /** Concise usage-error message: the correction, then a pointer to relevant help. */
@@ -50,12 +78,13 @@ export function helpResult(helpText: string): { ok: true; help: string } {
  * Print one CLI result in the caller's chosen presentation: JSON mode emits
  * exactly one JSON result on stdout; text mode prints compact text to stdout
  * on success and stderr on failure — no prose ever contaminates a JSON stdout.
+ * `text` is required in text mode: every command has a rendering, so a
+ * missing text is a contract bug, never a silent no-output success.
  */
 export function printResult(
-  result: { exitCode: CliExitCode; text?: string; json: unknown },
+  result: { exitCode: CliExitCode; text: string; json: unknown },
   isJson: boolean,
 ): void {
   if (isJson) console.log(JSON.stringify(result.json, null, 2));
-  else if (result.text !== undefined)
-    (result.exitCode === 0 ? console.log : console.error)(result.text);
+  else (result.exitCode === 0 ? console.log : console.error)(result.text);
 }

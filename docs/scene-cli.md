@@ -7,22 +7,17 @@ maintained: it describes what runs today.
 
 ## Output and manifests
 
-Structured results are one valid JSON object on stdout under `--json`:
-`{ "ok": true, ... }` or `{ "ok": false, "errors": [...] }`. Successful
-renders carry a "warnings" array (e.g. an auto-fit layer that could not fit
-at its min floor, or a safe-area violation naming the layer that intersects
-YouTube's duration-badge or progress-bar region) and write a Render manifest
-beside the output(s) (`<out>.manifest.json`) recording the scene identity,
-selected variants, exact Asset identities, tool version, and outputs — every
-path in it is relative to the manifest itself, so the project can be
-relocated and re-rendered offline via `scene rerender`. `scene validate`
-reports the structured `safeAreaViolations` array. Exit codes: 0 ok, 1
-invalid scene or render failure, 2 usage error. Rendering, validation,
-inspection, and rerendering are offline and never start generation.
-
-Before #128, Scene commands printed this JSON by default; the default is now
-compact text, with `--json` as the machine-readable form for callers and
-scripts (see README, Legacy surface).
+Successful renders carry a "warnings" array (e.g. an auto-fit layer that
+could not fit at its min floor, or a safe-area violation naming the layer
+that intersects YouTube's duration-badge or progress-bar region) and write a
+Render manifest beside the output(s) (`<out>.manifest.json`) recording the
+scene identity, selected variants, exact Asset identities, tool version, and
+outputs — every path in it is relative to the manifest itself, so the project
+can be relocated and re-rendered offline via `scene rerender`. `scene
+validate` reports the structured `safeAreaViolations` array. The output
+presentation (`--json` shape) and exit codes are stated once in
+`ply scene --help`; the default-output migration for machine consumers is in
+README (Legacy surface).
 
 ## Themes and templates
 
