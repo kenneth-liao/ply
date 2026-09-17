@@ -59,6 +59,12 @@ import { readFile } from "node:fs/promises";
 // file into that machinery), with no runtime coupling into the legacy
 // Scene surface.
 import type { Box } from "./scene-geometry.js";
+// Type-only compile-time pin (review INT-4): the two shapes stay
+// assignable in both directions, so the "no translation layer at the #176
+// seam" claim cannot silently rot — a field added to either side without
+// the other fails `tsc --noEmit`. This imports a type; it does not modify
+// or extend the legacy module.
+import type { ProtectedRegion } from "./safe-area.js";
 
 /** One caller-protected rectangle of a canvas. */
 export interface Region {
@@ -87,6 +93,15 @@ export interface RegionFile {
 /** The only supported region-file schema version. */
 export const REGION_SCHEMA_VERSION = 1;
 
+// The two-directional assignability pin, evaluated once at module load.
+type _RegionMatchesProtectedRegion = [Region] extends [ProtectedRegion]
+  ? [ProtectedRegion] extends [Region]
+    ? true
+    : never
+  : never;
+const _regionMatchesProtectedRegion: _RegionMatchesProtectedRegion = true;
+void _regionMatchesProtectedRegion;
+
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -94,13 +109,15 @@ function fail(source: string, detail: string): never {
   throw new Error(`Region file "${source}" ${detail}`);
 }
 
-/** Non-empty trimmed string, or a rejection naming the field. */
+/** Non-empty trimmed string, or a rejection naming the field. The caller
+ * receives the TRIMMED value: normalization happens at this boundary, so
+ * a " dup" id cannot bypass uniqueness against a stored "dup". */
 function requiredString(doc: Record<string, unknown>, field: string, source: string, context: string): string {
   const v = doc[field];
   if (typeof v !== "string" || v.trim() === "") {
     fail(source, `${context}: "${field}" must be a non-empty string.`);
   }
-  return v;
+  return (v as string).trim();
 }
 
 /** Parse and validate the raw JSON document — the one boundary where
@@ -227,13 +244,27 @@ export async function loadCompositionRegions(
   compositionCanvas: RegionCanvas,
 ): Promise<{ file: RegionFile; regions: Region[] }> {
   const file = await readRegionFile(regionFilePath);
+  return { file, regions: ingestRegionCanvas(file, compositionCanvas, regionFilePath) };
+}
+
+/**
+ * The canvas-contract half of the ingestion point, callable separately so
+ * a consumer can parse first (cheap, loud failure before any browser
+ * work) and validate the canvas contract once the Composition is known
+ * without re-reading the file. `sourcePath` is only for error messages.
+ */
+export function ingestRegionCanvas(
+  file: RegionFile,
+  compositionCanvas: RegionCanvas,
+  sourcePath: string,
+): Region[] {
   if (file.canvas.width !== compositionCanvas.width || file.canvas.height !== compositionCanvas.height) {
     throw new Error(
-      `Region file "${regionFilePath}" targets a ${file.canvas.width}×${file.canvas.height} canvas, ` +
+      `Region file "${sourcePath}" targets a ${file.canvas.width}×${file.canvas.height} canvas, ` +
         `but the Composition's canvas is ${compositionCanvas.width}×${compositionCanvas.height}. ` +
         `Regions are canvas-pixel data, so the file's canvas must match the Composition's canvas — ` +
         `edit the file's "canvas" to match, or check a Composition of that size.`,
     );
   }
-  return { file, regions: file.regions };
+  return file.regions;
 }

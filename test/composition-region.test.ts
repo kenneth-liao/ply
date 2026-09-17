@@ -358,6 +358,47 @@ test("a region outside the file's canvas fails loudly with exit 1", async () => 
   expect(out.error).toMatch(/canvas/i);
 });
 
+test("every visible layer x every region reports exactly one finding each (N×M fan-out with attribution)", async () => {
+  // Two full-bleed layers, two regions: 2×2 = 4 findings, and each finding
+  // must name the right (layer, region) pair — a loop that breaks early or
+  // misattributes cannot pass this.
+  const imgA = path.join(tempDir, "a.png");
+  await writeFile(imgA, solidPng(400, 300, RED));
+  const imgB = path.join(tempDir, "b.png");
+  await writeFile(imgB, solidPng(400, 300, [0, 0, 255, 255]));
+  await makeComp("fanout");
+  await addImageLayer("fanout", "alpha", imgA, { x: 0, y: 0 });
+  await addImageLayer("fanout", "beta", imgB, { x: 0, y: 0 });
+  const regions = await writeRegionFile("fanout.json", regionFileBody([
+    region("corner-box", { x: 360, y: 250, width: 40, height: 50 }),
+    region("bottom-strip", { x: 0, y: 285, width: 400, height: 15 }),
+  ]));
+
+  const { res, json } = await check("fanout", regions);
+  expect(res.code).toBe(0);
+  expect(json.findings).toHaveLength(4);
+  const pairs = json.findings.map((f: { layer: string; region: { id: string } }) => `${f.layer}/${f.region.id}`).sort();
+  expect(pairs).toEqual(["alpha/bottom-strip", "alpha/corner-box", "beta/bottom-strip", "beta/corner-box"]);
+  // Every finding carries its own layer identity and the shared painted extent.
+  for (const f of json.findings) {
+    expect(f.layerId).toBeTruthy();
+    expect(f.footprint).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+  }
+});
+
+// Review INT-2/PROD-1 pinned: a bad region file fails before the browser
+// pass, so its error takes precedence even when the Composition is also
+// missing.
+test("a malformed region file fails before the Composition is measured", async () => {
+  const bad = await writeRegionFile("bad-order.json", "{ nope");
+  const { res } = await check("no-such-comp", bad);
+  expect(res.code).toBe(1);
+  const out = JSON.parse(res.stdout);
+  expect(out.ok).toBe(false);
+  expect(out.error).toContain("bad-order.json");
+  expect(out.error).not.toContain("no-such-comp");
+});
+
 test("a region file whose canvas does not match the Composition's canvas fails loudly with exit 1", async () => {
   const img = path.join(tempDir, "bg.png");
   await writeFile(img, solidPng(400, 300, RED));

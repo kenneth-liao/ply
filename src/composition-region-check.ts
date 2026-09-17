@@ -10,10 +10,10 @@
  * platform geometry anywhere in the check path).
  *
  * Two authorities, both reused, never re-modeled:
- * - **Regions** are ingested through `loadCompositionRegions`
- *   (src/composition-regions.ts) — the single ingestion point that turns
- *   raw caller JSON into trusted rectangle data and enforces the canvas
- *   contract.
+ * - **Regions** are ingested through src/composition-regions.ts — the
+ *   single ingestion point (`readRegionFile` → `ingestRegionCanvas`, or
+ *   the one-call `loadCompositionRegions`) that turns raw caller JSON
+ *   into trusted rectangle data and enforces the canvas contract.
  * - **Footprints** are the painted extents `measureCompositionLayers`
  *   (src/composition-measure.ts) reports — the browser-measured visible
  *   ink that `composition measure` reports, including effect reach and
@@ -31,7 +31,7 @@
  * whole operation is local: no network, no inference weights.
  */
 import { measureCompositionLayers } from "./composition-measure.js";
-import { loadCompositionRegions, type Region } from "./composition-regions.js";
+import { ingestRegionCanvas, readRegionFile, type Region } from "./composition-regions.js";
 import type { Page } from "playwright";
 
 /** One (layer, region) intersection: the layer, its footprint, the region. */
@@ -70,6 +70,11 @@ const intersects = (
  * a caller-provided render page keeps the operation deterministic and
  * testable (and provably offline); without one, the shared render page is
  * used, exactly as in `composition measure`.
+ *
+ * Ordering is cheap-before-expensive: the region file is parsed and
+ * structurally validated first (a malformed file fails before the browser
+ * pass — review INT-2/PROD-1), then the Composition is measured, then the
+ * canvas contract is checked against the measured canvas.
  */
 export async function checkCompositionRegions(
   projectPath: string,
@@ -77,8 +82,9 @@ export async function checkCompositionRegions(
   regionFilePath: string,
   options: { page?: Page } = {},
 ): Promise<RegionCheckResult> {
+  const file = await readRegionFile(regionFilePath);
   const measured = await measureCompositionLayers(projectPath, compName, undefined, options);
-  const { regions } = await loadCompositionRegions(regionFilePath, measured.canvas);
+  const regions = ingestRegionCanvas(file, measured.canvas, regionFilePath);
 
   const findings: RegionFinding[] = [];
   for (const layer of measured.layers) {
