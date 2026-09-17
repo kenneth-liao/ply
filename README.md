@@ -54,6 +54,12 @@ The composer workflow runs through `ply project`, `ply composition`, and
 [docs/project-storage-contract.md](docs/project-storage-contract.md) for the
 full contracts.
 
+Placement coordinates accept two equivalent syntaxes — a separate dash-leading
+number and the equals form — so negative and fractional placement can be
+written either way (`--x -40` or `--x=-40`, `--y -.5` or `--y=-.5`); a
+following option is never consumed as a number, and Layer effects' numeric
+values (`--rotate`, `--shadow`, `--outline`) accept both forms too.
+
 ## Uniform generation (new surface)
 
 `ply generate` is one source-image generation operation with no subject
@@ -415,7 +421,8 @@ bunx playwright install chromium
 cp .env.local.example .env.local
 ```
 
-Run `bun run ply --help`, or use `bun link` to install the `ply` executable.
+Run `ply --help` (or `bun run ply --help` from a checkout without `bun link`),
+or use `bun link` to install the `ply` executable.
 The composer modules are `ply project`, `ply composition`, `ply layer`,
 `ply generate`, and `ply matte`; the existing `bun run scene`, `bun run library`,
 and `bun run jobs` legacy scripts remain supported. The repository is
@@ -486,17 +493,39 @@ adoption commands stay documented as inspect/review-only records: none of them
 starts a generation run, and new generated content enters only through the
 composer surface.
 
-Scene and `jobs` commands write machine-readable JSON to stdout; `generate` and
-`matte` print compact text by default and emit machine-readable JSON only under
-`--json`.
+Scene, `jobs`, and `library` commands print compact text by default and emit
+one valid JSON result on stdout under `--json` (with structured errors and
+their exit codes preserved); `generate` and `matte` have the same contract.
+
+**Migration for machine consumers (#128).** Before #128, `scene` and `jobs`
+printed machine-readable JSON by default and `library` rejected `--json`;
+now every module prints compact text by default and `--json` carries the
+structured form:
+
+```bash
+# Before — JSON was the default and scripts parsed stdout directly:
+ply scene inspect thumbnail.scene.json | jq '.layers'
+# After — add --json for the machine-readable result:
+ply scene inspect thumbnail.scene.json --json | jq '.layers'
+# Library joins the same contract (before, this crashed with a stack trace):
+ply library list --json
+```
+
+Exit codes keep their module-wide meanings — 0 ok, 1 operational failure, 2
+usage error — and the structured shape under `--json` is unchanged, but two
+exit-code contracts moved for `library` and help: `library` usage-shaped
+argument failures (unknown command, missing/invalid `--id`, invalid file,
+missing ref) now exit 2 where they exited 1, and every module's `--help`/`-h`
+now exits 0 where Scene/Job help exited 2. A wrapper treating "any nonzero
+exit as operational failure" must distinguish 2 (usage) from 1 (operational).
 
 ### Scene quick start
 
 ```bash
-bun run scene init headline-card --out thumbnail.scene.json
+ply scene init headline-card --out thumbnail.scene.json
 # Edit thumbnail.scene.json to reference studio-desk and set the text.
-bun run scene validate thumbnail.scene.json
-bun run scene render thumbnail.scene.json
+ply scene validate thumbnail.scene.json
+ply scene render thumbnail.scene.json
 ```
 
 Successful Scene renders are exactly 1280×720 and include a portable manifest.
@@ -536,22 +565,22 @@ A Scene is plain JSON. Layer order is paint order; later Layers appear on top.
 Use the CLI as the canonical interface reference:
 
 ```bash
-bun run scene --help
-bun run scene schema
-bun run scene themes
-bun run scene templates
+ply scene --help
+ply scene schema
+ply scene themes
+ply scene templates
 ```
 
 Important commands:
 
 ```bash
-bun run scene init <template> --out <scene.json>
-bun run scene inspect <scene.json>
-bun run scene validate <scene.json>
-bun run scene render <scene.json>
-bun run scene guidelines <scene.json>
-bun run scene author <scene.json>
-bun run scene rerender <manifest.json>
+ply scene init <template> --out <scene.json>
+ply scene inspect <scene.json>
+ply scene validate <scene.json>
+ply scene render <scene.json>
+ply scene guidelines <scene.json>
+ply scene author <scene.json>
+ply scene rerender <manifest.json>
 ```
 
 #### Variants
@@ -560,8 +589,8 @@ A Scene can hold named sparse changes against stable Layer IDs. Render one or
 more without starting generation:
 
 ```bash
-bun run scene render thumbnail.scene.json --variant headline-b
-bun run scene render thumbnail.scene.json --variant headline-a,headline-b
+ply scene render thumbnail.scene.json --variant headline-b
+ply scene render thumbnail.scene.json --variant headline-a,headline-b
 ```
 
 A multi-Variant render also creates a contact sheet.
@@ -573,10 +602,10 @@ a local PNG, JPEG, or WebP to the exact 1280×720 PNG profile. Non-16:9 images
 are refused rather than cropped or distorted without explicit intent.
 
 ```bash
-bun run scene reference import thumbnail.scene.json ./reference.webp \
+ply scene reference import thumbnail.scene.json ./reference.webp \
   --source "optional provenance"
-bun run scene compare thumbnail.scene.json
-bun run scene author thumbnail.scene.json
+ply scene compare thumbnail.scene.json
+ply scene author thumbnail.scene.json
 ```
 
 `compare` and `author` provide side-by-side and alpha-overlay review. They do
@@ -600,9 +629,9 @@ under `out/jobs/<jobId>/` before the retirement — by the pre-retirement
 `jobs plates|objects|creators|rerun` commands or other writer binaries:
 
 ```bash
-bun run jobs show <jobId>                 # full record: request, references, runs
-bun run jobs list                         # summarize recorded jobs
-bun run jobs review <jobId>               # offline evidence sheet (see below)
+ply jobs show <jobId>                 # full record: request, references, runs
+ply jobs list                         # summarize recorded jobs
+ply jobs review <jobId>               # offline evidence sheet (see below)
 ```
 
 No command here starts or extends a job, and none publishes anything:
@@ -630,8 +659,8 @@ mutable remote content outside the composition boundary.
 Existing plate/object/creator records stay reviewable:
 
 ```bash
-bun run jobs review <jobId>
-bun run library approve presenter-pointing
+ply jobs review <jobId>
+ply library approve presenter-pointing
 ```
 
 Only explicit human approval promotes a trial Creator Asset. Normal Scene
@@ -651,11 +680,15 @@ The shared library is the `assets/` directory. The filesystem is the registry;
 there is no catalog for generation references.
 
 ```bash
-bun run library --help
-bun run library list [query]
-bun run library list --sheet
-bun run library resolve <asset-ref>
+ply library --help
+ply library list [query]
+ply library list --sheet
+ply library list --json
+ply library resolve <asset-ref>
 ```
+
+Every library command prints compact text by default and one valid JSON
+result on stdout under `--json` (#128).
 
 Library kinds:
 
@@ -670,9 +703,9 @@ Library kinds:
 Add externally sourced Assets:
 
 ```bash
-bun run library add-logo ./logo.svg --id product-logo --source "source URL + date"
-bun run library add-cutout ./person.png --id presenter --source "source URL + date"
-bun run library add-mask ./shirt-mask.png --id presenter-shirt
+ply library add-logo ./logo.svg --id product-logo --source "source URL + date"
+ply library add-cutout ./person.png --id presenter --source "source URL + date"
+ply library add-mask ./shirt-mask.png --id presenter-shirt
 ```
 
 Existing library plates and objects keep their recorded generation

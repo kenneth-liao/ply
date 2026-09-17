@@ -7,11 +7,12 @@ import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type 
 import { parseShadowSpec, parseOutlineSpec } from "./layer.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
+import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
 const HELP = `
 layer — Layer management and inspection within a Project
 
-  bun run ply layer edit <layer-id> [options]
+  ply layer edit <layer-id> [options]
       Edit a Layer's content or placement, advancing its current revision.
       Requires --in-place when referenced by multiple Compositions.
       With --fork, publish a new Layer identity and retarget only the
@@ -26,17 +27,17 @@ layer — Layer management and inspection within a Project
       flip state, and none removes the reflection. --anchor places the
       Layer's visible painted ink at a target position (see below).
 
-  bun run ply layer inspect <layer-id> [options]
+  ply layer inspect <layer-id> [options]
       Inspect a Layer's identity, current revision, and content details
 
-  bun run ply layer review <layer-id> --out <path> [options]
+  ply layer review <layer-id> --out <path> [options]
       Build the offline evidence review sheet for a generated or matted
       Layer from retained Project evidence — References (shown only when
       their recorded paths still verify; unavailable ones are labeled, never
       substituted), the candidate, and the associated matte. Evidence only:
       no approval or promotion is implied.
 
-  bun run ply layer list [options]
+  ply layer list [options]
       List all Layers in the Project
 
 Options:
@@ -229,31 +230,9 @@ function formatAnchorTarget(anchored: AnchorResolution): string {
   return ` at y ${target.y}`;
 }
 
-/** A negative number is a valid `--rotate` (#134) and `--shadow` dx/dy
- * (#139) value, but parseArgs refuses a dash-leading option value ("--rotate
- * -30" reads as an ambiguous flag), so join a following dash-leading numeric
- * token into "--<flag>=<value>" before parsing. Scoped to these introduced
- * options; retained numeric options keep their existing surface untouched
- * (OOS-003). */
-function joinDashLeadingNumericValues(args: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (
-      (arg === "--rotate" || arg === "--shadow" || arg === "--outline") &&
-      args[i + 1] !== undefined &&
-      /^-(?:\.?\d)/.test(args[i + 1]!)
-    ) {
-      out.push(`${arg}=${args[i + 1]!}`);
-      i++;
-      continue;
-    }
-    out.push(arg);
-  }
-  return out;
-}
-
-const rawArgs = process.argv.slice(2);
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), [
+  "--x", "--y", "--rotate", "--shadow", "--outline",
+]);
 const isJson = rawArgs.includes("--json");
 
 let values: {
@@ -288,7 +267,7 @@ let positionals: string[];
 
 try {
   const parsed = parseArgs({
-    args: joinDashLeadingNumericValues(rawArgs),
+    args: rawArgs,
     allowPositionals: true,
     options: {
       project: { type: "string", short: "p" },
@@ -322,12 +301,13 @@ try {
   values = parsed.values;
   positionals = parsed.positionals;
 } catch (err) {
-  output({ ok: false, error: (err as Error).message }, isJson);
+  output({ ok: false, error: usageMessage((err as Error).message, "layer") }, isJson);
   process.exit(2);
 }
 
 if (values.help || positionals.length === 0) {
-  console.log(HELP);
+  if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
+  else console.log(HELP);
   process.exit(0);
 }
 
