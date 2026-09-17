@@ -20,7 +20,7 @@ New work goes through the current composer workflow:
 
   project        Create, select, and inspect self-contained Projects
   composition    Author Compositions: create, add Layers, import, remove,
-                 reorder, inspect, measure, render, replay, and list
+                 reorder, inspect, measure, check, render, replay, and list
   layer          Inspect and edit Layers within a Project
   generate       Generate source images as Generation Jobs — one uniform
                  operation, full-canvas or isolated intent, no content policy

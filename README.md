@@ -12,9 +12,12 @@ accepted vocabulary. Two shipments are acceptance-audited against `main`:
   independent local Matting ([spec #102](https://github.com/kenneth-liao/ply/issues/102))
   — including the retirement of the category-specific generation entry points.
 
-Caller-parameterized region checking is the remaining separately scoped target
-migration named by ADR-0015; the legacy Scene surface still runs as documented
-under [Legacy surface](#legacy-surface-preserved), and ADR-0014 records what
+Caller-parameterized region checking has shipped for Compositions
+(`ply composition check`, [Region checking](#region-checking-new-surface));
+the guideline overlay view and the starter region-file relocation are the
+remaining separately scoped migrations named by ADR-0015/spec #172; the
+legacy Scene surface still runs as documented under
+[Legacy surface](#legacy-surface-preserved), and ADR-0014 records what
 remains target for it.
 
 ## Current implementation
@@ -412,6 +415,56 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
   and pinned Render history replays byte-identically.
 - Invalid settings fail at the command boundary (exit 2) through the same
   parser the edit path uses — nothing invalid ever mutates live state.
+
+## Region checking (new surface)
+
+`ply composition check <comp> --regions <file>` tests a Composition's painted
+Layer extents against caller-supplied regions — rectangles of platform UI
+that overlays your visual (badge, progress strip, captions), supplied by
+path, with no platform geometry hardcoded in Ply (ADR-0015). Every visible
+Layer's painted footprint is tested against every region, one finding per
+(layer, region) intersection naming the layer, its footprint, and the region
+— the same actionable shape the legacy `safe-area:` warnings have.
+
+```bash
+ply composition check poster --regions my-platform-regions.json -p ~/projects/my-poster
+ply composition check poster --regions my-platform-regions.json --json -p ~/projects/my-poster
+```
+
+Findings are information, never render failures: the check exits 0 with
+findings, a full-bleed background intersecting every region is accepted
+noise, and the check writes nothing to the Project. Layers that paint
+nothing (opacity 0, fully transparent) produce no findings.
+
+The region file is caller-owned data (schema version 1):
+
+```json
+{
+  "schemaVersion": 1,
+  "canvas": { "width": 1280, "height": 720 },
+  "regions": [
+    {
+      "id": "duration-badge",
+      "label": "duration badge",
+      "reason": "YouTube pins the video-length badge to the bottom-right corner at every display size",
+      "box": { "x": 1088, "y": 656, "width": 192, "height": 64 }
+    }
+  ]
+}
+```
+
+- Regions are axis-aligned rectangles in **canvas pixels** — any canvas size,
+  any platform; there is no 1280×720 assumption in the code.
+- `canvas` must match the Composition's canvas (the canvas contract).
+- Each region needs a non-empty unique `id`, a human-readable `label`, a
+  `reason`, and a `box` within the file's canvas. This one ingestion point
+  is the schema contract for every region consumer, including the guideline
+  overlay view.
+
+Exit codes: 0 when the check completes (findings included), 1 for an
+operational failure (malformed region file, out-of-canvas region, canvas
+mismatch, missing Composition), 2 for usage errors. Default output is
+compact text; `--json` emits one valid JSON result with the findings.
 
 ## Setup
 
