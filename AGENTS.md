@@ -14,7 +14,8 @@
   (`jobs plates|objects|creators|rerun`); ADR-0014/0015's region-gate
   migration remains a target decision. Do not remove existing gates in a
   docs pass.
-- `.agents/skills/visual-authoring/SKILL.md` owns relocated authoring knowledge.
+- The AP kit-managed `visual-authoring` skill owns relocated authoring knowledge
+  (Workspace source, installed to every bound host by `apkit install`).
   It must be committed before any gate deletion (ISC-27).
 - This repository's instructions take precedence over stale generated profile
   context under `.agent-profile-kit/`; do not hand-edit generated profiles to
@@ -93,7 +94,7 @@ can be invisible in logs:
   creation, and verify/read their bytes once at generation.
 - Generation has no subject categories, mandatory identity References, or
   likeness gates (ADR-0014, #114): those are caller policy, preserved in
-  `.agents/skills/visual-authoring/SKILL.md` and the consuming repositories.
+  the AP kit-managed `visual-authoring` skill and the consuming repositories.
   Legacy generated-asset adoption is retired (#115, #114): legacy `jobs`
   records remain inspectable and reviewable only, and generated or matted
   content enters Projects as ordinary Layers, never the asset library.
