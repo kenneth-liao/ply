@@ -49,7 +49,7 @@ export interface RegionFinding {
 export interface RegionCheckResult {
   composition: string;
   canvas: { width: number; height: number };
-  /** The region file path exactly as the caller supplied it. */
+  /** The region file path, resolved to an absolute path by the CLI. */
   regionFile: string;
   /** How many regions the file supplied. */
   regionCount: number;

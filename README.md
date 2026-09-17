@@ -444,10 +444,10 @@ The region file is caller-owned data (schema version 1):
   "canvas": { "width": 1280, "height": 720 },
   "regions": [
     {
-      "id": "duration-badge",
-      "label": "duration badge",
-      "reason": "YouTube pins the video-length badge to the bottom-right corner at every display size",
-      "box": { "x": 1088, "y": 656, "width": 192, "height": 64 }
+      "id": "bottom-banner",
+      "label": "bottom banner",
+      "reason": "the platform overlays a banner across the bottom edge",
+      "box": { "x": 140, "y": 640, "width": 1000, "height": 64 }
     }
   ]
 }

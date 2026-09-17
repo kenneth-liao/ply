@@ -202,6 +202,47 @@ test("a layer clear of every region produces no findings with exit 0", async () 
   expect(json.findings).toEqual([]);
 });
 
+test("edges touching exactly is not an intersection (the strict-overlap boundary)", async () => {
+  // A painted extent ending exactly where a region begins shares an edge
+  // but overlaps no pixels — the legacy safe-area rule, which a future
+  // `>` → `>=` flip would silently break.
+  const img = path.join(tempDir, "top.png");
+  await writeFile(img, solidPng(400, 100, RED));
+  await makeComp("touching");
+  await addImageLayer("touching", "top", img, { x: 0, y: 0 });
+  const regions = await writeRegionFile("touching.json", regionFileBody([
+    region("just-below", { x: 0, y: 100, width: 400, height: 100 }),
+  ]));
+
+  const { res, json } = await check("touching", regions);
+  expect(res.code).toBe(0);
+  expect(json.findings).toEqual([]);
+
+  // One pixel into the region is enough again.
+  await makeComp("overlapping");
+  await addImageLayer("overlapping", "top", img, { x: 0, y: 1 });
+  const { res: res2, json: json2 } = await check("overlapping", regions);
+  expect(res2.code).toBe(0);
+  expect(json2.findings).toHaveLength(1);
+  expect(json2.findings[0].layer).toBe("top");
+});
+
+// An empty regions array is schema-legal: the check completes with zero
+// regions, zero findings, and exit 0.
+test("a region file with an empty regions array checks nothing, successfully", async () => {
+  const img = path.join(tempDir, "bg.png");
+  await writeFile(img, solidPng(400, 300, RED));
+  await makeComp("noregions");
+  await addImageLayer("noregions", "bg", img, { x: 0, y: 0 });
+  const regions = await writeRegionFile("empty.json", regionFileBody([]));
+
+  const { res, json } = await check("noregions", regions);
+  expect(res.code).toBe(0);
+  expect(json.ok).toBe(true);
+  expect(json.regionCount).toBe(0);
+  expect(json.findings).toEqual([]);
+});
+
 test("layers that paint nothing — opacity 0 or fully transparent content — produce no findings", async () => {
   const visible = path.join(tempDir, "on.png");
   await writeFile(visible, solidPng(64, 48, RED));

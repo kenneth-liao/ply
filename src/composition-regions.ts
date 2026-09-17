@@ -53,14 +53,12 @@
  * operation.
  */
 import { readFile } from "node:fs/promises";
-
-/** The axis-aligned rectangle, the repo's one box shape (see scene-geometry.ts). */
-export interface RegionBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+// The rectangle type is a type-only import: one box representation across
+// the repo (the user-approved contract — the region object is structurally
+// identical to safe-area.ts's ProtectedRegion, and #176 feeds this same
+// file into that machinery), with no runtime coupling into the legacy
+// Scene surface.
+import type { Box } from "./scene-geometry.js";
 
 /** One caller-protected rectangle of a canvas. */
 export interface Region {
@@ -70,7 +68,7 @@ export interface Region {
   /** Why the region is protected — surfaced in findings and overlay markup. */
   reason: string;
   /** The protected rectangle in canvas pixels. */
-  box: RegionBox;
+  box: Box;
 }
 
 /** The canvas a region file targets, in pixels. */
@@ -170,7 +168,7 @@ export function parseRegionFile(raw: unknown, source: string): RegionFile {
         fail(source, `${context} ("${id}"): "box.${f}" must be a finite number.`);
       }
     }
-    const b: RegionBox = {
+    const b: Box = {
       x: box.x as number,
       y: box.y as number,
       width: box.width as number,
