@@ -82,8 +82,14 @@ import { readLayerInternalFull } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
 import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
-import { buildCompositionHtml, rejectUnresolvedFonts, sizeOutlineFilterRegions, type SnapshotLayer } from "./composition-paint.js";
-import type { ResolvedLayerRevision, LayerShadow, LayerOutline } from "./layer.js";
+import {
+  assertOutlineDilationLimits,
+  buildCompositionHtml,
+  layerMaxScale,
+  rejectUnresolvedFonts,
+  sizeOutlineFilterRegions,
+  type SnapshotLayer,
+} from "./composition-paint.js";
 import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerTextTypography } from "./layer.js";
 import type { Page } from "playwright";
 
@@ -240,7 +246,7 @@ function effectReachPx(revision: ResolvedLayerRevision): number {
     ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
     : 0;
   if (outline === 0 && shadow === 0) return 0;
-  return (outline + shadow) * Math.max(revision.scaleX, revision.scaleY);
+  return (outline + shadow) * layerMaxScale(revision);
 }
 
 /** Round every component of an optional box for reporting. */
@@ -288,6 +294,10 @@ async function measureSnapshot(
   layers: SnapshotLayer[],
   options: { page?: Page } = {},
 ): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null }[]> {
+  // Check outline limits before anything is painted (#193, ADR-0022): an
+  // outline whose raster dilate at factor 1 exceeds Chromium's cap would clip
+  // silently in the painted screenshot pass, reporting an under-measured ink box.
+  assertOutlineDilationLimits(layers, 1);
   const run = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });

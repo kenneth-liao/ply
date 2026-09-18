@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Fixed outline-cap check ignoring Layer scale: raster dilation is now computed
+  as `outline.width × max(|scaleX|, |scaleY|) × supersample`, preventing silent
+  clipping on scaled-up Layers and false refusals on scaled-down Layers across
+  render, replay, and measurement (#193)
 - Fixed `ply composition measure`, every `ply layer edit --anchor`, and
   `ply composition check` failing on Compositions whose scaled Layers push
   the painted-ink capture window over the PNG decoder's 16,777,216-pixel

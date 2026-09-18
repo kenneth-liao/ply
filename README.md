@@ -401,9 +401,9 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
   `feMorphology` dilate extends the content's alpha by exactly `width`
   px in every direction, so painted ink and measurement reach agree
   exactly (ADR-0019). Every successful render draws that full ring;
-  an outline whose raster dilate (width × supersample) would exceed
-  Chromium's 256-raster-px kernel cap is refused instead of rendering a
-  clipped ring (see supersampled rendering, ADR-0022).
+  an outline whose raster dilate (width × layer scale × supersample) would
+  exceed Chromium's 256-raster-px kernel cap is refused instead of
+  rendering a clipped ring (see supersampled rendering, ADR-0022).
 - **Painted bounds include the outline:** `ply composition measure`
   reports the outlined (and shadowed) ink in
   `painted`/`paintedOnCanvas`/`clipped` and the effective outline
@@ -583,10 +583,12 @@ renders made before supersampling. The render pixel limits apply to the
 supersampled paint (canvas × factor per axis): a canvas that fits at 1× but
 not at the requested factor is refused with the fix named — it is never
 painted at a lower factor on its own. The same discipline covers outlines:
-Chromium caps the `feMorphology` outline-dilate kernel at 256 raster pixels,
-so an outline whose width × supersample would exceed that cap is refused
-before anything is painted — render with `--supersample 1`, a smaller
-factor, or a thinner outline. A render is never silently degraded.
+Chromium caps the `feMorphology` outline-dilate kernel at 256 raster pixels
+in device space. Outline width is in the Layer's local pixels, painted before
+the transform, so the raster dilation is `outline.width × max(|scaleX|, |scaleY|) × supersample`.
+An outline whose raster dilation would exceed that cap is refused before anything
+is painted — render with `--supersample 1` or a smaller factor, a thinner
+outline, or a smaller Layer scale. A render is never silently degraded.
 
 ```bash
 ply composition render poster -p ~/projects/my-poster                    # supersample 2 (default)
