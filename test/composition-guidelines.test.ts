@@ -21,7 +21,7 @@
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
-import { mkdtemp, rm, writeFile, readFile, readdir, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, readdir, mkdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { buildCompositionHtml } from "../src/composition-paint.js";
@@ -256,6 +256,28 @@ test("the view refuses to overwrite a Render output — the default render desti
   expect(res2.code).toBe(1);
   expect(JSON.parse(res2.stdout).ok).toBe(false);
   expect(Buffer.compare(await readFile(external), extBytes)).toBe(0);
+
+  // A RELATIVE external --out is recorded absolute at the render boundary
+  // (never ambiguous cwd-relative data), so the refusal follows the caller
+  // to the absolute path even when the render ran from another directory.
+  const relDir = path.join(tempDir, "from-cwd");
+  await mkdir(path.join(relDir, "rel-view"), { recursive: true });
+  const relOut = "./rel-view/kept.png";
+  const relRender = await invoke(
+    ["composition", "render", "kept", "--out", relOut, "--project", projDir, "--json"],
+    relDir,
+  );
+  expect(relRender.code).toBe(0);
+  // The record is absolute: resolve the caller's relative form through its
+  // real parent (the recorded form is the realpath-resolved target).
+  const recordedAbs = await realpath(path.resolve(relDir, relOut));
+  expect(JSON.parse(relRender.stdout).render.output).toBe(recordedAbs);
+  const relBytes = await readFile(recordedAbs);
+  const res3 = await invoke(["composition", "guidelines", "kept", "--regions", regions, "--out", recordedAbs, "--project", projDir, "--json"]);
+  expect(res3.code).toBe(1);
+  expect(JSON.parse(res3.stdout).ok).toBe(false);
+  expect(JSON.parse(res3.stdout).error).toContain(".manifest.json");
+  expect(Buffer.compare(await readFile(recordedAbs), relBytes)).toBe(0);
 });
 
 test("a fresh --out outside the Project and a repeat run over the view's own previous output both succeed", async () => {

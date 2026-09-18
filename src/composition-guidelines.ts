@@ -44,22 +44,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { paintCompositionHtml, buildCompositionHtml, type SnapshotLayer } from "./composition-paint.js";
+import { paintCompositionHtml, buildCompositionHtml, escapeHtml, type SnapshotLayer } from "./composition-paint.js";
 import { resolveCompositionSnapshot } from "./composition-render.js";
 import { ingestRegionCanvas, readRegionFile, type Region } from "./composition-regions.js";
 import { renderOutputConflict } from "./manifest.js";
 import { resolveProjectRoot } from "./project.js";
 import { projectRenderOutputConflict } from "./render-history.js";
-
-/** Minimal HTML escaping for caller-owned region text (same recipe as the paint builder). */
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
 
 /**
  * The region overlay (the legacy REQ-012 shape, caller-parameterized): one
@@ -68,7 +58,8 @@ function escapeHtml(text: string): string {
  * Scoped to .ply-region-guide so the selectors can never touch #canvas or
  * its Layer elements. Only the guideline page ever includes this markup —
  * buildCompositionHtml cannot, so the overlay structurally cannot enter a
- * final render's output.
+ * final render's output. Region text is escaped with the paint builder's
+ * shared escapeHtml.
  */
 function guidelineOverlayMarkup(regions: Region[]): string {
   const boxes = regions.map(

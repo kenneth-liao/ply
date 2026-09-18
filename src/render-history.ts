@@ -52,7 +52,10 @@ export interface RenderManifestDocument {
   composition: string;
   canvas: { width: number; height: number };
   environment: RenderEnvironment;
-  /** Informational, project-relative output path; replay never requires it. */
+  /** Informational destination record: project-relative for in-Project
+   * destinations, absolute for external ones (#174's render-output guard
+   * compares by this recorded form — never ambiguous cwd-relative data);
+   * replay never requires it. */
   output: string;
   createdAt: string;
   layers: RenderManifestLayer[];
@@ -281,14 +284,15 @@ export async function requireProjectRenderManifest(resolvedRoot: string, manifes
  * an output" (#174): scan the Project's renders/ manifests and compare each
  * recorded `output` against the candidate by filesystem identity
  * (`fsIdentity`), so a symlink alias cannot slip a recorded Render past the
- * guard. Recorded outputs resolve against the Project root — the documented
- * in-Project form; an external output's caller-chosen path is compared
- * verbatim-resolved, matching how the manifest recorded it. Only a missing
- * recorded PNG proves nothing is recorded there; a manifest that cannot be
- * read or parsed is itself the conflict — a write that cannot be proven safe
- * is not performed (fail-closed, like the legacy directory reader in
- * src/manifest.ts). The guideline view consults this so a review artifact
- * can never overwrite published Render pixels.
+ * guard. Recorded outputs are unambiguous by contract: the render boundary
+ * records external destinations absolute and in-Project destinations
+ * project-relative, so a relative record resolves against the Project root
+ * and nothing else. Only a missing recorded PNG proves nothing is recorded
+ * there; a manifest that cannot be read or parsed is itself the conflict —
+ * a write that cannot be proven safe is not performed (fail-closed, like
+ * the legacy directory reader in src/manifest.ts). The guideline view
+ * consults this so a review artifact can never overwrite published Render
+ * pixels.
  */
 export async function projectRenderOutputConflict(
   resolvedRoot: string,

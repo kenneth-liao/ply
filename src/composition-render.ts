@@ -43,8 +43,10 @@
  *   pixels from retained inputs) — the interrupted-operations notes in the
  *   storage contract cover recovery.
  * - The manifest's `output` field is informational (project-relative for
- *   in-Project destinations, the caller-chosen path verbatim for external
- *   ones); replay never requires the original PNG or any absolute path.
+ *   in-Project destinations, absolute for external ones — normalized at the
+ *   record boundary so a recorded external path is unambiguous, which the
+ *   render-output refusal guard in src/render-history.ts compares against);
+ *   replay never requires the original PNG or any absolute path.
  * - Default output is a fresh, never-colliding file under the Project's
  *   renders/ directory. An explicit --out may resolve outside the Project or
  *   be a brand-new file directly under renders/; every existing in-Project
@@ -349,8 +351,9 @@ async function defaultRenderDestination(
  * external regular file (destination-entry atomic rename). `manifest` is the
  * render history location under the Project's renders/ (always captured);
  * `informationalOutput` is the manifest's record of the destination —
- * project-relative for in-Project targets, the caller-chosen path verbatim
- * for external ones.
+ * project-relative for in-Project targets, absolute for external ones
+ * (a recorded output is compared by this recorded form, so it is never
+ * ambiguous cwd-relative data; #174's render-output guard reads it).
  */
 interface ExportTarget {
   path: string;
@@ -398,10 +401,13 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
     }
     // The caller-chosen path is kept verbatim for writing and reporting; the
     // realpath above is only the containment guard.
+    // The absolute target is recorded, never the caller-chosen lexical
+    // form: a relative external path would be ambiguous (which cwd?) and
+    // the render-output guard could not compare it soundly.
     return {
       path: target,
       manifest: await freshHistoryManifest(resolvedRoot),
-      informationalOutput: outPath,
+      informationalOutput: target,
       mode: "replace",
     };
   }
@@ -425,12 +431,12 @@ async function resolveExportTarget(resolvedRoot: string, outPath: string): Promi
     };
   }
 
-  // Same caller-chosen-path rule: the realpath only proves the parent's real
+  // Same absolute-record rule: the realpath only proves the parent's real
   // location is outside the Project.
   return {
     path: target,
     manifest: await freshHistoryManifest(resolvedRoot),
-    informationalOutput: outPath,
+    informationalOutput: target,
     mode: "replace",
   };
 }

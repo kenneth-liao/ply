@@ -229,8 +229,10 @@ function outlineFilterDef(outline: LayerOutline, layerIndex: number): string {
   );
 }
 
-/** Minimal HTML escaping for text layer content (#81). */
-function escapeHtml(text: string): string {
+/** Minimal HTML escaping for caller-owned text (#81; shared with every
+ * module that interpolates caller strings into the page — the guideline
+ * overlay's region id/label/reason use this exact recipe, #174). */
+export function escapeHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
