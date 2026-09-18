@@ -74,7 +74,7 @@ export function manifestPathFor(outputPath: string): string {
  * error leaves the question unanswered and propagates, so a write that cannot
  * be proven safe is never performed.
  */
-async function fsIdentity(p: string): Promise<string> {
+export async function fsIdentity(p: string): Promise<string> {
   const abs = path.resolve(p);
   try {
     return await realpath(abs);

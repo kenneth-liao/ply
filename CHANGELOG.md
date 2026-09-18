@@ -4,6 +4,22 @@
 
 ### Added
 
+- Added `ply composition guidelines <comp> --regions <file>` — the guideline
+  view for Compositions: the Composition exactly as `composition render`
+  would draw it, with the caller's regions (the same region file `check`
+  accepts, through the same ingestion point) drawn over the canvas as
+  inspectable overlay markup with each region's label and reason visible.
+  A review artifact, not a Render: it writes no Render manifest and adds
+  nothing to retained Render history, refuses to overwrite any output a
+  Render manifest or the Project's renders/ history records, and the
+  overlay is structurally excluded from final renders — the guideline
+  markup exists only on the guideline code path. Default output
+  `guidelines/<comp>.guidelines.png` (review output, not Project state);
+  `--out` names a path anywhere. Malformed region files, out-of-canvas
+  regions, canvas mismatches, and missing Compositions fail loudly with
+  nonzero status; compact text by default, valid JSON under `--json`;
+  local only (#174)
+
 - Added `examples/youtube-regions.json` — the committed starter YouTube
   region file (copy-and-own template): the bottom-right duration badge
   and the full-width watched-progress strip on a 1280×720 canvas,

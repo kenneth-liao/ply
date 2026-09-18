@@ -85,6 +85,57 @@ export interface RenderCompositionOptions {
   out?: string;
 }
 
+/**
+ * A locked snapshot of a Composition: its name, canvas, and every paintable
+ * Layer's exact verified bytes plus discriminated revision metadata. Resolved
+ * once under the Project lock through the one canonical full resolver — the
+ * exact pass a Render paints — so every consumer of the snapshot shows or
+ * paints precisely what a Render would (the guideline view, #174, shares it).
+ */
+export interface CompositionSnapshot {
+  name: string;
+  canvas: { width: number; height: number };
+  layers: SnapshotLayer[];
+}
+
+/** The locked snapshot resolution, shared by render and the guideline view. */
+async function resolveSnapshotLocked(
+  resolvedRoot: string,
+  compName: string,
+): Promise<CompositionSnapshot> {
+  const comp = await readCompositionInternalFull(resolvedRoot, compName);
+
+  // One canonical cap check, shared with replay (INT-1): invalid dimensions
+  // fail before any Layer resolution or output destination is staged.
+  assertRenderableCanvas(comp.canvas, comp.name);
+
+  const layers: SnapshotLayer[] = [];
+  for (const use of comp.layers) {
+    if (use.kind !== "image" && use.kind !== "text") {
+      throw new Error(
+        `Layer "${use.name}" in Composition "${comp.name}" has kind "${use.kind}", ` +
+          `which this foundation cannot render.`,
+      );
+    }
+    layers.push(toSnapshotLayer(use));
+  }
+  return { name: comp.name, canvas: comp.canvas, layers };
+}
+
+/**
+ * Resolve a Composition to its paint snapshot exactly as a Render would —
+ * the same canonical full resolver, the same render caps, under the Project
+ * lock. The guideline view (composition-guidelines.ts, #174) consumes this
+ * so its review pixels are the render pixels; it never re-resolves state a
+ * second way.
+ */
+export async function resolveCompositionSnapshot(
+  resolvedRoot: string,
+  compName: string,
+): Promise<CompositionSnapshot> {
+  return withProjectLock(resolvedRoot, () => resolveSnapshotLocked(resolvedRoot, compName));
+}
+
 /** Render a resolved Composition to a PNG and capture its history. See the module contract above. */
 export async function renderComposition(
   projectPath: string,
@@ -99,38 +150,22 @@ export async function renderComposition(
   const snapshot = await withProjectLock(resolvedRoot, async () => {
     // One canonical pass: the document, every Layer's revision metadata, and
     // the verified retained bytes are resolved exactly once.
-    const comp = await readCompositionInternalFull(resolvedRoot, compName);
-
-    // One canonical cap check, shared with replay (INT-1): invalid dimensions
-    // fail before any Layer resolution or output destination is staged.
-    assertRenderableCanvas(comp.canvas, comp.name);
-
-    const layers: SnapshotLayer[] = [];
-    for (const use of comp.layers) {
-      if (use.kind !== "image" && use.kind !== "text") {
-        throw new Error(
-          `Layer "${use.name}" in Composition "${comp.name}" has kind "${use.kind}", ` +
-            `which this foundation cannot render.`,
-        );
-      }
-      layers.push(toSnapshotLayer(use));
-    }
-
+    const resolved = await resolveSnapshotLocked(resolvedRoot, compName);
     const destination = options.out
       ? await resolveExportTarget(resolvedRoot, options.out)
-      : await defaultRenderDestination(resolvedRoot, comp.name);
+      : await defaultRenderDestination(resolvedRoot, resolved.name);
 
-    return { comp, layers, destination };
+    return { ...resolved, destination };
   });
 
   // Painting uses the snapshot's exact bytes and captures the environment
   // identity inside the same paint pass. A paint failure publishes nothing.
-  const { png, environment } = await paintComposition(snapshot.comp.canvas, snapshot.layers);
+  const { png, environment } = await paintComposition(snapshot.canvas, snapshot.layers);
 
   // The manifest is built purely from the in-memory snapshot — capture cannot
   // consult current state after the snapshot, whatever commits concurrently.
   const manifest: RenderManifestDocument = buildRenderManifest(
-    { name: snapshot.comp.name, canvas: snapshot.comp.canvas, layers: snapshot.layers },
+    { name: snapshot.name, canvas: snapshot.canvas, layers: snapshot.layers },
     environment,
     snapshot.destination.informationalOutput,
   );
@@ -138,9 +173,9 @@ export async function renderComposition(
   await publishRender(png, manifest, snapshot.destination);
 
   return {
-    name: snapshot.comp.name,
-    width: snapshot.comp.canvas.width,
-    height: snapshot.comp.canvas.height,
+    name: snapshot.name,
+    width: snapshot.canvas.width,
+    height: snapshot.canvas.height,
     output: snapshot.destination.path,
     manifest: snapshot.destination.manifest,
   };

@@ -13,11 +13,10 @@ accepted vocabulary. Two shipments are acceptance-audited against `main`:
   — including the retirement of the category-specific generation entry points.
 
 Caller-parameterized region checking has shipped for Compositions
-(`ply composition check`, [Region checking](#region-checking-new-surface));
-a starter YouTube region file ships as a copy-and-own template
-([Starter region file](#starter-region-file)) and the guideline overlay
-view is the remaining separately scoped migration named by
-ADR-0015/spec #172; the
+(`ply composition check`, [Region checking](#region-checking-new-surface))
+along with the guideline overlay view (`ply composition guidelines`,
+[Guideline view](#guideline-view)); a starter YouTube region file ships as a
+copy-and-own template ([Starter region file](#starter-region-file)); the
 legacy Scene surface still runs as documented under
 [Legacy surface](#legacy-surface-preserved), and ADR-0014 records what
 remains target for it.
@@ -486,6 +485,40 @@ workflow ever holds more than one authoritative copy. For another canvas
 size or surface, explicitly choose appropriate regions of your own
 (caller-owned policy, per ADR-0015 — Ply validates shape and the canvas
 contract, never content).
+
+### Guideline view
+
+`ply composition guidelines <comp> --regions <file>` renders the guideline
+view: the Composition exactly as `composition render` would draw it, with
+the caller's regions drawn over the canvas as inspectable overlay markup —
+each region's label and reason visible — so a human reviewer can judge
+placement visually before accepting a render. Only the overlay shows a
+near-miss that does not intersect but still looks wrong, and whether an
+intersection actually matters (a background touching the badge is fine; a
+headline grazing it is not).
+
+```bash
+ply composition guidelines thumb --regions my-platform-regions.json -p ~/projects/my-poster
+ply composition guidelines thumb --regions examples/youtube-regions.json --out /tmp/view.png -p ~/projects/my-thumb
+```
+
+The view is a **review artifact, not a Render**: it writes no Render
+manifest and adds nothing to retained Render history, and the overlay is
+structurally excluded from final renders — the guideline markup exists only
+on the guideline code path, and the render path has no parameter, flag, or
+branch that can emit it (ADR-0005's disposition, carried forward by
+ADR-0015). The view refuses to overwrite any output a Render manifest or
+the Project's `renders/` history records. The default output,
+`guidelines/<comp>.guidelines.png` inside the Project, is review output,
+not Project state: no Project scan, validation, sharing, or history code
+reads or requires that directory. `--out` names a path anywhere instead.
+
+It reads the same region file `check` accepts, through the same single
+ingestion point — one region format, one parser, the same canvas contract.
+Malformed region files, out-of-canvas regions, canvas mismatches, and
+missing Compositions fail loudly (exit 1, actionable error); usage errors
+exit 2. Default output is compact text; `--json` emits one valid JSON
+result. Local only: no network, no inference weights.
 
 ## Setup
 

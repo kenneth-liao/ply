@@ -19,9 +19,9 @@
  * malformed history fails loudly and never resolves to current or newer
  * content.
  */
-import { readFile, lstat } from "node:fs/promises";
+import { readFile, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
-import { toolIdentity } from "./manifest.js";
+import { toolIdentity, fsIdentity } from "./manifest.js";
 import { readRevisionInternalFull } from "./layer.js";
 import { sanitizeName } from "./composition.js";
 import { escapesDirReal } from "./paths.js";
@@ -275,4 +275,54 @@ export async function requireProjectRenderManifest(resolvedRoot: string, manifes
         `render history lives in renders/.`,
     );
   }
+}
+/**
+ * The one reader for "does the Project's Render history record this path as
+ * an output" (#174): scan the Project's renders/ manifests and compare each
+ * recorded `output` against the candidate by filesystem identity
+ * (`fsIdentity`), so a symlink alias cannot slip a recorded Render past the
+ * guard. Recorded outputs resolve against the Project root — the documented
+ * in-Project form; an external output's caller-chosen path is compared
+ * verbatim-resolved, matching how the manifest recorded it. Only a missing
+ * recorded PNG proves nothing is recorded there; a manifest that cannot be
+ * read or parsed is itself the conflict — a write that cannot be proven safe
+ * is not performed (fail-closed, like the legacy directory reader in
+ * src/manifest.ts). The guideline view consults this so a review artifact
+ * can never overwrite published Render pixels.
+ */
+export async function projectRenderOutputConflict(
+  resolvedRoot: string,
+  outputPath: string,
+): Promise<{ manifest: string } | undefined> {
+  const dir = path.join(resolvedRoot, "renders");
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    // Only absence proves nothing is recorded there. A permission or I/O
+    // failure answers nothing — fail closed by propagating, never fail open.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+  const target = await fsIdentity(outputPath);
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith(".manifest.json")) continue;
+    const file = path.join(dir, entry);
+    let manifest: RenderManifestDocument;
+    try {
+      manifest = await readRenderManifest(file);
+    } catch {
+      // An unreadable history manifest cannot prove the target safe.
+      return { manifest: file };
+    }
+    const recorded = path.resolve(resolvedRoot, manifest.output);
+    try {
+      if ((await fsIdentity(recorded)) === target) return { manifest: file };
+    } catch {
+      // The recorded output cannot be resolved (its parent is gone, a
+      // non-ENOENT I/O error propagated): it cannot be proven unrecorded.
+      return { manifest: file };
+    }
+  }
+  return undefined;
 }

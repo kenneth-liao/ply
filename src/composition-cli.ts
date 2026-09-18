@@ -20,6 +20,7 @@ import {
 import { renderComposition, replayRender } from "./composition-render.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
+import { renderCompositionGuidelines } from "./composition-guidelines.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
@@ -105,6 +106,20 @@ composition — Composition authoring and inspection
       mismatch, or a missing Composition fails loudly with a nonzero exit
       status, never a successful-looking empty result. The check is local:
       no network, no inference weights. Writes nothing to the Project.
+
+  ply composition guidelines <comp> --regions <file> [options]
+      Render a guideline view: the Composition exactly as 'render' would
+      draw it, with the caller-supplied regions (the same caller-owned
+      region file 'check' accepts) drawn over the canvas as inspectable
+      overlay markup, each region's label and reason visible. A review
+      artifact for human acceptance, not a reproducible Render: it writes
+      no Render manifest, adds nothing to Render history, and refuses to
+      overwrite any output a Render manifest or the Project's renders/
+      history records. Default output: guidelines/<comp>.guidelines.png
+      inside the Project (review output, not Project state); --out names a
+      path anywhere. The overlay is structurally excluded from final
+      renders — it exists only on this code path. Local only: no network,
+      no inference weights.
 
   ply composition render <name> [options]
       Render a Composition to a PNG at its exact canvas dimensions and
@@ -707,6 +722,39 @@ async function run() {
         output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
+    } else if (command === "guidelines") {
+      const compName = positionals[1];
+      if (!compName) {
+        emitRender({ ok: false, error: "Usage: ply composition guidelines <comp> --regions <region-file.json> [--out <path>]" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.regions === undefined || !values.regions.trim()) {
+        emitRender({ ok: false, error: "Missing required option: --regions <region-file.json> (a caller-owned region file passed by path)" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      try {
+        const view = await renderCompositionGuidelines(targetProj, compName, path.resolve(values.regions.trim()), { out: values.out });
+        // The output is on disk before the browser teardown runs; if teardown
+        // fails, the caller must hear exactly that.
+        teardownOutcome = `The guideline PNG was already written to ${view.output}. Do not re-render to recover it.`;
+        emitRender(
+          { ok: true, ...view },
+          isJson,
+          () => {
+            const n = view.regionCount === 1 ? "1 caller-supplied region" : `${view.regionCount} caller-supplied regions`;
+            console.log(
+              `Guideline view for Composition "${view.composition}" (${view.canvas.width}×${view.canvas.height}) with ${n} → ${view.output} ` +
+                `(review artifact; no Render manifest)`,
+            );
+          },
+        );
+      } catch (err) {
+        teardownOutcome = "No guideline PNG was written.";
+        emitRender({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
     } else if (command === "render") {
       const name = positionals[1];
       if (!name) {
@@ -775,7 +823,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, measure, check, render, replay, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, measure, check, guidelines, render, replay, list. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }
