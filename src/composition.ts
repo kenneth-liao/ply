@@ -21,6 +21,7 @@ import {
   storeContentBlob,
   readLayerInternal,
   readLayerInternalFull,
+  resolveTextTypographyControls,
 } from "./layer.js";
 import { resolveFace, resolveTextAxes, fontAssetBytes } from "./fonts.js";
 import {
@@ -397,6 +398,14 @@ export async function addTextLayerToComposition(
      */
     weight?: number;
     width?: number;
+    /**
+     * Optional text typography (#187, ADR-0021): font-independent, validated
+     * against the fixed allowed ranges — tracking in em (-0.5..1, a 0 is
+     * stored as absent), line height as a unitless multiplier (0.5..3). Each
+     * field is stored only when set.
+     */
+    tracking?: number | null;
+    lineHeight?: number | null;
   },
   options: AddLayerOptions & { fontSize?: number } = {},
 ): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
@@ -424,6 +433,13 @@ export async function addTextLayerToComposition(
       // Axes resolve BEFORE any retention, so a refused control publishes
       // nothing — not even a stray content blob (#179, ADR-0021).
       const axes = resolveTextAxes(face, { weight: input.weight, width: input.width });
+      // Typography resolves at the same one boundary (#187, ADR-0021) — a
+      // refused tracking/line-height publishes nothing, and a set value is
+      // stored only when set (a tracking of 0 is the same look as absent).
+      const typography = resolveTextTypographyControls({
+        tracking: input.tracking,
+        lineHeight: input.lineHeight,
+      });
       const bytes = fontAssetBytes(face);
       const contentHash = createHash("sha256").update(bytes).digest("hex");
       await storeContentBlob(projectPath, contentHash, bytes);
@@ -437,6 +453,8 @@ export async function addTextLayerToComposition(
         fontSize,
         color,
         ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
+        ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
+        ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
         x,
         y,
         opacity,

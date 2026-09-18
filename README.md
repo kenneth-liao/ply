@@ -254,7 +254,8 @@ ply composition measure poster --json                # machine-readable
   box of the transformed content rectangle, unclipped), and the
   transformed rectangle's **corners**. A variable-font text Layer's report
   includes its stored weight and width (the `axes` facts #179) — the same
-  values painting applies.
+  values painting applies — and its stored tracking and line height when
+  set (the `typography` facts #187).
 - It also reports the **painted extents**: the visible-ink (alpha > 0)
   bounding box in the same coordinates — image transparent padding is
   excluded from painted but kept in content, and text painted bounds are
@@ -456,6 +457,43 @@ ply layer edit <layerId> --weight 600 --width 100 --in-place
   the stored axes from the revision alone, and `composition measure` and
   `layer inspect` report them.
 
+## Text tracking and line height (new surface)
+
+Text Layers also select their typography with an optional `tracking`
+(letter spacing, in em) and `lineHeight` (a unitless multiplier of the font
+size), next to `--font-size`, on both `composition add` and `layer edit`
+(ADR-0021). Both are font-independent:
+
+```bash
+ply composition add poster display --text "Groundline" --font Archivo \
+  --tracking -0.032 --line-height 0.88 -p ~/projects/my-poster
+ply composition add poster utility --text "Hello" --font Archivo \
+  --tracking 0.16 -p ~/projects/my-poster
+ply layer edit <layerId> --tracking -0.032 --line-height 0.88 --in-place
+```
+
+- **Ranges**: `--tracking` accepts −0.5 to 1 (em, inclusive);
+  `--line-height` accepts 0.5 to 3 (inclusive). An out-of-range or
+  non-numeric value is refused before anything is published, naming the
+  control and its allowed range — a usage error (exit 2).
+- **Omitted means normal.** A control that is not set stores nothing, and
+  the text paints exactly as it would without the control: normal letter
+  spacing and the font's own line height.
+- **One stored form per look.** `tracking` 0 is the same look as no
+  tracking, so it is stored as absent — the stored field is never 0.
+- **Clearing on edit:** `--tracking 0` removes stored tracking and
+  `--line-height normal` removes stored line height. A control that is not
+  given on an edit keeps its current value — including edits that change
+  `--font`, because tracking and line height do not depend on the font.
+- The stored fields are revision facts: each participates in the revision
+  hash only when present, so pre-#187 revisions keep their exact ids and
+  pinned Render history replays byte-identically. Paint and measurement
+  both read the stored values from the revision alone and emit the same
+  markup (`letter-spacing:<n>em`, `line-height:<n>`), so measured and
+  rendered text agree, including the line-box height line height changes.
+  `layer inspect` and `composition measure` show both values when they are
+  set.
+
 ## Region checking (new surface)
 
 `ply composition check <comp> --regions <file>` tests a Composition's painted
@@ -620,6 +658,9 @@ ply composition add poster headline --text "Hello" --font Anton -p ~/projects/my
 # Variable fonts take weight/width (ADR-0021); omitted controls use the
 # face's default instance (Archivo: 400/100):
 ply composition add poster display --text "Groundline" --font Archivo --weight 800 --width 122 -p ~/projects/my-poster
+# Typography is font-independent (ADR-0021); omitted means normal spacing
+# and the font's own line height:
+ply composition add poster utility --text "Hello" --font Archivo --tracking 0.16 -p ~/projects/my-poster
 ply composition render poster -p ~/projects/my-poster
 # Every successful render retains a manifest under the Project's renders/:
 ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster

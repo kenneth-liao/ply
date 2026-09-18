@@ -95,7 +95,13 @@ export interface TextAxes {
  * src/layer.ts) tolerates a carried width equal to `STATIC_FACE_WIDTH` as
  * nothing-to-store, since a static look IS the width-100 instance; that
  * carry tolerance is edit semantics, deliberately not part of this
- * validator. #187 extends this validator, never a second one.
+ * validator. #187 did extend the control surface alongside this validator
+ * (as this note directed, never a second weight/width validator) — but its
+ * tracking/line-height controls are font-independent (ADR-0021: stored only
+ * when set, validated against fixed Ply ranges, not a face's bytes), so they
+ * live in their own one validator, `resolveTextTypographyControls` in
+ * src/layer.ts, shared by the add path, the edit path, and both CLI
+ * boundaries.
  */
 export function resolveTextAxes(face: FontFace, controls: TextAxesControls): TextAxes {
   for (const name of ["weight", "width"] as const) {
