@@ -4,6 +4,15 @@
 
 ### Added
 
+- Added `examples/youtube-regions.json` — the committed starter YouTube
+  region file (copy-and-own template): the bottom-right duration badge
+  and the full-width watched-progress strip on a 1280×720 canvas,
+  schema version 1, transcribed from the legacy baseline
+  (`PROTECTED_REGIONS`, unchanged and still authoritative) and usable
+  directly with `ply composition check --regions` and the guideline
+  view. The canonical copy for real work lives in the caller's own
+  project and is passed by path, so no workflow ever holds more than
+  one authoritative copy (#175)
 - Added `ply composition check <comp> --regions <file>` — caller-parameterized
   region checking for Compositions: a caller-owned region file (rectangles in
   canvas pixels with id/label/reason and a canvas contract, schema version 1,
