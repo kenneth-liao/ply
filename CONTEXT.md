@@ -4,9 +4,9 @@ Canonical vocabulary and cross-cutting invariants for the accepted general-purpo
 composer destination. Project-scoped sharing and retained Render history have
 shipped, as have uniform source-image generation with caller-owned content policy
 and independently invoked local Matting; caller-parameterized region checking
-has shipped for Compositions (`ply
-composition check`); its guideline overlay view and the starter region-file
-relocation remain target behavior.
+has shipped for Compositions (`ply composition check`), as have its guideline
+overlay view (`ply composition guidelines`) and the starter region-file
+relocation (`examples/youtube-regions.json`).
 `README.md` documents the current command surface;
 `ISA.md` owns destination criteria and progress. Decisions live in `docs/adr/`.
 

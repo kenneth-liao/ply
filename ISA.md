@@ -1,10 +1,10 @@
 ---
 thing: Ply — general-purpose layered image composer
 phase: active
-progress: 18/28
+progress: 19/28
 principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
 started: 2026-09-07
-updated: 2026-09-12
+updated: 2026-09-17
 ---
 
 # Ideal State — Ply
@@ -182,7 +182,7 @@ Why: the agent operates the tool; the human only asks for outputs.
 
 Why: cutting enforcement must not cut correctness or lose hard-won knowledge.
 
-- [ ] ISC-23: Region checking survives as a caller-parameterized command;
+- [x] ISC-23: Region checking survives as a caller-parameterized command;
   YouTube's rectangles live in caller-supplied data, not in `src/`.
   Probe: run the check with a supplied region file; `rg` finds no hardcoded
   YouTube geometry. bash
@@ -315,7 +315,7 @@ on 2026-09-08 at `637cb17`; [spec #77's acceptance audit](https://github.com/ken
 records the integrated delivery evidence. The generation/Matting closures carry
 their own evidence and dates below. These closures concern the new Composition
 model and the shipped generation/Matting operations, not retirement of the
-legacy Scene surface. Whole-product ISC-2/3/4/17, 20–23, and 27 remain open;
+legacy Scene surface. Whole-product ISC-2/3/4/17, 20–22, and 27 remain open;
 ISC-16's explicit promotion rests on an unresolved destination question (see
 Not yet specified).
 
@@ -339,5 +339,6 @@ Not yet specified).
   with no Generation Job or adoption state (re-run 2026-09-12); real inference on
   the current BiRefNet Dynamic/MPS engine is recorded by
   [spec #159](https://github.com/kenneth-liao/ply/issues/159) (#162/#164).
+- ISC-23: [spec #172's acceptance audit](https://github.com/kenneth-liao/ply/issues/172#issuecomment-5724683335) — a supplied region file drives the check and no hardcoded YouTube geometry remains in `src/` (2026-09-17).
 - ISC-24/25/26: `693bc03` — authoring skill, superseding ADRs, and target glossary preparation.
 - ISC-28: #77 acceptance audit DEC-005 — prior logo export retained in the consuming repository's history.
