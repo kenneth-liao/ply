@@ -115,9 +115,11 @@ composition — Composition authoring and inspection
       artifact for human acceptance, not a reproducible Render: it writes
       no Render manifest, adds nothing to Render history, and refuses to
       overwrite any output a Render manifest or the Project's renders/
-      history records. Default output: guidelines/<comp>.guidelines.png
-      inside the Project (review output, not Project state); --out names a
-      path anywhere. The overlay is structurally excluded from final
+      history records. Destinations resolve through the same export-target
+      boundary as render: existing Project state and reserved storage are
+      refused. Default output: a fresh file under the Project's guidelines/
+      (review output, not Project state); --out names a path anywhere
+      outside Project state. The overlay is structurally excluded from final
       renders — it exists only on this code path. Local only: no network,
       no inference weights.
 

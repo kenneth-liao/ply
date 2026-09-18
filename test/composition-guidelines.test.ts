@@ -25,7 +25,7 @@ import { mkdtemp, rm, writeFile, readFile, readdir, mkdir, realpath } from "node
 import { tmpdir } from "node:os";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { buildCompositionHtml } from "../src/composition-paint.js";
-import { guidelinePageHtml } from "../src/composition-guidelines.js";
+import { guidelinePageHtml, placeRegionCallouts } from "../src/composition-guidelines.js";
 import { getBrowser, closeBrowser } from "../src/browser.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
@@ -149,18 +149,33 @@ test("the guideline output draws the caller regions over the canvas; the final r
   expect(json.canvas).toEqual({ width: 400, height: 300 });
   expect(json.regionCount).toBe(1);
   expect(json.regionFile).toBe(regions);
-  expect(json.output).toBe(path.join(projDir, "guidelines", "thumb.guidelines.png"));
+  // Fresh, never-colliding default under the Project's guidelines/ (review
+  // output; re-running never overwrites the artifact under review).
+  expect(path.dirname(json.output)).toBe(path.join(projDir, "guidelines"));
+  expect(path.basename(json.output)).toMatch(/^thumb-[a-z0-9]+-[a-f0-9]{8}\.guidelines\.png$/);
   const guidelinePng = await readFile(json.output);
   // Same canvas dimensions as the Composition.
   expect(decodePng(guidelinePng).width).toBe(400);
   expect(decodePng(guidelinePng).height).toBe(300);
 
   // The overlay is really painted: a pixel inside the region box — over
-  // transparent canvas, away from the dashed border and text — carries the
-  // overlay's alpha, where the same pixel in the final render is empty.
-  const gx = 290, gy = 205; // strictly inside the box, clear of border and text
+  // transparent canvas, away from the dashed border — carries the overlay's
+  // alpha, where the same pixel in the final render is empty. And the
+  // callout pill (white background, real text ink) paints somewhere in the
+  // view where the final render has none.
+  const gx = 290, gy = 205; // strictly inside the box, clear of border
   expect(ALPHA_AT(guidelinePng, gx, gy, 400)).toBeGreaterThan(0);
   expect(ALPHA_AT(renderBytes, gx, gy, 400)).toBe(0);
+  const pillPixels = (png: Buffer): number => {
+    const d = decodePng(png).rgba;
+    let n = 0;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i]! > 200 && d[i - 1]! > 240 && d[i - 2]! > 240 && d[i - 3]! > 240) n++;
+    }
+    return n;
+  };
+  expect(pillPixels(guidelinePng)).toBeGreaterThan(50);
+  expect(pillPixels(renderBytes)).toBe(0);
 
   // The structural proof: re-rendering the same Composition after the
   // guideline view produces byte-identical output — none of the overlay
@@ -213,7 +228,9 @@ test("the guideline view writes no Render manifest and adds nothing to retained 
   const after = new Map<string, string>();
   await walk(projDir, after);
   const added = [...after.keys()].filter((p) => !before.has(p));
-  expect(added).toEqual([path.join(projDir, "guidelines", "plate.guidelines.png")]);
+  expect(added).toHaveLength(1);
+  expect(path.dirname(added[0]!)).toBe(path.join(projDir, "guidelines"));
+  expect(added[0]!).toMatch(/\.guidelines\.png$/);
 
   const rendersAfter = new Map<string, string>();
   await walk(path.join(projDir, "renders"), rendersAfter);
@@ -235,15 +252,14 @@ test("the view refuses to overwrite a Render output — the default render desti
   const historyPng = json.render.output as string;
   const historyBytes = await readFile(historyPng);
 
-  // Pointing the guideline view at the retained history output is refused
-  // with the manifest named and an actionable suggestion.
+  // Pointing the guideline view at the retained history output is refused —
+  // it is existing in-Project state, so the export-target boundary refuses
+  // it before anything else.
   const res = await invoke(["composition", "guidelines", "kept", "--regions", regions, "--out", historyPng, "--project", projDir, "--json"]);
   expect(res.code).toBe(1);
   const out = JSON.parse(res.stdout);
   expect(out.ok).toBe(false);
-  expect(out.error).toContain(path.basename(historyPng));
-  expect(out.error).toContain(".manifest.json");
-  expect(out.error).toContain("--out");
+  expect(out.error).toContain("inside the Project");
   // The recorded bytes are untouched.
   expect(Buffer.compare(await readFile(historyPng), historyBytes)).toBe(0);
 
@@ -255,6 +271,7 @@ test("the view refuses to overwrite a Render output — the default render desti
   const res2 = await invoke(["composition", "guidelines", "kept", "--regions", regions, "--out", external, "--project", projDir, "--json"]);
   expect(res2.code).toBe(1);
   expect(JSON.parse(res2.stdout).ok).toBe(false);
+  expect(JSON.parse(res2.stdout).error).toContain(".manifest.json");
   expect(Buffer.compare(await readFile(external), extBytes)).toBe(0);
 
   // A RELATIVE external --out is recorded absolute at the render boundary
@@ -280,6 +297,38 @@ test("the view refuses to overwrite a Render output — the default render desti
   expect(Buffer.compare(await readFile(recordedAbs), relBytes)).toBe(0);
 });
 
+test("the view refuses to write Project state — --out routes through the render path's export-target boundary", async () => {
+  const img = path.join(tempDir, "bg.png");
+  await writeFile(img, solidPng(64, 64, RED));
+  await makeComp("guard");
+  await addImageLayer("guard", "bg", img, { x: 0, y: 0 });
+  const regions = await writeRegionFile("g2.json", regionFileBody([region("r", { x: 0, y: 0, width: 10, height: 10 })]));
+
+  // Existing Project state is never written over.
+  for (const victim of ["ply.json", "compositions/guard.json", "layers/whatever.json"]) {
+    const res = await invoke(["composition", "guidelines", "guard", "--regions", regions, "--out", path.join(projDir, victim), "--project", projDir, "--json"]);
+    expect(res.code, victim).toBe(1);
+    const out = JSON.parse(res.stdout);
+    expect(out.ok, victim).toBe(false);
+    expect(out.error, victim).toContain(victim);
+  }
+  // The manifest survived byte-for-byte.
+  expect(await readFile(path.join(projDir, "ply.json"), "utf8")).toContain('"guideline-proj"');
+
+  // A fresh path under reserved storage is refused too.
+  const freshReserved = path.join(projDir, "compositions", "sneaky.png");
+  const res2 = await invoke(["composition", "guidelines", "guard", "--regions", regions, "--out", freshReserved, "--project", projDir, "--json"]);
+  expect(res2.code).toBe(1);
+  expect(JSON.parse(res2.stdout).error).toContain("reserved");
+  expect(await readdir(path.join(projDir, "compositions"))).not.toContain("sneaky.png");
+
+  // A fresh path whose parent does not exist is refused, not auto-created.
+  const missingParent = path.join(tempDir, "no-such-dir", "view.png");
+  const res3 = await invoke(["composition", "guidelines", "guard", "--regions", regions, "--out", missingParent, "--project", projDir, "--json"]);
+  expect(res3.code).toBe(1);
+  expect(JSON.parse(res3.stdout).error).toContain("parent directory does not exist");
+});
+
 test("a fresh --out outside the Project and a repeat run over the view's own previous output both succeed", async () => {
   const img = path.join(tempDir, "bg.png");
   await writeFile(img, solidPng(400, 300, RED));
@@ -288,6 +337,7 @@ test("a fresh --out outside the Project and a repeat run over the view's own pre
   const regions = await writeRegionFile("f.json", regionFileBody([region("r", { x: 0, y: 0, width: 100, height: 100 })]));
 
   const custom = path.join(tempDir, "elsewhere", "view.png");
+  await mkdir(path.dirname(custom), { recursive: true });
   const { res, json } = await guidelines("fresh", regions, ["--out", custom]);
   expect(res.code).toBe(0);
   expect(json.output).toBe(custom);
@@ -380,7 +430,8 @@ test("compact text by default and valid JSON under --json", async () => {
   expect(json.composition).toBe("shape");
   expect(json.canvas).toEqual({ width: 400, height: 300 });
   expect(json.regionCount).toBe(1);
-  expect(json.output.endsWith("guidelines/shape.guidelines.png")).toBe(true);
+  expect(json.output.endsWith(".guidelines.png")).toBe(true);
+  expect(path.dirname(json.output)).toBe(path.join(projDir, "guidelines"));
 });
 
 test("composition --help documents the guidelines command", async () => {
@@ -409,6 +460,101 @@ test("the guideline view completes with every browser network route aborted (off
     });
     expect(result.regionCount).toBe(1);
     expect(decodePng(await readFile(result.output)).width).toBe(400);
+  } finally {
+    await ctx.close();
+    await closeBrowser();
+  }
+});
+test("a deleted recorded output does not veto unrelated targets, but an unreadable history manifest still vetoes (narrowed fail-closed)", async () => {
+  const img = path.join(tempDir, "bg.png");
+  await writeFile(img, solidPng(64, 64, RED));
+  await makeComp("decay");
+  await addImageLayer("decay", "bg", img, { x: 0, y: 0 });
+  const regions = await writeRegionFile("d.json", regionFileBody([region("r", { x: 0, y: 0, width: 10, height: 10 })]));
+
+  // An external export the caller later deletes is routine; its stale
+  // record must not veto an unrelated fresh target.
+  const doomed = path.join(tempDir, "doomed", "kept.png");
+  await mkdir(path.dirname(doomed), { recursive: true });
+  await render("decay", ["--out", doomed]);
+  await rm(doomed);
+  const unrelated = path.join(tempDir, "unrelated", "view.png");
+  await mkdir(path.dirname(unrelated), { recursive: true });
+  const { res } = await guidelines("decay", regions, ["--out", unrelated]);
+  expect(res.code).toBe(0);
+  expect((await readFile(unrelated)).length).toBeGreaterThan(0);
+
+  // The stale record still names its own path: a write to that exact path
+  // is refused (lexical comparison when the recorded file is gone).
+  const res2 = await invoke(["composition", "guidelines", "decay", "--regions", regions, "--out", doomed, "--project", projDir, "--json"]);
+  expect(res2.code).toBe(1);
+  expect(JSON.parse(res2.stdout).ok).toBe(false);
+  expect(JSON.parse(res2.stdout).error).toContain(".manifest.json");
+
+  // An unreadable history manifest cannot prove any target unrecorded: it
+  // vetoes, naming the manifest and suggesting --out.
+  await writeFile(path.join(projDir, "renders", "corrupt.manifest.json"), "{ not json");
+  const blocked = path.join(tempDir, "elsewhere2", "view.png");
+  await mkdir(path.dirname(blocked), { recursive: true });
+  const res3 = await invoke(["composition", "guidelines", "decay", "--regions", regions, "--out", blocked, "--project", projDir, "--json"]);
+  expect(res3.code).toBe(1);
+  const out3 = JSON.parse(res3.stdout);
+  expect(out3.ok).toBe(false);
+  expect(out3.error).toContain("corrupt.manifest.json");
+  expect(out3.error).toContain("--out");
+});
+
+test("label and reason callouts stay fully inside the canvas for thin and edge regions — measured in the browser page", async () => {
+  // The canonical YouTube geometry plus hostile shapes: a 16px strip at the
+  // canvas bottom edge (the progress bar), the duration badge, a top-edge
+  // sliver, a tiny box, and a full-canvas box.
+  const cw = 1280, ch = 720;
+  const regions = [
+    region("duration-badge", { x: 1120, y: 650, width: 160, height: 70 }, "duration badge",
+      "the platform pins the video duration over this corner"),
+    region("progress-strip", { x: 0, y: 704, width: 1280, height: 16 }, "progress strip",
+      "the platform draws the watched-progress bar across this strip"),
+    region("top-edge", { x: 0, y: 0, width: 200, height: 12 }, "top edge", "a banner pinned along the top edge"),
+    region("tiny", { x: 600, y: 350, width: 30, height: 20 }, "tiny", "a very small protected area"),
+    region("whole", { x: 0, y: 0, width: 1280, height: 720 }, "whole canvas", "covers everything"),
+  ];
+  const html = guidelinePageHtml({ width: cw, height: ch }, [], regions);
+
+  const browser = await getBrowser();
+  const ctx = await browser.newContext({ viewport: { width: cw, height: ch }, deviceScaleFactor: 1 });
+  const page = await ctx.newPage();
+  try {
+    await page.setContent(html, { waitUntil: "load" });
+    await placeRegionCallouts(page);
+    const rects = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll<HTMLElement>(".ply-region-guide-callout")).map((el) => {
+        const label = el.querySelector<HTMLElement>(".ply-region-guide-label")!.getBoundingClientRect();
+        const reason = el.querySelector<HTMLElement>(".ply-region-guide-reason")!.getBoundingClientRect();
+        const box = el.getBoundingClientRect();
+        return {
+          box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+          label: { left: label.left, top: label.top, right: label.right, bottom: label.bottom },
+          reason: { left: reason.left, top: reason.top, right: reason.right, bottom: reason.bottom },
+        };
+      });
+    });
+    expect(rects).toHaveLength(regions.length);
+    for (const r of rects) {
+      // The callout and both text lines sit fully inside the canvas — for
+      // the bottom strip this is the acceptance bar text-inside-the-box
+      // could never meet.
+      expect(r.box.left).toBeGreaterThanOrEqual(0);
+      expect(r.box.top).toBeGreaterThanOrEqual(0);
+      expect(r.box.right).toBeLessThanOrEqual(cw);
+      expect(r.box.bottom).toBeLessThanOrEqual(ch);
+      expect(r.label.bottom).toBeLessThanOrEqual(ch);
+      expect(r.reason.bottom).toBeLessThanOrEqual(ch);
+      expect(r.label.right).toBeLessThanOrEqual(cw);
+      expect(r.reason.right).toBeLessThanOrEqual(cw);
+      // The text is not clipped by its own container.
+      expect(r.label.bottom).toBeLessThanOrEqual(r.box.bottom + 0.5);
+      expect(r.reason.bottom).toBeLessThanOrEqual(r.box.bottom + 0.5);
+    }
   } finally {
     await ctx.close();
     await closeBrowser();

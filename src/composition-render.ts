@@ -354,8 +354,14 @@ async function defaultRenderDestination(
  * project-relative for in-Project targets, absolute for external ones
  * (a recorded output is compared by this recorded form, so it is never
  * ambiguous cwd-relative data; #174's render-output guard reads it).
+ *
+ * This is the one export-target boundary for every caller-chosen PNG
+ * destination: the render path and the guideline view (#174) both resolve
+ * through it, so a review artifact cannot write where a Render cannot —
+ * reserved Project inputs, existing in-Project state, directories, and
+ * non-regular files are refused here and nowhere else.
  */
-interface ExportTarget {
+export interface ExportTarget {
   path: string;
   manifest: string;
   informationalOutput: string;
@@ -372,7 +378,7 @@ interface ExportTarget {
 const RESERVED_PROJECT_PATHS = ["ply.json", ".ply.lock", "compositions", "layers", "content"];
 
 /** Resolve an --out export target and refuse every path that could damage Project state or retained inputs. */
-async function resolveExportTarget(resolvedRoot: string, outPath: string): Promise<ExportTarget> {
+export async function resolveExportTarget(resolvedRoot: string, outPath: string): Promise<ExportTarget> {
   const target = path.resolve(outPath);
   const realRoot = await realpath(resolvedRoot);
 

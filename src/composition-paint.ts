@@ -119,12 +119,17 @@ export async function paintComposition(
  * markup: `paintComposition` builds its page from `buildCompositionHtml`
  * alone, with no parameter, flag, or branch that could emit the overlay
  * (ADR-0005's structural exclusion, carried forward by ADR-0015).
+ *
+ * `options.beforeScreenshot` is a page hook for the guideline path's
+ * in-page placement pass (measured text placement needs the live page, the
+ * same pattern as `sizeOutlineFilterRegions`); the render path never passes
+ * one, so no render-page flow runs guideline code.
  */
 export async function paintCompositionHtml(
   canvas: { width: number; height: number },
   html: string,
   layers: SnapshotLayer[],
-  options: { page?: Page } = {},
+  options: { page?: Page; beforeScreenshot?: (page: Page) => Promise<void> } = {},
 ): Promise<{ png: Buffer; environment: PaintEnvironment }> {
   const paint = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
@@ -135,6 +140,7 @@ export async function paintCompositionHtml(
     // pixel leaves this page — see sizeOutlineFilterRegions.
     await sizeOutlineFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
+    if (options.beforeScreenshot) await options.beforeScreenshot(page);
     const png = await page.screenshot({
       type: "png",
       omitBackground: true,

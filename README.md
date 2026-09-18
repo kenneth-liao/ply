@@ -508,10 +508,21 @@ structurally excluded from final renders — the guideline markup exists only
 on the guideline code path, and the render path has no parameter, flag, or
 branch that can emit it (ADR-0005's disposition, carried forward by
 ADR-0015). The view refuses to overwrite any output a Render manifest or
-the Project's `renders/` history records. The default output,
-`guidelines/<comp>.guidelines.png` inside the Project, is review output,
-not Project state: no Project scan, validation, sharing, or history code
-reads or requires that directory. `--out` names a path anywhere instead.
+the Project's `renders/` history records, and every destination — default
+or `--out` — resolves through the same export-target boundary the render
+path uses: existing Project state (`ply.json`, compositions/, layers/,
+content/, retained inputs) and reserved storage are refused, and writes are
+atomic.
+
+The default output is a fresh, never-colliding file under the Project's
+`guidelines/` directory (`guidelines/<comp>-<id>.guidelines.png`), so
+re-running the view never overwrites the artifact you may still be
+reviewing. That directory is **review output, not Project state**: no
+Project scan, validation, sharing, or history code reads or requires it
+(render history lives only in `renders/`), and whole-tree enumerators —
+share, export, backup tooling — should treat it (like any non-canonical
+directory) as ignorable review output. `--out` names a path anywhere
+outside Project state instead.
 
 It reads the same region file `check` accepts, through the same single
 ingestion point — one region format, one parser, the same canvas contract.

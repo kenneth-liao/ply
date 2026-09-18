@@ -286,13 +286,24 @@ export async function requireProjectRenderManifest(resolvedRoot: string, manifes
  * (`fsIdentity`), so a symlink alias cannot slip a recorded Render past the
  * guard. Recorded outputs are unambiguous by contract: the render boundary
  * records external destinations absolute and in-Project destinations
- * project-relative, so a relative record resolves against the Project root
- * and nothing else. Only a missing recorded PNG proves nothing is recorded
- * there; a manifest that cannot be read or parsed is itself the conflict —
- * a write that cannot be proven safe is not performed (fail-closed, like
- * the legacy directory reader in src/manifest.ts). The guideline view
- * consults this so a review artifact can never overwrite published Render
- * pixels.
+ * project-relative, so a relative record resolves against the Project root.
+ *
+ * Narrowed fail-closed rule (#174 review PROD-2): the guard vetoes a write
+ * only on evidence that concerns the target, never on unrelated decay.
+ * - A manifest that cannot be read or parsed is itself the conflict: it
+ *   cannot prove ANY target unrecorded, so it vetoes every write
+ *   (fail-closed) — the caller's error names the manifest and suggests
+ *   --out.
+ * - A recorded output that no longer exists (a deleted external export is
+ *   routine — it is user-owned temp outside the Project) is compared
+ *   lexically (fsIdentity's ENOENT fallback): a different path is not a
+ *   conflict; the recorded path itself still is (the history still names
+ *   it).
+ * - A non-ENOENT I/O failure answering the question is itself the conflict
+ *   — a write that cannot be proven safe is not performed (fail-closed,
+ *   like the legacy directory reader in src/manifest.ts).
+ * The guideline view consults this so a review artifact can never overwrite
+ * published Render pixels. Renders themselves never consult it.
  */
 export async function projectRenderOutputConflict(
   resolvedRoot: string,
@@ -321,10 +332,14 @@ export async function projectRenderOutputConflict(
     }
     const recorded = path.resolve(resolvedRoot, manifest.output);
     try {
+      // fsIdentity resolves ENOENT lexically (real parent + basename), so a
+      // DELETED record still names its path: it vetoes only a write to that
+      // same path and never an unrelated target (PROD-2). Only a non-ENOENT
+      // failure leaves the question unanswered — fail closed, naming the
+      // manifest.
       if ((await fsIdentity(recorded)) === target) return { manifest: file };
-    } catch {
-      // The recorded output cannot be resolved (its parent is gone, a
-      // non-ENOENT I/O error propagated): it cannot be proven unrecorded.
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") throw err;
       return { manifest: file };
     }
   }

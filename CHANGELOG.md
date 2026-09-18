@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed render-manifest `output` records: external `--out` destinations are
+  now recorded as absolute paths instead of the caller-chosen lexical form
+  (in-Project records stay project-relative). The field is informational —
+  replay never reads it — and the change lets the guideline view's
+  render-output refusal guard compare recorded outputs soundly (#174)
+
 ### Added
 
 - Added `ply composition guidelines <comp> --regions <file>` — the guideline
