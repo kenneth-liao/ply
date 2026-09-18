@@ -291,6 +291,7 @@ export async function paintCompositionHtml(
       type: "png",
       omitBackground: true,
       clip: { x: 0, y: 0, width: canvas.width * supersample, height: canvas.height * supersample },
+      // 60s timeout: 4× chained dilate paints on large rasters take ~30s (#194).
       timeout: 60000,
     });
     if (supersample === 1) {
