@@ -6,7 +6,7 @@ import { EMPTY_LIBRARY } from "../src/assets.js";
 import { getTheme, THEMES, themeRevision } from "../src/themes.js";
 import { buildScene, getTemplate, TEMPLATES } from "../src/templates.js";
 import { run as cliRun } from "../src/scene-cli.js";
-import { resolveFace } from "../src/fonts.js";
+import { faceDefaultWeight, resolveFace } from "../src/fonts.js";
 import { renderScene } from "../src/scene-render.js";
 import { getBrowser } from "../src/browser.js";
 import { decodePng } from "./png.js";
@@ -388,7 +388,7 @@ describe("scene themes", () => {
     expect(photo.visible).toEqual(true);
     expect(text.align).toEqual("left");
     expect(text.lineHeight).toEqual(1.1);
-    expect(text.weight).toEqual(resolveFace("Anton").weight);
+    expect(text.weight).toEqual(faceDefaultWeight(resolveFace("Anton")));
     expect(shape.radius).toEqual(getTheme("midnight").shape!.radius);
   });
 

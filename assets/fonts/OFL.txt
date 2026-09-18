@@ -1,8 +1,10 @@
-This directory redistributes 13 font faces licensed under the SIL Open Font
+This directory redistributes 15 font faces licensed under the SIL Open Font
 License, Version 1.1 (reproduced in full below). The per-face copyright
-notices and SHA-256 checksums are in LICENSE.md. The files are byte-identical
-to the latin-subset builds served by fonts.gstatic.com (Google's own builds,
-which retain the Reserved Font Names unchanged).
+notices and SHA-256 checksums are in LICENSE.md. Thirteen of the files are
+byte-identical to the latin-subset builds served by fonts.gstatic.com
+(Google's own builds, which retain the Reserved Font Names unchanged); the
+Archivo variable face and IBM Plex Mono are the exact full upstream files
+pinned from google/fonts (not subsets).
 
 -----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007

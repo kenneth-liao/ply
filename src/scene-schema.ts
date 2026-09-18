@@ -243,10 +243,17 @@ export const SCENE_SCHEMA = {
       minimum: 1,
       maximum: 1000,
       description:
-        "CSS font weight. Default: the bundled face's natural weight. Bundled " +
-        "faces ship one weight each; a weight off the face renders through " +
-        "Chromium's synthetic bold — deterministic in the renderer's pinned " +
-        "browser, but synthesized glyphs, not a second shipped face.",
+        "CSS font weight. Default: the bundled face's natural weight. Most " +
+        "bundled faces ship one weight each; a weight off the face renders " +
+        "through Chromium's synthetic bold — deterministic in the renderer's " +
+        "pinned browser, but synthesized glyphs, not a second shipped face. " +
+        "The Archivo variable face is the exception: the @font-face rule " +
+        "declares its real wght 100-900 axis range, so an in-range weight " +
+        "maps onto the font's actual axes and an out-of-range weight is " +
+        "clamped to that range — never synthesized. (#179: the Composition " +
+        "Layer surface validates weight/width through resolveTextAxes " +
+        "instead and refuses out-of-range values outright; the Scene " +
+        "surface gains no new controls.)",
     },
     tracking: {
       type: "number",

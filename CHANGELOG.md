@@ -25,6 +25,19 @@
 
 ### Added
 
+- Added the Groundline type faces and text weight/width controls: Archivo
+  ships as the exact full upstream variable file (`wght` 100–900, `wdth`
+  62–125) and IBM Plex Mono as the static 500 cut, and `composition add` /
+  `layer edit` accept optional `--weight`/`--width` validated against the
+  face's real axis ranges — omitted controls resolve to the variable face's
+  default instance (Archivo 400/100, stored in the revision), static faces
+  accept only their own weight and refuse width (storing no axis fields).
+  Out-of-range or unsupported values are refused before anything is
+  published, naming the family and its allowed values; a `--font` edit keeps
+  the current axes when the new font supports them and refuses otherwise;
+  the stored axes join the revision hash only when present, so pre-#179
+  revisions keep their ids and pinned Render history replays
+  byte-identically, and paint/measure/inspect report them (#179)
 - Added `ply composition guidelines <comp> --regions <file>` — the guideline
   view for Compositions: the Composition exactly as `composition render`
   would draw it, with the caller's regions (the same region file `check`

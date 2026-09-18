@@ -84,6 +84,7 @@ import { withProjectLock } from "./project-lock.js";
 import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
 import { buildCompositionHtml, rejectUnresolvedFonts, sizeOutlineFilterRegions, type SnapshotLayer } from "./composition-paint.js";
 import type { ResolvedLayerRevision, LayerShadow, LayerOutline } from "./layer.js";
+import { normalizeStoredTextAxes } from "./layer.js";
 import type { Page } from "playwright";
 
 /** One Layer's measured layout geometry (module doc documents each box). */
@@ -112,6 +113,10 @@ export interface MeasuredLayerBounds {
    * none of that effect) — the same facts painting applies, reported for
    * auditability. */
   effects: { shadow: LayerShadow | null; outline: LayerOutline | null };
+  /** The revision's selected text axes (#179, ADR-0021): the stored weight
+   * and width a variable-font text Layer paints with (or null when the
+   * retained font is static — a static revision stores no axis fields). */
+  axes: { weight: number; width: number } | null;
 }
 
 export interface MeasureCompositionResult {
@@ -470,6 +475,8 @@ export async function measureCompositionLayers(
           flipY: rev.flipY,
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
+        axes:
+          rev.kind === "text" ? normalizeStoredTextAxes(rev) ?? null : null,
       };
     });
 

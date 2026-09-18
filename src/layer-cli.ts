@@ -5,6 +5,7 @@ import path from "node:path";
 import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
 import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import { parseShadowSpec, parseOutlineSpec } from "./layer.js";
+import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
@@ -71,6 +72,13 @@ Options:
   --text <str>          New text content for a text Layer
   --font <family>       Bundled font family name for a text Layer
   --font-size <num>     Font size in px for a text Layer
+  --weight <num>        Text weight for a text Layer (#179): validated
+                        against the Layer's font's real weight axis —
+                        Archivo 100-900 (default 400); static faces accept
+                        only their own weight
+  --width <num>         Text width for a text Layer (#179): variable fonts
+                        only — Archivo 62-125 (default 100); static faces
+                        refuse width
   --color <hex>         Text color as #RGB or #RRGGBB
   --x <num>             X position on canvas
   --y <num>             Y position on canvas
@@ -251,6 +259,8 @@ let values: {
   text?: string;
   font?: string;
   "font-size"?: string;
+  weight?: string;
+  width?: string;
   color?: string;
   x?: string;
   y?: string;
@@ -285,6 +295,8 @@ try {
       text: { type: "string" },
       font: { type: "string" },
       "font-size": { type: "string" },
+      weight: { type: "string" },
+      width: { type: "string" },
       color: { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
@@ -332,6 +344,8 @@ async function run() {
         values.font !== undefined ||
         values["font-size"] !== undefined ||
         values.color !== undefined ||
+        values.weight !== undefined ||
+        values.width !== undefined ||
         values.x !== undefined ||
         values.y !== undefined ||
         values.opacity !== undefined ||
@@ -348,7 +362,7 @@ async function run() {
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, --outline, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --weight, --width, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, --outline, or --fork.",
           },
           isJson,
         );
@@ -398,12 +412,14 @@ async function run() {
         (values.text !== undefined ||
           values.font !== undefined ||
           values["font-size"] !== undefined ||
-          values.color !== undefined)
+          values.color !== undefined ||
+          values.weight !== undefined ||
+          values.width !== undefined)
       ) {
         output(
           {
             ok: false,
-            error: "--image and text options (--text, --font, --font-size, --color) are mutually exclusive.",
+            error: "--image and text options (--text, --font, --font-size, --color, --weight, --width) are mutually exclusive.",
           },
           isJson,
         );
@@ -425,7 +441,8 @@ async function run() {
       if (
         values["from-generation"] !== undefined &&
         (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
-          values["font-size"] !== undefined || values.color !== undefined)
+          values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined ||
+          values.width !== undefined)
       ) {
         output(
           { ok: false, error: "--from-generation and --image/--text options are mutually exclusive content options." },
@@ -445,7 +462,8 @@ async function run() {
       if (
         values["from-matte"] !== undefined &&
         (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
-          values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined)
+          values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined ||
+          values.width !== undefined || values["from-generation"] !== undefined)
       ) {
         output(
           { ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content options." },
@@ -475,6 +493,8 @@ async function run() {
       const y = values.y !== undefined ? parseNumericArgument(values.y) : undefined;
       const opacity = values.opacity !== undefined ? parseNumericArgument(values.opacity) : undefined;
       const fontSize = values["font-size"] !== undefined ? parseNumericArgument(values["font-size"]) : undefined;
+      const weight = values.weight !== undefined ? parseNumericArgument(values.weight) : undefined;
+      const width = values.width !== undefined ? parseNumericArgument(values.width) : undefined;
 
       if (x !== undefined && !Number.isFinite(x)) {
         output({ ok: false, error: "Placement coordinate (--x) must be a finite number." }, isJson);
@@ -495,6 +515,34 @@ async function run() {
         output({ ok: false, error: "Font size (--font-size) must be a positive finite number." }, isJson);
         process.exitCode = 2;
         return;
+      }
+      // Text axes (#179, ADR-0021): shape at the command boundary (exit 2),
+      // and range when --font names the face — the SAME validator the edit
+      // path uses, so the boundaries never disagree. Without --font the
+      // face is the Layer's retained font, so the range refusal is semantic
+      // (exit 1) inside the edit path, like the other retained-state refusals.
+      if (weight !== undefined && !Number.isFinite(weight)) {
+        output({ ok: false, error: "Weight (--weight) must be a finite number." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (width !== undefined && !Number.isFinite(width)) {
+        output({ ok: false, error: "Width (--width) must be a finite number." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.font !== undefined) {
+        // An unknown family keeps its established semantic refusal (exit 1,
+        // from the edit path's resolveFace); only weight/width range errors
+        // are usage errors here (exit 2).
+        const face = resolveFace(values.font);
+        try {
+          resolveTextAxes(face, { weight, width });
+        } catch (err) {
+          output({ ok: false, error: (err as Error).message }, isJson);
+          process.exitCode = 2;
+          return;
+        }
       }
 
       // Resize flags (#133): syntax and well-formedness at the command
@@ -645,13 +693,15 @@ async function run() {
           values.text !== undefined ||
           values.font !== undefined ||
           values["font-size"] !== undefined ||
-          values.color !== undefined;
+          values.color !== undefined ||
+          values.weight !== undefined ||
+          values.width !== undefined;
         if (conflicting) {
           output(
             {
               ok: false,
               error:
-                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, --outline, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
+                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, --outline, --weight, --width, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
             },
             isJson,
           );
@@ -737,6 +787,8 @@ async function run() {
           font: values.font,
           fontSize,
           color: values.color,
+          weight,
+          width,
           x: editX,
           y: editY,
           opacity,
@@ -863,6 +915,10 @@ async function run() {
             if (rev.kind === "text") {
               console.log(`  Text: ${JSON.stringify(rev.text)}`);
               console.log(`  Font: retained face (${(rev.fontBytes / 1024).toFixed(1)} KB), ${rev.fontSize}px, color ${rev.color}`);
+              // Selected text axes (#179, ADR-0021): present ⟺ variable font.
+              if (rev.weight !== undefined || rev.width !== undefined) {
+                console.log(`  Axes: weight ${rev.weight}, width ${rev.width}`);
+              }
             } else {
               console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
             }

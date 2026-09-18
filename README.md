@@ -252,7 +252,9 @@ ply composition measure poster --json                # machine-readable
   intrinsic retained size; text: the line-box layout extent of the Layer's
   retained font bytes at its font size), the **box** (axis-aligned bounding
   box of the transformed content rectangle, unclipped), and the
-  transformed rectangle's **corners**.
+  transformed rectangle's **corners**. A variable-font text Layer's report
+  includes its stored weight and width (the `axes` facts #179) — the same
+  values painting applies.
 - It also reports the **painted extents**: the visible-ink (alpha > 0)
   bounding box in the same coordinates — image transparent padding is
   excluded from painted but kept in content, and text painted bounds are
@@ -417,6 +419,43 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
 - Invalid settings fail at the command boundary (exit 2) through the same
   parser the edit path uses — nothing invalid ever mutates live state.
 
+## Text weight and width (new surface)
+
+Text Layers select their look with an optional `weight` and `width`, next to
+`--font` and `--font-size`, on both `composition add` and `layer edit`
+(ADR-0021). Ply renders only weights and widths the bundled font actually
+contains — it never synthesizes one:
+
+```bash
+ply composition add poster display --text "Groundline" --font Archivo \
+  --weight 800 --width 122 -p ~/projects/my-poster
+ply composition add poster body --text "Hello" --font "IBM Plex Mono" \
+  --weight 500 -p ~/projects/my-poster
+ply layer edit <layerId> --weight 600 --width 100 --in-place
+```
+
+- **Variable fonts** (bundled: Archivo, `wght` 100–900, `wdth` 62–125): each
+  value must fall inside the font's axis range — an out-of-range value is
+  refused, naming the family and its allowed values. An omitted control
+  resolves to the font's default instance (Archivo: 400 / 100), and the
+  revision always stores the resolved pair.
+- **Static fonts** (IBM Plex Mono 500 and every other pre-existing face):
+  `weight` accepts only the face's own weight (or omission) and `width` is
+  refused outright — the bytes already fix the look. The revision stores no
+  axis fields.
+- **Editing `--font`** keeps the current weight and width when the new font
+  supports them; otherwise the edit is refused and names what the new font
+  allows — nothing changes silently. When the current revision stores no
+  axes, the new font's defaults apply.
+- **Editing `weight`/`width` without `--font`** validates against the
+  Layer's retained font, resolved by its content hash; if the retained bytes
+  match no bundled face, the edit requires `--font`.
+- The stored axes are revision facts: they participate in the revision hash
+  only when present, so pre-#179 revisions keep their exact ids and pinned
+  Render history replays byte-identically. Paint and measurement both read
+  the stored axes from the revision alone, and `composition measure` and
+  `layer inspect` report them.
+
 ## Region checking (new surface)
 
 `ply composition check <comp> --regions <file>` tests a Composition's painted
@@ -578,6 +617,9 @@ Create a Project, build a Composition, render it locally, and replay the result:
 ply project init ~/projects/my-poster
 ply composition create poster --width 1080 --height 1080 -p ~/projects/my-poster
 ply composition add poster headline --text "Hello" --font Anton -p ~/projects/my-poster
+# Variable fonts take weight/width (ADR-0021); omitted controls use the
+# face's default instance (Archivo: 400/100):
+ply composition add poster display --text "Groundline" --font Archivo --weight 800 --width 122 -p ~/projects/my-poster
 ply composition render poster -p ~/projects/my-poster
 # Every successful render retains a manifest under the Project's renders/:
 ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster
@@ -735,7 +777,11 @@ not alter final Render pixels.
 #### Fonts and output
 
 Bundled OFL fonts live under `assets/fonts/` and load from local bytes. Unknown
-or unresolved font families fail instead of silently falling back.
+or unresolved font families fail instead of silently falling back. The set
+includes the Archivo variable face (`wght` 100–900, `wdth` 62–125, default
+instance 400/100) and IBM Plex Mono 500 (ADR-0021) alongside the other
+bundled faces; the legacy Scene surface resolves them at their default
+instance and gains no new controls.
 
 Rendering keeps the 1280×720 dimensions and enforces the 2 MB output limit.
 Oversized PNGs are optimized locally. Each final Render gets a manifest with
