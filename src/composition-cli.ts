@@ -204,9 +204,9 @@ Options:
                         pixels per canvas pixel, area-average back to the
                         canvas size. 1 paints directly (the pre-#184 pixels).
                         The pixel limits apply to the supersampled paint; an
-                        over-limit render is refused, never downgraded — the
-                        same applies to an outline whose width × supersample
-                        exceeds Chromium's 256-raster-px dilate cap
+                        over-limit render is refused, never downgraded. Outlines
+                        whose raster dilation exceeds Chromium's 256-raster-px
+                        cap render via chained dilate steps (#194)
   --x <num>             X position on canvas (default: 0)
   --y <num>             Y position on canvas (default: 0)
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)

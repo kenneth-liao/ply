@@ -291,6 +291,7 @@ export async function paintCompositionHtml(
       type: "png",
       omitBackground: true,
       clip: { x: 0, y: 0, width: canvas.width * supersample, height: canvas.height * supersample },
+      timeout: 60000,
     });
     if (supersample === 1) {
       return { png, environment: captureEnvironment(page) };

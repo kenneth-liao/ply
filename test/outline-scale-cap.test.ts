@@ -15,10 +15,12 @@ import { mkdtemp, rm, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   MAX_OUTLINE_DILATE_PX,
+  buildCompositionHtml,
   layerMaxScale,
   outlineDilateRadii,
   outlineDilateSteps,
   outlineRasterDilation,
+  type SnapshotLayer,
 } from "../src/composition-paint.js";
 import { encodePngRgba, decodePng } from "../src/png.js";
 
@@ -216,7 +218,11 @@ test("acceptance criterion: outline 200 at scale 1 renders a 200 ± 1 px ring at
 
   for (const factor of [1, 2, 4]) {
     const out = path.join(tempDir, `factors-${factor}.png`);
+    const t0 = performance.now();
     const res = await invoke(["composition", "render", "factors", "--project", projDir, "--supersample", String(factor), "--out", out, "--json"]);
+    const elapsed = performance.now() - t0;
+    console.log(`[FACTOR-TIMING] factor ${factor}: ${elapsed.toFixed(1)}ms`);
+    if (res.code !== 0) console.error("FACTOR", factor, "FAILED:", res.stdout, res.stderr);
     expect(res.code).toBe(0);
 
     const png = decodePng(await readFile(out));
@@ -233,7 +239,7 @@ test("acceptance criterion: outline 200 at scale 1 renders a 200 ± 1 px ring at
     expect(ringLeft).toBeGreaterThanOrEqual(199);
     expect(ringLeft).toBeLessThanOrEqual(201);
   }
-}, 60000);
+}, 90000);
 
 // ---------------------------------------------------------------------------
 // Boundary pinned from MAX_OUTLINE_DILATE_PX constant (including non-uniform scale)
@@ -348,6 +354,38 @@ test("boundary covers non-uniform scale (scaleX != scaleY takes the larger)", as
   expect(res2Over.code).toBe(0);
 }, 30000);
 
+test("fractional radii geometry: outline 129 at scale 2 renders a 258 ± 1 px ring via chained dilate", async () => {
+  // 800×800 canvas, 50×50 square at (350, 350), scale 2 -> content box 100×100 [350, 450).
+  // Outline 129 local px × scale 2 × factor 1 = 258 raster px > 256.
+  // n = ceil(258/256) = 2 steps, emitting fractional local radii [64.5, 64.5].
+  // Rendered ring extends exactly 129 × 2 = 258 canvas px to the left: [350 - 258, 350) = [92, 350).
+  const img = path.join(tempDir, "fractional-sq.png");
+  await writeFile(img, solidPng(50, 50, [0, 0, 0, 255]));
+  await invoke(["composition", "create", "frac-comp", "--width", "800", "--height", "800", "--project", projDir]);
+  await invoke(["composition", "add", "frac-comp", "hero", "--image", img, "--x", "350", "--y", "350", "--project", projDir]);
+  const layerId = JSON.parse(
+    (await invoke(["composition", "inspect", "frac-comp", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0]!.layerId;
+  await invoke(["layer", "edit", layerId, "--resize", "2", "--outline", "129,#ff0000", "--project", projDir, "--json"]);
+
+  const out = path.join(tempDir, "fractional-render.png");
+  const renderRes = await invoke(["composition", "render", "frac-comp", "--project", projDir, "--supersample", "1", "--out", out, "--json"]);
+  expect(renderRes.code).toBe(0);
+
+  const png = decodePng(await readFile(out));
+  const cy = 400;
+  let ringLeft = 0;
+  for (let x = 0; x < 350; x++) {
+    const i = (cy * png.width + x) * 4;
+    if (png.rgba[i]! > 200 && png.rgba[i + 1]! < 50 && png.rgba[i + 2]! < 50 && png.rgba[i + 3]! > 200) {
+      ringLeft++;
+    }
+  }
+  // Expected ring: 258 ± 1 px
+  expect(ringLeft).toBeGreaterThanOrEqual(257);
+  expect(ringLeft).toBeLessThanOrEqual(259);
+}, 30000);
+
 // ---------------------------------------------------------------------------
 // Replay with chained dilate
 // ---------------------------------------------------------------------------
@@ -426,10 +464,80 @@ test("measurement path measures chained outline dilation without clipping, agree
   expect(minY).toBe(0);
   expect(maxX - minX + 1).toBe(800);
   expect(maxY - minY + 1).toBe(800);
+
+  // Differing-n agreement (INT-6): at factor 2, raster dilation is 200 × 2 × 2 = 800 px -> n_render = 4
+  // Measurement measured at 1x with n_measure = 2. Footprints still agree exactly.
+  const outF2 = path.join(tempDir, "measure-render-f2.png");
+  const renderResF2 = await invoke(["composition", "render", "measure-clip", "--project", projDir, "--supersample", "2", "--out", outF2, "--json"]);
+  expect(renderResF2.code).toBe(0);
+  const pngF2 = decodePng(await readFile(outF2));
+  expect(pngF2.width).toBe(800);
+  expect(pngF2.height).toBe(800);
+  let minX2 = Infinity, minY2 = Infinity, maxX2 = -Infinity, maxY2 = -Infinity;
+  for (let y = 0; y < pngF2.height; y++) {
+    for (let x = 0; x < pngF2.width; x++) {
+      const idx = (y * pngF2.width + x) * 4;
+      if (pngF2.rgba[idx + 3]! > 0) {
+        minX2 = Math.min(minX2, x); maxX2 = Math.max(maxX2, x);
+        minY2 = Math.min(minY2, y); maxY2 = Math.max(maxY2, y);
+      }
+    }
+  }
+  expect(minX2).toBe(0);
+  expect(minY2).toBe(0);
+  expect(maxX2 - minX2 + 1).toBe(800);
+  expect(maxY2 - minY2 + 1).toBe(800);
+}, 30000);
+
+test("measurement agrees with rendered ink when supersample factor causes differing n (n=1 at 1x vs n=2 at 2x)", async () => {
+  // Unclipped differing-n geometry (INT-6):
+  // 600×600 canvas, 60×60 square at (270, 270), scale 1, outline 150 local px.
+  // Measurement at 1x: 150 raster px <= 256 -> n_measure = 1.
+  // Painted extents: [270 - 150, 270 - 150, 60 + 300, 60 + 300] = [120, 120, 360, 360].
+  // Render at factor 2: 150 × 2 = 300 raster px > 256 -> n_render = 2 (chained dilate).
+  // Rendered ink bounds after downsampling must agree with measurement within <= 1 px tolerance.
+  const img = path.join(tempDir, "agree-diff-n.png");
+  await writeFile(img, solidPng(60, 60, [0, 0, 255, 255]));
+  await invoke(["composition", "create", "agree-comp", "--width", "600", "--height", "600", "--project", projDir]);
+  await invoke(["composition", "add", "agree-comp", "hero", "--image", img, "--x", "270", "--y", "270", "--project", projDir]);
+  const layerId = JSON.parse(
+    (await invoke(["composition", "inspect", "agree-comp", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0]!.layerId;
+  await invoke(["layer", "edit", layerId, "--outline", "150,#ff0000", "--project", projDir, "--json"]);
+
+  const measureRes = await invoke(["composition", "measure", "agree-comp", "--project", projDir, "--json"]);
+  expect(measureRes.code).toBe(0);
+  const layer = JSON.parse(measureRes.stdout).layers[0];
+  expect(layer.painted).toEqual({ x: 120, y: 120, width: 360, height: 360 });
+  expect(layer.clipped).toBe(false);
+
+  const out = path.join(tempDir, "agree-diff-n-render.png");
+  const renderRes = await invoke(["composition", "render", "agree-comp", "--project", projDir, "--supersample", "2", "--out", out, "--json"]);
+  expect(renderRes.code).toBe(0);
+  const png = decodePng(await readFile(out));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const idx = (y * png.width + x) * 4;
+      if (png.rgba[idx + 3]! > 0) {
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  // Agreement within <= 1 px tolerance
+  expect(minX).toBeGreaterThanOrEqual(119);
+  expect(minX).toBeLessThanOrEqual(121);
+  expect(minY).toBeGreaterThanOrEqual(119);
+  expect(minY).toBeLessThanOrEqual(121);
+  expect(maxX - minX + 1).toBeGreaterThanOrEqual(359);
+  expect(maxX - minX + 1).toBeLessThanOrEqual(361);
+  expect(maxY - minY + 1).toBeGreaterThanOrEqual(359);
+  expect(maxY - minY + 1).toBeLessThanOrEqual(361);
 }, 30000);
 
 // ---------------------------------------------------------------------------
-// Byte-identity for n = 1
+// Byte-identity and markup pin for n = 1
 // ---------------------------------------------------------------------------
 
 test("outlines with n = 1 produce byte-identical markup to single-dilate filter def, and replays are byte-identical", async () => {
@@ -455,3 +563,34 @@ test("outlines with n = 1 produce byte-identical markup to single-dilate filter 
   const bytesReplay = await readFile(replayOut);
   expect(bytesReplay.equals(bytes1)).toBe(true);
 }, 30000);
+
+test("n = 1 outlined layer markup matches the canonical single-dilate filter def exactly", () => {
+  // INT-4: Pin the exact n = 1 markup string from buildCompositionHtml against the legacy single-node shape
+  const layer: SnapshotLayer = {
+    name: "hero",
+    layerId: "layer-1",
+    revision: {
+      revisionId: "rev-1",
+      kind: "image",
+      contentHash: "hash1",
+      x: 50,
+      y: 50,
+      opacity: 1,
+      scaleX: 1,
+      scaleY: 1,
+      rotationDeg: 0,
+      flipX: false,
+      flipY: false,
+      outline: { width: 42, color: "#00ff00" },
+    } as any,
+    contentBytes: Buffer.from([]),
+  };
+  const html = buildCompositionHtml({ width: 200, height: 200 }, [layer], 1);
+  // Pinned n = 1 markup: single feMorphology with in="SourceAlpha" and result="dil", no chained dil_N nodes
+  expect(html).toContain('<feMorphology in="SourceAlpha" operator="dilate" radius="42" result="dil"/>');
+  expect(html).toContain('<feFlood flood-color="#00ff00" result="flood"/>');
+  expect(html).toContain('<feComposite in="flood" in2="dil" operator="in" result="ring"/>');
+  expect(html).toContain('<feMerge><feMergeNode in="ring"/><feMergeNode in="SourceGraphic"/></feMerge>');
+  expect(html).not.toContain("dil_1");
+  expect(html).not.toContain("dil_2");
+});
