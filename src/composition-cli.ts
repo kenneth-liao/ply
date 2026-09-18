@@ -224,7 +224,7 @@ function output(
 
 /** A negative number is a valid coordinate value (#128) — the shared join in
  * cli-present.ts handles it, scoped here to the composition placement flags. */
-const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y", "--tracking"]);
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y", "--tracking", "--line-height"]);
 const isJson = rawArgs.includes("--json");
 let values: {
   project?: string;

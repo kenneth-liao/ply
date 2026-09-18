@@ -290,6 +290,10 @@ describe("edit semantics (#187, ADR-0021)", () => {
       [["--tracking", "1.1"], "Tracking", "1"],
       [["--line-height", "0.4"], "Line height", "0.5"],
       [["--line-height", "3.1"], "Line height", "3"],
+      // A negative line height in space form (INT-1/PROD-2): the dash-join
+      // gets it to the validator, so the refusal names the control and its
+      // range instead of the parser's generic ambiguity error.
+      [["--line-height", "-0.5"], "Line height", "0.5"],
     ] as [string[], string, string][]) {
       // On edit:
       const refused = await invoke(["layer", "edit", layerId, ...args, "--in-place", "--project", projDir]);
@@ -303,9 +307,17 @@ describe("edit semantics (#187, ADR-0021)", () => {
       expect(refusedAdd.code).toBe(2);
       expect(refusedAdd.stderr).toContain(name);
       expect(refusedAdd.stderr).toContain(range);
-      // Non-numeric (other than the lineHeight "normal" clear word):
+      // Non-numeric (other than the lineHeight "normal" clear word), on both
+      // the edit and the add path (INT-2):
       const nonNumeric = await invoke(["layer", "edit", layerId, ...args.slice(0, 1), "abc", "--in-place", "--project", projDir]);
       expect(nonNumeric.code).toBe(2);
+      expect(nonNumeric.stderr).toContain(name);
+      const nonNumericAdd = await invoke([
+        "composition", "add", "poster", "refused", "--text", "Ply", "--font", "Archivo",
+        ...args.slice(0, 1), "abc", "--project", projDir,
+      ]);
+      expect(nonNumericAdd.code).toBe(2);
+      expect(nonNumericAdd.stderr).toContain(name);
     }
 
     // Nothing was published: the Layer's revision and the Composition are
@@ -403,10 +415,12 @@ describe("paint, measure, and inspect (#187, ADR-0021)", () => {
     const inkMaxX = Math.max(...reds.map((p) => p.x));
     const inkMaxY = Math.max(...reds.map((p) => p.y));
     // The layout box is a superset of the glyph ink up to the painted
-    // capture's 1px pixel grid (the same tolerance the measure suite grants
-    // between ink and painted boxes), tight enough to prove it measured this
-    // typography-selected look — the same parity contract the other text
-    // facts hold in composition-measure.test.ts.
+    // capture's 1px pixel grid (painted extents are quantized to the
+    // screenshot's pixel grid, so a sub-pixel layout-box overhang — negative
+    // tracking narrows the advance, not the ink — rounds across the edge),
+    // tight enough to prove it measured this typography-selected look — the
+    // same parity contract the other text facts hold in
+    // composition-measure.test.ts.
     expect(inkMinX).toBeGreaterThanOrEqual(layer.box.x);
     expect(inkMinY).toBeGreaterThanOrEqual(layer.box.y);
     expect(inkMaxX).toBeLessThanOrEqual(layer.box.x + layer.box.width + 1);

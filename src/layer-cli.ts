@@ -248,7 +248,7 @@ function formatAnchorTarget(anchored: AnchorResolution): string {
 }
 
 const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), [
-  "--x", "--y", "--rotate", "--shadow", "--outline", "--tracking",
+  "--x", "--y", "--rotate", "--shadow", "--outline", "--tracking", "--line-height",
 ]);
 const isJson = rawArgs.includes("--json");
 

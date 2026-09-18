@@ -36,7 +36,9 @@
   an omitted control carries across any edit, including `--font` (both are
   font-independent); the stored fields join the revision hash only when
   present, so pre-#187 revisions keep their ids and pinned Render history
-  replays byte-identically, and paint/measure/inspect report them (#187)
+  replays byte-identically, and paint/measure/inspect report them — revisions
+  storing the new fields require this version or later, and earlier versions
+  refuse them loudly (#187)
 - Added the Groundline type faces and text weight/width controls: Archivo
   ships as the exact full upstream variable file (`wght` 100–900, `wdth`
   62–125) and IBM Plex Mono as the static 500 cut, and `composition add` /
