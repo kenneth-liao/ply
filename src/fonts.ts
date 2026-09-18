@@ -11,7 +11,12 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 /** One axis of a variable font face: the range its bytes actually contain
- * and the face's default value for that axis (#179, ADR-0021). */
+ * (the no-synthesis boundary, verified against the shipped bytes' fvar
+ * table in test/fonts.test.ts) and the value an omitted control resolves
+ * to (#179, ADR-0021). That default is a Ply-side resolution, not the
+ * bytes' fvar default — Archivo's fvar default instance is wght 600, while
+ * Ply resolves omitted Archivo controls to the ADR-pinned 400/100 and
+ * paints the stored axes explicitly, so the fvar default never applies. */
 export interface FontAxis {
   min: number;
   max: number;
@@ -62,11 +67,11 @@ export function faceDefaultWeight(face: FontFace): number {
   return face.variant === "variable" ? face.axes.wght.default : face.weight;
 }
 
-/** Optional weight/width controls on a text Layer (#179, ADR-0021). */
-export interface TextAxesControls {
-  weight?: number;
-  width?: number;
-}
+/** Optional weight/width controls on a text Layer (#179, ADR-0021). The
+ * same shape flows both ways — callers pass it as controls to
+ * `resolveTextAxes`, which returns the resolved axes — so it is one type
+ * with two names for its two roles. */
+export type TextAxesControls = TextAxes;
 
 /** Resolved text axes: present if and only if the retained face is variable. */
 export interface TextAxes {
@@ -82,12 +87,21 @@ export interface TextAxes {
  * bytes already fix the look. Every refusal names the family and the values
  * it allows. Never synthesizes: out-of-range and unsupported values are
  * refused here, before anything is published.
+ *
+ * Scope note for the one split in that story (#179, INT-FONTS-3): EVERY
+ * explicit width is refused on a static face — including the implicit
+ * `STATIC_FACE_WIDTH` — because an explicit control must name a width the
+ * face has. The edit path's carried-axes rule (`resolveEditTextAxes` in
+ * src/layer.ts) tolerates a carried width equal to `STATIC_FACE_WIDTH` as
+ * nothing-to-store, since a static look IS the width-100 instance; that
+ * carry tolerance is edit semantics, deliberately not part of this
+ * validator. #187 extends this validator, never a second one.
  */
 export function resolveTextAxes(face: FontFace, controls: TextAxesControls): TextAxes {
   for (const name of ["weight", "width"] as const) {
     const value = controls[name];
     if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
-      throw new Error(`Invalid ${name} ${value}: must be a finite number.`);
+      throw new Error(`Invalid ${name} ${value} for font "${face.family}": must be a finite number.`);
     }
   }
   if (face.variant === "variable") {
@@ -197,7 +211,11 @@ function fontDataUri(face: FontFace): string {
   return uri;
 }
 
-/** Reads the bundled bytes and throws naming the family when they are absent. */
+/** Reads the bundled bytes and throws naming the family when they are
+ * absent. `weight` is a static face's own weight; for a variable face it is
+ * the default-instance weight (a convenient fallback for callers without
+ * stored axes — a text Layer's real look is its revision's stored axes,
+ * never this number). */
 export function readFontAsset(face: FontFace): { family: string; weight: number; dataUri: string } {
   return {
     family: face.family,

@@ -101,6 +101,35 @@ describe("fallback rejection probe", () => {
 });
 
 describe("Groundline faces (#179, ADR-0021)", () => {
+  /** Parse a TrueType fvar table's axes (tag, min/default/max as 16.16
+   * Fixed) — enough of the sfnt container to verify the registry's declared
+   * axis facts against the shipped font bytes. */
+  function fvarAxes(bytes: Buffer): Record<string, { min: number; default: number; max: number }> {
+    const numTables = bytes.readUInt16BE(4);
+    let tableOffset = -1;
+    for (let i = 0; i < numTables; i++) {
+      const off = 12 + i * 16;
+      if (bytes.toString("latin1", off, off + 4) === "fvar") {
+        tableOffset = bytes.readUInt32BE(off + 8);
+      }
+    }
+    if (tableOffset < 0) throw new Error("font has no fvar table");
+    const axesArrayOffset = bytes.readUInt16BE(tableOffset + 4);
+    const axisCount = bytes.readUInt16BE(tableOffset + 8);
+    const axisSize = bytes.readUInt16BE(tableOffset + 10);
+    const axes: Record<string, { min: number; default: number; max: number }> = {};
+    for (let i = 0; i < axisCount; i++) {
+      const rec = tableOffset + axesArrayOffset + i * axisSize;
+      const fixed = (o: number) => bytes.readInt32BE(o) / 65536;
+      axes[bytes.toString("latin1", rec, rec + 4)] = {
+        min: fixed(rec + 4),
+        default: fixed(rec + 8),
+        max: fixed(rec + 12),
+      };
+    }
+    return axes;
+  }
+
   it("bundles Archivo as a variable face with its real axis ranges and default instance", () => {
     const archivo = resolveFace("Archivo");
     expect(archivo.variant).toBe("variable");
@@ -108,6 +137,28 @@ describe("Groundline faces (#179, ADR-0021)", () => {
     expect(archivo.file).toBe("Archivo[wdth,wght].ttf");
     expect(archivo.axes.wght).toEqual({ min: 100, max: 900, default: 400 });
     expect(archivo.axes.wdth).toEqual({ min: 62, max: 125, default: 100 });
+  });
+
+  it("declares the axis ranges the shipped Archivo bytes actually contain (fvar, INT-FONTS-2)", () => {
+    const archivo = resolveFace("Archivo");
+    if (archivo.variant !== "variable") throw new Error("unreachable");
+    const axes = fvarAxes(readFileSync(fontAssetPath(archivo)));
+    // The no-synthesis boundary is a byte fact: the registry's ranges ARE
+    // the font's fvar table — a registry typo cannot pass beside the
+    // SHA-256 byte pin.
+    expect(archivo.axes.wght.min).toBe(axes.wght.min);
+    expect(archivo.axes.wght.max).toBe(axes.wght.max);
+    expect(archivo.axes.wdth).toEqual(axes.wdth);
+    // The omitted-control default is the ADR-0021 resolution (400/100),
+    // deliberately NOT the bytes' fvar default — the shipped Archivo
+    // declares fvar default wght 600 (Groundline's "strong" weight). Ply
+    // never relies on the fvar default: paint emits the stored axes
+    // explicitly, and the Scene surface maps font-weight 400 onto the axis.
+    expect(axes.wght.default).toBe(600);
+    expect(archivo.axes.wght.default).toBe(400);
+    expect(archivo.axes.wdth.default).toBe(axes.wdth.default);
+    // A static face has no fvar table to declare.
+    expect(() => fvarAxes(readFileSync(fontAssetPath(resolveFace("IBM Plex Mono"))))).toThrow(/no fvar/);
   });
 
   it("bundles IBM Plex Mono as a static 500 face", () => {

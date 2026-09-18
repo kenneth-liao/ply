@@ -13,6 +13,14 @@ naming the allowed range. It never synthesizes a weight or width.
 - **Variable font** (for example Archivo, `wght` 100–900, `wdth` 62–125): the
   revision always stores the resolved `weight` and `width`. An omitted control
   resolves to the font's default instance (Archivo: 400 / 100).
+  - That default is the resolution this decision pins for omitted controls
+    (per the #179 ticket), not the shipped bytes' fvar default instance:
+    `Archivo[wdth,wght].ttf` declares fvar default `wght` 600. Ply never
+    relies on the fvar default — Composition paint emits the stored axes
+    explicitly, and the legacy Scene surface maps `font-weight` 400 onto the
+    axis — so an omitted control renders as 400 / 100 everywhere.
+  - The axis RANGES are the font's own bytes (fvar), the no-synthesis
+    boundary, verified by test in #179.
 - **Static font** (every face bundled before #179, and IBM Plex Mono 500): the
   bytes already fix the look. `weight` accepts only the face's own weight,
   `width` is refused, and the revision stores neither.

@@ -278,6 +278,16 @@ function textMarkup(layer: TextLayer): string {
   // Auto-fit layers start markup at their max; renderScene shrinks to fit
   // after fonts resolve, so the shipped markup is deterministic either way.
   const startSize = layer.fontSize ?? layer.autoFit!.max;
+  // Legacy-weight note (#179, INT-FONTS-1): the Scene surface's pre-existing
+  // `weight` control is passed straight to CSS, deliberately — the Scene
+  // gains no new controls (#179). For the variable face the @font-face rule
+  // declares the real axis range, so an in-range weight maps onto the font's
+  // actual axes and an out-of-range one is CLAMPED by the browser to the
+  // declared range — synthesized glyphs are impossible. A static face's
+  // off-weight renders through Chromium's synthetic bold, the documented
+  // pre-#179 Scene behavior (see the scene-schema weight description);
+  // #179 leaves that untouched. The Layer/Composition surface is the one
+  // that validates axes through `resolveTextAxes` and never synthesizes.
   const styles = [
     `font-family:'${face.family}'`,
     `font-weight:${layer.weight ?? faceDefaultWeight(face)}`,
