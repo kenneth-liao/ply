@@ -41,10 +41,13 @@ no better. Lanczos resampling added halos; area averaging did not.
 
 - The render pixel limits apply to the supersampled paint. A canvas that
   fits at 1× but not at the requested factor is refused loudly, never
-  silently painted at a lower factor. The same refusal covers an outline
-  whose raster dilate (width × factor) would exceed Chromium's 256-raster-px
-  `feMorphology` kernel cap — a render never degrades on its own (decided in
-  review of the #184 implementation).
+  silently painted at a lower factor.  The same refusal covers an outline
+  whose raster dilate would exceed Chromium's 256-raster-px `feMorphology`
+  kernel cap — a render never degrades on its own (decided in review of the #184
+  implementation). Note (#193): outline width is in the Layer's local pixels
+  (ADR-0019), painted before the transform, so the true raster dilation is
+  `outline.width × max(|scaleX|, |scaleY|) × supersample`; rotation and flip do
+  not change it.
 - Default renders differ from renders made before #184, and they take
   longer. Their pinned history replays unchanged.
 - Recording the output file's hash in the manifest is a separate question

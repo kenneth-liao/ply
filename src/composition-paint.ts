@@ -87,14 +87,83 @@ function captureEnvironment(page: Page): PaintEnvironment {
 
 /**
  * Chromium caps the `feMorphology` dilate kernel at 256 px in the filter's
- * raster space (verified empirically): a supersampled paint rasterizes in
- * device pixels, so an outline whose `width × supersample` exceeds this cap
- * would render a silently clipped ring. The paint path refuses that state
- * before painting instead — never a degraded render (#184, ADR-0022).
- * One home for the number: the paint-path refusal and every test of the cap
- * read this constant, never a second copy of the number.
+ * raster space (verified empirically). Outline width is in the Layer's LOCAL
+ * px (ADR-0019), painted before the transform, so the raster dilation is
+ * `outline.width × max(|scaleX|, |scaleY|) × supersample` (#193, ADR-0022).
+ * An outline exceeding this cap would render a silently clipped ring. The
+ * paint path refuses that state before painting instead — never a degraded
+ * render (ADR-0022).
+ *
+ * One home for the number: the refusal and every test of the cap read this
+ * constant, never a second copy of the number.
  */
 export const MAX_OUTLINE_DILATE_PX = 256;
+
+/**
+ * The largest absolute scale factor a Layer's canonical transform applies
+ * (#193, ADR-0016, ADR-0019, ADR-0022).
+ *
+ * Reads the exact `scaleX` and `scaleY` revision fields the paint transform
+ * applies. Effects (outline feMorphology dilate, drop-shadow blur) paint in
+ * the Layer's local coordinate space before the transform, so their maximum
+ * raster extent scales by max(|scaleX|, |scaleY|). Rotation and flip preserve
+ * lengths and do not change this factor.
+ */
+export function layerMaxScale(rev: { scaleX: number; scaleY: number }): number {
+  return Math.max(Math.abs(rev.scaleX), Math.abs(rev.scaleY));
+}
+
+/**
+ * Compute the raster dilation in device pixels for an outline (#193, ADR-0019, ADR-0022).
+ * Outline width is in Layer local px (ADR-0019), painted before the transform.
+ * The raster dilation in device pixels is:
+ *   outline.width × max(|scaleX|, |scaleY|) × supersample.
+ * Rotation and flip do not change it.
+ */
+export function outlineRasterDilation(
+  outlineWidth: number,
+  rev: { scaleX: number; scaleY: number },
+  supersample: number = 1,
+): number {
+  return outlineWidth * layerMaxScale(rev) * supersample;
+}
+
+/**
+ * Assert that no Layer's outline exceeds Chromium's feMorphology dilate cap
+ * in device raster space (#184, #193, ADR-0019, ADR-0022).
+ *
+ * Loud refusal before anything is painted: Chromium caps the feMorphology dilate
+ * kernel at MAX_OUTLINE_DILATE_PX raster pixels. The dilate radius is in the
+ * Layer's local coordinate space before transform, so raster dilation is:
+ *   outline.width × max(|scaleX|, |scaleY|) × supersample
+ * An outline exceeding the cap would render a silently clipped ring.
+ *
+ * Refused loudly naming the Layer, outline width, scale, factor, resulting raster
+ * size, the cap, and the fixes.
+ */
+export function assertOutlineDilationLimits(layers: SnapshotLayer[], supersample: number = 1): void {
+  for (const l of layers) {
+    const outline = l.revision.outline;
+    if (outline !== undefined) {
+      const dilation = outlineRasterDilation(outline.width, l.revision, supersample);
+      if (dilation > MAX_OUTLINE_DILATE_PX) {
+        const scaleDesc =
+          l.revision.scaleX === l.revision.scaleY
+            ? `${l.revision.scaleX}`
+            : `${l.revision.scaleX}×${l.revision.scaleY}`;
+        const fix =
+          supersample > 1
+            ? `Render with --supersample 1 or a smaller factor, a thinner outline, or a smaller Layer scale.`
+            : `Render with a thinner outline or a smaller Layer scale.`;
+        throw new Error(
+          `Layer "${l.name}" has a ${outline.width}px outline at scale ${scaleDesc}; supersample ${supersample} ` +
+            `paints its dilate at ${dilation} raster pixels — over Chromium's ${MAX_OUTLINE_DILATE_PX}px ` +
+            `feMorphology dilate cap, which would clip the ring. ${fix}`,
+        );
+      }
+    }
+  }
+}
 
 /**
  * Area-average a supersampled RGBA image back to its canvas size (#184,
@@ -214,24 +283,13 @@ export async function paintCompositionHtml(
   if (!Number.isInteger(supersample) || supersample < 1) {
     throw new Error(`Invalid supersample factor ${supersample}: must be an integer of at least 1.`);
   }
-  // Loud refusal before anything is painted (#184, ADR-0022): Chromium caps
-  // the feMorphology dilate kernel at MAX_OUTLINE_DILATE_PX raster pixels,
-  // and a supersampled paint rasterizes in device pixels — an outline whose
-  // width × factor exceeds the cap would render a silently clipped ring.
-  // Refused with the same shape as the supersample pixel-limit refusal:
-  // names the Layer, the numbers, the cap, and the fix. Replay inherits this
-  // check, so a stored manifest whose factor would clip is refused too.
-  for (const l of layers) {
-    const outline = l.revision.outline;
-    if (outline !== undefined && outline.width * supersample > MAX_OUTLINE_DILATE_PX) {
-      throw new Error(
-        `Layer "${l.name}" has a ${outline.width}px outline; supersample ${supersample} paints its dilate ` +
-          `at ${outline.width * supersample} raster pixels — over Chromium's ${MAX_OUTLINE_DILATE_PX}px ` +
-          `feMorphology dilate cap, which would clip the ring. Render with --supersample 1 or a smaller ` +
-          `factor, or use a thinner outline.`,
-      );
-    }
-  }
+  // Loud refusal before anything is painted (#184, #193, ADR-0019, ADR-0022):
+  // Chromium caps the feMorphology dilate kernel at MAX_OUTLINE_DILATE_PX
+  // raster pixels. Outline width is in Layer local px (ADR-0019) before
+  // transform, so raster dilation is outline.width × max(|scaleX|, |scaleY|) × factor.
+  // An outline exceeding the cap would render a silently clipped ring.
+  // Replay inherits this check, so a stored manifest whose Composition would clip is refused too.
+  assertOutlineDilationLimits(layers, supersample);
   const paint = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width * supersample, height: canvas.height * supersample });
     await page.setContent(html, { waitUntil: "load" });
