@@ -25,6 +25,18 @@
 
 ### Added
 
+- Added text tracking and line-height controls: `composition add` and
+  `layer edit` accept optional `--tracking` (letter spacing in em, −0.5 to
+  1) and `--line-height` (a unitless multiplier, 0.5 to 3, or `normal`),
+  stored as revision facts only when set — an omitted control paints as
+  normal spacing and the font's own line height, and `tracking` 0 is stored
+  as absent (one stored form per look). Out-of-range or non-numeric values
+  are refused before anything is published, naming the control and its
+  allowed range; `--tracking 0` / `--line-height normal` clear on edit and
+  an omitted control carries across any edit, including `--font` (both are
+  font-independent); the stored fields join the revision hash only when
+  present, so pre-#187 revisions keep their ids and pinned Render history
+  replays byte-identically, and paint/measure/inspect report them (#187)
 - Added the Groundline type faces and text weight/width controls: Archivo
   ships as the exact full upstream variable file (`wght` 100–900, `wdth`
   62–125) and IBM Plex Mono as the static 500 cut, and `composition add` /

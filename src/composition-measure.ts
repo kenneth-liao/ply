@@ -84,7 +84,7 @@ import { withProjectLock } from "./project-lock.js";
 import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
 import { buildCompositionHtml, rejectUnresolvedFonts, sizeOutlineFilterRegions, type SnapshotLayer } from "./composition-paint.js";
 import type { ResolvedLayerRevision, LayerShadow, LayerOutline } from "./layer.js";
-import { normalizeStoredTextAxes } from "./layer.js";
+import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerTextTypography } from "./layer.js";
 import type { Page } from "playwright";
 
 /** One Layer's measured layout geometry (module doc documents each box). */
@@ -117,6 +117,11 @@ export interface MeasuredLayerBounds {
    * and width a variable-font text Layer paints with (or null when the
    * retained font is static — a static revision stores no axis fields). */
   axes: { weight: number; width: number } | null;
+  /** The revision's selected text typography (#187, ADR-0021): the stored
+   * tracking and line height a text Layer paints with — each field present
+   * only when set (an omitted control paints as normal spacing / the font's
+   * own line height), `{}` when neither is stored. */
+  typography: LayerTextTypography;
 }
 
 export interface MeasureCompositionResult {
@@ -477,6 +482,10 @@ export async function measureCompositionLayers(
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
         axes:
           rev.kind === "text" ? normalizeStoredTextAxes(rev) ?? null : null,
+        typography:
+          rev.kind === "text"
+            ? normalizeStoredTextTypography(rev)
+            : ({} as LayerTextTypography),
       };
     });
 

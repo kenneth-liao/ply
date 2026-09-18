@@ -185,9 +185,26 @@ export interface LayerTextRevision extends LayerRevisionBase {
    */
   weight?: number;
   width?: number;
+  /**
+   * Selected text typography (#187, ADR-0021): each present ONLY when set —
+   * an omitted control paints exactly as before (normal letter spacing, the
+   * font's own line height), which has no numeric form, and a stored
+   * `tracking` of 0 is the same look as absent, so it is never stored.
+   * Font-independent: neither field depends on the retained font, and both
+   * carry across a `--font` edit. Validated against their allowed ranges at
+   * ingestion; the stored fields are the only thing paint and measurement
+   * read.
+   */
+  tracking?: number;
+  lineHeight?: number;
 }
 
 export type LayerRevision = LayerImageRevision | LayerTextRevision;
+
+/** Allowed `tracking` range in em, inclusive (#187, ADR-0021). */
+export const TRACKING_RANGE = { min: -0.5, max: 1 } as const;
+/** Allowed `lineHeight` range as a unitless multiplier, inclusive (#187, ADR-0021). */
+export const LINE_HEIGHT_RANGE = { min: 0.5, max: 3 } as const;
 
 /** Canonical normalized transform scale: the one shape every consumer reads. */
 export interface LayerTransformScale {
@@ -590,6 +607,116 @@ export interface LayerTextAxes {
   width: number;
 }
 
+/** Canonical normalized text typography (#187, ADR-0021): the one shape every
+ * consumer reads. Unlike the axes, the fields are independent — each is
+ * present only when set. */
+export interface LayerTextTypography {
+  tracking?: number;
+  lineHeight?: number;
+}
+
+/**
+ * The ONE validator/normalizer for text tracking and line-height CONTROLS
+ * (#187, ADR-0021) — the single home the add path, the edit path, and both
+ * CLI boundaries share, so the boundaries never disagree. Tracking and line
+ * height are font-independent, so unlike `resolveTextAxes` they validate
+ * against fixed Ply ranges, not a face's bytes. `null` clears a control;
+ * `undefined` means not given; a `tracking` of 0 is the same look as absent
+ * and normalizes to absent, so the resolved fields are always storable
+ * values (tracking never 0). Every refusal names the control and its
+ * allowed range, and fires before anything is published.
+ */
+export function resolveTextTypographyControls(controls: {
+  tracking?: number | null;
+  lineHeight?: number | null;
+}): LayerTextTypography {
+  const out: LayerTextTypography = {};
+  const checks = [
+    {
+      name: "tracking",
+      label: "Tracking (--tracking)",
+      value: controls.tracking,
+      range: TRACKING_RANGE,
+      zeroMeansAbsent: true,
+    },
+    {
+      name: "lineHeight",
+      label: "Line height (--line-height)",
+      value: controls.lineHeight,
+      range: LINE_HEIGHT_RANGE,
+      zeroMeansAbsent: false,
+    },
+  ] as const;
+  for (const { name, label, value, range, zeroMeansAbsent } of checks) {
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`${label} must be a finite number.`);
+    }
+    if (zeroMeansAbsent && value === 0) continue;
+    if (value < range.min || value > range.max) {
+      throw new Error(
+        `${label} must be between ${range.min} and ${range.max} (inclusive) — ${value} is out of range.`,
+      );
+    }
+    out[name as "tracking" | "lineHeight"] = value;
+  }
+  return out;
+}
+
+/**
+ * Canonical stored-text-typography validation and normalization (#187,
+ * ADR-0021). The ONE normalization boundary AND the one reader for a
+ * revision's tracking/line height: documents written before #187 lack the
+ * fields (only a missing field is absent — a present `null` or any other
+ * non-number is a malformed document, never a silent default); every
+ * downstream reader — revision resolution, the revision hash, paint markup,
+ * measurement, and the edit carry path — projects through this function and
+ * never re-derives the fields. Each field is independent: present only when
+ * set, a finite number inside its allowed range, and a stored `tracking` of
+ * 0 is a malformed document (0 is stored as absent — one stored form per
+ * look).
+ */
+export function normalizeStoredTextTypography(revision: {
+  tracking?: unknown;
+  lineHeight?: unknown;
+}): LayerTextTypography {
+  const out: LayerTextTypography = {};
+  const checks = [
+    {
+      name: "tracking" as const,
+      value: revision.tracking,
+      range: TRACKING_RANGE,
+      zeroIsMalformed: true,
+    },
+    {
+      name: "lineHeight" as const,
+      value: revision.lineHeight,
+      range: LINE_HEIGHT_RANGE,
+      zeroIsMalformed: false,
+    },
+  ];
+  for (const { name, value, range, zeroIsMalformed } of checks) {
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(
+        `Malformed revision document: text ${name} must be a finite number when present (got ${JSON.stringify(value)}).`,
+      );
+    }
+    if (zeroIsMalformed && value === 0) {
+      throw new Error(
+        `Malformed revision document: text tracking 0 is the same look as no tracking and is never stored.`,
+      );
+    }
+    if (value < range.min || value > range.max) {
+      throw new Error(
+        `Malformed revision document: text ${name} ${value} is outside its allowed range ${range.min} to ${range.max}.`,
+      );
+    }
+    out[name] = value;
+  }
+  return out;
+}
+
 /**
  * Canonical stored-text-axes validation and normalization (#179, ADR-0021).
  * The ONE normalization boundary AND the one reader for a revision's text
@@ -640,7 +767,9 @@ export function normalizeStoredTextAxes(revision: {
  * only when present, so revisions written before #139/#140 keep their exact
  * ids (#139, #140). The text weight/width fields are appended only when
  * present (as one resolved pair), so revisions written before #179 keep
- * their exact ids (#179, ADR-0021). */
+ * their exact ids (#179, ADR-0021). The text tracking and line-height
+ * fields are appended only when present, so revisions written before #187
+ * keep their exact ids (#187, ADR-0021). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
@@ -657,7 +786,13 @@ export function computeRevisionHash(rev: LayerRevision): string {
     rev.outline !== undefined ? `:outline(${rev.outline.width},${rev.outline.color})` : "";
   const textAxes = rev.kind === "text" ? normalizeStoredTextAxes(rev) : undefined;
   const textAxesFields = textAxes !== undefined ? `:textaxes(${textAxes.weight},${textAxes.width})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}`).digest("hex").slice(0, 16)}`;
+  const typography = rev.kind === "text" ? normalizeStoredTextTypography(rev) : undefined;
+  const typographyFields =
+    typography !== undefined
+      ? (typography.tracking !== undefined ? `:tracking(${typography.tracking})` : "") +
+        (typography.lineHeight !== undefined ? `:lineheight(${typography.lineHeight})` : "")
+      : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}${typographyFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -886,6 +1021,12 @@ export async function readRevisionInternalFull(
   // (#179, ADR-0021) — a malformed stored pair is refused loudly before the
   // revision hash is consulted. Absence IS the no-axes form (static fonts).
   const textAxes = revision.kind === "text" ? normalizeStoredTextAxes(revision) : undefined;
+  // Canonical text typography: validated and normalized at this same one
+  // boundary (#187, ADR-0021) — a malformed stored field is refused loudly
+  // before the revision hash is consulted. Absence IS the normal-spacing /
+  // normal-line-height form.
+  const textTypography =
+    revision.kind === "text" ? normalizeStoredTextTypography(revision) : undefined;
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -983,6 +1124,7 @@ export async function readRevisionInternalFull(
           fontSize: revision.fontSize,
           color: revision.color,
           ...(textAxes ?? {}),
+          ...(textTypography ?? {}),
           fontBytes: contentBytes.length,
         };
 
@@ -1054,6 +1196,22 @@ export interface EditLayerOptions {
    * outright. Carries across a `--font` switch the same way `weight` does.
    */
   width?: number;
+  /**
+   * Select the text's tracking in em (#187, ADR-0021): an ABSOLUTE setter,
+   * font-independent — validated against the fixed allowed range (-0.5..1),
+   * never against a face. `0` or `null` clears stored tracking (one stored
+   * form per look: tracking 0 is never stored); an omitted option carries
+   * the current value across any edit, including a `--font` switch.
+   */
+  tracking?: number | null;
+  /**
+   * Select the text's line height as a unitless multiplier (#187, ADR-0021):
+   * an ABSOLUTE setter, font-independent — validated against the fixed
+   * allowed range (0.5..3). `null` clears stored line height (the font's own
+   * line height applies); an omitted option carries the current value across
+   * any edit, including a `--font` switch.
+   */
+  lineHeight?: number | null;
   x?: number;
   y?: number;
   opacity?: number;
@@ -1641,7 +1799,9 @@ async function buildEditedRevision(
       options.fontSize !== undefined ||
       options.color !== undefined ||
       options.weight !== undefined ||
-      options.width !== undefined
+      options.width !== undefined ||
+      options.tracking !== undefined ||
+      options.lineHeight !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on an image Layer. Layer "${layerId}" is an image Layer.`);
     }
@@ -1789,6 +1949,24 @@ async function buildEditedRevision(
       axes = normalizeStoredTextAxes(prevRev) ?? {};
     }
 
+    // Text typography (#187, ADR-0021): font-independent, so it never
+    // consults the face registry and always resolves here — an explicit
+    // control sets or clears it (0/"normal" normalize to absent through the
+    // one control resolver), an omitted control carries the current value
+    // across ANY edit, including a `--font` switch.
+    const typography = resolveTextTypographyControls({
+      ...(options.tracking !== undefined
+        ? { tracking: options.tracking }
+        : prevRev.tracking !== undefined
+          ? { tracking: prevRev.tracking }
+          : {}),
+      ...(options.lineHeight !== undefined
+        ? { lineHeight: options.lineHeight }
+        : prevRev.lineHeight !== undefined
+          ? { lineHeight: prevRev.lineHeight }
+          : {}),
+    });
+
     const text = options.text !== undefined ? options.text : prevRev.text;
     const fontSize = options.fontSize !== undefined ? options.fontSize : prevRev.fontSize;
     const color = options.color !== undefined ? options.color : prevRev.color;
@@ -1806,6 +1984,8 @@ async function buildEditedRevision(
       fontSize,
       color,
       ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
+      ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
+      ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
       x,
       y,
       opacity,
@@ -1824,6 +2004,8 @@ async function buildEditedRevision(
       color === prevRev.color &&
       axes.weight === prevRev.weight &&
       axes.width === prevRev.width &&
+      typography.tracking === prevRev.tracking &&
+      typography.lineHeight === prevRev.lineHeight &&
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity &&

@@ -6,6 +6,7 @@ import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer
 import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import { parseShadowSpec, parseOutlineSpec } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
+import { resolveTextTypographyControls } from "./layer.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
@@ -72,6 +73,14 @@ Options:
   --text <str>          New text content for a text Layer
   --font <family>       Bundled font family name for a text Layer
   --font-size <num>     Font size in px for a text Layer
+  --tracking <num>      Letter spacing in em for a text Layer (#187,
+                        ADR-0021): -0.5 to 1 (0 removes stored tracking —
+                        the same look as no tracking)
+  --line-height <num|normal>
+                        Line height as a unitless multiplier of the font
+                        size (#187, ADR-0021): 0.5 to 3; "normal" removes
+                        stored line height (the font's own line height
+                        applies)
   --weight <num>        Text weight for a text Layer (#179): validated
                         against the Layer's font's real weight axis —
                         Archivo 100-900 (default 400); static faces accept
@@ -239,7 +248,7 @@ function formatAnchorTarget(anchored: AnchorResolution): string {
 }
 
 const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), [
-  "--x", "--y", "--rotate", "--shadow", "--outline",
+  "--x", "--y", "--rotate", "--shadow", "--outline", "--tracking",
 ]);
 const isJson = rawArgs.includes("--json");
 
@@ -261,6 +270,8 @@ let values: {
   "font-size"?: string;
   weight?: string;
   width?: string;
+  tracking?: string;
+  "line-height"?: string;
   color?: string;
   x?: string;
   y?: string;
@@ -297,6 +308,8 @@ try {
       "font-size": { type: "string" },
       weight: { type: "string" },
       width: { type: "string" },
+      tracking: { type: "string" },
+      "line-height": { type: "string" },
       color: { type: "string" },
       x: { type: "string" },
       y: { type: "string" },
@@ -346,6 +359,8 @@ async function run() {
         values.color !== undefined ||
         values.weight !== undefined ||
         values.width !== undefined ||
+        values.tracking !== undefined ||
+        values["line-height"] !== undefined ||
         values.x !== undefined ||
         values.y !== undefined ||
         values.opacity !== undefined ||
@@ -362,7 +377,7 @@ async function run() {
           {
             ok: false,
             error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --weight, --width, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, --outline, or --fork.",
+              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, --outline, or --fork.",
           },
           isJson,
         );
@@ -414,12 +429,14 @@ async function run() {
           values["font-size"] !== undefined ||
           values.color !== undefined ||
           values.weight !== undefined ||
-          values.width !== undefined)
+          values.width !== undefined ||
+          values.tracking !== undefined ||
+          values["line-height"] !== undefined)
       ) {
         output(
           {
             ok: false,
-            error: "--image and text options (--text, --font, --font-size, --color, --weight, --width) are mutually exclusive.",
+            error: "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
           },
           isJson,
         );
@@ -442,7 +459,7 @@ async function run() {
         values["from-generation"] !== undefined &&
         (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
           values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined ||
-          values.width !== undefined)
+          values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)
       ) {
         output(
           { ok: false, error: "--from-generation and --image/--text options are mutually exclusive content options." },
@@ -463,7 +480,8 @@ async function run() {
         values["from-matte"] !== undefined &&
         (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
           values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined ||
-          values.width !== undefined || values["from-generation"] !== undefined)
+          values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined ||
+          values["from-generation"] !== undefined)
       ) {
         output(
           { ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content options." },
@@ -495,6 +513,10 @@ async function run() {
       const fontSize = values["font-size"] !== undefined ? parseNumericArgument(values["font-size"]) : undefined;
       const weight = values.weight !== undefined ? parseNumericArgument(values.weight) : undefined;
       const width = values.width !== undefined ? parseNumericArgument(values.width) : undefined;
+      const tracking = values.tracking !== undefined ? parseNumericArgument(values.tracking) : undefined;
+      const lineHeightValue = values["line-height"];
+      const lineHeight =
+        lineHeightValue === undefined ? undefined : lineHeightValue === "normal" ? null : parseNumericArgument(lineHeightValue);
 
       if (x !== undefined && !Number.isFinite(x)) {
         output({ ok: false, error: "Placement coordinate (--x) must be a finite number." }, isJson);
@@ -528,6 +550,29 @@ async function run() {
       }
       if (width !== undefined && !Number.isFinite(width)) {
         output({ ok: false, error: "Width (--width) must be a finite number." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      // Text typography (#187, ADR-0021): font-independent, so shape and
+      // range are usage errors (exit 2) here unconditionally, through the
+      // SAME validator the edit path uses — the edit path re-resolves before
+      // anything publishes. `--tracking 0` and `--line-height normal` are
+      // the clear syntaxes; the resolver normalizes both to absent (one
+      // stored form per look).
+      if (values.tracking !== undefined && !Number.isFinite(tracking)) {
+        output({ ok: false, error: "Tracking (--tracking) must be a finite number." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (lineHeightValue !== undefined && lineHeightValue !== "normal" && !Number.isFinite(lineHeight)) {
+        output({ ok: false, error: 'Line height (--line-height) must be a finite number or "normal".' }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      try {
+        resolveTextTypographyControls({ tracking, lineHeight });
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -695,13 +740,15 @@ async function run() {
           values["font-size"] !== undefined ||
           values.color !== undefined ||
           values.weight !== undefined ||
-          values.width !== undefined;
+          values.width !== undefined ||
+          values.tracking !== undefined ||
+          values["line-height"] !== undefined;
         if (conflicting) {
           output(
             {
               ok: false,
               error:
-                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, --outline, --weight, --width, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
+                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, --outline, --weight, --width, --tracking, --line-height, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
             },
             isJson,
           );
@@ -789,6 +836,8 @@ async function run() {
           color: values.color,
           weight,
           width,
+          tracking,
+          lineHeight,
           x: editX,
           y: editY,
           opacity,
@@ -918,6 +967,15 @@ async function run() {
               // Selected text axes (#179, ADR-0021): present ⟺ variable font.
               if (rev.weight !== undefined || rev.width !== undefined) {
                 console.log(`  Axes: weight ${rev.weight}, width ${rev.width}`);
+              }
+              // Selected text typography (#187, ADR-0021): each shown only
+              // when set — absence IS the normal-spacing / normal-line-height
+              // form.
+              if (rev.tracking !== undefined) {
+                console.log(`  Tracking: ${rev.tracking}em`);
+              }
+              if (rev.lineHeight !== undefined) {
+                console.log(`  Line height: ${rev.lineHeight}`);
               }
             } else {
               console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);

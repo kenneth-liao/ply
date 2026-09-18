@@ -33,7 +33,7 @@ import { familyResolved } from "./fonts.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
 import { createHash } from "node:crypto";
-import { normalizeStoredTextAxes, type LayerOutline, type ResolvedLayerRevision } from "./layer.js";
+import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerOutline, type ResolvedLayerRevision } from "./layer.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
   png: "image/png",
@@ -433,9 +433,19 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
           axes !== undefined
             ? `font-variation-settings:'wght' ${axes.weight}, 'wdth' ${axes.width};`
             : "";
+        // Selected text typography (#187, ADR-0021): read from the revision
+        // alone through the one stored-typography reader — the same markup
+        // paint and measurement share, so measured and rendered text agree
+        // on spacing and the line-box height. Emitted only when stored, so
+        // pre-#187 revisions paint exactly as before (pinned history stays
+        // byte-identical).
+        const typography = normalizeStoredTextTypography(rev);
+        const typographyCss =
+          (typography.tracking !== undefined ? `letter-spacing:${typography.tracking}em;` : "") +
+          (typography.lineHeight !== undefined ? `line-height:${typography.lineHeight};` : "");
         const style =
           `${base}${transformed}${effectsFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
-          `font-size:${rev.fontSize}px;color:${rev.color};${axesCss}white-space:pre-wrap;`;
+          `font-size:${rev.fontSize}px;color:${rev.color};${axesCss}${typographyCss}white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
       return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;

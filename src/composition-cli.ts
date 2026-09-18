@@ -19,6 +19,7 @@ import {
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
+import { resolveTextTypographyControls } from "./layer.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -173,6 +174,13 @@ Options:
   --font <family>       Bundled font family name (required with --text;
                         e.g. Anton, "Source Sans 3", "Archivo Black")
   --font-size <num>     Font size in px for text Layers (default: 48)
+  --tracking <num>      Letter spacing in em for a text Layer (#187,
+                        ADR-0021): -0.5 to 1 (0 is stored as absent — the
+                        same look as no tracking)
+  --line-height <num|normal>
+                        Line height as a unitless multiplier of the font
+                        size (#187, ADR-0021): 0.5 to 3; "normal" (or
+                        omission) uses the font's own line height
   --weight <num>        Text weight for a text Layer (#179): validated
                         against the bundled font's real weight axis —
                         Archivo 100-900 (default 400); static faces accept
@@ -216,7 +224,7 @@ function output(
 
 /** A negative number is a valid coordinate value (#128) — the shared join in
  * cli-present.ts handles it, scoped here to the composition placement flags. */
-const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y"]);
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y", "--tracking"]);
 const isJson = rawArgs.includes("--json");
 let values: {
   project?: string;
@@ -227,6 +235,8 @@ let values: {
   font?: string;
   "font-size"?: string;
   weight?: string;
+  tracking?: string;
+  "line-height"?: string;
   color?: string;
   order?: string;
   out?: string;
@@ -256,6 +266,8 @@ try {
       font: { type: "string" },
       "font-size": { type: "string" },
       weight: { type: "string" },
+      tracking: { type: "string" },
+      "line-height": { type: "string" },
       color: { type: "string" },
       order: { type: "string" },
       out: { type: "string" },
@@ -337,7 +349,7 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (values.image && (values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined)) {
+      if (values.image && (values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
         output({ ok: false, error: "--image and --text are mutually exclusive content kinds; use one per Layer." }, isJson);
         process.exitCode = 2;
         return;
@@ -345,14 +357,14 @@ async function run() {
       // Generated-content ingestion (#107): --from-generation is a third,
       // mutually exclusive content kind; --output selects one output of the
       // referenced Generation Job and is meaningless without it.
-      if (values["from-generation"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined)) {
+      if (values["from-generation"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
         output({ ok: false, error: "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer." }, isJson);
         process.exitCode = 2;
         return;
       }
       // Matting-content ingestion (#108): --from-matte is a fourth, mutually
       // exclusive content kind.
-      if (values["from-matte"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined || values.weight !== undefined || values.width !== undefined)) {
+      if (values["from-matte"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
         output({ ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer." }, isJson);
         process.exitCode = 2;
         return;
@@ -377,8 +389,8 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (values.text === undefined && (values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined)) {
-        output({ ok: false, error: "--font, --font-size, --color, --weight, and --width require --text <str>." }, isJson);
+      if (values.text === undefined && (values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
+        output({ ok: false, error: "--font, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>." }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -507,9 +519,36 @@ async function run() {
             process.exitCode = 2;
             return;
           }
+          // Text typography (#187, ADR-0021): font-independent, so shape and
+          // range are usage errors (exit 2) here unconditionally, through the
+          // SAME validator the add path uses — the add path re-resolves
+          // before anything publishes. `--tracking 0` and `--line-height
+          // normal` are the clear syntaxes; the resolver normalizes both to
+          // absent (one stored form per look).
+          const tracking = values.tracking !== undefined ? parseNumericArgument(values.tracking) : undefined;
+          const lineHeightValue = values["line-height"];
+          const lineHeight =
+            lineHeightValue === undefined ? undefined : lineHeightValue === "normal" ? null : parseNumericArgument(lineHeightValue);
+          if (values.tracking !== undefined && !Number.isFinite(tracking)) {
+            output({ ok: false, error: "Tracking (--tracking) must be a finite number." }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          if (lineHeightValue !== undefined && lineHeightValue !== "normal" && !Number.isFinite(lineHeight)) {
+            output({ ok: false, error: 'Line height (--line-height) must be a finite number or "normal".' }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          try {
+            resolveTextTypographyControls({ tracking, lineHeight });
+          } catch (err) {
+            output({ ok: false, error: (err as Error).message }, isJson);
+            process.exitCode = 2;
+            return;
+          }
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
-            { text: values.text, font: values.font, color: values.color, weight, width },
+            { text: values.text, font: values.font, color: values.color, weight, width, tracking, lineHeight },
             { x, y, opacity, fontSize },
           );
           mutationCommitted = true;
@@ -700,6 +739,14 @@ async function run() {
               }
               if (layer.axes) {
                 facts.push(`weight ${layer.axes.weight}, width ${layer.axes.width}`);
+              }
+              // Stored text typography (#187, ADR-0021), reported only when
+              // set — the facts painting applies.
+              if (layer.typography.tracking !== undefined) {
+                facts.push(`tracking ${layer.typography.tracking}em`);
+              }
+              if (layer.typography.lineHeight !== undefined) {
+                facts.push(`line height ${layer.typography.lineHeight}`);
               }
               if (t.scaleX !== 1 || t.scaleY !== 1) {
                 facts.push(`scale ${t.scaleX === t.scaleY ? `${t.scaleX}×` : `${t.scaleX}×/${t.scaleY}×`}`);
