@@ -8,8 +8,8 @@
   "type": "module",
   "scripts": {
     "ply": "bun run src/cli.ts",
-    "test": "for f in $(find test -name '*.test.ts'); do bun test --isolate \"$f\" || exit 1; done",
-    "test:live": "for f in $(find test -name '*.test.ts'); do PLY_RUN_LIVE=1 bun test --isolate \"$f\" || exit 1; done",
+    "test": "bun run scripts/test.ts",
+    "test:live": "PLY_RUN_LIVE=1 bun run scripts/test.ts",
     "project": "bun run src/project-cli.ts",
     "generate": "bun run src/generation-cli.ts",
     "matte": "bun run src/matting-cli.ts",
