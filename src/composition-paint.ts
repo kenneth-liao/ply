@@ -104,15 +104,43 @@ export async function paintComposition(
   layers: SnapshotLayer[],
   options: { page?: Page } = {},
 ): Promise<{ png: Buffer; environment: PaintEnvironment }> {
+  return paintCompositionHtml(canvas, buildCompositionHtml(canvas, layers), layers, options);
+}
+
+/**
+ * Paint an already-built page for one Composition: the shared screenshot
+ * recipe (awaited decode, outline-filter region sizing, font-resolution
+ * gate, clipped PNG, environment capture) over caller-built markup.
+ *
+ * This is the guideline-view seam (#174): the guideline page is the shared
+ * `buildCompositionHtml` markup wrapped with the region overlay by
+ * composition-guidelines.ts — the overlay markup exists only on that
+ * guideline code path. The render path never calls this with wrapped
+ * markup: `paintComposition` builds its page from `buildCompositionHtml`
+ * alone, with no parameter, flag, or branch that could emit the overlay
+ * (ADR-0005's structural exclusion, carried forward by ADR-0015).
+ *
+ * `options.beforeScreenshot` is a page hook for the guideline path's
+ * in-page placement pass (measured text placement needs the live page, the
+ * same pattern as `sizeOutlineFilterRegions`); the render path never passes
+ * one, so no render-page flow runs guideline code.
+ */
+export async function paintCompositionHtml(
+  canvas: { width: number; height: number },
+  html: string,
+  layers: SnapshotLayer[],
+  options: { page?: Page; beforeScreenshot?: (page: Page) => Promise<void> } = {},
+): Promise<{ png: Buffer; environment: PaintEnvironment }> {
   const paint = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
-    await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
+    await page.setContent(html, { waitUntil: "load" });
     // Awaited decode: a partially painted canvas is never screenshotted.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     // Per-Layer outline-filter region sizing (#140, ADR-0019): before any
     // pixel leaves this page — see sizeOutlineFilterRegions.
     await sizeOutlineFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
+    if (options.beforeScreenshot) await options.beforeScreenshot(page);
     const png = await page.screenshot({
       type: "png",
       omitBackground: true,
@@ -207,8 +235,10 @@ function outlineFilterDef(outline: LayerOutline, layerIndex: number): string {
   );
 }
 
-/** Minimal HTML escaping for text layer content (#81). */
-function escapeHtml(text: string): string {
+/** Minimal HTML escaping for caller-owned text (#81; shared with every
+ * module that interpolates caller strings into the page — the guideline
+ * overlay's region id/label/reason use this exact recipe, #174). */
+export function escapeHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

@@ -10,6 +10,15 @@ import { withProjectLock } from "./project-lock.js";
 
 export const PROJECT_MANIFEST_FILENAME = "ply.json";
 export const CURRENT_SCHEMA_VERSION = 1;
+/**
+ * The canonical Project layout: every subdirectory here is required by the
+ * validator below. The guideline view (#174) may also create a non-canonical
+ * `guidelines/` directory — review-output PNGs, not Project state: nothing
+ * in Ply scans, validates, shares, or requires it (the same standing as a
+ * caller's stray files), and whole-tree enumerators outside Ply (share,
+ * export, backup tooling) must treat unknown non-canonical directories as
+ * ignorable review output. Render history lives only in `renders/`.
+ */
 export const PROJECT_SUBDIRS = ["compositions", "layers", "content", "renders"] as const;
 
 export interface ProjectManifest {

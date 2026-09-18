@@ -2,7 +2,34 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed render-manifest `output` records: external `--out` destinations are
+  now recorded as absolute paths instead of the caller-chosen lexical form
+  (in-Project records stay project-relative). The field is informational —
+  replay never reads it — and the change lets the guideline view's
+  render-output refusal guard compare recorded outputs soundly (#174)
+
 ### Added
+
+- Added `ply composition guidelines <comp> --regions <file>` — the guideline
+  view for Compositions: the Composition exactly as `composition render`
+  would draw it, with the caller's regions (the same region file `check`
+  accepts, through the same ingestion point) drawn over the canvas as
+  inspectable overlay markup with each region's label and reason visible.
+  A review artifact, not a Render: it writes no Render manifest and adds
+  nothing to retained Render history, refuses to overwrite any output a
+  Render manifest or the Project's renders/ history records, and the
+  overlay is structurally excluded from final renders — the guideline
+  markup exists only on the guideline code path. Default output: a fresh,
+  never-colliding `guidelines/<comp>-<id>.guidelines.png` (review output,
+  not Project state); `--out` accepts any fresh path the render export
+  boundary accepts — including in-Project non-reserved ones — while
+  existing Project state and reserved storage are refused. Malformed region
+  files, out-of-canvas
+  regions, canvas mismatches, and missing Compositions fail loudly with
+  nonzero status; compact text by default, valid JSON under `--json`;
+  local only (#174)
 
 - Added `examples/youtube-regions.json` — the committed starter YouTube
   region file (copy-and-own template): the bottom-right duration badge
