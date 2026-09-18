@@ -904,9 +904,55 @@ test("a single Layer whose own window is over the decoder's pixel budget gets th
   // Names the Layer and the fix — never the raw decoder error.
   expect(out.error).toContain("wide");
   expect(out.error).toMatch(/capture window/i);
-  expect(out.error).toMatch(/reduce the transform scale|place the Layer nearer the canvas/i);
+  expect(out.error).toMatch(/reduce the transform scale/i);
   expect(out.error).not.toMatch(/parse limit/i);
 }, 60000);
+
+test("effect reach is per-Layer: it widens only that Layer's window and refuses that Layer (#185)", async () => {
+  // The capture window is widened by each Layer's OWN effect reach — never
+  // another Layer's — and the refusal judges box + reach, so a Layer whose
+  // box alone fits but whose reach pushes the window over the bounds is
+  // refused (never measured with clipped effect ink).
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(100, 100, RED));
+
+  // Reach-inclusive refusal: box 4064×4064 alone gives an exactly-legal
+  // 4096×4096 window; the shadow's local reach (1+0+2·1=3) maps through
+  // the 40.64× transform to 121.92px, widening the window to ~4340² ≈
+  // 18.8MP — over MAX_PIXELS while under 8192px per axis.
+  await makeComp("reachrefusal", 5120, 2880);
+  const inked = await addImageLayer("reachrefusal", "inked", img, { x: 100, y: 100 });
+  const inkedId = JSON.parse(
+    (await invoke(["composition", "inspect", "reachrefusal", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0].layerId as string;
+  expect((await invoke(["layer", "edit", inkedId, "--resize-to", "4064x4064", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  expect((await invoke(["layer", "edit", inkedId, "--shadow", "1,0,1,#000000", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  const refusal = await measure("reachrefusal");
+  expect(refusal.res.code).toBe(1);
+  const out = JSON.parse(refusal.res.stdout);
+  expect(out.ok).toBe(false);
+  expect(out.error).toContain("inked");
+  expect(out.error).toContain("plus up to 121.92px of effect extent");
+  expect(out.error).not.toMatch(/parse limit/i);
+
+  // Reach independence: a shadowed Layer's painted extents (shadow ink
+  // included) are identical with and without another Layer in the
+  // Composition — the other Layer's box and reach never perturb its window.
+  await makeComp("withneighbor", 400, 300);
+  const shadowed = await addImageLayer("withneighbor", "inked", img, { x: 30, y: 20 });
+  expect((await invoke(["layer", "edit", shadowed.use.layerId, "--shadow", "20,16,8,#000000", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  const solo = await measure("withneighbor");
+  expect(solo.res.code).toBe(0);
+  const soloPainted = solo.json.layers[0].painted;
+  expect(soloPainted).not.toBeNull();
+  await makeComp("withneighbor2", 400, 300);
+  const duoShadowed = await addImageLayer("withneighbor2", "inked", img, { x: 30, y: 20 });
+  expect((await invoke(["layer", "edit", duoShadowed.use.layerId, "--shadow", "20,16,8,#000000", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  await addImageLayer("withneighbor2", "neighbor", img, { x: 200, y: 150 });
+  const duo = await measure("withneighbor2");
+  expect(duo.res.code).toBe(0);
+  expect(duo.json.layers.find((l: { name: string }) => l.name === "inked").painted).toEqual(soloPainted);
+}, 120000);
 
 test("a window at exactly the decoder's bounds measures; one pixel over is refused (#185)", async () => {
   // Pins the shared-limit contract: the refusal check and decodePng use the

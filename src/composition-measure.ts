@@ -352,7 +352,7 @@ async function measureSnapshot(
               (reach > 0 ? ` plus up to ${reach}px of effect extent` : "") +
               `, beyond the painted-extent capture window (max ${MAX_INK_VIEWPORT_PX}px per axis, ` +
               `${MAX_PIXELS.toLocaleString("en-US")}px total). Painted extents are refused ` +
-              `instead of growing measurement memory without bound — reduce the transform scale, the effect extent, or place the Layer nearer the canvas.`,
+              `instead of growing measurement memory without bound — reduce the transform scale or the effect extent.`,
           );
         }
       }
