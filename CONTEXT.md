@@ -33,6 +33,8 @@ current revision; a fork creates a new Layer identity for the forking Compositio
 **Render**:
 The image produced locally from a resolved Composition. Its manifest preserves
 exact Layer revisions and required content so later edits do not change it.
+A Render is always delivered at the canvas size; its supersample factor is
+render quality, never Composition geometry (ADR-0022).
 
 **Generation Job**:
 An online request that produces image content for a Layer and records the
