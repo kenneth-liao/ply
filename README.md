@@ -14,8 +14,10 @@ accepted vocabulary. Two shipments are acceptance-audited against `main`:
 
 Caller-parameterized region checking has shipped for Compositions
 (`ply composition check`, [Region checking](#region-checking-new-surface));
-the guideline overlay view and the starter region-file relocation are the
-remaining separately scoped migrations named by ADR-0015/spec #172; the
+a starter YouTube region file ships as a copy-and-own template
+([Starter region file](#starter-region-file)) and the guideline overlay
+view is the remaining separately scoped migration named by
+ADR-0015/spec #172; the
 legacy Scene surface still runs as documented under
 [Legacy surface](#legacy-surface-preserved), and ADR-0014 records what
 remains target for it.
@@ -465,6 +467,25 @@ Exit codes: 0 when the check completes (findings included), 1 for an
 operational failure (malformed region file, out-of-canvas region, canvas
 mismatch, missing Composition), 2 for usage errors. Default output is
 compact text; `--json` emits one valid JSON result with the findings.
+
+### Starter region file
+
+A committed starter for YouTube's 1280×720 thumbnail canvas ships at
+`examples/youtube-regions.json` — the bottom-right duration badge and the
+full-width watched-progress strip, usable directly with `composition
+check`:
+
+```bash
+ply composition check thumb --regions examples/youtube-regions.json -p ~/projects/my-thumb
+```
+
+The starter is a **copy-and-own template**, not a second authority: copy
+it into your project and own it — the canonical copy for real work lives
+in the caller's own project and is passed by path at use time, so no
+workflow ever holds more than one authoritative copy. For another canvas
+size or surface, explicitly choose appropriate regions of your own
+(caller-owned policy, per ADR-0015 — Ply validates shape and the canvas
+contract, never content).
 
 ## Setup
 

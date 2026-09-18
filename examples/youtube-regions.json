@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "canvas": { "width": 1280, "height": 720 },
+  "regions": [
+    {
+      "id": "duration-badge",
+      "label": "duration badge",
+      "reason": "YouTube pins the video-length badge to the thumbnail's bottom-right corner at every display size",
+      "box": { "x": 1088, "y": 656, "width": 192, "height": 64 }
+    },
+    {
+      "id": "progress-bar",
+      "label": "progress bar",
+      "reason": "YouTube draws the watched-progress bar across the thumbnail's full width at the bottom edge",
+      "box": { "x": 0, "y": 704, "width": 1280, "height": 16 }
+    }
+  ]
+}
