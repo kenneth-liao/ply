@@ -154,7 +154,7 @@ export function assertOutlineDilationLimits(layers: SnapshotLayer[], supersample
         const fix =
           supersample > 1
             ? `Render with --supersample 1 or a smaller factor, a thinner outline, or a smaller Layer scale.`
-            : `Render with a smaller factor, a thinner outline, or a smaller Layer scale.`;
+            : `Render with a thinner outline or a smaller Layer scale.`;
         throw new Error(
           `Layer "${l.name}" has a ${outline.width}px outline at scale ${scaleDesc}; supersample ${supersample} ` +
             `paints its dilate at ${dilation} raster pixels — over Chromium's ${MAX_OUTLINE_DILATE_PX}px ` +

@@ -90,7 +90,14 @@ import {
   sizeOutlineFilterRegions,
   type SnapshotLayer,
 } from "./composition-paint.js";
-import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerTextTypography } from "./layer.js";
+import {
+  normalizeStoredTextAxes,
+  normalizeStoredTextTypography,
+  type LayerOutline,
+  type LayerShadow,
+  type LayerTextTypography,
+  type ResolvedLayerRevision,
+} from "./layer.js";
 import type { Page } from "playwright";
 
 /** One Layer's measured layout geometry (module doc documents each box). */

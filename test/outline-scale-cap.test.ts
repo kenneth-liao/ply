@@ -13,7 +13,7 @@ import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
 import { mkdtemp, rm, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { MAX_OUTLINE_DILATE_PX, layerMaxScale, outlineRasterDilation } from "../src/composition-paint.js";
+import { MAX_OUTLINE_DILATE_PX, assertOutlineDilationLimits, layerMaxScale, outlineRasterDilation } from "../src/composition-paint.js";
 import { encodePngRgba, decodePng } from "../src/png.js";
 
 let tempDir: string;
@@ -133,7 +133,7 @@ test("probe case 2: scale 2, outline 200, factor 1 is refused loudly, naming all
   expect(err).toContain("supersample 1");
   expect(err).toContain("400 raster pixels");
   expect(err).toContain(`${MAX_OUTLINE_DILATE_PX}px`);
-  expect(err).toContain("smaller factor");
+  expect(err).not.toContain("smaller factor");
   expect(err).toContain("thinner outline");
   expect(err).toContain("smaller Layer scale");
 
@@ -177,7 +177,21 @@ test("probe case 3: scale 0.25, outline 200, factor 2 renders a ring of 50 ± 1 
 // Boundary pinned from MAX_OUTLINE_DILATE_PX constant (including non-uniform scale)
 // ---------------------------------------------------------------------------
 
-test("boundary from constant: exactly 256 raster dilation renders; 258 is refused", async () => {
+test("boundary from constant: exactly 256 raster dilation renders; 257 and 258 are refused", async () => {
+  // Direct seam check: 256 renders, true edge 257 is refused (INT-3)
+  const atCap = [{
+    name: "item",
+    revision: { outline: { width: MAX_OUTLINE_DILATE_PX, color: "#000000" }, scaleX: 1, scaleY: 1 },
+  }] as any;
+  expect(() => assertOutlineDilationLimits(atCap, 1)).not.toThrow();
+
+  const overCap257 = [{
+    name: "item",
+    revision: { outline: { width: MAX_OUTLINE_DILATE_PX + 1, color: "#000000" }, scaleX: 1, scaleY: 1 },
+  }] as any;
+  expect(() => assertOutlineDilationLimits(overCap257, 1)).toThrow(/257 raster pixels/);
+
+  // Render check: exactly 256 renders; 257 and 258 are refused
   const atCapOutline = Math.floor(MAX_OUTLINE_DILATE_PX / 2); // 128
   const overCapOutline = atCapOutline + 1; // 129 -> 129 * 2 = 258
 
@@ -200,6 +214,56 @@ test("boundary from constant: exactly 256 raster dilation renders; 258 is refuse
   const overRes = await invoke(["composition", "render", "bnd", "--project", projDir, "--supersample", "1", "--json"]);
   expect(overRes.code).toBe(1);
   expect(JSON.parse(overRes.stdout).error).toContain("258 raster pixels");
+
+  // True edge 257 in render pass: 100px outline at scale 2.57 = 257 raster pixels (INT-3)
+  const img257 = path.join(tempDir, "sq257.png");
+  await writeFile(img257, solidPng(64, 64, [0, 0, 0, 255]));
+  await invoke(["composition", "create", "bnd257", "--width", "400", "--height", "400", "--project", projDir]);
+  await invoke(["composition", "add", "bnd257", "item", "--image", img257, "--x", "150", "--y", "150", "--project", projDir]);
+  const layerId257 = JSON.parse(
+    (await invoke(["composition", "inspect", "bnd257", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0]!.layerId;
+  await invoke(["layer", "edit", layerId257, "--resize", "2.57", "--outline", "100,#0000ff", "--project", projDir, "--json"]);
+  const edge257Res = await invoke(["composition", "render", "bnd257", "--project", projDir, "--supersample", "1", "--json"]);
+  expect(edge257Res.code).toBe(1);
+  expect(JSON.parse(edge257Res.stdout).error).toContain("257 raster pixels");
+});
+
+test("rotation and flip do not change outline raster dilation (over-cap refused, at-cap renders)", async () => {
+  const atCapOutline = Math.floor(MAX_OUTLINE_DILATE_PX / 2); // 128
+  const overCapOutline = atCapOutline + 1; // 129
+
+  const img = path.join(tempDir, "rot-flip.png");
+  await writeFile(img, solidPng(80, 80, [0, 0, 0, 255]));
+  await invoke(["composition", "create", "rot-flip", "--width", "500", "--height", "500", "--project", projDir]);
+  await invoke(["composition", "add", "rot-flip", "hero", "--image", img, "--x", "200", "--y", "200", "--project", projDir]);
+  const layerId = JSON.parse(
+    (await invoke(["composition", "inspect", "rot-flip", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0]!.layerId;
+
+  // Apply scale 2 with 45° rotation and both horizontal and vertical flips (INT-1)
+  await invoke([
+    "layer", "edit", layerId,
+    "--resize", "2",
+    "--rotate", "45",
+    "--flip", "both",
+    "--project", projDir,
+    "--json",
+  ]);
+
+  // At-cap (128 × scale 2 × factor 1 = 256): renders successfully
+  await invoke(["layer", "edit", layerId, "--outline", `${atCapOutline},#0000ff`, "--project", projDir, "--json"]);
+  const atCapRes = await invoke(["composition", "render", "rot-flip", "--project", projDir, "--supersample", "1", "--json"]);
+  expect(atCapRes.code).toBe(0);
+
+  // Over-cap (129 × scale 2 × factor 1 = 258): refused before painting
+  await invoke(["layer", "edit", layerId, "--outline", `${overCapOutline},#0000ff`, "--project", projDir, "--json"]);
+  const overRes = await invoke(["composition", "render", "rot-flip", "--project", projDir, "--supersample", "1", "--json"]);
+  expect(overRes.code).toBe(1);
+  const err = JSON.parse(overRes.stdout).error;
+  expect(err).toContain("258 raster pixels");
+  expect(err).toContain("scale 2");
+  expect(err).toContain("dilate cap");
 });
 
 test("boundary covers non-uniform scale (scaleX != scaleY takes the larger)", async () => {
