@@ -1,4 +1,5 @@
 import { Glob } from "bun";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 function getGitInfo(toplevel: string) {
@@ -46,12 +47,20 @@ async function pump(stream: ReadableStream<Uint8Array>, write: (chunk: string) =
 
 const toplevel = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"]).stdout.toString().trim() || process.cwd();
 
+const testDir = join(toplevel, "test");
 const glob = new Glob("**/*.test.ts");
 const testFiles: string[] = [];
-for (const f of glob.scanSync({ cwd: join(toplevel, "test") })) {
-  testFiles.push(`test/${f}`);
+if (existsSync(testDir)) {
+  for (const f of glob.scanSync({ cwd: testDir })) {
+    testFiles.push(`test/${f}`);
+  }
 }
 testFiles.sort();
+
+if (testFiles.length === 0) {
+  console.error("No test files found");
+  process.exit(1);
+}
 
 let totalPass = 0;
 let totalFail = 0;
