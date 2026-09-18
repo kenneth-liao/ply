@@ -6,7 +6,9 @@
  * in the caller's project and is passed by path, so no workflow ever holds
  * two authoritative copies. This test protects the committed template from
  * drift — the file must always load through the single ingestion point
- * (#173's `parseRegionFile`) and must always carry the exact YouTube
+ * (#173's `readRegionFile`, whose parsed output the CLI check then passes
+ * through `ingestRegionCanvas` against the Composition's canvas —
+ * src/composition-region-check.ts) and must always carry the exact YouTube
  * baseline rectangles it relocated (the numbers the removal ticket #176
  * retires `src/safe-area.ts` against).
  *
@@ -14,7 +16,11 @@
  */
 import { expect, test } from "bun:test";
 import path from "node:path";
-import { readRegionFile, REGION_SCHEMA_VERSION } from "../src/composition-regions.js";
+import {
+  ingestRegionCanvas,
+  readRegionFile,
+  REGION_SCHEMA_VERSION,
+} from "../src/composition-regions.js";
 
 const STARTER = path.resolve(import.meta.dir, "../examples/youtube-regions.json");
 
@@ -23,6 +29,13 @@ test("the starter region file loads through the region ingestion point", async (
   expect(file.schemaVersion).toBe(REGION_SCHEMA_VERSION);
   expect(file.canvas).toEqual({ width: 1280, height: 720 });
   expect(file.regions.map((r) => r.id)).toEqual(["duration-badge", "progress-bar"]);
+});
+
+test("the starter passes the canvas contract against its 1280×720 canvas", async () => {
+  // The CLI check always runs the canvas-contract half of the ingestion
+  // point after reading the file; the starter must round-trip it unchanged.
+  const regions = ingestRegionCanvas(await readRegionFile(STARTER), { width: 1280, height: 720 }, STARTER);
+  expect(regions.map((r) => r.id)).toEqual(["duration-badge", "progress-bar"]);
 });
 
 test("the starter carries the exact relocated YouTube baseline rectangles", async () => {
