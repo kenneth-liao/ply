@@ -71,6 +71,9 @@ request.
   reproducible after its source Layers change (ADR-0013).
 - Final composition is local and deterministic. Generation is the only network
   operation; unresolved content and font fallback fail loudly.
+- A text Layer's look is its bundled font plus the weight and width it
+  selects. Ply renders only weights and widths the font contains; it never
+  synthesizes one.
 - The caller decides what content to generate and where text pixels come from.
   Ply does not infer subject policy or impose likeness approval (ADR-0014).
 - Generation References come from the caller. Their identities are derived at
