@@ -521,8 +521,11 @@ reviewing. That directory is **review output, not Project state**: no
 Project scan, validation, sharing, or history code reads or requires it
 (render history lives only in `renders/`), and whole-tree enumerators —
 share, export, backup tooling — should treat it (like any non-canonical
-directory) as ignorable review output. `--out` names a path anywhere
-outside Project state instead.
+directory) as ignorable review output. `--out` accepts any fresh,
+non-reserved path the render export boundary accepts — inside the Project
+(outside reserved storage) or outside it — while existing Project state
+(`ply.json`, compositions/, layers/, content/, retained inputs) is never
+written over.
 
 It reads the same region file `check` accepts, through the same single
 ingestion point — one region format, one parser, the same canvas contract.

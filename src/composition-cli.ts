@@ -117,11 +117,13 @@ composition — Composition authoring and inspection
       overwrite any output a Render manifest or the Project's renders/
       history records. Destinations resolve through the same export-target
       boundary as render: existing Project state and reserved storage are
-      refused. Default output: a fresh file under the Project's guidelines/
-      (review output, not Project state); --out names a path anywhere
-      outside Project state. The overlay is structurally excluded from final
-      renders — it exists only on this code path. Local only: no network,
-      no inference weights.
+      refused. Default output: a fresh, never-colliding file under the
+      Project's guidelines/ (review output, not Project state); --out
+      accepts any fresh, non-reserved path the render export boundary
+      accepts — in-Project or outside — while existing Project state and
+      reserved storage are never written over. The overlay is structurally
+      excluded from final renders — it exists only on this code path.
+      Local only: no network, no inference weights.
 
   ply composition render <name> [options]
       Render a Composition to a PNG at its exact canvas dimensions and
