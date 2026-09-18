@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `ply composition measure`, every `ply layer edit --anchor`, and
+  `ply composition check` failing on Compositions whose scaled Layers push
+  the painted-ink capture window over the PNG decoder's 16,777,216-pixel
+  parse limit: each Layer is now captured through its own window (its own
+  box plus its own effect reach plus the ink pad, never the combination of
+  other Layers' extremes), and the loud pre-capture refusal enforces the
+  decoder's total-pixel budget (`MAX_PIXELS`, read from the PNG reader) in
+  addition to the per-axis cap — a Layer over either bound gets the
+  measurement refusal naming the Layer and the fix, never the raw
+  parse-limit error (#185)
+
 ### Changed
 
 - Changed render-manifest `output` records: external `--out` destinations are

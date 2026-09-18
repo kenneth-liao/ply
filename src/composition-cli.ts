@@ -77,10 +77,11 @@ composition — Composition authoring and inspection
       capture window's pixel grid, while canvas offsets are layout-derived
       and may be fractional. Capture is bounded — one windowed screenshot
       per Layer (never scaled by off-canvas distance), widened by each
-      Layer's effect extent, and a Layer whose layout box plus effect extent
-      exceeds the 8192×8192px window is refused with an
-      actionable error instead of growing memory. Painted bounds are the
-      browser's own paint of the exact markup rendering uses, so
+      Layer's effect extent, and a Layer whose window — its layout box plus
+      effect extent plus pad — exceeds the capture bounds (8192px per axis,
+      16,777,216px total) is refused with an actionable error instead of
+      growing memory. Painted bounds are the browser's own paint of the exact
+      markup rendering uses, so
       measurement and rendering agree; opacity scaling
       changes alpha values, never the ink footprint. Text dimensions are measured with
       the Layer's retained font bytes — the same face painting uses, never
