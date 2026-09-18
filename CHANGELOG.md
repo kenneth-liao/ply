@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `ply composition check <comp> --regions <file>` — caller-parameterized
+  region checking for Compositions: a caller-owned region file (rectangles in
+  canvas pixels with id/label/reason and a canvas contract, schema version 1,
+  ingested at the single point in `src/composition-regions.ts`) is tested
+  against every visible Layer's painted extent from the shared measurement
+  authority, one finding per (layer, region) intersection; findings are
+  information, never render failures (exit 0), while malformed region files,
+  out-of-canvas regions, canvas mismatches, and missing Compositions fail
+  loudly with nonzero status. Compact text by default, valid JSON under
+  `--json`; local only — no network, no inference weights (#173)
+
 ### Changed
 
 - **BREAKING for machine consumers:** `scene` and `jobs` commands no longer

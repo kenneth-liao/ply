@@ -19,6 +19,7 @@ import {
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
+import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
@@ -85,6 +86,25 @@ composition — Composition authoring and inspection
       a second measuring authority; corrupt content or an unresolved font
       fails instead of producing misleading numbers. Writes nothing to the
       Project.
+
+  ply composition check <comp> --regions <file> [options]
+      Check a Composition's painted Layer extents against caller-supplied
+      regions (a caller-owned region file passed by path: rectangles in
+      canvas pixels, each with an id, label, and reason — schema documented
+      in README). Findings are information, never render failures: every
+      visible Layer's painted extent is tested against every region, one
+      finding per (layer, region) intersection naming the layer, its
+      footprint, and the region. A full-bleed background intersecting
+      every region is reported, not a failure; hidden or fully transparent
+      Layers paint nothing and report nothing. Footprints are the same
+      shared painted extents 'composition measure' reports — never a
+      second geometry model — with their conservative over-approximation
+      retained. The file's schemaVersion, per-region shape, and its canvas
+      (which must match the Composition's canvas) are validated at one
+      ingestion point; a malformed file, an out-of-canvas region, a canvas
+      mismatch, or a missing Composition fails loudly with a nonzero exit
+      status, never a successful-looking empty result. The check is local:
+      no network, no inference weights. Writes nothing to the Project.
 
   ply composition render <name> [options]
       Render a Composition to a PNG at its exact canvas dimensions and
@@ -188,6 +208,7 @@ let values: {
   x?: string;
   y?: string;
   opacity?: string;
+  regions?: string;
   json?: boolean;
   help?: boolean;
 };
@@ -215,6 +236,7 @@ try {
       x: { type: "string" },
       y: { type: "string" },
       opacity: { type: "string" },
+      regions: { type: "string" },
       json: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -637,6 +659,54 @@ async function run() {
         output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
+    } else if (command === "check") {
+      const compName = positionals[1];
+      if (!compName) {
+        output({ ok: false, error: "Usage: ply composition check <composition> --regions <region-file.json>" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.regions === undefined || !values.regions.trim()) {
+        output({ ok: false, error: "Missing required option: --regions <region-file.json> (a caller-owned region file passed by path)" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+
+      try {
+        const result = await checkCompositionRegions(targetProj, compName, path.resolve(values.regions.trim()));
+        // Findings are information, never render failures (ADR-0005): the
+        // check completes with exit 0 regardless of findings.
+        output(
+          {
+            ok: true,
+            composition: result.composition,
+            canvas: result.canvas,
+            regionFile: result.regionFile,
+            regionCount: result.regionCount,
+            findings: result.findings,
+          },
+          isJson,
+          () => {
+            const n = result.findings.length;
+            const regions = result.regionCount === 1 ? "1 caller-supplied region" : `${result.regionCount} caller-supplied regions`;
+            console.log(
+              `Checked Composition "${result.composition}" (${result.canvas.width}×${result.canvas.height}) against ${regions} — ` +
+                (n === 0 ? "no findings." : `${n} finding(s) (information, never render failures):`),
+            );
+            result.findings.forEach((f: RegionFinding, i: number) => {
+              const r = f.region.box;
+              console.log(
+                `  ${i + 1}. layer "${f.layer}" (painted (${f.footprint.x}, ${f.footprint.y}) ${f.footprint.width}×${f.footprint.height}) ` +
+                  `intersects region "${f.region.id}" (x ${r.x}–${r.x + r.width}, y ${r.y}–${r.y + r.height}) — ` +
+                  `${f.region.label}: ${f.region.reason} — move, resize, or accept the overlap`,
+              );
+            });
+          },
+        );
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
     } else if (command === "render") {
       const name = positionals[1];
       if (!name) {
@@ -705,7 +775,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, measure, render, replay, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, measure, check, render, replay, list. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }
