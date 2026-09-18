@@ -25,6 +25,17 @@
 
 ### Added
 
+- Added supersampled rendering: `ply composition render` now paints at 2
+  device pixels per canvas pixel by default and area-averages each 2×2 block
+  in premultiplied alpha back to exactly the canvas size (ADR-0022), so large
+  display type gets even edge-coverage ramps instead of stair-stepping.
+  `--supersample <n>` (integer ≥ 1) overrides the factor; `--supersample 1`
+  paints directly, byte-identically to pre-#184 renders. Composition
+  geometry stays in canvas pixels; the render pixel limits now apply to the
+  supersampled paint and an over-limit factor is refused with the fix named,
+  never downgraded; the Render manifest records the factor and `replay`
+  repaints at it (no `--supersample` flag — it takes no factor), while
+  manifests written before this change record no factor and parse as 1 (#184)
 - Added text tracking and line-height controls: `composition add` and
   `layer edit` accept optional `--tracking` (letter spacing in em, −0.5 to
   1) and `--line-height` (a unitless multiplier, 0.5 to 3, or `normal`),

@@ -4,9 +4,14 @@
  *
  * Render contract (#80, DEC-004):
  * - Output is a PNG at exactly the Composition's canvas dimensions. The
- *   canvas must be positive integers within the PNG parse caps
- *   (MAX_DIMENSION per axis, MAX_PIXELS total); invalid dimensions fail
- *   before any painting or output publication.
+ *   paint happens at an integer supersample factor of device pixels per
+ *   canvas pixel (default 2, #184 / ADR-0022) and every N×N block is
+ *   area-averaged in premultiplied alpha back to the canvas size; the
+ *   factor is recorded in the manifest and replay paints at it. The canvas
+ *   must be positive integers within the PNG parse caps (MAX_DIMENSION per
+ *   axis, MAX_PIXELS total), which apply to the supersampled paint; invalid
+ *   dimensions or an over-limit factor fail before any painting or output
+ *   publication, never at a lower factor.
  * - Layers paint in reference-list order — later Layers paint over earlier
  *   ones — at each revision's stored position (x, y) and opacity in [0, 1],
  *   at the retained content's intrinsic size, clipped to the canvas. Areas
@@ -85,6 +90,12 @@ export interface RenderCompositionResult {
 export interface RenderCompositionOptions {
   /** Caller-chosen export path; must resolve outside the Project. */
   out?: string;
+  /** Integer supersample factor (#184, ADR-0022): device pixels per canvas
+   * pixel, area-averaged back to exactly the canvas size. Default 2 —
+   * ADR-0022 renders supersample at delivery size by default; 1 paints
+   * directly, exactly as before #184. Geometry (canvas, placement, font
+   * sizes, measurement, anchors, guidelines, checks) is unaffected. */
+  supersample?: number;
 }
 
 /**
@@ -145,6 +156,14 @@ export async function renderComposition(
   options: RenderCompositionOptions = {},
 ): Promise<RenderCompositionResult> {
   const resolvedRoot = await resolveProjectRoot(projectPath);
+  // The supersample factor is shaped at the command boundary (usage error);
+  // this is the API-boundary fail-fast for any other caller.
+  const supersample = options.supersample ?? 2;
+  if (!Number.isInteger(supersample) || supersample < 1) {
+    throw new Error(
+      `Invalid supersample factor ${supersample}: must be an integer of at least 1.`,
+    );
+  }
 
   // Lock snapshot: resolve the Composition, its verified retained bytes, and
   // the output path as one consistent read, then release the lock before
@@ -162,12 +181,15 @@ export async function renderComposition(
 
   // Painting uses the snapshot's exact bytes and captures the environment
   // identity inside the same paint pass. A paint failure publishes nothing.
-  const { png, environment } = await paintComposition(snapshot.canvas, snapshot.layers);
+  // The supersampled paint (canvas × factor per axis) must fit the render
+  // limits — never silently painted at a lower factor (#184, ADR-0022).
+  assertSupersampledPaintSize(snapshot.canvas, supersample, snapshot.name);
+  const { png, environment } = await paintComposition(snapshot.canvas, snapshot.layers, { supersample });
 
   // The manifest is built purely from the in-memory snapshot — capture cannot
   // consult current state after the snapshot, whatever commits concurrently.
   const manifest: RenderManifestDocument = buildRenderManifest(
-    { name: snapshot.name, canvas: snapshot.canvas, layers: snapshot.layers },
+    { name: snapshot.name, canvas: snapshot.canvas, layers: snapshot.layers, supersample },
     environment,
     snapshot.destination.informationalOutput,
   );
@@ -200,6 +222,38 @@ function assertRenderableCanvas(canvas: { width: number; height: number }, name:
     throw new Error(
       `Invalid canvas dimensions ${width}×${height} for Composition "${name}": ` +
         `the render limit is ${MAX_PIXELS.toLocaleString("en-US")} pixels.`,
+    );
+  }
+}
+
+/**
+ * The supersampled paint check (#184, ADR-0022): the paint happens at
+ * canvas × factor device pixels per axis, so the render limits apply to that
+ * size — reusing the one limit constants from the PNG reader (never a second
+ * copy of the numbers). A canvas that fits at 1× but not at the requested
+ * factor is refused loudly with the fix named; it is never painted at a
+ * lower factor on its own. Only reachable for factor ≥ 2: the snapshot
+ * boundary already refused over-limit canvases, and factor 1 paints at the
+ * canvas size itself.
+ */
+function assertSupersampledPaintSize(
+  canvas: { width: number; height: number },
+  supersample: number,
+  name: string,
+): void {
+  const width = canvas.width * supersample;
+  const height = canvas.height * supersample;
+  const fix = `Render with --supersample 1 or a smaller factor.`;
+  if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+    throw new Error(
+      `Composition "${name}" is ${canvas.width}×${canvas.height} canvas pixels; supersample ${supersample} ` +
+        `paints ${width}×${height} device pixels — over the ${MAX_DIMENSION}px per-axis render limit. ${fix}`,
+    );
+  }
+  if (width * height > MAX_PIXELS) {
+    throw new Error(
+      `Composition "${name}" is ${canvas.width}×${canvas.height} canvas pixels; supersample ${supersample} ` +
+        `paints ${width}×${height} device pixels — over the ${MAX_PIXELS.toLocaleString("en-US")}-pixel render limit. ${fix}`,
     );
   }
 }
@@ -283,10 +337,16 @@ export async function replayRender(
   const layers = await withProjectLock(resolvedRoot, () => resolveHistoricalLayers(resolvedRoot, manifest));
 
   // A manifest's canvas is untrusted input: apply the same render caps as the
-  // render boundary before any paint (CRAFT-2).
+  // render boundary before any paint (CRAFT-2). The manifest's factor was
+  // defaulted/validated by the parser (pre-#184 history: 1); the supersampled
+  // paint must fit the same limits (never silently painted at a lower factor).
   assertRenderableCanvas(manifest.canvas, manifest.composition);
+  assertSupersampledPaintSize(manifest.canvas, manifest.supersample, manifest.composition);
 
-  const { png, environment } = await paintComposition(manifest.canvas, layers, { page: options.page });
+  const { png, environment } = await paintComposition(manifest.canvas, layers, {
+    page: options.page,
+    supersample: manifest.supersample,
+  });
   // Reject an unsupported environment before any output is published.
   verifyEnvironmentMatch(manifest.environment, environment);
 
@@ -295,7 +355,7 @@ export async function replayRender(
     : await defaultRenderDestination(resolvedRoot, manifest.composition);
 
   const replayedManifest: RenderManifestDocument = buildRenderManifest(
-    { name: manifest.composition, canvas: manifest.canvas, layers },
+    { name: manifest.composition, canvas: manifest.canvas, layers, supersample: manifest.supersample },
     environment,
     destination.informationalOutput,
   );

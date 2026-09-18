@@ -51,6 +51,11 @@ export interface RenderManifestDocument {
   schemaVersion: number;
   composition: string;
   canvas: { width: number; height: number };
+  /** The integer supersample factor the pixels were painted at (#184,
+   * ADR-0022): device pixels per canvas pixel, area-averaged back to the
+   * canvas size. New manifests always record it; the parser defaults a
+   * missing factor (pre-#184 history) to 1 at that one ingestion boundary. */
+  supersample: number;
   environment: RenderEnvironment;
   /** Informational destination record: project-relative for in-Project
    * destinations, absolute for external ones (#174's render-output guard
@@ -67,7 +72,12 @@ export interface RenderManifestDocument {
  * capture cannot consult current state after the snapshot (no-mix invariant).
  */
 export function buildRenderManifest(
-  snapshot: { name: string; canvas: { width: number; height: number }; layers: SnapshotLayer[] },
+  snapshot: {
+    name: string;
+    canvas: { width: number; height: number };
+    layers: SnapshotLayer[];
+    supersample: number;
+  },
   environment: PaintEnvironment,
   informationalOutput: string,
   now = new Date(),
@@ -76,6 +86,7 @@ export function buildRenderManifest(
     schemaVersion: RENDER_MANIFEST_SCHEMA_VERSION,
     composition: snapshot.name,
     canvas: { width: snapshot.canvas.width, height: snapshot.canvas.height },
+    supersample: snapshot.supersample,
     environment: {
       tool: { name: environment.tool.name, version: environment.tool.version },
       runtime: environment.runtime,
@@ -152,6 +163,17 @@ export function parseRenderManifest(raw: string): RenderManifestDocument {
     m.canvas.height <= 0
   ) {
     throw new Error('Malformed render manifest: "canvas" must specify positive integer width and height.');
+  }
+  // The supersample factor defaults to 1 exactly here (#184): manifests
+  // written before supersampling record no factor and replay at 1. A present
+  // factor must be a positive integer — anything else is malformed history,
+  // not a value to repair.
+  if (m.supersample === undefined) {
+    m.supersample = 1;
+  } else if (!Number.isInteger(m.supersample) || m.supersample < 1) {
+    throw new Error(
+      `Malformed render manifest: "supersample" ${JSON.stringify(m.supersample)} must be a positive integer.`,
+    );
   }
   const env = m.environment as RenderEnvironment | undefined;
   if (!env || typeof env !== "object" || Array.isArray(env)) {

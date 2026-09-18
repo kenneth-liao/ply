@@ -563,6 +563,35 @@ size or surface, explicitly choose appropriate regions of your own
 (caller-owned policy, per ADR-0015 — Ply validates shape and the canvas
 contract, never content).
 
+### Supersampled rendering
+
+`ply composition render` supersamples by default (ADR-0022): the Composition
+is painted at 2 device pixels per canvas pixel, then every 2×2 block is
+area-averaged back to one output pixel — so the output PNG is always exactly
+the canvas size, but large display type gets even edge-coverage ramps instead
+of stair-stepping. The average is taken in premultiplied alpha, so
+transparent edges get no dark fringes.
+
+The factor is a render-quality setting, never Composition geometry: canvas,
+placement, font sizes, `measure`, `--anchor`, `guidelines` and `check` all
+stay in canvas pixels. Override it with `--supersample <n>` (integer ≥ 1);
+`--supersample 1` paints directly at the canvas size, byte-identically to
+renders made before supersampling. The render pixel limits apply to the
+supersampled paint (canvas × factor per axis): a canvas that fits at 1× but
+not at the requested factor is refused with the fix named — it is never
+painted at a lower factor on its own.
+
+```bash
+ply composition render poster -p ~/projects/my-poster                    # supersample 2 (default)
+ply composition render poster --supersample 4 -p ~/projects/my-poster    # smoother, larger paint
+ply composition render poster --supersample 1 -p ~/projects/my-poster    # direct paint
+```
+
+The Render manifest records the factor. `replay` repaints at the recorded
+factor — it has no `--supersample` flag — so it reproduces the delivered
+bytes; manifests written before supersampling record no factor and replay at
+1 (the parser defaults it at that one ingestion boundary).
+
 ### Guideline view
 
 `ply composition guidelines <comp> --regions <file>` renders the guideline
@@ -666,8 +695,9 @@ ply composition render poster -p ~/projects/my-poster
 ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster
 ```
 
-A render manifest pins the exact ordered Layer revisions, canvas, and
-rendering-environment identity used for that paint. Replay regenerates the
+A render manifest pins the exact ordered Layer revisions, canvas,
+supersample factor, and rendering-environment identity used for that paint.
+Replay regenerates the
 pixels byte-identically from those pinned inputs — after source Layers are
 edited, uses are removed or reordered, the Project is relocated, or the
 original source files and the rendered PNG are gone — and refuses missing,

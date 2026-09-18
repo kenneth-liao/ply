@@ -705,7 +705,14 @@ test("anchored placement uses the outline-extended ink; --anchor and --outline a
  * FULL in-bounds width even when it exceeds the default objectBoundingBox
  * filter region's margins — the per-Layer in-page region sizing covers the
  * element's real box expanded by `width`; measurement's painted extent
- * agrees with the rendered ink exactly. */
+ * agrees with the rendered ink exactly.
+ *
+ * Pinned to --supersample 1 (#184, ADR-0022): Chromium caps the feMorphology
+ * dilate kernel at 256 px in the filter's raster space, so a 256-canvas-px
+ * outline renders its full ring only at factor 1 (at factor 2 the raster
+ * space is device pixels and the ring would clip at 128 canvas px). The
+ * region-sizing contract this test pins is factor-independent, and the
+ * supersampled outline geometry is pinned separately below. */
 test("the outline ring extends the full width past a small element's box; painted agrees with the render", async () => {
   const redImg = path.join(tempDir, "red.png");
   await writeFile(redImg, solidPng(40, 30, RED));
@@ -721,7 +728,7 @@ test("the outline ring extends the full width past a small element's box; painte
   expect(editRes.code).toBe(0);
 
   const out = path.join(tempDir, "wide.png");
-  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--supersample", "1", "--json"])).code).toBe(0);
   const png = decodePng(await readFile(out));
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (let y = 0; y < png.height; y++) {
@@ -746,6 +753,44 @@ test("the outline ring extends the full width past a small element's box; painte
   expect(layer.paintedOnCanvas).toEqual({ x: 0, y: 0, width: 396, height: 386 });
   expect(layer.clipped).toBe(true);
   expect(layer.box).toEqual({ x: 100, y: 100, width: 40, height: 30 });
+});
+
+/** Supersampled outline geometry (#184, ADR-0022): at the default factor 2
+ * the ring must still reach exactly `width` past the box on every side —
+ * the same canvas-px ink support as the factor-1 render (the kernel is well
+ * under Chromium's 256-raster-px dilate cap here). */
+test("the supersampled outline ring matches the 1× ink support exactly", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(60, 40, RED));
+
+  await makeComp("poster", 400, 400);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 120, y: 130 });
+  const layerId = addRes.use.layerId as string;
+  expect((await invoke(["layer", "edit", layerId, "--outline", "12,#0000ff", "--project", projDir, "--json"])).code).toBe(0);
+
+  const inkSupport = async (file: string) => {
+    const png = decodePng(await readFile(file));
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let y = 0; y < png.height; y++) {
+      for (let x = 0; x < png.width; x++) {
+        if (pixel(png, x, y)![3] > 0) {
+          minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+          minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        }
+      }
+    }
+    return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+  };
+
+  const one = path.join(tempDir, "o1.png");
+  const two = path.join(tempDir, "o2.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", one, "--supersample", "1", "--json"])).code).toBe(0);
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", two, "--json"])).code).toBe(0);
+  // The ring reaches exactly 12px past the box on every side at both
+  // factors: ink support [108, 192) × [118, 182).
+  const want = { x: 108, y: 118, width: 84, height: 64 };
+  expect(await inkSupport(one)).toEqual(want);
+  expect(await inkSupport(two)).toEqual(want);
 });
 
 /** PROD-1 (review): region sizing must never no-op silently — a skipped
