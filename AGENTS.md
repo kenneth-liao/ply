@@ -42,15 +42,12 @@ Single-context repo: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/
 
 - `bun`, not npm. `uv`, not pip.
 - Tests: `bun run test` — every test file runs in its own `bun test --isolate`
-  invocation. One browser-backed suite per process is the stable shape; the
-  per-file topology is green on both Bun 1.3.14 and ≥1.4.0. The underlying
-  single-process deadlock (#27) was Bun's CDP-pipe defect (oven-sh/bun #15679,
-  fixed in Bun 1.4.0): on Bun ≥1.4.0 a bare single-process `bun test` over the
-  whole suite is verified 10/10, so `--isolate` is defense-in-depth (module
-  isolation), not a flake mask. On Bun 1.3.14 the single-process topology
-  still hangs (~60% of runs) — upgrade with `bun upgrade` before trusting a
-  bare `bun test`. `bun run test:fast` is that single-process topology for
-  Bun ≥1.4.0 only; the default per-file `bun run test` stays the entrypoint. The shared render page (`src/browser.ts` withRenderPage)
+  invocation. Per-file `--isolate` is **required**: module-mock tripwire tests
+  (added in #104–#107) mock a module for the whole `bun test` process and are
+  never undone, so any other test file that imports the mocked module fails in
+  a shared process. The per-file topology predates that (#27, Bun's CDP-pipe
+  defect oven-sh/bun #15679, fixed in Bun 1.4.0) and is now load-bearing for
+  module isolation, not just process separation. The shared render page (`src/browser.ts` withRenderPage)
   serializes and self-heals; a hung or crashed run is worth reporting, not
   silently re-running.
 - Model costs: measure from real Gateway billing (`✓` figures only) — never copy from price tables.
