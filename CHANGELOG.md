@@ -8,7 +8,8 @@
   region file (copy-and-own template): the bottom-right duration badge
   and the full-width watched-progress strip on a 1280×720 canvas,
   schema version 1, transcribed from the legacy baseline
-  (`PROTECTED_REGIONS`, unchanged and still authoritative) and usable
+  (`PROTECTED_REGIONS`, then unchanged; since #176 the starter file is
+  the one home for those rectangles and the only copy) and usable
   directly with `ply composition check --regions` and the guideline
   view. The canonical copy for real work lives in the caller's own
   project and is passed by path, so no workflow ever holds more than
@@ -26,6 +27,16 @@
 
 ### Changed
 
+- Removed the hardcoded YouTube region baseline from `src/` (#176): the
+  legacy Scene machinery (`scene validate`, `scene render`,
+  `safeAreaWarnings`, and `scene guidelines`) now reads its rectangles from
+  the committed starter file `examples/youtube-regions.json` (#175) through
+  the single region ingestion point — a lazy, memoized `protectedRegions()`
+  reader in `src/safe-area.ts` that fails loudly naming the file when the
+  starter is missing or malformed, with no fallback to built-in numbers.
+  Behaviour, warning wording, and guideline rectangles are unchanged; an
+  `rg` probe over `src/` finds no region geometry, id, label, or reason
+  literals (#176)
 - **BREAKING for machine consumers:** `scene` and `jobs` commands no longer
   print machine-readable JSON by default — the default output is now compact
   text, and the structured result (including structured errors) is one

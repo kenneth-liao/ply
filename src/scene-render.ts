@@ -28,7 +28,7 @@ import type {
   ConnectorLayer,
 } from "./scene.js";
 import { LAYER_DEFAULTS } from "./scene.js";
-import { PROTECTED_REGIONS, safeAreaWarnings } from "./safe-area.js";
+import { protectedRegions, safeAreaWarnings } from "./safe-area.js";
 
 export interface SceneRenderResult {
   png: Buffer;
@@ -604,7 +604,7 @@ const loadImageSize = (uri: string): Promise<{ w: number; h: number }> =>
  * render's output.
  */
 function guidelineOverlayMarkup(): string {
-  const regions = PROTECTED_REGIONS.map(
+  const regions = protectedRegions().map(
     (r) =>
       `<div class="safe-guide" data-region-id="${esc(r.id)}" data-region-label="${esc(r.label)}" ` +
       `title="${esc(r.reason)}" ` +

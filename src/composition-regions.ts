@@ -7,17 +7,18 @@
  * names axis-aligned rectangles in canvas pixels, each with a stable id, a
  * human-readable label, and the reason it is protected. The schema (this
  * is the contract every consumer builds on — #173's check, #174's
- * guideline view, #175's starter file):
+ * guideline view, #175's starter file, #176's legacy reader; the shipped
+ * YouTube instance lives at examples/youtube-regions.json):
  *
  *     {
  *       "schemaVersion": 1,
  *       "canvas": { "width": 1280, "height": 720 },
  *       "regions": [
  *         {
- *           "id": "duration-badge",
- *           "label": "duration badge",
- *           "reason": "YouTube pins the video-length badge to the bottom-right corner",
- *           "box": { "x": 1088, "y": 656, "width": 192, "height": 64 }
+ *           "id": "top-banner",
+ *           "label": "top banner",
+ *           "reason": "the platform pins a banner over the top edge",
+ *           "box": { "x": 0, "y": 0, "width": 1280, "height": 80 }
  *         }
  *       ]
  *     }
@@ -45,19 +46,20 @@
  * downstream sees raw file data, an alternate rectangle shape, or a
  * second parser: the region object is structurally identical to
  * safe-area.ts's `ProtectedRegion` (id/label/reason + `box: Box`), so the
- * legacy machinery can consume the same file without a translation layer.
+ * legacy machinery consumes this same file format through the same
+ * parser (#176) without a translation layer.
  *
  * Region data is caller-owned policy (ADR-0015): Ply validates its shape
  * and canvas contract, never its content. No network, no inference
  * weights — reading and validating a region file is a local, offline
  * operation.
  */
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 // The rectangle type is a type-only import: one box representation across
 // the repo (the user-approved contract — the region object is structurally
-// identical to safe-area.ts's ProtectedRegion, and #176 feeds this same
-// file into that machinery), with no runtime coupling into the legacy
-// Scene surface.
+// identical to safe-area.ts's ProtectedRegion, and #176's legacy reader
+// feeds this same file into that machinery), with no runtime coupling
+// into the legacy Scene surface.
 import type { Box } from "./scene-geometry.js";
 // Type-only compile-time pin (review INT-4): the two shapes stay
 // assignable in both directions, so the "no translation layer at the #176
@@ -210,11 +212,27 @@ export function parseRegionFile(raw: unknown, source: string): RegionFile {
   return { schemaVersion: version, canvas: { width, height }, regions };
 }
 
-/** Read and parse a region file from disk — parse-don't-validate at one boundary. */
+/**
+ * Read and parse a region file from disk — parse-don't-validate at one
+ * boundary. The async form delegates to the sync twin: one reading half
+ * (same file access, same actionable errors), one parser, two call
+ * signatures.
+ */
 export async function readRegionFile(regionFilePath: string): Promise<RegionFile> {
+  return readRegionFileSync(regionFilePath);
+}
+
+/**
+ * The one reading half shared by both call signatures — sync (the legacy
+ * safe-area reader's consumers are synchronous) and, via the delegation
+ * in `readRegionFile`, async. Reads the file, JSON-parses it, and hands
+ * the result to the one parser; every failure is loud and names the
+ * file. There is deliberately no second reading recipe.
+ */
+export function readRegionFileSync(regionFilePath: string): RegionFile {
   let raw: string;
   try {
-    raw = await readFile(regionFilePath, "utf8");
+    raw = readFileSync(regionFilePath, "utf8");
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {

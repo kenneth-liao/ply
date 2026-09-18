@@ -1,11 +1,23 @@
 /**
- * YouTube safe-area validation (REQ-012, DEC-002) — the one home for the
- * protected regions and the violation geometry.
+ * Legacy Scene safe-area validation (REQ-012, DEC-002, ADR-0005) — the
+ * violation geometry and the lazy reader for the protected regions.
  *
- * A protected region is a rectangle of the 1280×720 canvas where YouTube's
- * own UI overlays the thumbnail: the duration badge (bottom-right corner)
- * and the watched-progress bar (full-width bottom strip). Visible layer
- * content intersecting a region risks being covered by that UI, so it is
+ * The region rectangles themselves live in the committed starter region
+ * file `examples/youtube-regions.json` (#175) — the one home for that
+ * geometry since #176 retired the last built-in copy from `src/`. The
+ * starter is read through the single region ingestion point
+ * (src/composition-regions.ts) on first use, never at import time: the
+ * renderer imports this module, so only the region-using paths pay for
+ * the read, and a missing or malformed starter fails loudly at first use
+ * naming the file instead of breaking unrelated commands. There is no
+ * fallback to built-in numbers. The starter ships as a copy-and-own
+ * template; caller-supplied region files (the Composition check) are read
+ * through the same ingestion point (ADR-0015).
+ *
+ * A protected region is a rectangle of the thumbnail canvas where the
+ * platform's own UI overlays the image (see the starter file for the
+ * rectangles, their labels, and their reasons). Visible layer content
+ * intersecting a region risks being covered by that UI, so it is
  * reported as an actionable, layer-specific violation.
  *
  * Violations are warnings, never render failures (ADR-0005): a full-canvas
@@ -33,13 +45,16 @@
  * point where a rotation stands between it and the canvas.
  * Content that stays outside all inflated footprints never violates;
  * content an inflated box over-covers may still be reported — the region
- * figures themselves are conservative boxes sized for YouTube's largest
- * display surfaces and are tuned here, in this one place.
+ * figures themselves are conservative boxes sized for the platform's
+ * largest display surfaces, and they are tuned in the starter region
+ * file, not here.
  */
 import { LAYER_DEFAULTS, type ResolvedScene, type SceneLayer, type GroupLayer, type ImageLayer, type TextLayer, type ShapeLayer, type Effects } from "./scene.js";
 import { connectorGeometry, arrowPad, type Box } from "./scene-geometry.js";
+import { readRegionFileSync } from "./composition-regions.js";
+import { fileURLToPath } from "node:url";
 
-/** One protected rectangle of the YouTube thumbnail canvas. */
+/** One protected rectangle of the thumbnail canvas. */
 export interface ProtectedRegion {
   id: string;
   /** Human-readable name used in warnings and the guideline overlay. */
@@ -50,34 +65,42 @@ export interface ProtectedRegion {
 }
 
 /**
- * The protected regions of the 1280×720 YouTube thumbnail canvas — the
- * single definition every consumer (validate, render warnings, guideline
- * view) reads. Anchored to the canvas edges so the constants state only
- * their size: the badge is the bottom-right 192×64, the progress strip the
- * full-width bottom 16px.
+ * The committed starter region file (#175) — the one home of the region
+ * rectangles the legacy machinery validates against. Resolved
+ * module-relative (never cwd-relative: Scene commands run from other
+ * repositories' working directories).
  */
-export const PROTECTED_REGIONS: ProtectedRegion[] = [
-  {
-    id: "duration-badge",
-    label: "duration badge",
-    reason:
-      "YouTube pins the video-length badge to the thumbnail's bottom-right corner at every display size",
-    box: { x: 1280 - 192, y: 720 - 64, width: 192, height: 64 },
-  },
-  {
-    id: "progress-bar",
-    label: "progress bar",
-    reason:
-      "YouTube draws the watched-progress bar across the thumbnail's full width at the bottom edge",
-    box: { x: 0, y: 720 - 16, width: 1280, height: 16 },
-  },
-];
+const STARTER_REGION_FILE = fileURLToPath(
+  new URL("../examples/youtube-regions.json", import.meta.url),
+);
+
+/** Memoized `protectedRegions()` result — for the starter file only; a
+ * caller-supplied path (tests) is read fresh on every call. */
+let starterRegions: ProtectedRegion[] | undefined;
+
+/**
+ * The protected regions every legacy consumer (validate, render warnings,
+ * guideline view) reads — the single reader that replaced the built-in
+ * `PROTECTED_REGIONS` constant. The first call for the starter file reads
+ * and parses it through the region ingestion point, then memoizes; the
+ * file is committed repo data, not per-invocation input. Lazy by design:
+ * the renderer imports this module, so the read must not run at import
+ * time — a missing or malformed starter fails loudly here, at first use,
+ * naming the file, with no fallback to built-in numbers.
+ * `regionFilePath` exists for tests; non-starter paths are read fresh.
+ */
+export function protectedRegions(regionFilePath: string = STARTER_REGION_FILE): ProtectedRegion[] {
+  if (regionFilePath === STARTER_REGION_FILE && starterRegions) return starterRegions;
+  const file = readRegionFileSync(regionFilePath);
+  if (regionFilePath === STARTER_REGION_FILE) starterRegions = file.regions;
+  return file.regions;
+}
 
 /** One layer-specific safe-area violation. */
 export interface SafeAreaViolation {
   /** The visible layer whose footprint intersects the region. */
   layer: string;
-  /** The protected region id (PROTECTED_REGIONS). */
+  /** The protected region id (protectedRegions()). */
   region: string;
   /** The layer's axis-aligned frame footprint that intersects. */
   box: Box;
@@ -412,7 +435,7 @@ export function findSafeAreaViolations(resolved: ResolvedScene): SafeAreaViolati
   const violations: SafeAreaViolation[] = [];
   const boxes = topLevelBoxes(resolved.scene.layers);
   for (const { layer, box } of leafFootprints(resolved.scene.layers, IDENTITY, boxes)) {
-    for (const region of PROTECTED_REGIONS) {
+    for (const region of protectedRegions()) {
       if (intersects(box, region.box))
         violations.push({ layer: layer.id, region: region.id, box, regionBox: region.box });
     }

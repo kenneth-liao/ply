@@ -31,8 +31,13 @@ the theme pin set.
 
 ## Safe areas (REQ-012)
 
-The YouTube duration-badge and progress regions are defined once in
-`src/safe-area.ts`. `validate` and `render` report visible layers whose
+The YouTube region rectangles live in the committed starter region file
+`examples/youtube-regions.json` — the one home for that geometry since #176
+retired the built-in copy from `src/`. `validate` and `render` read them
+through the single region ingestion point (src/composition-regions.ts) via
+the lazy reader in `src/safe-area.ts`, which fails loudly naming the file
+if it is missing or malformed. `validate` and `render` report visible
+layers whose
 painted footprint intersects a region — as structured violations and as
 warnings respectively. Violations never fail a render: a full-canvas plate
 legitimately intersects, and accepting the overlap is the reviewer's call
