@@ -33,7 +33,7 @@ import { familyResolved } from "./fonts.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
 import { createHash } from "node:crypto";
-import type { LayerOutline, ResolvedLayerRevision } from "./layer.js";
+import { normalizeStoredTextAxes, type LayerOutline, type ResolvedLayerRevision } from "./layer.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
   png: "image/png",
@@ -422,9 +422,20 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
       const effectsFns = [outlineFn, shadowFn].filter(Boolean).join(" ");
       const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
       if (rev.kind === "text") {
+        // Selected text axes (#179, ADR-0021): read from the revision alone
+        // through the one stored-axes reader — this builder is the one
+        // markup for paint AND measurement, so measured and rendered text
+        // agree on the axis-selected look. Emitted only when stored, so
+        // pre-#179 revisions paint exactly as before (pinned history stays
+        // byte-identical).
+        const axes = normalizeStoredTextAxes(rev);
+        const axesCss =
+          axes !== undefined
+            ? `font-variation-settings:'wght' ${axes.weight}, 'wdth' ${axes.width};`
+            : "";
         const style =
           `${base}${transformed}${effectsFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
-          `font-size:${rev.fontSize}px;color:${rev.color};white-space:pre-wrap;`;
+          `font-size:${rev.fontSize}px;color:${rev.color};${axesCss}white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
       return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;

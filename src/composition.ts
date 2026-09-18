@@ -22,7 +22,7 @@ import {
   readLayerInternal,
   readLayerInternalFull,
 } from "./layer.js";
-import { resolveFace, fontAssetBytes } from "./fonts.js";
+import { resolveFace, resolveTextAxes, fontAssetBytes } from "./fonts.js";
 import {
   selectGenerationOutput,
   retainGenerationRecord,
@@ -389,6 +389,14 @@ export async function addTextLayerToComposition(
     font: string;
     /** Strict hex color (#RGB / #RRGGBB); default #ffffff. */
     color?: string;
+    /**
+     * Optional text axes (#179, ADR-0021): validated against the face's real
+     * axis ranges — a variable face stores the resolved pair (omitted
+     * controls resolve to its default instance), a static face accepts only
+     * its own weight and refuses width outright.
+     */
+    weight?: number;
+    width?: number;
   },
   options: AddLayerOptions & { fontSize?: number } = {},
 ): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
@@ -408,9 +416,14 @@ export async function addTextLayerToComposition(
 
     return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
       // Resolve the bundled face once and retain its exact bytes as the
-      // revision's content identity. Unknown families and missing bundled
-      // bytes fail loudly here, naming the bundled families.
+      // revision's content identity. Unknown families, missing bundled
+      // bytes, and out-of-range/unsupported weight or width controls fail
+      // loudly here — before anything is published — naming the bundled
+      // families or the face's allowed values.
       const face = resolveFace(input.font);
+      // Axes resolve BEFORE any retention, so a refused control publishes
+      // nothing — not even a stray content blob (#179, ADR-0021).
+      const axes = resolveTextAxes(face, { weight: input.weight, width: input.width });
       const bytes = fontAssetBytes(face);
       const contentHash = createHash("sha256").update(bytes).digest("hex");
       await storeContentBlob(projectPath, contentHash, bytes);
@@ -423,6 +436,7 @@ export async function addTextLayerToComposition(
         text: input.text,
         fontSize,
         color,
+        ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
         x,
         y,
         opacity,

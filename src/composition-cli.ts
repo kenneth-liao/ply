@@ -18,6 +18,7 @@ import {
   type ResolvedCompositionLayer,
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
+import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -172,6 +173,13 @@ Options:
   --font <family>       Bundled font family name (required with --text;
                         e.g. Anton, "Source Sans 3", "Archivo Black")
   --font-size <num>     Font size in px for text Layers (default: 48)
+  --weight <num>        Text weight for a text Layer (#179): validated
+                        against the bundled font's real weight axis —
+                        Archivo 100-900 (default 400); static faces accept
+                        only their own weight
+  --width <num>         Text width for a text Layer (#179): variable fonts
+                        only — Archivo 62-125 (default 100); static faces
+                        refuse width
   --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
   --order <names>       Comma-separated permutation of use names (required for reorder)
   --out <path>          Export path for a render or replay; fresh in-Project
@@ -218,6 +226,7 @@ let values: {
   text?: string;
   font?: string;
   "font-size"?: string;
+  weight?: string;
   color?: string;
   order?: string;
   out?: string;
@@ -246,6 +255,7 @@ try {
       text: { type: "string" },
       font: { type: "string" },
       "font-size": { type: "string" },
+      weight: { type: "string" },
       color: { type: "string" },
       order: { type: "string" },
       out: { type: "string" },
@@ -327,7 +337,7 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (values.image && (values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined)) {
+      if (values.image && (values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined)) {
         output({ ok: false, error: "--image and --text are mutually exclusive content kinds; use one per Layer." }, isJson);
         process.exitCode = 2;
         return;
@@ -335,14 +345,14 @@ async function run() {
       // Generated-content ingestion (#107): --from-generation is a third,
       // mutually exclusive content kind; --output selects one output of the
       // referenced Generation Job and is meaningless without it.
-      if (values["from-generation"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined)) {
+      if (values["from-generation"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined)) {
         output({ ok: false, error: "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer." }, isJson);
         process.exitCode = 2;
         return;
       }
       // Matting-content ingestion (#108): --from-matte is a fourth, mutually
       // exclusive content kind.
-      if (values["from-matte"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined)) {
+      if (values["from-matte"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined || values.weight !== undefined || values.width !== undefined)) {
         output({ ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer." }, isJson);
         process.exitCode = 2;
         return;
@@ -367,8 +377,8 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (values.text === undefined && (values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined)) {
-        output({ ok: false, error: "--font, --font-size, and --color require --text <str>." }, isJson);
+      if (values.text === undefined && (values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined)) {
+        output({ ok: false, error: "--font, --font-size, --color, --weight, and --width require --text <str>." }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -470,9 +480,36 @@ async function run() {
             process.exitCode = 2;
             return;
           }
+          // Text axes (#179, ADR-0021): shape and range at the command
+          // boundary as a usage error (exit 2) through the SAME validator
+          // the add path uses, so the two boundaries never disagree; the
+          // add path re-resolves against the face before anything publishes.
+          const weight = values.weight !== undefined ? parseNumericArgument(values.weight) : undefined;
+          const width = values.width !== undefined ? parseNumericArgument(values.width) : undefined;
+          if (values.weight !== undefined && !Number.isFinite(weight)) {
+            output({ ok: false, error: "Weight (--weight) must be a finite number." }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          if (values.width !== undefined && !Number.isFinite(width)) {
+            output({ ok: false, error: "Width (--width) must be a finite number." }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          // An unknown family keeps its established semantic refusal (exit
+          // 1, from the add path's resolveFace); only weight/width range
+          // errors are usage errors here (exit 2).
+          const face = resolveFace(values.font);
+          try {
+            resolveTextAxes(face, { weight, width });
+          } catch (err) {
+            output({ ok: false, error: (err as Error).message }, isJson);
+            process.exitCode = 2;
+            return;
+          }
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
-            { text: values.text, font: values.font, color: values.color },
+            { text: values.text, font: values.font, color: values.color, weight, width },
             { x, y, opacity, fontSize },
           );
           mutationCommitted = true;
@@ -660,6 +697,9 @@ async function run() {
               if (layer.effects.outline) {
                 const o = layer.effects.outline;
                 facts.push(`outline ${o.width} ${o.color}`);
+              }
+              if (layer.axes) {
+                facts.push(`weight ${layer.axes.weight}, width ${layer.axes.width}`);
               }
               if (t.scaleX !== 1 || t.scaleY !== 1) {
                 facts.push(`scale ${t.scaleX === t.scaleY ? `${t.scaleX}×` : `${t.scaleX}×/${t.scaleY}×`}`);

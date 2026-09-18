@@ -30,7 +30,7 @@ import {
 } from "./assets.js";
 import { SCENE_SCHEMA, LAYER_DEFAULTS, loadScene, SCHEMA_VERSION, type Scene, type SceneError, type ResolvedScene } from "./scene.js";
 import { resolveVariant } from "./variants.js";
-import { resolveFace } from "./fonts.js";
+import { faceDefaultWeight, resolveFace } from "./fonts.js";
 import { renderScene, renderSceneInspection, renderContactSheet, renderGuidelines, countLayers } from "./scene-render.js";
 import { protectedRegions, findSafeAreaViolations } from "./safe-area.js";
 import { THEMES, themeRevision } from "./themes.js";
@@ -191,7 +191,7 @@ function summarizeLayer(
     if (layer.fontSize !== undefined) summary.fontSize = layer.fontSize;
     if (layer.autoFit !== undefined) summary.autoFit = layer.autoFit;
     // The face's natural weight is the effective weight fallback.
-    summary.weight = layer.weight ?? resolveFace(layer.font as string).weight;
+    summary.weight = layer.weight ?? faceDefaultWeight(resolveFace(layer.font as string));
     if (layer.tracking !== undefined) summary.tracking = layer.tracking;
     if (layer.casing !== undefined) summary.casing = layer.casing;
     if (layer.fill !== undefined) summary.fill = withAngle(layer.fill);

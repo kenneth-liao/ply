@@ -14,7 +14,7 @@ import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js"
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
-import { resolveFace, fontAssetBytes } from "./fonts.js";
+import { STATIC_FACE_WIDTH, faceByContentHash, resolveFace, resolveTextAxes, fontAssetBytes, type FontFace, type TextAxes } from "./fonts.js";
 import {
   selectGenerationOutput,
   retainGenerationRecord,
@@ -175,6 +175,16 @@ export interface LayerTextRevision extends LayerRevisionBase {
   text: string;
   fontSize: number;
   color: string;
+  /**
+   * Selected text axes (#179, ADR-0021): present if and only if the retained
+   * font is a variable face — the resolved weight and width the look is, so
+   * a Render reproduces from the retained bytes plus these facts alone. A
+   * static face's bytes already fix the look, and the revision stores
+   * neither field. Validated against the face's axis ranges at ingestion;
+   * the stored fields are the only thing paint and measurement read.
+   */
+  weight?: number;
+  width?: number;
 }
 
 export type LayerRevision = LayerImageRevision | LayerTextRevision;
@@ -571,6 +581,54 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
   }
 }
 
+/** Canonical normalized text axes (#179, ADR-0021): the one shape every
+ * consumer reads. Present together or not at all — a variable face's look is
+ * weight and width resolved as one instance, so a lone field is a malformed
+ * document, never a silent default. */
+export interface LayerTextAxes {
+  weight: number;
+  width: number;
+}
+
+/**
+ * Canonical stored-text-axes validation and normalization (#179, ADR-0021).
+ * The ONE normalization boundary AND the one reader for a revision's text
+ * weight/width: documents written before #179 lack the fields (only a
+ * missing field is absent — a present `null` or any other non-number is a
+ * malformed document, never a silent default); every downstream reader —
+ * revision resolution, the revision hash, paint markup, measurement, and
+ * the edit carry path — projects through this function and never re-derives
+ * the fields. Fields must be present together and be finite numbers — a
+ * partial or invalid pair is a malformed document, refused loudly before
+ * the revision hash is consulted.
+ */
+export function normalizeStoredTextAxes(revision: {
+  weight?: unknown;
+  width?: unknown;
+}): LayerTextAxes | undefined {
+  const hasWeight = revision.weight !== undefined;
+  const hasWidth = revision.width !== undefined;
+  if (hasWeight !== hasWidth) {
+    throw new Error(
+      `Malformed revision document: text weight and width must be present together (got weight ${JSON.stringify(revision.weight)}, width ${JSON.stringify(revision.width)}).`,
+    );
+  }
+  if (!hasWeight) {
+    return undefined;
+  }
+  const weight = revision.weight;
+  const width = revision.width;
+  if (
+    typeof weight !== "number" || !Number.isFinite(weight) ||
+    typeof width !== "number" || !Number.isFinite(width)
+  ) {
+    throw new Error(
+      `Malformed revision document: text weight and width must be finite numbers when present (got weight ${JSON.stringify(revision.weight)}, width ${JSON.stringify(revision.width)}).`,
+    );
+  }
+  return { weight, width };
+}
+
 /** Compute content-derived revision hash for an immutable revision record.
  * The scale fields are appended only when present, so revisions written
  * before #133 hash to exactly their pre-resize ids: older revisions retain
@@ -580,7 +638,9 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
  * fields are appended only when present, so revisions written before #135
  * keep their exact ids (#135). The shadow and outline fields are appended
  * only when present, so revisions written before #139/#140 keep their exact
- * ids (#139, #140). */
+ * ids (#139, #140). The text weight/width fields are appended only when
+ * present (as one resolved pair), so revisions written before #179 keep
+ * their exact ids (#179, ADR-0021). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
@@ -595,7 +655,9 @@ export function computeRevisionHash(rev: LayerRevision): string {
       : "";
   const outlineField =
     rev.outline !== undefined ? `:outline(${rev.outline.width},${rev.outline.color})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}`).digest("hex").slice(0, 16)}`;
+  const textAxes = rev.kind === "text" ? normalizeStoredTextAxes(rev) : undefined;
+  const textAxesFields = textAxes !== undefined ? `:textaxes(${textAxes.weight},${textAxes.width})` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -820,6 +882,10 @@ export async function readRevisionInternalFull(
   // boundary (#140, ADR-0019) — a malformed stored field is refused loudly
   // before the revision hash is consulted. Absence IS the no-outline form.
   const outline = normalizeStoredOutline(revision);
+  // Canonical text axes: validated and normalized at this same one boundary
+  // (#179, ADR-0021) — a malformed stored pair is refused loudly before the
+  // revision hash is consulted. Absence IS the no-axes form (static fonts).
+  const textAxes = revision.kind === "text" ? normalizeStoredTextAxes(revision) : undefined;
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -916,6 +982,7 @@ export async function readRevisionInternalFull(
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
+          ...(textAxes ?? {}),
           fontBytes: contentBytes.length,
         };
 
@@ -970,6 +1037,23 @@ export interface EditLayerOptions {
   font?: string;
   fontSize?: number;
   color?: string;
+  /**
+   * Select the text look's weight (#179, ADR-0021): an ABSOLUTE setter
+   * validated against the target face's real axis range (a `--font` edit's
+   * new face, otherwise the Layer's retained font resolved by its content
+   * hash — if the retained bytes match no bundled face, `--font` is
+   * required). A variable face stores the resolved axes; a static face
+   * accepts only its own weight and stores nothing. An omitted option
+   * carries the current revision's axes across a font switch when the new
+   * font supports them — nothing changes silently.
+   */
+  weight?: number;
+  /**
+   * Select the text look's width (#179, ADR-0021): variable faces only —
+   * validated against the face's `wdth` range, and refused on static faces
+   * outright. Carries across a `--font` switch the same way `weight` does.
+   */
+  width?: number;
   x?: number;
   y?: number;
   opacity?: number;
@@ -1477,6 +1561,47 @@ function boundedScale(
 }
 
 /**
+ * Resolve the text axes an edit publishes (#179, ADR-0021): the one home for
+ * the edit semantics, layered on `resolveTextAxes`'s face validation.
+ *
+ * - A variable target: the explicit control wins, otherwise the current
+ *   revision's axes carry across the font switch, otherwise the face's
+ *   default instance — then the pair validates against the face's real
+ *   ranges.
+ * - A static target: an explicit width is refused; an explicit or carried
+ *   weight must be the face's own weight (refused otherwise, naming what it
+ *   allows). A carried width is refused unless it is the static face's
+ *   implicit width (`STATIC_FACE_WIDTH`): the face has no width axis, so a
+ *   different width has no equivalent and cannot change silently
+ *   (ADR-0021), while a carried width-100 look carries as nothing-to-store.
+ */
+function resolveEditTextAxes(
+  face: FontFace,
+  options: EditLayerOptions,
+  prevRev: LayerTextRevision,
+): TextAxes {
+  if (face.variant === "variable") {
+    return resolveTextAxes(face, {
+      weight: options.weight ?? prevRev.weight,
+      width: options.width ?? prevRev.width,
+    });
+  }
+  const carriedWidth = options.width !== undefined ? undefined : prevRev.width;
+  if (carriedWidth !== undefined && carriedWidth !== STATIC_FACE_WIDTH) {
+    throw new Error(
+      `Font "${face.family}" is a static face at weight ${face.weight} — it has no width axis, so the current width ${carriedWidth} cannot be kept.`,
+    );
+  }
+  const carriedWeight = options.weight !== undefined ? undefined : prevRev.weight;
+  return resolveTextAxes(face, {
+    ...(options.weight !== undefined || carriedWeight !== undefined
+      ? { weight: options.weight ?? carriedWeight }
+      : {}),
+    ...(options.width !== undefined ? { width: options.width } : {}),
+  });
+}
+
+/**
  * Canonical edited-revision construction shared by in-place and fork editing
  * (#85): one home for kind stability, content ingestion/validation, and
  * field preservation, so no publication path can build a divergent revision.
@@ -1514,7 +1639,9 @@ async function buildEditedRevision(
       options.text !== undefined ||
       options.font !== undefined ||
       options.fontSize !== undefined ||
-      options.color !== undefined
+      options.color !== undefined ||
+      options.weight !== undefined ||
+      options.width !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on an image Layer. Layer "${layerId}" is an image Layer.`);
     }
@@ -1627,13 +1754,39 @@ async function buildEditedRevision(
       throw new Error(`Cannot edit image source on a text Layer. Layer "${layerId}" is a text Layer.`);
     }
 
-    let contentHash = prevRev.contentHash;
+    // Resolve the target face (#179, ADR-0021): a `--font` edit names it; an
+    // axes edit resolves the retained font by its content hash — the bytes
+    // are the only font identity. Edits that change neither the font nor the
+    // axes never consult the registry, so a Project whose retained bytes
+    // match no bundled face keeps editing text, size, and color as before.
+    let face: FontFace | undefined;
     if (options.font !== undefined) {
-      const face = resolveFace(options.font);
-      const bytes = fontAssetBytes(face);
-      const fontHash = createHash("sha256").update(bytes).digest("hex");
-      await storeContentBlob(resolvedRoot, fontHash, bytes);
-      contentHash = fontHash;
+      face = resolveFace(options.font);
+    } else if (options.weight !== undefined || options.width !== undefined) {
+      face = faceByContentHash(prevRev.contentHash);
+      if (face === undefined) {
+        throw new Error(
+          `The retained font of Layer "${layerId}" (content hash ${prevRev.contentHash}) matches no bundled face — pass --font to choose a bundled family.`,
+        );
+      }
+    }
+
+    let contentHash = prevRev.contentHash;
+    let axes: TextAxes;
+    if (face !== undefined) {
+      // Axes resolve BEFORE any retention, so a refused edit publishes
+      // nothing — not even a stray content blob.
+      axes = resolveEditTextAxes(face, options, prevRev);
+      if (options.font !== undefined) {
+        const bytes = fontAssetBytes(face);
+        const fontHash = createHash("sha256").update(bytes).digest("hex");
+        await storeContentBlob(resolvedRoot, fontHash, bytes);
+        contentHash = fontHash;
+      }
+    } else {
+      // No font or axes edit: the current revision's axes carry verbatim
+      // (present ⟺ the retained font is variable).
+      axes = normalizeStoredTextAxes(prevRev) ?? {};
     }
 
     const text = options.text !== undefined ? options.text : prevRev.text;
@@ -1652,6 +1805,7 @@ async function buildEditedRevision(
       text,
       fontSize,
       color,
+      ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
       x,
       y,
       opacity,
@@ -1668,6 +1822,8 @@ async function buildEditedRevision(
       text === prevRev.text &&
       fontSize === prevRev.fontSize &&
       color === prevRev.color &&
+      axes.weight === prevRev.weight &&
+      axes.width === prevRev.width &&
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity &&

@@ -11,6 +11,7 @@
  */
 import type { Page } from "playwright";
 import { withRenderPage } from "./browser.js";
+import { faceDefaultWeight } from "./fonts.js";
 import {
   fontFaceCss,
   familyResolved,
@@ -279,7 +280,7 @@ function textMarkup(layer: TextLayer): string {
   const startSize = layer.fontSize ?? layer.autoFit!.max;
   const styles = [
     `font-family:'${face.family}'`,
-    `font-weight:${layer.weight ?? face.weight}`,
+    `font-weight:${layer.weight ?? faceDefaultWeight(face)}`,
     `font-size:${startSize}px`,
     `text-align:${layer.align ?? LAYER_DEFAULTS.align}`,
     `line-height:${lineHeight}`,
