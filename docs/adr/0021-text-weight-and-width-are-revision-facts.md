@@ -47,4 +47,6 @@ could not be reproduced from its manifest.
 - Bundled variable fonts ship as the exact upstream bytes, not latin subsets,
   so Ply renders byte-identical type to the brand source.
 - Tracking and line height are not part of this decision. They are separate
-  text Layer controls.
+  text Layer controls (#187). Unlike a variable font's axes, they are stored only
+  when set: an omitted value paints as normal spacing and the font's own line
+  height, which has no numeric form.
