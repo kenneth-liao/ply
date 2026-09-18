@@ -806,3 +806,133 @@ test("a Layer box beyond the capture window is refused loudly, not measured with
   expect(out.error).toContain("giant");
   expect(out.error).toMatch(/capture window/i);
 });
+
+test("a Composition that renders is measurable: each Layer is captured through its own window (#185)", async () => {
+  // Regression (#185): the ink pass sized ONE capture window from the widest
+  // and tallest Layer boxes of all Layers. Two Layers that each fit alone
+  // made a window that does not: the per-axis check passed, but the window
+  // screenshot died in the PNG decoder's 16,777,216-pixel parse limit with a
+  // message naming no Layer and no fix — so `measure`, every `--anchor` edit,
+  // and `composition check` failed on a Composition that renders fine.
+  // Verified reproduction: a 5120×2880 canvas with a 2048×1536 Layer at
+  // 2.248× (box 4603.9×3452.93) and a full-canvas 1280×720 background at 4×
+  // (box 5120×2880) — the old global window is 5152×3485 ≈ 17.95MP.
+  const small = path.join(tempDir, "small.png");
+  await writeFile(small, solidPng(1280, 720, RED));
+  const big = path.join(tempDir, "big.png");
+  await writeFile(big, solidPng(2048, 1536, RED));
+
+  async function buildDuo(comp: string) {
+    await makeComp(comp, 5120, 2880);
+    const scaled = await addImageLayer(comp, "scaled", big, { x: 100, y: 50 });
+    expect((await invoke(["layer", "edit", scaled.use.layerId, "--resize", "2.248", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+    const bg = await addImageLayer(comp, "bg", small, { x: 0, y: 0 });
+    expect((await invoke(["layer", "edit", bg.use.layerId, "--resize", "4", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+    return { scaledId: scaled.layer.id, bgId: bg.layer.id };
+  }
+
+  const { scaledId, bgId } = await buildDuo("duo");
+
+  // The reproduction measures successfully.
+  const { res, json } = await measure("duo");
+  expect(res.code).toBe(0);
+  expect(json.ok).toBe(true);
+  const duoScaled = json.layers.find((l: { name: string }) => l.name === "scaled");
+  const duoBg = json.layers.find((l: { name: string }) => l.name === "bg");
+  expect(duoScaled.painted).not.toBeNull();
+  expect(duoBg.painted).not.toBeNull();
+  // Solid content: the painted extent is the full layout box (± resampling
+  // bleed at 2.248×).
+  expect(close(duoScaled.painted!.width, 2048 * 2.248, 2)).toBe(true);
+  expect(close(duoScaled.painted!.height, 1536 * 2.248, 2)).toBe(true);
+
+  // Each Layer reports the same painted extents as when measured in the
+  // Composition alone — a Layer's numbers never depend on the others.
+  // Each solo Composition holds exactly one of the two Layers, at the same
+  // placement and transform it has in the duo Composition.
+  await makeComp("soloA", 5120, 2880);
+  const scaledOnly = await addImageLayer("soloA", "scaled", big, { x: 100, y: 50 });
+  expect((await invoke(["layer", "edit", scaledOnly.use.layerId, "--resize", "2.248", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  const soloA = await measure("soloA");
+  expect(soloA.res.code).toBe(0);
+  const soloScaled = soloA.json.layers[0];
+  expect(soloScaled.painted).toEqual(duoScaled.painted);
+  await makeComp("soloB", 5120, 2880);
+  const bgOnly = await addImageLayer("soloB", "bg", small, { x: 0, y: 0 });
+  expect((await invoke(["layer", "edit", bgOnly.use.layerId, "--resize", "4", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  const soloB = await measure("soloB");
+  expect(soloB.res.code).toBe(0);
+  expect(soloB.json.layers[0].painted).toEqual(duoBg.painted);
+
+  // Every caller works again on this Composition: anchored placement
+  // resolves, and the caller-owned region check runs.
+  const anchor = await invoke(["layer", "edit", scaledId, "--anchor", "center,center", "--x", "2560", "--y", "1440", "--project", projDir, "--json"]);
+  expect(anchor.code).toBe(0);
+  const anchorBg = await invoke(["layer", "edit", bgId, "--anchor", "center,center", "--x", "2560", "--y", "1440", "--project", projDir, "--json"]);
+  expect(anchorBg.code).toBe(0);
+  const regions = path.join(tempDir, "regions.json");
+  await writeFile(
+    regions,
+    JSON.stringify({
+      schemaVersion: 1,
+      canvas: { width: 5120, height: 2880 },
+      regions: [{ id: "badge", label: "badge", reason: "badge overlay covers content", box: { x: 4600, y: 2200, width: 400, height: 300 } }],
+    }) + "\n",
+  );
+  const check = await invoke(["composition", "check", "duo", "--regions", regions, "--project", projDir, "--json"]);
+  expect(check.code).toBe(0);
+  expect(JSON.parse(check.stdout).ok).toBe(true);
+}, 120000);
+
+test("a single Layer whose own window is over the decoder's pixel budget gets the measurement refusal, not the PNG parse-limit error (#185)", async () => {
+  // The old check was per-axis only, so a 4100×4100 Layer (own capture window
+  // 4132×4132 ≈ 17.07MP, under 8192px per axis) sailed through the refusal
+  // check and died in decodePng with a message naming no Layer and no fix.
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(100, 100, RED));
+  await makeComp("pixelheavy", 5120, 2880);
+  await addImageLayer("pixelheavy", "wide", img, { x: 50, y: 50 });
+  const layerId = JSON.parse(
+    (await invoke(["composition", "inspect", "pixelheavy", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0].layerId as string;
+  expect((await invoke(["layer", "edit", layerId, "--resize-to", "4100x4100", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+
+  const { res } = await measure("pixelheavy", "wide");
+  expect(res.code).toBe(1);
+  const out = JSON.parse(res.stdout);
+  expect(out.ok).toBe(false);
+  // Names the Layer and the fix — never the raw decoder error.
+  expect(out.error).toContain("wide");
+  expect(out.error).toMatch(/capture window/i);
+  expect(out.error).toMatch(/reduce the transform scale|place the Layer nearer the canvas/i);
+  expect(out.error).not.toMatch(/parse limit/i);
+}, 60000);
+
+test("a window at exactly the decoder's bounds measures; one pixel over is refused (#185)", async () => {
+  // Pins the shared-limit contract: the refusal check and decodePng use the
+  // same constants and the same strict comparisons, so a window of exactly
+  // 16,777,216px total (4096×4096 here) or exactly 8192px on an axis must
+  // still measure — the refusal fires only past the bounds.
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(100, 100, RED));
+  await makeComp("boundary", 5120, 2880);
+  await addImageLayer("boundary", "edge", img, { x: 100, y: 100 });
+  const layerId = JSON.parse(
+    (await invoke(["composition", "inspect", "boundary", "--project", projDir, "--json"])).stdout,
+  ).composition.layers[0].layerId as string;
+  // Window = 4064 + 2·16 pad = 4096 per axis: exactly MAX_PIXELS total.
+  expect((await invoke(["layer", "edit", layerId, "--resize-to", "4064x4064", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  let { res } = await measure("boundary");
+  expect(res.code).toBe(0);
+
+  // One pixel taller in total: the window stays 8192-legal per axis
+  // (8192×2080) but totals 17,039,360 > MAX_PIXELS — refused with the
+  // measurement refusal.
+  expect((await invoke(["layer", "edit", layerId, "--resize-to", "8160x2048", "--in-place", "--project", projDir, "--json"])).code).toBe(0);
+  ({ res } = await measure("boundary"));
+  expect(res.code).toBe(1);
+  const out = JSON.parse(res.stdout);
+  expect(out.ok).toBe(false);
+  expect(out.error).toContain("edge");
+  expect(out.error).not.toMatch(/parse limit/i);
+}, 120000);

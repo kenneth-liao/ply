@@ -81,7 +81,7 @@ import { readCompositionInternalFull } from "./composition.js";
 import { readLayerInternalFull } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
-import { decodePng } from "./png.js";
+import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
 import { buildCompositionHtml, rejectUnresolvedFonts, sizeOutlineFilterRegions, type SnapshotLayer } from "./composition-paint.js";
 import type { ResolvedLayerRevision, LayerShadow, LayerOutline } from "./layer.js";
 import type { Page } from "playwright";
@@ -189,13 +189,15 @@ function round2(n: number): number {
 const INK_PAD_PX = 16;
 
 /**
- * Single-dimension cap (px) for the per-Layer ink-capture window (review
+ * Per-axis cap (px) for the per-Layer ink-capture window (review
  * INT-1/PROD-1): a layout box needing more is refused loudly instead of
- * growing a viewport without bound. 8192 keeps one window screenshot at
- * most ~256MB of RGBA — bounded, and far above any on-canvas ink a
- * Composition-scale Layer produces.
+ * growing a viewport without bound. One home for the number: the window
+ * screenshot is decoded by `decodePng`, so the cap IS the PNG reader's
+ * per-axis parse limit (`MAX_DIMENSION`) — a window the refusal check
+ * accepts can always be decoded (#185). The decoder's total-pixel budget
+ * (`MAX_PIXELS`) is enforced in the same refusal check below.
  */
-const MAX_INK_VIEWPORT_PX = 8192;
+const MAX_INK_VIEWPORT_PX = MAX_DIMENSION;
 
 /** Standalone measurement canvas edge (px): large enough that a text Layer's
  * pre-wrap shrink-to-fit line cannot wrap inside it (the containing block
@@ -297,14 +299,16 @@ async function measureSnapshot(
     // canvas can be captured and the canvas intersection reported against
     // the PAINTED extents, never the layout box.
     //
-    // Bounded capture (review INT-1/PROD-1): the capture window is sized
-    // for the largest single Layer box plus the pad — never the union of
-    // all off-canvas extents — and the canvas is SHIFTED per Layer so its
-    // box sits inside the window. A placement far off-canvas costs a
-    // window shift, not viewport growth; a box beyond the cap is refused
-    // loudly, because a read-only query must fail safely, never grow
-    // memory without bound. Cost ceiling: O(Layers × capture-window
-    // area) — one screenshot plus one pixel scan per Layer.
+    // Bounded capture (review INT-1/PROD-1, #185): each Layer gets its OWN
+    // capture window, sized from that Layer's box plus its own effect reach
+    // plus the pad — never the combination of other Layers' extremes — and
+    // the canvas is SHIFTED so the box sits inside it. A placement far
+    // off-canvas costs a window shift, not viewport growth; a Layer whose
+    // own window exceeds the decoder's bounds (per-axis or total pixels,
+    // read from the PNG reader) is refused loudly, because a read-only
+    // query must fail safely, never grow memory without bound. Cost
+    // ceiling: O(Layers × capture-window area) — one screenshot plus one
+    // pixel scan per Layer.
     //
     // Effect reach (#139/#140, ADR-0018/0019): a Layer's effects extend
     // its ink beyond the layout box by up to the COMBINED local reach
@@ -320,37 +324,48 @@ async function measureSnapshot(
     // into a smaller report.
     let painted: (Box | null)[] = [];
     if (measured.length > 0) {
+      // Per-Layer capture window (#185): sized from THAT Layer's own box,
+      // its own effect reach, and the pad — never the union of other
+      // Layers' extremes, so a Layer's measured numbers stay the same
+      // whatever other Layers are in the Composition, and two Layers that
+      // each fit alone can no longer combine into a window that does not.
       const boxes = measured.map((m) => m.box);
       const reaches = layers.map((l) => effectReachPx(l.revision));
-      const widest = Math.max(...boxes.map((b, i) => b.width + 2 * reaches[i]!));
-      const tallest = Math.max(...boxes.map((b, i) => b.height + 2 * reaches[i]!));
-      if (
-        widest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX ||
-        tallest + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX
-      ) {
-        const bad = boxes.findIndex(
-          (b, i) => b.width + 2 * reaches[i]! + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX ||
-            b.height + 2 * reaches[i]! + 2 * INK_PAD_PX > MAX_INK_VIEWPORT_PX,
-        );
-        const reach = reaches[bad]!;
-        throw new Error(
-          `Layer "${layers[bad]!.name}" has a layout box ${Math.ceil(boxes[bad]!.width)}×${Math.ceil(boxes[bad]!.height)}px` +
-            (reach > 0 ? ` plus up to ${reach}px of effect extent` : "") +
-            `, beyond the ${MAX_INK_VIEWPORT_PX}×${MAX_INK_VIEWPORT_PX}px painted-extent capture window. Painted extents are refused ` +
-            `instead of growing measurement memory without bound — reduce the transform scale, the effect extent, or place the Layer nearer the canvas.`,
-        );
+      const windowFor = (i: number) => ({
+        w: Math.max(1, Math.ceil(boxes[i]!.width + 2 * reaches[i]! + 2 * INK_PAD_PX)),
+        h: Math.max(1, Math.ceil(boxes[i]!.height + 2 * reaches[i]! + 2 * INK_PAD_PX)),
+      });
+      // Loud refusal, per Layer (review INT-1/PROD-1, #185): the same
+      // bounds the decoder enforces on the window screenshot — MAX_PIXELS
+      // total (imported from the PNG reader: one home for the limit, never
+      // a second copy of the numbers) in addition to the per-axis cap. A
+      // Layer whose OWN window is over either bound is refused with the
+      // measurement refusal naming the Layer, its box and effect extent,
+      // and the fix; the raw decoder error never reaches the user from
+      // this path.
+      for (let i = 0; i < measured.length; i++) {
+        const { w, h } = windowFor(i);
+        if (w > MAX_INK_VIEWPORT_PX || h > MAX_INK_VIEWPORT_PX || w * h > MAX_PIXELS) {
+          const reach = reaches[i]!;
+          throw new Error(
+            `Layer "${layers[i]!.name}" has a layout box ${Math.ceil(boxes[i]!.width)}×${Math.ceil(boxes[i]!.height)}px` +
+              (reach > 0 ? ` plus up to ${reach}px of effect extent` : "") +
+              `, beyond the painted-extent capture window (max ${MAX_INK_VIEWPORT_PX}px per axis, ` +
+              `${MAX_PIXELS.toLocaleString("en-US")}px total). Painted extents are refused ` +
+              `instead of growing measurement memory without bound — reduce the transform scale, the effect extent, or place the Layer nearer the canvas.`,
+          );
+        }
       }
-      const captureW = Math.max(1, Math.ceil(widest + 2 * INK_PAD_PX));
-      const captureH = Math.max(1, Math.ceil(tallest + 2 * INK_PAD_PX));
-      await page.setViewportSize({ width: captureW, height: captureH });
       for (let i = 0; i < measured.length; i++) {
         const b = boxes[i]!;
-        // Window shift: position the canvas (and its absolutely positioned
-        // children, so this Layer's box) inside the fixed capture window,
-        // centered with the pad on every side (rounded to whole pixels — a
-        // fractional shift would re-render the Layer at a subpixel offset
-        // and bleed its raster). Feasible because the cap check above
-        // bounds every box.
+        // Per-Layer capture window and shift: position the canvas (and its
+        // absolutely positioned children, so this Layer's box) inside ITS
+        // OWN fixed capture window, centered with the pad on every side
+        // (rounded to whole pixels — a fractional shift would re-render the
+        // Layer at a subpixel offset and bleed its raster). Feasible
+        // because the per-Layer cap check above bounds every window.
+        const { w: captureW, h: captureH } = windowFor(i);
+        await page.setViewportSize({ width: captureW, height: captureH });
         const left = Math.round(captureW / 2 - (b.x + b.width / 2));
         const top = Math.round(captureH / 2 - (b.y + b.height / 2));
         await page.evaluate(
