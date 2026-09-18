@@ -24,6 +24,7 @@ import { mkdtemp, rm, readFile, readdir, writeFile, mkdir, unlink, rename, cp } 
 import { tmpdir } from "node:os";
 import { encodePngRgba, readPngHeader, decodePng } from "../src/png.js";
 import { replayRender } from "../src/composition-render.js";
+import { parseRenderManifest, buildRenderManifest, RENDER_MANIFEST_SCHEMA_VERSION } from "../src/render-history.js";
 import { getBrowser, closeBrowser } from "../src/browser.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
@@ -401,6 +402,57 @@ test("a malformed render manifest fails with a field-specific error", async () =
   const { res } = await replayJson(path.join(projDir, "renders", "broken.manifest.json"));
   expect(res.code).toBe(1);
   expect(JSON.parse(res.stdout).error).toContain("Malformed render manifest");
+});
+
+const validManifestJson = (overrides: Record<string, unknown> = {}): string =>
+  JSON.stringify({
+    schemaVersion: RENDER_MANIFEST_SCHEMA_VERSION,
+    composition: "poster",
+    canvas: { width: 64, height: 64 },
+    environment: {
+      tool: { name: "ply", version: "4.0.0" },
+      runtime: "bun 1.4.0",
+      browser: "chromium 140",
+      platform: "darwin-arm64",
+    },
+    output: "renders/poster.png",
+    createdAt: "2024-01-01T00:00:00.000Z",
+    layers: [],
+    ...overrides,
+  });
+
+test("a manifest without a supersample field parses as factor 1 (#184)", () => {
+  const m = parseRenderManifest(validManifestJson());
+  expect(m.supersample).toBe(1);
+});
+
+test.each([1, 2, 4])("a manifest with supersample %i parses with that factor", (factor) => {
+  const m = parseRenderManifest(validManifestJson({ supersample: factor }));
+  expect(m.supersample).toBe(factor);
+});
+
+test.each([0, -2, 1.5, "2", null])("a manifest with malformed supersample %p is rejected", (factor) => {
+  expect(() => parseRenderManifest(validManifestJson({ supersample: factor }))).toThrow(/supersample/);
+});
+
+test("buildRenderManifest records the supersample factor it is given", () => {
+  const m = buildRenderManifest(
+    {
+      name: "poster",
+      canvas: { width: 128, height: 72 },
+      layers: [],
+      supersample: 2,
+    },
+    {
+      tool: { name: "ply", version: "4.0.0" },
+      runtime: "bun 1.4.0",
+      browser: "chromium 140",
+      platform: "darwin-arm64",
+    },
+    "renders/poster.png",
+  );
+  expect(m.supersample).toBe(2);
+  expect(m.canvas).toEqual({ width: 128, height: 72 });
 });
 
 test("an unsupported manifest schemaVersion is rejected, not replayed", async () => {

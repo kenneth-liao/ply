@@ -30,6 +30,7 @@
  */
 import { withRenderPage } from "./browser.js";
 import { familyResolved } from "./fonts.js";
+import { decodePng, encodePngRgba } from "./png.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
 import { createHash } from "node:crypto";
@@ -85,6 +86,80 @@ function captureEnvironment(page: Page): PaintEnvironment {
 }
 
 /**
+ * Chromium caps the `feMorphology` dilate kernel at 256 px in the filter's
+ * raster space (verified empirically): a supersampled paint rasterizes in
+ * device pixels, so an outline whose `width × supersample` exceeds this cap
+ * would render a silently clipped ring. The paint path refuses that state
+ * before painting instead — never a degraded render (#184, ADR-0022).
+ * One home for the number: the paint-path refusal and every test of the cap
+ * read this constant, never a second copy of the number.
+ */
+export const MAX_OUTLINE_DILATE_PX = 256;
+
+/**
+ * Area-average a supersampled RGBA image back to its canvas size (#184,
+ * ADR-0022): every factor×factor block of device pixels averages into one
+ * canvas pixel. The average is taken in PREMULTIPLIED alpha — each sample's
+ * channels are weighted by its alpha before summing, and the color is
+ * unpremultiplied afterwards — so transparent edges keep their hue with no
+ * dark fringes; for fully opaque blocks it is exactly a plain box average.
+ * Rounding is deterministic: integer sums, every division rounded half-up,
+ * and the unpremultiply rounds once from the rounded premultiplied average.
+ *
+ * Pure pixel math: no PNG decode, no browser — tested directly on known
+ * blocks including semi-transparent edges.
+ */
+export function averageSupersampled(rgba: Buffer, width: number, height: number, factor: number): Buffer {
+  if (!Number.isInteger(factor) || factor < 1) {
+    throw new Error(`averageSupersampled: factor ${factor} must be an integer of at least 1.`);
+  }
+  if (width % factor !== 0 || height % factor !== 0) {
+    throw new Error(
+      `averageSupersampled: image size ${width}×${height} does not divide evenly by factor ${factor}.`,
+    );
+  }
+  if (rgba.length !== width * height * 4) {
+    throw new Error(`averageSupersampled: ${rgba.length} bytes is not ${width}×${height} RGBA`);
+  }
+  const outWidth = width / factor;
+  const outHeight = height / factor;
+  const out = Buffer.alloc(outWidth * outHeight * 4);
+  const count = factor * factor;
+  // Loop-invariant helper (PROD-PAINT-1): one function, no per-pixel closure
+  // allocation. Premultiplied 8-bit average: Rp = round(Σ(r·a)/(255·count));
+  // the unpremultiply rounds once more from that average. Opaque blocks
+  // (a = 255) skip the premultiplied round-trip losslessly, so they are
+  // exactly the plain box average.
+  const unpremultiply = (sumP: number, a: number, count: number): number => {
+    if (a === 0) return 0;
+    const rp = Math.round(sumP / (255 * count));
+    return Math.min(255, Math.round((rp * 255) / a));
+  };
+  for (let by = 0; by < outHeight; by++) {
+    for (let bx = 0; bx < outWidth; bx++) {
+      let sumRp = 0, sumGp = 0, sumBp = 0, sumA = 0;
+      for (let dy = 0; dy < factor; dy++) {
+        for (let dx = 0; dx < factor; dx++) {
+          const i = ((by * factor + dy) * width + bx * factor + dx) * 4;
+          const r = rgba[i]!, g = rgba[i + 1]!, b = rgba[i + 2]!, a = rgba[i + 3]!;
+          sumRp += r * a;
+          sumGp += g * a;
+          sumBp += b * a;
+          sumA += a;
+        }
+      }
+      const a = Math.round(sumA / count);
+      const o = (by * outWidth + bx) * 4;
+      out[o] = unpremultiply(sumRp, a, count);
+      out[o + 1] = unpremultiply(sumGp, a, count);
+      out[o + 2] = unpremultiply(sumBp, a, count);
+      out[o + 3] = a;
+    }
+  }
+  return out;
+}
+
+/**
  * Paint the snapshot's exact bytes through the render page: one
  * absolutely-positioned element per Layer at its stored position and opacity,
  * in reference-list order, over a transparent canvas sized to the
@@ -102,9 +177,9 @@ function captureEnvironment(page: Page): PaintEnvironment {
 export async function paintComposition(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
-  options: { page?: Page } = {},
+  options: { page?: Page; supersample?: number } = {},
 ): Promise<{ png: Buffer; environment: PaintEnvironment }> {
-  return paintCompositionHtml(canvas, buildCompositionHtml(canvas, layers), layers, options);
+  return paintCompositionHtml(canvas, buildCompositionHtml(canvas, layers, options.supersample ?? 1), layers, options);
 }
 
 /**
@@ -129,10 +204,36 @@ export async function paintCompositionHtml(
   canvas: { width: number; height: number },
   html: string,
   layers: SnapshotLayer[],
-  options: { page?: Page; beforeScreenshot?: (page: Page) => Promise<void> } = {},
+  options: { page?: Page; beforeScreenshot?: (page: Page) => Promise<void>; supersample?: number } = {},
 ): Promise<{ png: Buffer; environment: PaintEnvironment }> {
+  // The supersample factor is paint-time device-pixel density (#184,
+  // ADR-0022): the page paints at factor× the canvas size and the screenshot
+  // is area-averaged back to exactly the canvas size. Default 1 paints
+  // exactly as before — same markup, same viewport, same clip, no resample.
+  const supersample = options.supersample ?? 1;
+  if (!Number.isInteger(supersample) || supersample < 1) {
+    throw new Error(`Invalid supersample factor ${supersample}: must be an integer of at least 1.`);
+  }
+  // Loud refusal before anything is painted (#184, ADR-0022): Chromium caps
+  // the feMorphology dilate kernel at MAX_OUTLINE_DILATE_PX raster pixels,
+  // and a supersampled paint rasterizes in device pixels — an outline whose
+  // width × factor exceeds the cap would render a silently clipped ring.
+  // Refused with the same shape as the supersample pixel-limit refusal:
+  // names the Layer, the numbers, the cap, and the fix. Replay inherits this
+  // check, so a stored manifest whose factor would clip is refused too.
+  for (const l of layers) {
+    const outline = l.revision.outline;
+    if (outline !== undefined && outline.width * supersample > MAX_OUTLINE_DILATE_PX) {
+      throw new Error(
+        `Layer "${l.name}" has a ${outline.width}px outline; supersample ${supersample} paints its dilate ` +
+          `at ${outline.width * supersample} raster pixels — over Chromium's ${MAX_OUTLINE_DILATE_PX}px ` +
+          `feMorphology dilate cap, which would clip the ring. Render with --supersample 1 or a smaller ` +
+          `factor, or use a thinner outline.`,
+      );
+    }
+  }
   const paint = async (page: Page) => {
-    await page.setViewportSize({ width: canvas.width, height: canvas.height });
+    await page.setViewportSize({ width: canvas.width * supersample, height: canvas.height * supersample });
     await page.setContent(html, { waitUntil: "load" });
     // Awaited decode: a partially painted canvas is never screenshotted.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
@@ -144,9 +245,28 @@ export async function paintCompositionHtml(
     const png = await page.screenshot({
       type: "png",
       omitBackground: true,
-      clip: { x: 0, y: 0, width: canvas.width, height: canvas.height },
+      clip: { x: 0, y: 0, width: canvas.width * supersample, height: canvas.height * supersample },
     });
-    return { png, environment: captureEnvironment(page) };
+    if (supersample === 1) {
+      return { png, environment: captureEnvironment(page) };
+    }
+    // Area-average each N×N block of device pixels back to one canvas pixel,
+    // in premultiplied alpha, and re-encode at exactly the canvas size. The
+    // screenshot is this tool's own bounded output, never untrusted bytes.
+    const painted = decodePng(png);
+    // The raster must be exactly canvas × factor before anything is averaged
+    // (PROD-PAINT-2): a dimension drift would otherwise surface as an opaque
+    // byte-length error instead of naming the supersample cause.
+    if (painted.width !== canvas.width * supersample || painted.height !== canvas.height * supersample) {
+      throw new Error(
+        `Supersampled paint captured ${painted.width}×${painted.height} instead of ` +
+          `${canvas.width * supersample}×${canvas.height * supersample} device pixels at supersample ` +
+          `${supersample} — refusing to average a mismatched raster.`,
+      );
+    }
+    const averaged = averageSupersampled(painted.rgba, painted.width, painted.height, supersample);
+    const reduced = encodePngRgba(canvas.width, canvas.height, averaged);
+    return { png: reduced, environment: captureEnvironment(page) };
   };
   return options.page ? paint(options.page) : withRenderPage(paint);
 }
@@ -354,7 +474,14 @@ export async function sizeOutlineFilterRegions(page: Page, layers: SnapshotLayer
  * transforms about (x, y) with transform-origin 0 0, the same canvas and
  * text wrapping. There is no second markup builder to drift from.
  */
-export function buildCompositionHtml(canvas: { width: number; height: number }, layers: SnapshotLayer[]): string {
+export function buildCompositionHtml(
+  canvas: { width: number; height: number },
+  layers: SnapshotLayer[],
+  supersample = 1,
+): string {
+  if (!Number.isInteger(supersample) || supersample < 1) {
+    throw new Error(`Invalid supersample factor ${supersample}: must be an integer of at least 1.`);
+  }
   const faces = new Map<string, Buffer>();
   for (const l of layers) {
     if (l.revision.kind === "text" && !faces.has(l.revision.contentHash)) {
@@ -455,7 +582,16 @@ export function buildCompositionHtml(canvas: { width: number; height: number }, 
     `<!doctype html><html><head><style>` +
     fontCss +
     `html,body{margin:0;padding:0;background:transparent}` +
-    `#canvas{position:relative;width:${canvas.width}px;height:${canvas.height}px;overflow:hidden}` +
+    // Supersampled paint (#184, ADR-0022): the markup keeps its exact
+    // canvas-pixel geometry — positions, font sizes, intrinsic image sizes,
+    // transforms, shadow and outline lengths all stay in canvas px — and one
+    // device transform maps the whole canvas to factor× device pixels, so
+    // every length (including values the builder does not scale: intrinsic
+    // sizes, em/unitless values, filter pixels) composes correctly with no
+    // per-site scaling to drift. Factor 1 emits exactly the pre-#184 markup.
+    `#canvas{position:relative;width:${canvas.width}px;height:${canvas.height}px;overflow:hidden` +
+    (supersample > 1 ? `;transform:scale(${supersample});transform-origin:0 0` : "") +
+    `}` +
     `</style></head>` +
     `<body>${outlineDefs(layers)}<div id="canvas">${els}</div></body></html>`
   );

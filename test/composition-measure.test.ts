@@ -97,6 +97,22 @@ function inkBox(png: ReturnType<typeof decodePng>): { x: number; y: number; widt
   return minX === Infinity ? null : { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
+/** True when `ink` (the rendered PNG's alpha bounding box) matches `footprint`
+ * within 1 canvas px per edge — the antialiasing fringe a supersampled render
+ * adds around image edges (#184, ADR-0022); the factor-1 render is exact. */
+function withinInkFringe(
+  ink: { x: number; y: number; width: number; height: number },
+  footprint: { x: number; y: number; width: number; height: number },
+): boolean {
+  const tol = 1;
+  return (
+    Math.abs(ink.x - footprint.x) <= tol &&
+    Math.abs(ink.y - footprint.y) <= tol &&
+    Math.abs(ink.width - footprint.width) <= 2 * tol &&
+    Math.abs(ink.height - footprint.height) <= 2 * tol
+  );
+}
+
 function pixel(png: ReturnType<typeof decodePng>, x: number, y: number): [number, number, number, number] {
   const i = (y * png.width + x) * 4;
   return [png.rgba[i]!, png.rgba[i + 1]!, png.rgba[i + 2]!, png.rgba[i + 3]!];
@@ -518,16 +534,21 @@ test("measure reports painted extents separately from layout boxes (image alpha 
   expect(layer.box).toEqual({ x: 30, y: 20, width: 120, height: 80 });
   // Painted extent excludes it: the ink region offset by the placement.
   expect(layer.painted).toEqual({ x: 50, y: 30, width: 80, height: 60 });
+
   // Fully on-canvas: the visible footprint equals the painted extent.
   expect(layer.paintedOnCanvas).toEqual({ x: 50, y: 30, width: 80, height: 60 });
   expect(layer.clipped).toBe(false);
 
   // Measurement/render agreement: the rendered PNG's non-transparent pixels
-  // occupy exactly the painted footprint.
+  // occupy the painted footprint within the supersampled raster's
+  // antialiasing fringe (#184, ADR-0022): a render at the default factor 2
+  // bilinearly resamples image Layers in the compositor, so each hard edge
+  // carries an alpha>0 fringe of at most 1 canvas px beyond the layout-
+  // derived painted footprint (the factor-1 render is exact).
   const rendered = await invoke(["composition", "render", "ink", "--project", projDir, "--json"]);
   expect(rendered.code).toBe(0);
   const png = decodePng(await readFile(JSON.parse(rendered.stdout).render.output as string));
-  expect(inkBox(png)).toEqual(layer.paintedOnCanvas);
+  expect(withinInkFringe(inkBox(png)!, layer.paintedOnCanvas!)).toBe(true);
 });
 
 test("fully transparent content reports explicit null painted semantics", async () => {
@@ -617,7 +638,9 @@ test("canvas clipping is judged against painted extents, never the layout box", 
   const rendered = await invoke(["composition", "render", "clip", "--project", projDir, "--json"]);
   expect(rendered.code).toBe(0);
   const png = decodePng(await readFile(JSON.parse(rendered.stdout).render.output as string));
-  expect(inkBox(png)).toEqual(layer.paintedOnCanvas);
+  // The rendered ink occupies the on-canvas footprint within the supersampled
+  // raster's antialiasing fringe (≤1 canvas px per edge; #184, ADR-0022).
+  expect(withinInkFringe(inkBox(png)!, layer.paintedOnCanvas!)).toBe(true);
 });
 
 test("painted extents follow the canonical transform in rendering coordinates", async () => {

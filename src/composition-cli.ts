@@ -129,10 +129,14 @@ composition — Composition authoring and inspection
       Local only: no network, no inference weights.
 
   ply composition render <name> [options]
-      Render a Composition to a PNG at its exact canvas dimensions and
-      capture a retained Render manifest under the Project's renders/
-      (default: a fresh file under renders/; --out exports the PNG elsewhere,
-      history is always kept in renders/)
+      Render a Composition to a PNG at exactly its canvas dimensions,
+      supersampled by default (#184, ADR-0022): painted at 2 device pixels
+      per canvas pixel, then area-averaged in premultiplied alpha back to
+      the canvas size (--supersample <n> overrides; 1 paints directly).
+      Composition geometry stays in canvas pixels. A retained Render
+      manifest recording the factor is captured under the Project's
+      renders/ (default: a fresh file under renders/; --out exports the PNG
+      elsewhere, history is always kept in renders/)
 
   ply composition replay <manifest-path> [options]
       Replay a retained Render manifest: regenerate the Render's pixels
@@ -195,6 +199,14 @@ Options:
                         or any path outside the Project (existing Project
                         state is never exported over). Render history always
                         stays under the Project's renders/
+  --supersample <n>     Render-time supersample factor for render (#184,
+                        ADR-0022): integer ≥ 1, default 2 — paint at n device
+                        pixels per canvas pixel, area-average back to the
+                        canvas size. 1 paints directly (the pre-#184 pixels).
+                        The pixel limits apply to the supersampled paint; an
+                        over-limit render is refused, never downgraded — the
+                        same applies to an outline whose width × supersample
+                        exceeds Chromium's 256-raster-px dilate cap
   --x <num>             X position on canvas (default: 0)
   --y <num>             Y position on canvas (default: 0)
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)
@@ -224,7 +236,7 @@ function output(
 
 /** A negative number is a valid coordinate value (#128) — the shared join in
  * cli-present.ts handles it, scoped here to the composition placement flags. */
-const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y", "--tracking", "--line-height"]);
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y", "--tracking", "--line-height", "--supersample"]);
 const isJson = rawArgs.includes("--json");
 let values: {
   project?: string;
@@ -247,6 +259,7 @@ let values: {
   x?: string;
   y?: string;
   opacity?: string;
+  supersample?: string;
   regions?: string;
   json?: boolean;
   help?: boolean;
@@ -278,6 +291,7 @@ try {
       x: { type: "string" },
       y: { type: "string" },
       opacity: { type: "string" },
+      supersample: { type: "string" },
       regions: { type: "string" },
       json: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -850,12 +864,23 @@ async function run() {
     } else if (command === "render") {
       const name = positionals[1];
       if (!name) {
-        emitRender({ ok: false, error: "Usage: ply composition render <name> [--out <path>]" }, isJson);
+        emitRender({ ok: false, error: "Usage: ply composition render <name> [--out <path>] [--supersample <n>]" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      // Supersample factor (#184, ADR-0022): shaped at the command boundary
+      // as a usage error, like every other value-range option.
+      const supersample = values.supersample !== undefined ? parseNumericArgument(values.supersample) : 2;
+      if (!Number.isInteger(supersample) || supersample < 1) {
+        output(
+          { ok: false, error: `Supersample factor (--supersample) must be an integer of at least 1.` },
+          isJson,
+        );
         process.exitCode = 2;
         return;
       }
       try {
-        const render = await renderComposition(targetProj, name, { out: values.out });
+        const render = await renderComposition(targetProj, name, { out: values.out, supersample });
         // The output is on disk before the browser teardown runs; if teardown
         // fails, the caller must hear exactly that.
         teardownOutcome = `The rendered PNG was already written to ${render.output}. Do not re-render to recover it.`;
@@ -875,6 +900,16 @@ async function run() {
       const manifestPath = positionals[1];
       if (!manifestPath) {
         emitRender({ ok: false, error: "Usage: ply composition replay <manifest-path> [--out <path>]" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (values.supersample !== undefined) {
+        // replay has no --supersample (#184): the factor comes from the
+        // manifest alone, so replay reproduces the recorded pixels.
+        output(
+          { ok: false, error: "replay does not accept --supersample; the factor comes from the render manifest." },
+          isJson,
+        );
         process.exitCode = 2;
         return;
       }
