@@ -49,7 +49,9 @@ Single-context repo: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/
   defect oven-sh/bun #15679, fixed in Bun 1.4.0) and is now load-bearing for
   module isolation, not just process separation. The shared render page (`src/browser.ts` withRenderPage)
   serializes and self-heals; a hung or crashed run is worth reporting, not
-  silently re-running.
+  silently re-running. The test runner (`scripts/test.ts`) runs every file
+  even after failures and prints a final summary naming the checkout path,
+  commit SHA, clean state, file count, and test totals.
 - Model costs: measure from real Gateway billing (`✓` figures only) — never copy from price tables.
 - The tool must keep working offline for everything except generation itself.
   Creator isolation is local inference (BiRefNet Dynamic on PyTorch/MPS,
