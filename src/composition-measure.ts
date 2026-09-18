@@ -83,7 +83,6 @@ import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
 import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
 import {
-  assertOutlineDilationLimits,
   buildCompositionHtml,
   layerMaxScale,
   rejectUnresolvedFonts,
@@ -301,10 +300,6 @@ async function measureSnapshot(
   layers: SnapshotLayer[],
   options: { page?: Page } = {},
 ): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null }[]> {
-  // Check outline limits before anything is painted (#193, ADR-0022): an
-  // outline whose raster dilate at factor 1 exceeds Chromium's cap would clip
-  // silently in the painted screenshot pass, reporting an under-measured ink box.
-  assertOutlineDilationLimits(layers, 1);
   const run = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });

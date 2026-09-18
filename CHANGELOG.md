@@ -29,6 +29,7 @@
 
 ### Added
 
+- Chained feMorphology dilate steps when outline raster dilation exceeds Chromium's 256-px cap, lifting the outline dilate cap across all supersample factors and Layer scales (#194)
 - Added supersampled rendering: `ply composition render` now paints at 2
   device pixels per canvas pixel by default and area-averages each 2×2 block
   in premultiplied alpha back to exactly the canvas size (ADR-0022), so large
