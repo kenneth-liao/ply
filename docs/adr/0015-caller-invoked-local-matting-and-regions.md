@@ -4,6 +4,15 @@
   ([spec #102](https://github.com/kenneth-liao/ply/issues/102)). Still target:
   caller-parameterized region checking — the hardcoded YouTube-region scope
   remains in place until that migration.
+  - **Update (#172, shipped):** the region-check migration has landed —
+    caller-parameterized region checking (`ply composition check`, #177), the
+    guideline overlay view (`ply composition guidelines`, #181), the starter
+    region file at `examples/youtube-regions.json` (#178, with the skill
+    pointer in agent-profile-workspace#11), and the removal of the hardcoded
+    `src/` YouTube-region scope (#180) have all shipped. The warning-only
+    disposition, caller-owned region data, and guideline-never-in-final-output
+    rules are unchanged; the "still target" sentence above is superseded by
+    this update.
 - Supersedes: ADR-0006; ADR-0005's hardcoded YouTube-region scope
 
 Matting is an explicit local operation on any image, independent of generation
