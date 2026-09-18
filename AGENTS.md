@@ -65,8 +65,10 @@ Single-context repo: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/
 - Final composition stays local. ADR-0014 allows caller-chosen text pixels;
   the category-specific generation gates were retired with their commands
   (#114) — the caller's own policy lives in the consuming repositories and
-  the visual-authoring skill. The numeric YouTube region baseline stays
-  until its separately scoped migration. Do not present the accepted
+  the visual-authoring skill. The numeric YouTube region baseline left
+  `src/` (#176): the legacy Scene machinery reads its rectangles from
+  `examples/youtube-regions.json` through the single region ingestion
+  point. Do not present the accepted
   destination as already shipped.
 
 ## Rendering gotchas

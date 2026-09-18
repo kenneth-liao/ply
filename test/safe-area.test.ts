@@ -6,7 +6,7 @@ import type { Page } from "playwright";
 import { getBrowser } from "../src/browser.js";
 import { type Scene, type SceneLayer, type ResolvedScene } from "../src/scene.js";
 import { scenePageHtml, guidelinePageHtml, renderScene, renderGuidelines } from "../src/scene-render.js";
-import { PROTECTED_REGIONS, findSafeAreaViolations, safeAreaWarnings } from "../src/safe-area.js";
+import { protectedRegions, findSafeAreaViolations, safeAreaWarnings } from "../src/safe-area.js";
 import type { Box } from "../src/scene-geometry.js";
 import { run as cliRun } from "../src/scene-cli.js";
 import { renderOutputConflict } from "../src/manifest.js";
@@ -68,25 +68,55 @@ const scene = (layers: SceneLayer[]): Scene => ({
  */
 const resolved = (layers: SceneLayer[]): ResolvedScene => ({ scene: scene(layers), assets: new Map(), masks: new Map() });
 
-// --- the one definition ------------------------------------------------------
+// --- the one source of the rectangles ----------------------------------------
 
-describe("PROTECTED_REGIONS", () => {
+describe("protectedRegions", () => {
   it("defines the duration badge and progress bar once, anchored to the 1280×720 edges", () => {
-    expect(PROTECTED_REGIONS.map((r) => r.id)).toEqual(["duration-badge", "progress-bar"]);
-    const badge = PROTECTED_REGIONS.find((r) => r.id === "duration-badge")!;
+    expect(protectedRegions().map((r) => r.id)).toEqual(["duration-badge", "progress-bar"]);
+    const badge = protectedRegions().find((r) => r.id === "duration-badge")!;
     expect(badge.box.x + badge.box.width).toBe(1280);
     expect(badge.box.y + badge.box.height).toBe(720);
-    const progress = PROTECTED_REGIONS.find((r) => r.id === "progress-bar")!;
+    const progress = protectedRegions().find((r) => r.id === "progress-bar")!;
     expect(progress.box.x).toBe(0);
     expect(progress.box.width).toBe(1280);
     expect(progress.box.y + progress.box.height).toBe(720);
-    for (const r of PROTECTED_REGIONS) {
+    for (const r of protectedRegions()) {
       expect(r.box.width).toBeGreaterThan(0);
       expect(r.box.height).toBeGreaterThan(0);
       expect(r.box.x).toBeGreaterThanOrEqual(0);
       expect(r.box.y).toBeGreaterThanOrEqual(0);
       expect(r.box.x + r.box.width).toBeLessThanOrEqual(1280);
       expect(r.box.y + r.box.height).toBeLessThanOrEqual(720);
+    }
+  });
+
+  it("fails fast naming the file when the region file does not exist", () => {
+    const missing = path.join(tmpdir(), "ply-region-missing", "not-there.json");
+    expect(() => protectedRegions(missing)).toThrow(`Region file "${missing}" does not exist`);
+  });
+
+  it("fails fast naming the file when the region file is malformed", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ply-region-bad-"));
+    const bad = path.join(dir, "bad.json");
+    await writeFile(bad, "{ not json");
+    try {
+      expect(() => protectedRegions(bad)).toThrow(`Region file "${bad}" is not valid JSON`);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails fast naming the file when the region file targets a different canvas", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ply-region-canvas-"));
+    const bad = path.join(dir, "wrong-canvas.json");
+    await writeFile(
+      bad,
+      JSON.stringify({ schemaVersion: 1, canvas: { width: 1024, height: 576 }, regions: [] }),
+    );
+    try {
+      expect(() => protectedRegions(bad)).toThrow(`Region file "${bad}" targets a 1024×576 canvas`);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
@@ -466,7 +496,7 @@ describe("scene CLI", () => {
         layer: "sticker",
         region: "duration-badge",
         box: { x: 1150, y: 660, width: 100, height: 40 },
-        regionBox: PROTECTED_REGIONS.find((r) => r.id === "duration-badge")!.box,
+        regionBox: protectedRegions().find((r) => r.id === "duration-badge")!.box,
       },
     ]);
   });
@@ -715,7 +745,7 @@ describe("blur-bearing paint extents match Chromium", () => {
   // `filter: drop-shadow(x y N)` lengths as σ, and `text-shadow`'s as 2σ, and
   // paints out to ~2.45σ — a bound of the authored length alone under-counts.
   const clearOfBadge = { position: { x: 958, y: 610 }, size: { width: 100, height: 60 } };
-  const badge = PROTECTED_REGIONS.find((r) => r.id === "duration-badge")!;
+  const badge = protectedRegions().find((r) => r.id === "duration-badge")!;
 
   const grouped = (effects: Record<string, unknown>): SceneLayer =>
     ({
@@ -761,7 +791,7 @@ describe("blur-bearing paint extents match Chromium", () => {
       const { png } = await renderScene(r, { page });
       const paint = paintedBox(png);
       const violations = findSafeAreaViolations(r);
-      for (const region of PROTECTED_REGIONS) {
+      for (const region of protectedRegions()) {
         if (!overlaps(paint, region.box)) continue;
         expect(
           violations.some((v) => v.layer === painter && v.region === region.id),

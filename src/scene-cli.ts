@@ -32,7 +32,7 @@ import { SCENE_SCHEMA, LAYER_DEFAULTS, loadScene, SCHEMA_VERSION, type Scene, ty
 import { resolveVariant } from "./variants.js";
 import { resolveFace } from "./fonts.js";
 import { renderScene, renderSceneInspection, renderContactSheet, renderGuidelines, countLayers } from "./scene-render.js";
-import { PROTECTED_REGIONS, findSafeAreaViolations } from "./safe-area.js";
+import { protectedRegions, findSafeAreaViolations } from "./safe-area.js";
 import { THEMES, themeRevision } from "./themes.js";
 import { buildScene, getTemplate, TEMPLATES } from "./templates.js";
 import { checkReference, diffPng, renderCompareSheet } from "./compare.js";
@@ -743,7 +743,7 @@ async function dispatch(
       output,
       width,
       height,
-      regions: PROTECTED_REGIONS.map((r) => ({ id: r.id, label: r.label, box: r.box })),
+      regions: protectedRegions().map((r) => ({ id: r.id, label: r.label, box: r.box })),
     });
   }
   if (cmd === "guidelines") return usageError(`"scene guidelines" takes exactly one scene file`);
