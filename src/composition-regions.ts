@@ -54,6 +54,7 @@
  * weights — reading and validating a region file is a local, offline
  * operation.
  */
+import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 // The rectangle type is a type-only import: one box representation across
 // the repo (the user-approved contract — the region object is structurally
@@ -213,40 +214,63 @@ export function parseRegionFile(raw: unknown, source: string): RegionFile {
 }
 
 /**
- * Read and parse a region file from disk — parse-don't-validate at one
- * boundary. The async form delegates to the sync twin: one reading half
- * (same file access, same actionable errors), one parser, two call
- * signatures.
+ * The one reading-failure mapping, shared by both reading paths: every
+ * failure is loud and names the file.
  */
-export async function readRegionFile(regionFilePath: string): Promise<RegionFile> {
-  return readRegionFileSync(regionFilePath);
+function readFailure(regionFilePath: string, err: unknown): never {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "ENOENT") {
+    fail(regionFilePath, `does not exist — supply a region file the caller owns (see ply composition check --help).`);
+  }
+  fail(regionFilePath, `could not be read (${(err as Error).message}).`);
 }
 
 /**
- * The one reading half shared by both call signatures — sync (the legacy
- * safe-area reader's consumers are synchronous) and, via the delegation
- * in `readRegionFile`, async. Reads the file, JSON-parses it, and hands
- * the result to the one parser; every failure is loud and names the
- * file. There is deliberately no second reading recipe.
+ * The one parse recipe, shared by both reading paths: JSON-decode the
+ * file's bytes and hand the result to the one schema parser. Pure — the
+ * I/O stays in each reading path below, sync or async by its caller's
+ * needs, so the async consumer never performs blocking I/O.
+ */
+function parseRegionJson(raw: string, source: string): RegionFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(source, `is not valid JSON: ${(err as Error).message}`);
+  }
+  return parseRegionFile(parsed, source);
+}
+
+/**
+ * Read and parse a region file from disk — parse-don't-validate at one
+ * boundary. The async form the Composition check path awaits; its I/O is
+ * non-blocking (`node:fs/promises`).
+ */
+export async function readRegionFile(regionFilePath: string): Promise<RegionFile> {
+  let raw: string;
+  try {
+    raw = await readFile(regionFilePath, "utf8");
+  } catch (err) {
+    readFailure(regionFilePath, err);
+  }
+  return parseRegionJson(raw, regionFilePath);
+}
+
+/**
+ * The synchronous reading path, for the legacy safe-area reader (#176):
+ * its consumers (`scene validate` / `render` warnings, the guideline
+ * view) are synchronous, so they cannot await the async ingestion point.
+ * The parse recipe and the failure mapping are shared with
+ * `readRegionFile` — the two paths differ only in I/O.
  */
 export function readRegionFileSync(regionFilePath: string): RegionFile {
   let raw: string;
   try {
     raw = readFileSync(regionFilePath, "utf8");
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      fail(regionFilePath, `does not exist — supply a region file the caller owns (see ply composition check --help).`);
-    }
-    fail(regionFilePath, `could not be read (${(err as Error).message}).`);
+    readFailure(regionFilePath, err);
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    fail(regionFilePath, `is not valid JSON: ${(err as Error).message}`);
-  }
-  return parseRegionFile(parsed, regionFilePath);
+  return parseRegionJson(raw, regionFilePath);
 }
 
 /**

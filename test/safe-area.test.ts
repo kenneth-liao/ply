@@ -105,6 +105,20 @@ describe("protectedRegions", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("fails fast naming the file when the region file targets a different canvas", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ply-region-canvas-"));
+    const bad = path.join(dir, "wrong-canvas.json");
+    await writeFile(
+      bad,
+      JSON.stringify({ schemaVersion: 1, canvas: { width: 1024, height: 576 }, regions: [] }),
+    );
+    try {
+      expect(() => protectedRegions(bad)).toThrow(`Region file "${bad}" targets a 1024×576 canvas`);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // --- violation geometry -------------------------------------------------------

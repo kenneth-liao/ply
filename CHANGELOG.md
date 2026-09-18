@@ -33,7 +33,9 @@
   the committed starter file `examples/youtube-regions.json` (#175) through
   the single region ingestion point — a lazy, memoized `protectedRegions()`
   reader in `src/safe-area.ts` that fails loudly naming the file when the
-  starter is missing or malformed, with no fallback to built-in numbers.
+  starter is missing, malformed, or declares a canvas other than the Scene
+  canvas (the same canvas contract the Composition check enforces), with
+  no fallback to built-in numbers.
   Behaviour, warning wording, and guideline rectangles are unchanged; an
   `rg` probe over `src/` finds no region geometry, id, label, or reason
   literals (#176)

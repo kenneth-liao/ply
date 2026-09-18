@@ -51,7 +51,8 @@
  */
 import { LAYER_DEFAULTS, type ResolvedScene, type SceneLayer, type GroupLayer, type ImageLayer, type TextLayer, type ShapeLayer, type Effects } from "./scene.js";
 import { connectorGeometry, arrowPad, type Box } from "./scene-geometry.js";
-import { readRegionFileSync } from "./composition-regions.js";
+import { readRegionFileSync, ingestRegionCanvas } from "./composition-regions.js";
+import { SCENE_CANVAS } from "./scene-schema.js";
 import { fileURLToPath } from "node:url";
 
 /** One protected rectangle of the thumbnail canvas. */
@@ -82,18 +83,23 @@ let starterRegions: ProtectedRegion[] | undefined;
  * The protected regions every legacy consumer (validate, render warnings,
  * guideline view) reads — the single reader that replaced the built-in
  * `PROTECTED_REGIONS` constant. The first call for the starter file reads
- * and parses it through the region ingestion point, then memoizes; the
- * file is committed repo data, not per-invocation input. Lazy by design:
- * the renderer imports this module, so the read must not run at import
- * time — a missing or malformed starter fails loudly here, at first use,
- * naming the file, with no fallback to built-in numbers.
+ * and parses it through the region ingestion point — including its canvas
+ * contract, enforced against the Scene canvas (`SCENE_CANVAS`) by the
+ * same `ingestRegionCanvas` the Composition check uses, so a starter
+ * whose declared canvas drifts fails loudly naming the file instead of
+ * silently checking wrong geometry — then memoizes; the file is
+ * committed repo data, not per-invocation input. Lazy by design: the
+ * renderer imports this module, so the read must not run at import
+ * time — a missing or malformed starter fails loudly here, at first
+ * use, naming the file, with no fallback to built-in numbers.
  * `regionFilePath` exists for tests; non-starter paths are read fresh.
  */
 export function protectedRegions(regionFilePath: string = STARTER_REGION_FILE): ProtectedRegion[] {
   if (regionFilePath === STARTER_REGION_FILE && starterRegions) return starterRegions;
   const file = readRegionFileSync(regionFilePath);
-  if (regionFilePath === STARTER_REGION_FILE) starterRegions = file.regions;
-  return file.regions;
+  const regions = ingestRegionCanvas(file, SCENE_CANVAS, regionFilePath);
+  if (regionFilePath === STARTER_REGION_FILE) starterRegions = regions;
+  return regions;
 }
 
 /** One layer-specific safe-area violation. */

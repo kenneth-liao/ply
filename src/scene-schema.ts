@@ -17,6 +17,15 @@
  * `library:<id>` / `<id>` (aliases intact) or a project-relative path,
  * optionally pinned to exact content with `@<sha-256-or-prefix>`.
  */
+
+/**
+ * The Scene canvas — the only supported Scene dimensions, enforced by the
+ * schema `const`s below. One home, so other consumers (the safe-area
+ * reader's region canvas contract, #176) reference it instead of
+ * restating the numbers.
+ */
+export const SCENE_CANVAS = { width: 1280, height: 720 } as const;
+
 export const SCENE_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
   title: "Ply Scene",
@@ -38,11 +47,11 @@ export const SCENE_SCHEMA = {
       required: ["width", "height"],
       properties: {
         width: {
-          const: 1280,
+          const: SCENE_CANVAS.width,
           description: "The YouTube thumbnail canvas is exactly 1280px wide.",
         },
         height: {
-          const: 720,
+          const: SCENE_CANVAS.height,
           description: "The YouTube thumbnail canvas is exactly 720px tall.",
         },
       },
