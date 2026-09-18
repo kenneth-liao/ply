@@ -12,8 +12,8 @@
   and ADR-0015's independent Matting are shipped by spec #102, including the
   #114 retirement of the category-specific generation entry points
   (`jobs plates|objects|creators|rerun`); ADR-0014/0015's region-gate
-  migration remains a target decision. Do not remove existing gates in a
-  docs pass.
+  migration has shipped by spec #172 (#177, #178, #180, #181).
+  Do not remove existing gates in a docs pass.
 - The AP kit-managed `visual-authoring` skill owns relocated authoring knowledge
   (Workspace source, installed to every bound host by `apkit install`).
   It must be committed before any gate deletion (ISC-27).

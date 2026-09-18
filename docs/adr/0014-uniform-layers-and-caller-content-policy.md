@@ -6,6 +6,15 @@
   target: named Variant sets and the legacy approval/trial-output markers leave
   the schema, and caller-parameterized region checking replaces the hardcoded
   region scope (ADR-0015).
+  - **Update (#172, shipped):** the region-scope migration has landed —
+    caller-parameterized region checking (`ply composition check`, #177), the
+    guideline overlay view (`ply composition guidelines`, #181), the starter
+    region file at `examples/youtube-regions.json` (#178, with the skill
+    pointer in agent-profile-workspace#11), and the removal of the hardcoded
+    `src/` YouTube-region scope (#180) have all shipped (recorded in
+    [ADR-0015](0015-caller-invoked-local-matting-and-regions.md)). The "still
+    target" sentence above stands for the Variant sets and legacy markers;
+    only its region-checking clause is superseded by this update.
 - Supersedes: ADR-0001, ADR-0004, ADR-0008, ADR-0011
 
 Ply is a general-purpose image composer over one Layer primitive, not a
