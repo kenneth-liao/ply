@@ -401,9 +401,10 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
   `feMorphology` dilate extends the content's alpha by exactly `width`
   px in every direction, so painted ink and measurement reach agree
   exactly (ADR-0019). Every successful render draws that full ring;
-  an outline whose raster dilate (width × layer scale × supersample) would
-  exceed Chromium's 256-raster-px kernel cap is refused instead of
-  rendering a clipped ring (see supersampled rendering, ADR-0022).
+  when raster dilation (width × layer scale × supersample) exceeds
+  Chromium's 256-raster-px kernel cap, the outline is drawn as a chain
+  of smaller dilate steps so outlines render unclipped at any scale
+  and factor (see supersampled rendering, ADR-0019, ADR-0022).
 - **Painted bounds include the outline:** `ply composition measure`
   reports the outlined (and shadowed) ink in
   `painted`/`paintedOnCanvas`/`clipped` and the effective outline
@@ -582,13 +583,14 @@ stay in canvas pixels. Override it with `--supersample <n>` (integer ≥ 1);
 renders made before supersampling. The render pixel limits apply to the
 supersampled paint (canvas × factor per axis): a canvas that fits at 1× but
 not at the requested factor is refused with the fix named — it is never
-painted at a lower factor on its own. The same discipline covers outlines:
-Chromium caps the `feMorphology` outline-dilate kernel at 256 raster pixels
-in device space. Outline width is in the Layer's local pixels, painted before
-the transform, so the raster dilation is `outline.width × max(|scaleX|, |scaleY|) × supersample`.
-An outline whose raster dilation would exceed that cap is refused before anything
-is painted — render with `--supersample 1` or a smaller factor, a thinner
-outline, or a smaller Layer scale. A render is never silently degraded.
+painted at a lower factor on its own. Outlines render at any factor and
+Layer scale without clipping (#194): Chromium caps an individual
+`feMorphology` dilate kernel at 256 raster pixels in device space, but
+when a Layer's raster dilation (`outline.width × max(|scaleX|, |scaleY|) × supersample`)
+exceeds 256 px, the outline is rendered as a chain of smaller dilate steps
+whose local radii sum to `width`. Box structuring elements add up exactly,
+so geometry and painted extents stay identical at any renderable factor
+(ADR-0019, ADR-0022).
 
 ```bash
 ply composition render poster -p ~/projects/my-poster                    # supersample 2 (default)

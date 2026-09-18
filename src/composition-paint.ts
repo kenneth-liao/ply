@@ -129,40 +129,34 @@ export function outlineRasterDilation(
 }
 
 /**
- * Assert that no Layer's outline exceeds Chromium's feMorphology dilate cap
- * in device raster space (#184, #193, ADR-0019, ADR-0022).
+ * Compute the number of chained `feMorphology` dilate steps needed so that
+ * no single step exceeds Chromium's MAX_OUTLINE_DILATE_PX cap in device raster
+ * space (#194, ADR-0019, ADR-0022).
  *
- * Loud refusal before anything is painted: Chromium caps the feMorphology dilate
- * kernel at MAX_OUTLINE_DILATE_PX raster pixels. The dilate radius is in the
- * Layer's local coordinate space before transform, so raster dilation is:
- *   outline.width × max(|scaleX|, |scaleY|) × supersample
- * An outline exceeding the cap would render a silently clipped ring.
- *
- * Refused loudly naming the Layer, outline width, scale, factor, resulting raster
- * size, the cap, and the fixes.
+ *   n = ceil(rasterDilation / MAX_OUTLINE_DILATE_PX), minimum 1.
  */
-export function assertOutlineDilationLimits(layers: SnapshotLayer[], supersample: number = 1): void {
-  for (const l of layers) {
-    const outline = l.revision.outline;
-    if (outline !== undefined) {
-      const dilation = outlineRasterDilation(outline.width, l.revision, supersample);
-      if (dilation > MAX_OUTLINE_DILATE_PX) {
-        const scaleDesc =
-          l.revision.scaleX === l.revision.scaleY
-            ? `${l.revision.scaleX}`
-            : `${l.revision.scaleX}×${l.revision.scaleY}`;
-        const fix =
-          supersample > 1
-            ? `Render with --supersample 1 or a smaller factor, a thinner outline, or a smaller Layer scale.`
-            : `Render with a thinner outline or a smaller Layer scale.`;
-        throw new Error(
-          `Layer "${l.name}" has a ${outline.width}px outline at scale ${scaleDesc}; supersample ${supersample} ` +
-            `paints its dilate at ${dilation} raster pixels — over Chromium's ${MAX_OUTLINE_DILATE_PX}px ` +
-            `feMorphology dilate cap, which would clip the ring. ${fix}`,
-        );
-      }
-    }
-  }
+export function outlineDilateSteps(
+  outlineWidth: number,
+  rev: { scaleX: number; scaleY: number },
+  supersample: number = 1,
+): number {
+  const dilation = outlineRasterDilation(outlineWidth, rev, supersample);
+  return Math.max(1, Math.ceil(dilation / MAX_OUTLINE_DILATE_PX));
+}
+
+/**
+ * Split an outline width into `n` local radii that sum to exactly `width`
+ * (#194, ADR-0019).
+ *
+ * Box structuring elements add up exactly (square(a) ⊕ square(b) = square(a+b)),
+ * preserving the ring geometry and measurement reach. When n = 1, returns [width].
+ */
+export function outlineDilateRadii(width: number, n: number): number[] {
+  if (n <= 1) return [width];
+  const step = width / n;
+  const radii = Array.from({ length: n - 1 }, () => step);
+  radii.push(width - step * (n - 1));
+  return radii;
 }
 
 /**
@@ -283,13 +277,6 @@ export async function paintCompositionHtml(
   if (!Number.isInteger(supersample) || supersample < 1) {
     throw new Error(`Invalid supersample factor ${supersample}: must be an integer of at least 1.`);
   }
-  // Loud refusal before anything is painted (#184, #193, ADR-0019, ADR-0022):
-  // Chromium caps the feMorphology dilate kernel at MAX_OUTLINE_DILATE_PX
-  // raster pixels. Outline width is in Layer local px (ADR-0019) before
-  // transform, so raster dilation is outline.width × max(|scaleX|, |scaleY|) × factor.
-  // An outline exceeding the cap would render a silently clipped ring.
-  // Replay inherits this check, so a stored manifest whose Composition would clip is refused too.
-  assertOutlineDilationLimits(layers, supersample);
   const paint = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width * supersample, height: canvas.height * supersample });
     await page.setContent(html, { waitUntil: "load" });
@@ -304,6 +291,8 @@ export async function paintCompositionHtml(
       type: "png",
       omitBackground: true,
       clip: { x: 0, y: 0, width: canvas.width * supersample, height: canvas.height * supersample },
+      // 60s timeout: 4× chained dilate paints on large rasters take ~30s (#194).
+      timeout: 60000,
     });
     if (supersample === 1) {
       return { png, environment: captureEnvironment(page) };
@@ -401,11 +390,30 @@ function outlineFilterId(outline: LayerOutline, layerIndex: number): string {
   return `ply-o-${createHash("sha256").update(`${outline.width}:${outline.color}:${layerIndex}`).digest("hex").slice(0, 16)}`;
 }
 
-function outlineFilterDef(outline: LayerOutline, layerIndex: number): string {
+function outlineFilterDef(
+  outline: LayerOutline,
+  layerIndex: number,
+  rev: { scaleX: number; scaleY: number },
+  supersample = 1,
+): string {
   const id = outlineFilterId(outline, layerIndex);
+  const n = outlineDilateSteps(outline.width, rev, supersample);
+  let morphNodes: string;
+  if (n <= 1) {
+    morphNodes = `<feMorphology in="SourceAlpha" operator="dilate" radius="${outline.width}" result="dil"/>`;
+  } else {
+    const radii = outlineDilateRadii(outline.width, n);
+    morphNodes = radii
+      .map((r, i) => {
+        const inName = i === 0 ? "SourceAlpha" : `dil_${i}`;
+        const outName = i === radii.length - 1 ? "dil" : `dil_${i + 1}`;
+        return `<feMorphology in="${inName}" operator="dilate" radius="${r}" result="${outName}"/>`;
+      })
+      .join("");
+  }
   return (
     `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
-    `<feMorphology in="SourceAlpha" operator="dilate" radius="${outline.width}" result="dil"/>` +
+    morphNodes +
     `<feFlood flood-color="${outline.color}" result="flood"/>` +
     `<feComposite in="flood" in2="dil" operator="in" result="ring"/>` +
     `<feMerge><feMergeNode in="ring"/><feMergeNode in="SourceGraphic"/></feMerge>` +
@@ -435,9 +443,13 @@ export function escapeHtml(text: string): string {
  * id; the region placeholder is sized in-page before any screenshot by
  * `sizeOutlineFilterRegions`.
  */
-function outlineDefs(layers: SnapshotLayer[]): string {
+function outlineDefs(layers: SnapshotLayer[], supersample = 1): string {
   const defs = layers
-    .map((l, i) => (l.revision.outline !== undefined ? outlineFilterDef(l.revision.outline, i) : ""))
+    .map((l, i) =>
+      l.revision.outline !== undefined
+        ? outlineFilterDef(l.revision.outline, i, l.revision, supersample)
+        : "",
+    )
     .join("");
   if (defs === "") return "";
   return `<svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>`;
@@ -651,6 +663,6 @@ export function buildCompositionHtml(
     (supersample > 1 ? `;transform:scale(${supersample});transform-origin:0 0` : "") +
     `}` +
     `</style></head>` +
-    `<body>${outlineDefs(layers)}<div id="canvas">${els}</div></body></html>`
+    `<body>${outlineDefs(layers, supersample)}<div id="canvas">${els}</div></body></html>`
   );
 }

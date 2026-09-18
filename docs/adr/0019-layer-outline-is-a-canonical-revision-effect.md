@@ -45,6 +45,16 @@ glyphs alike) by exactly `width` px in every direction (a box
 structuring element: painted ink ⊆ content ⊕ square(width)), so painted
 ink and measurement reach agree exactly.
 
+**Chained dilate steps under raster-dilation caps (#194):** Chromium caps an
+individual `feMorphology` dilate kernel at 256 px in device raster space
+(`MAX_OUTLINE_DILATE_PX`). When a Layer's raster dilation (`outline.width ×
+max(|scaleX|, |scaleY|) × supersample`) would exceed 256 px, the dilate is
+split into `n = ceil(rasterDilation / 256)` chained `feMorphology` dilate
+steps whose local radii sum to `width`. Box structuring elements add up
+exactly (`square(a) ⊕ square(b) = square(a+b)`), so the ring's geometry and
+measurement bound `content ⊕ square(width)` are unchanged. A chained dilate is
+still one bounded outline effect, not a general filter framework (DEC-006).
+
 **Filter regions are sized per Layer, in-page.** Chromium clips BOTH the
 dilate result AND the source graphic to the filter's declared region
 (verified empirically), and a region expressed in objectBoundingBox

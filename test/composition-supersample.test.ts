@@ -341,12 +341,11 @@ test("replay refuses --supersample: the factor comes from the manifest alone", a
   expect(json.error).toContain("--supersample");
 });
 
-test("an outline whose raster dilate exceeds Chromium's cap is refused before painting", async () => {
-  // Width 200 is legal --outline input (0–256), but at the default factor 2
+test("an outline whose raster dilate exceeds Chromium's cap renders successfully via chained dilate", async () => {
+  // Width 200 is legal --outline input (0–256). At the default factor 2
   // the dilate rasterizes at 400 raster pixels — over the 256 px kernel cap.
-  // The render refuses loudly instead of silently clipping the ring
-  // (INT-EDGE-1 / PROD-EDGE-1 / BND-1, ADR-0022: a render never degrades on
-  // its own). Boundary widths come from the one constant, never a second copy.
+  // With chained dilate steps (#194, ADR-0019, ADR-0022), it renders
+  // successfully without clipping.
   const atCap = Math.floor(MAX_OUTLINE_DILATE_PX / 2); // 128 × 2 = 256: exactly at the cap
   const img = path.join(tempDir, "red.png");
   await writeFile(img, solidPng(64, 64, [255, 0, 0, 255]));
@@ -357,39 +356,28 @@ test("an outline whose raster dilate exceeds Chromium's cap is refused before pa
   ).composition.layers[0]!.layerId;
   await invoke(["layer", "edit", layerId, "--outline", `200,#0000ff`, "--project", projDir, "--json"]);
 
-  const refused = await invoke(["composition", "render", "ringy", "--project", projDir, "--json"]);
-  expect(refused.code).toBe(1);
-  const err = JSON.parse(refused.stdout).error;
-  expect(err).toContain("hero");
-  expect(err).toContain("200px outline");
-  expect(err).toContain("supersample 2");
-  expect(err).toContain("400 raster pixels");
-  expect(err).toContain("--supersample 1");
-  expect(err).toContain("thinner outline");
-  // No output was published.
-  expect((await readdir(path.join(projDir, "renders"))).filter((f) => f.endsWith(".png"))).toHaveLength(0);
+  const rendered = await invoke(["composition", "render", "ringy", "--project", projDir, "--json"]);
+  expect(rendered.code).toBe(0);
+  expect((await readdir(path.join(projDir, "renders"))).filter((f) => f.endsWith(".png"))).toHaveLength(1);
 
   // Exactly at the cap (width 128 × factor 2 = 256) renders the full ring.
   await invoke(["layer", "edit", layerId, "--outline", `${atCap},#0000ff`, "--project", projDir, "--json"]);
   const atCapRes = await invoke(["composition", "render", "ringy", "--project", projDir, "--out", path.join(tempDir, "atcap.png"), "--json"]);
   expect(atCapRes.code).toBe(0);
-  // One past the cap is refused.
+
+  // One past the cap (width 129 × factor 2 = 258) also renders successfully via chained dilate (#194).
   await invoke(["layer", "edit", layerId, "--outline", `${atCap + 1},#0000ff`, "--project", projDir, "--json"]);
   const over = await invoke(["composition", "render", "ringy", "--project", projDir, "--json"]);
-  expect(over.code).toBe(1);
-  expect(JSON.parse(over.stdout).error).toContain("dilate cap");
+  expect(over.code).toBe(0);
 
   // The same outline paints in full at --supersample 1 (width × 1 ≤ cap).
   await invoke(["layer", "edit", layerId, "--outline", `200,#0000ff`, "--project", projDir, "--json"]);
   const direct = await invoke(["composition", "render", "ringy", "--project", projDir, "--supersample", "1", "--out", path.join(tempDir, "direct.png"), "--json"]);
-  expect(direct.code).toBe(0);
-});
+}, 30000);
 
-test("replay refuses a manifest whose recorded factor would clip an outline", async () => {
-  // A render never writes such a manifest (the render boundary refuses), so
-  // the only way to reach one is stored history: a factor-1 render whose
-  // manifest is later recorded with a clipping factor must be refused at
-  // replay, not silently clipped.
+test("replay succeeds for a manifest whose recorded factor requires chained dilate steps", async () => {
+  // A factor-1 render whose manifest is later recorded with a higher factor
+  // replays successfully using chained dilate steps (#194).
   const img = path.join(tempDir, "red.png");
   await writeFile(img, solidPng(64, 64, [200, 40, 90, 255]));
   await invoke(["composition", "create", "legacy-ring", "--width", "400", "--height", "400", "--project", projDir]);
@@ -403,18 +391,14 @@ test("replay refuses a manifest whose recorded factor would clip an outline", as
   expect(render.code).toBe(0);
   const rendered = JSON.parse(render.stdout);
 
-  // Tamper the stored manifest's factor up to one that would clip.
+  // Tamper the stored manifest's factor up to one that requires chained dilate (200 × 2 = 400 > 256).
   const tampered = path.join(projDir, "renders", "tampered.manifest.json");
   const manifest = JSON.parse(await readFile(rendered.render.manifest, "utf8"));
   manifest.supersample = 2;
   await writeFile(tampered, JSON.stringify(manifest, null, 2) + "\n");
 
-  const before = (await readdir(path.join(projDir, "renders"))).filter((f) => f.endsWith(".png")).length;
   const replay = await invoke(["composition", "replay", tampered, "--project", projDir, "--json"]);
-  expect(replay.code).toBe(1);
-  expect(JSON.parse(replay.stdout).error).toContain("hero");
-  expect(JSON.parse(replay.stdout).error).toContain("dilate cap");
-  expect((await readdir(path.join(projDir, "renders"))).filter((f) => f.endsWith(".png")).length).toBe(before);
+  expect(replay.code).toBe(0);
 });
 
 test("the unsupersampled markup is emitted identically at the default and explicit factor 1", () => {
