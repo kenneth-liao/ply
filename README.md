@@ -400,7 +400,10 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
   effect-extended result. The ring is an exact geometry: an
   `feMorphology` dilate extends the content's alpha by exactly `width`
   px in every direction, so painted ink and measurement reach agree
-  exactly (ADR-0019).
+  exactly (ADR-0019). Every successful render draws that full ring;
+  an outline whose raster dilate (width × supersample) would exceed
+  Chromium's 256-raster-px kernel cap is refused instead of rendering a
+  clipped ring (see supersampled rendering, ADR-0022).
 - **Painted bounds include the outline:** `ply composition measure`
   reports the outlined (and shadowed) ink in
   `painted`/`paintedOnCanvas`/`clipped` and the effective outline
@@ -579,7 +582,11 @@ stay in canvas pixels. Override it with `--supersample <n>` (integer ≥ 1);
 renders made before supersampling. The render pixel limits apply to the
 supersampled paint (canvas × factor per axis): a canvas that fits at 1× but
 not at the requested factor is refused with the fix named — it is never
-painted at a lower factor on its own.
+painted at a lower factor on its own. The same discipline covers outlines:
+Chromium caps the `feMorphology` outline-dilate kernel at 256 raster pixels,
+so an outline whose width × supersample would exceed that cap is refused
+before anything is painted — render with `--supersample 1`, a smaller
+factor, or a thinner outline. A render is never silently degraded.
 
 ```bash
 ply composition render poster -p ~/projects/my-poster                    # supersample 2 (default)

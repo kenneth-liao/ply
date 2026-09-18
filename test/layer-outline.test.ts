@@ -709,10 +709,11 @@ test("anchored placement uses the outline-extended ink; --anchor and --outline a
  *
  * Pinned to --supersample 1 (#184, ADR-0022): Chromium caps the feMorphology
  * dilate kernel at 256 px in the filter's raster space, so a 256-canvas-px
- * outline renders its full ring only at factor 1 (at factor 2 the raster
- * space is device pixels and the ring would clip at 128 canvas px). The
- * region-sizing contract this test pins is factor-independent, and the
- * supersampled outline geometry is pinned separately below. */
+ * outline can only render its full ring at factor 1; at any higher factor the
+ * paint path refuses before painting (MAX_OUTLINE_DILATE_PX in
+ * composition-paint.ts) instead of silently clipping. The region-sizing
+ * contract this test pins is factor-independent, and the supersampled
+ * outline geometry is pinned separately at kernel sizes under the cap. */
 test("the outline ring extends the full width past a small element's box; painted agrees with the render", async () => {
   const redImg = path.join(tempDir, "red.png");
   await writeFile(redImg, solidPng(40, 30, RED));

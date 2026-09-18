@@ -294,9 +294,12 @@ async function publishRender(
   }
 }
 
-export interface ReplayRenderOptions extends RenderCompositionOptions {
+export interface ReplayRenderOptions extends Omit<RenderCompositionOptions, "supersample"> {
   /** Caller-owned page (tests: route-aborted offline evidence); never closed. */
   page?: Page;
+  // No supersample option (#184): replay always paints at the factor the
+  // manifest records — the type omits the field rather than silently
+  // ignoring it (PROD-WIRE-1).
 }
 
 /**

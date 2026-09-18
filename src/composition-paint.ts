@@ -86,6 +86,17 @@ function captureEnvironment(page: Page): PaintEnvironment {
 }
 
 /**
+ * Chromium caps the `feMorphology` dilate kernel at 256 px in the filter's
+ * raster space (verified empirically): a supersampled paint rasterizes in
+ * device pixels, so an outline whose `width × supersample` exceeds this cap
+ * would render a silently clipped ring. The paint path refuses that state
+ * before painting instead — never a degraded render (#184, ADR-0022).
+ * One home for the number: the paint-path refusal and every test of the cap
+ * read this constant, never a second copy of the number.
+ */
+export const MAX_OUTLINE_DILATE_PX = 256;
+
+/**
  * Area-average a supersampled RGBA image back to its canvas size (#184,
  * ADR-0022): every factor×factor block of device pixels averages into one
  * canvas pixel. The average is taken in PREMULTIPLIED alpha — each sample's
@@ -114,6 +125,16 @@ export function averageSupersampled(rgba: Buffer, width: number, height: number,
   const outHeight = height / factor;
   const out = Buffer.alloc(outWidth * outHeight * 4);
   const count = factor * factor;
+  // Loop-invariant helper (PROD-PAINT-1): one function, no per-pixel closure
+  // allocation. Premultiplied 8-bit average: Rp = round(Σ(r·a)/(255·count));
+  // the unpremultiply rounds once more from that average. Opaque blocks
+  // (a = 255) skip the premultiplied round-trip losslessly, so they are
+  // exactly the plain box average.
+  const unpremultiply = (sumP: number, a: number, count: number): number => {
+    if (a === 0) return 0;
+    const rp = Math.round(sumP / (255 * count));
+    return Math.min(255, Math.round((rp * 255) / a));
+  };
   for (let by = 0; by < outHeight; by++) {
     for (let bx = 0; bx < outWidth; bx++) {
       let sumRp = 0, sumGp = 0, sumBp = 0, sumA = 0;
@@ -128,19 +149,10 @@ export function averageSupersampled(rgba: Buffer, width: number, height: number,
         }
       }
       const a = Math.round(sumA / count);
-      // Premultiplied 8-bit average: Rp = round(Σ(r·a)/(255·count)); the
-      // unpremultiply rounds once more from that average. Opaque blocks
-      // (a = 255) skip the premultiplied round-trip losslessly, so they are
-      // exactly the plain box average.
-      const unpremultiply = (sumP: number) => {
-        if (a === 0) return 0;
-        const rp = Math.round(sumP / (255 * count));
-        return Math.min(255, Math.round((rp * 255) / a));
-      };
       const o = (by * outWidth + bx) * 4;
-      out[o] = unpremultiply(sumRp);
-      out[o + 1] = unpremultiply(sumGp);
-      out[o + 2] = unpremultiply(sumBp);
+      out[o] = unpremultiply(sumRp, a, count);
+      out[o + 1] = unpremultiply(sumGp, a, count);
+      out[o + 2] = unpremultiply(sumBp, a, count);
       out[o + 3] = a;
     }
   }
@@ -202,6 +214,24 @@ export async function paintCompositionHtml(
   if (!Number.isInteger(supersample) || supersample < 1) {
     throw new Error(`Invalid supersample factor ${supersample}: must be an integer of at least 1.`);
   }
+  // Loud refusal before anything is painted (#184, ADR-0022): Chromium caps
+  // the feMorphology dilate kernel at MAX_OUTLINE_DILATE_PX raster pixels,
+  // and a supersampled paint rasterizes in device pixels — an outline whose
+  // width × factor exceeds the cap would render a silently clipped ring.
+  // Refused with the same shape as the supersample pixel-limit refusal:
+  // names the Layer, the numbers, the cap, and the fix. Replay inherits this
+  // check, so a stored manifest whose factor would clip is refused too.
+  for (const l of layers) {
+    const outline = l.revision.outline;
+    if (outline !== undefined && outline.width * supersample > MAX_OUTLINE_DILATE_PX) {
+      throw new Error(
+        `Layer "${l.name}" has a ${outline.width}px outline; supersample ${supersample} paints its dilate ` +
+          `at ${outline.width * supersample} raster pixels — over Chromium's ${MAX_OUTLINE_DILATE_PX}px ` +
+          `feMorphology dilate cap, which would clip the ring. Render with --supersample 1 or a smaller ` +
+          `factor, or use a thinner outline.`,
+      );
+    }
+  }
   const paint = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width * supersample, height: canvas.height * supersample });
     await page.setContent(html, { waitUntil: "load" });
@@ -224,6 +254,16 @@ export async function paintCompositionHtml(
     // in premultiplied alpha, and re-encode at exactly the canvas size. The
     // screenshot is this tool's own bounded output, never untrusted bytes.
     const painted = decodePng(png);
+    // The raster must be exactly canvas × factor before anything is averaged
+    // (PROD-PAINT-2): a dimension drift would otherwise surface as an opaque
+    // byte-length error instead of naming the supersample cause.
+    if (painted.width !== canvas.width * supersample || painted.height !== canvas.height * supersample) {
+      throw new Error(
+        `Supersampled paint captured ${painted.width}×${painted.height} instead of ` +
+          `${canvas.width * supersample}×${canvas.height * supersample} device pixels at supersample ` +
+          `${supersample} — refusing to average a mismatched raster.`,
+      );
+    }
     const averaged = averageSupersampled(painted.rgba, painted.width, painted.height, supersample);
     const reduced = encodePngRgba(canvas.width, canvas.height, averaged);
     return { png: reduced, environment: captureEnvironment(page) };
