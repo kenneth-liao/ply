@@ -1,10 +1,10 @@
 ---
 thing: Ply — general-purpose layered image composer
 phase: active
-progress: 19/28
-principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
+progress: 19/46
+principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Each layer's look — its shape, framing, colour, light, and how it blends with what is beneath it — is a set of adjustable parameters on the layer, never a change to its source, so one good asset serves every composition and any finished image can be built and tuned inside Ply without reaching for another tool. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
 started: 2026-09-07
-updated: 2026-09-17
+updated: 2026-09-19
 ---
 
 # Ideal State — Ply
@@ -48,6 +48,10 @@ the skills that agent reads.
 - Named variant sets as a schema concept. Variation is a filesystem concern.
 - YouTube-specific enforcement in the tool. It becomes caller-supplied data
   and skill knowledge.
+- Hand-driven pixel work: painting, retouching, freeform selections, and
+  non-rectangular warps.
+- Vector path editing, or a shape-drawing language inside Ply. Arbitrary
+  shapes arrive as vector files.
 
 ## Principles
 
@@ -84,7 +88,9 @@ the skills that agent reads.
 Ply is three modules — edit, compose, generate — over one uniform layer
 primitive. A composition is an ordered list of layers; any layer is reusable in
 any composition; editing a shared layer propagates or forks by explicit choice;
-and the tool enforces nothing about what a layer contains.
+and the tool enforces nothing about what a layer contains. A layer's look is
+a set of parameters over content that is never modified, so a finished image is
+built and tuned with no other image tool.
 
 ## Features
 
@@ -107,6 +113,12 @@ Why: the tool is a set of primitives, not a thumbnail machine.
 - [x] ISC-5: Anti: no composition is ever flattened in order to be reused.
   Probe: `rg` finds no bake/flatten path; a composition used inside another
   exposes its layers individually. bash
+
+- [ ] ISC-43: The nine outlier reference thumbnails are rebuilt with no image
+  tool other than Ply. The only outside steps are generation and acquiring
+  existing clean assets, imported unmodified.
+  Probe: a rebuild script that invokes only `ply`; renders reviewed against
+  the references. manual
 
 ### F1 · Composition
 
@@ -178,6 +190,17 @@ Why: the agent operates the tool; the human only asks for outputs.
   commands. Using one part never requires reading the whole surface.
   Probe: read the help tree. manual
 
+- [ ] ISC-41: A Layer can be created in its final state — content, placement,
+  transforms, effects, stack position — in one command.
+  Probe: build the "Claude Skills" reference thumbnail with one command per
+  Layer. bash
+- [ ] ISC-45: A Layer is addressable by Composition and use name wherever a
+  Layer id is accepted.
+  Probe: the same build with no Layer id lookups. bash
+- [ ] ISC-42: One command produces a labelled comparison sheet from any set of
+  renders or local images.
+  Probe: a reference-versus-result sheet for the nine thumbnails. bash
+
 ### F5 · Relocation discipline
 
 Why: cutting enforcement must not cut correctness or lose hard-won knowledge.
@@ -204,6 +227,61 @@ Why: cutting enforcement must not cut correctness or lose hard-won knowledge.
   Probe: all ten resolve in `ai-launchpad-content`; `deepseek`, `kimi`,
   `obsidian`, `opencode`, `qwen`, and `zai` previously existed nowhere else. bash
 
+### F6 · Edit
+
+Why: a Layer's look is tuned by parameter, so one good asset serves every
+composition and no other image tool is needed.
+
+- [ ] ISC-29: A filled geometric region is a Layer whose size, corner radius,
+  and fill (solid or gradient) are editable parameters.
+  Probe: create a bar, change its width and fill by edit, render — no image
+  file involved. bash
+- [ ] ISC-30: The visible region of any Layer is an editable parameter: a
+  rectangle with an optional corner radius.
+  Probe: crop a padded cutout to the face and round a screenshot's corners;
+  `measure` reports the cropped extent. bash
+- [ ] ISC-31: A Layer's colour and light — brightness, contrast, saturation,
+  warmth, edge glow — are editable parameters.
+  Probe: one content hash graded warm in Composition A and cool in B. bash
+- [ ] ISC-32: How a Layer combines with what is beneath it (its blend mode) is
+  an editable parameter.
+  Probe: a white-background wordmark set to multiply shows no white over a
+  grid background. bash
+- [ ] ISC-33: Text can be filled with a gradient.
+  Probe: render a two-stop gradient headline. bash
+- [ ] ISC-34: Any local vector file imports as a Layer and renders at full
+  fidelity at any scale.
+  Probe: one logo SVG at 60px and 600px, both crisp. manual
+- [ ] ISC-44: A single-colour vector Layer takes its colour as a parameter.
+  Probe: one `claude.svg` rendered dark, white, and orange. bash
+- [ ] ISC-35: Any local font file the caller supplies works like a bundled
+  one: retained in the Project, replayable, real axis ranges enforced.
+  Probe: a pixel font renders, replays after relocation, and an out-of-range
+  weight is refused. bash
+- [ ] ISC-36: Several Layers can be transformed and adjusted as one unit
+  without flattening.
+  Probe: rotate a card and its wordmark with one edit; each stays individually
+  editable; ISC-5 still holds. bash
+- [ ] ISC-37: Every edit property works on every Layer kind, except properties
+  that need an intrinsic pixel size.
+  Probe: matrix test, property × kind. bash
+- [ ] ISC-38: Anti: no edit operation writes to or replaces a Layer's retained
+  content bytes; removing every adjustment restores the original render
+  byte-for-byte.
+  Probe: apply every property, remove each, compare renders. bash
+- [ ] ISC-39: Anti: no edit property calls a model or the network; every edit
+  property is covered by replay. Anything needing inference is generation or
+  matting.
+  Probe: the edit suite runs with the network disabled; replay is
+  byte-identical. bash
+- [ ] ISC-40: Anti: an imported vector never loads anything external or runs
+  a script, at import, measure, or render.
+  Probe: a crafted SVG with a script and a remote reference — zero requests,
+  no execution. bash
+- [ ] ISC-46: A vector file with an external reference is refused at import,
+  naming the reference.
+  Probe: the same crafted SVG's import error. bash
+
 ## Not yet specified
 
 - **The ISC-21 token budget.** Needs a measurement of today's `scene inspect`
@@ -214,11 +292,14 @@ Why: cutting enforcement must not cut correctness or lose hard-won knowledge.
   recreating a UI panel like the reference thumbnail means many precise text
   layers. The edit module may want first-class help for this.
 - **Generating into an existing layer** (img2img over a layer's current
-  content). Plausibly valuable, not discussed.
-- **Masks.** Deferred; a genuine compositing primitive that returns when the
-  edit module grows.
-- **The contact sheet.** Kept as a comparison command, but its shape after
-  Variants are gone is undecided.
+  content). Plausibly valuable. Studio relighting of a cutout is the first
+  concrete use; untested.
+- **Arbitrary-shape masks** (one Layer's alpha clipping another). Rectangular
+  visible regions are claimed (ISC-30); no evidence yet needs more.
+- **Relative layout between Layers** (row, align, re-flow when one changes).
+  Mixed inline content such as a logo inside a word is placed by hand from
+  `measure` today. Sits beside text-dense panels; may share a mechanism with
+  ISC-36.
 - **Shared-library promotion versus caller-owned library.** ISC-16 assumes
   promoting a Layer to a shared library is an explicit Ply operation, while
   ADR-0014's destination owns no asset catalog and leaves reusable libraries to
@@ -291,6 +372,26 @@ minimum functionality. Returns with the edit module.
 cutouts, plates, or masks exist on disk, so migration costs nothing. The single
 exception is `assets/logos/` (ISC-28). Bundled fonts stay: they are the
 renderer's registry, not content.
+
+**2026-09-19 — refined: edit module destination.** The first real-world run
+(nine outlier thumbnails recreated) needed ImageMagick and `rsvg-convert` for
+every bar, pill, card, gradient background, logo recolour, and cutout trim.
+Goal extended; ISC-29 through ISC-46 added (F6 Edit, plus F0 arrival and F4
+agent-surface claims). The contact-sheet fog graduated to ISC-42; the Masks
+fog narrowed to arbitrary shapes.
+
+**2026-09-19 — Parametric shapes and vector import, no drawing language.**
+Shapes whose parameters are the point are a Layer kind (ISC-29); arbitrary
+shapes arrive as vector files (ISC-34). *Dead end:* a text `--background`
+option — it bundles two concerns; a bar is its own Layer.
+
+**2026-09-19 — Grading is a property; relighting is generation.** Deterministic
+colour and light are Layer parameters (ISC-31, ISC-39). Changing the direction
+or shape of light needs inference, so it is generation and produces new
+content for the caller to approve.
+
+**2026-09-19 — ISC-36 mechanism deferred.** Group primitive versus nested
+Composition as a unit is an architectural choice; it gets an ADR when specced.
 
 ## Learning
 
