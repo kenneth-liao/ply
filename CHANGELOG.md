@@ -36,7 +36,7 @@
   refused naming the allowed value, a carried-axis refusal names the
   one-command fix, and the revision still stores no axis fields (#196,
   ADR-0021)
-- Chained feMorphology dilate steps when outline raster dilation exceeds Chromium's 256-px cap, lifting the outline dilate cap across all supersample factors and Layer scales (#194). Rollback is safe: reverting restores the #199 loud refusal, and a pre-#194 binary replaying an over-cap manifest refuses loudly (fail-closed both ways, no silent clipping).
+- Added chained feMorphology dilate steps when outline raster dilation exceeds Chromium's 256-px cap, lifting the outline dilate cap across all supersample factors and Layer scales (#194)
 - Added supersampled rendering: `ply composition render` now paints at 2
   device pixels per canvas pixel by default and area-averages each 2×2 block
   in premultiplied alpha back to exactly the canvas size (ADR-0022), so large

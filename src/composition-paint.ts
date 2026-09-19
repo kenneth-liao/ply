@@ -86,16 +86,16 @@ function captureEnvironment(page: Page): PaintEnvironment {
 }
 
 /**
- * Chromium caps the `feMorphology` dilate kernel at 256 px in the filter's
- * raster space (verified empirically). Outline width is in the Layer's LOCAL
- * px (ADR-0019), painted before the transform, so the raster dilation is
+ * Chromium's per-step raster cap on the `feMorphology` dilate kernel:
+ * 256 px in the filter's raster space (verified empirically). Outline
+ * width is in the Layer's LOCAL px (ADR-0019), painted before the
+ * transform, so the raster dilation is
  * `outline.width × max(|scaleX|, |scaleY|) × supersample` (#193, ADR-0022).
- * An outline exceeding this cap would render a silently clipped ring. The
- * paint path refuses that state before painting instead — never a degraded
- * render (ADR-0022).
+ * `outlineDilateSteps` reads this cap to set the chained-step count so no
+ * single dilate step exceeds it (#194).
  *
- * One home for the number: the refusal and every test of the cap read this
- * constant, never a second copy of the number.
+ * One home for the number: `outlineDilateSteps` and every test of the cap
+ * read this constant, never a second copy of the number.
  */
 export const MAX_OUTLINE_DILATE_PX = 256;
 

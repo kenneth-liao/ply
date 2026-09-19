@@ -1,13 +1,15 @@
 /**
- * Tests for issue #193: outline-cap check incorporates Layer scale.
+ * Tests for issues #193 and #194: outline raster dilation incorporates
+ * Layer scale and supersample, and an outline over Chromium's per-step cap
+ * renders via chained dilate steps.
  *
- * Chromium caps the feMorphology dilate kernel at 256 px in device raster space
- * (MAX_OUTLINE_DILATE_PX). Outline width is in the Layer's LOCAL px (ADR-0019),
- * painted before the transform, so raster dilation is:
+ * Chromium caps each feMorphology dilate step's kernel at 256 px in device
+ * raster space (MAX_OUTLINE_DILATE_PX). Outline width is in the Layer's
+ * LOCAL px (ADR-0019), painted before the transform, so raster dilation is:
  *   outline.width × max(|scaleX|, |scaleY|) × supersample.
- *
- * Neither silent clipping (scaled-up Layer) nor false refusal (scaled-down Layer)
- * is permitted (ADR-0022).
+ * outlineDilateSteps chains enough steps to keep each at or under the cap,
+ * so the full ring renders at any scale or factor — never a silently
+ * clipped ring (ADR-0022).
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
@@ -174,7 +176,7 @@ test("probe case 2: scale 2, outline 200, factor 1 renders a 400 ± 1 px ring vi
 test("probe case 3: scale 0.25, outline 200, factor 2 renders a ring of 50 ± 1 px", async () => {
   // 400×400 canvas, 100×100 square at (150, 150), scale 0.25 -> content box 25×25 [150, 175).
   // Outline 200 local px × scale 0.25 × factor 2 = 100 raster px <= 256.
-  // Must render (not falsely refused) and produce a 50 ± 1 px ring.
+  // Must render and produce a 50 ± 1 px ring.
   const img = path.join(tempDir, "black100.png");
   await writeFile(img, solidPng(100, 100, [0, 0, 0, 255]));
   await invoke(["composition", "create", "comp3", "--width", "400", "--height", "400", "--project", projDir]);
