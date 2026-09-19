@@ -23,7 +23,8 @@ naming the allowed range. It never synthesizes a weight or width.
     boundary, verified by test in #179.
 - **Static font** (every face bundled before #179, and IBM Plex Mono 500): the
   bytes already fix the look. `weight` accepts only the face's own weight,
-  `width` is refused, and the revision stores neither.
+  `width` accepts only the face's implicit width (100) or omission (#196),
+  and the revision stores neither.
 
 So each look has exactly one representation: the stored fields are present if
 and only if the retained font is variable. The revision hash includes the
@@ -32,8 +33,10 @@ paint meaning (the ADR-0016/0019 compatibility pattern). Paint and measurement
 both read the stored axes from the revision alone, so they cannot disagree.
 
 Changing `--font` on an edit keeps the current weight and width when the new
-font supports them. Otherwise the edit is refused and names what the new font
-allows. Nothing changes silently.
+font supports them. Explicit `weight`/`width` controls on the same edit
+replace the carried values before validation (#196); otherwise a carried
+value the new font cannot express is refused, naming the one-command fix.
+Nothing changes silently.
 
 ## Why the axes are stored when the family is not
 
@@ -52,6 +55,12 @@ could not be reproduced from its manifest.
 
 ## Consequences
 
+- A variable-font Layer switches to a static face in one `layer edit`
+  (#196): a static face accepts its implicit width (100) as well as its own
+  weight, explicit `--weight`/`--width` on a `--font` edit replace the
+  carried axes before validation, and a carried-axis refusal names the
+  one-command fix. The revision still stores no axis fields for a static
+  face — storage, hashing, revision ids, and pinned replays are unchanged.
 - Bundled variable fonts ship as the exact upstream bytes, not latin subsets,
   so Ply renders byte-identical type to the brand source.
 - Tracking and line height are not part of this decision. They are separate

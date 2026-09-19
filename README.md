@@ -445,13 +445,16 @@ ply layer edit <layerId> --weight 600 --width 100 --in-place
   resolves to the font's default instance (Archivo: 400 / 100), and the
   revision always stores the resolved pair.
 - **Static fonts** (IBM Plex Mono 500 and every other pre-existing face):
-  `weight` accepts only the face's own weight (or omission) and `width` is
-  refused outright — the bytes already fix the look. The revision stores no
-  axis fields.
+  `weight` accepts only the face's own weight and `width` only the face's
+  implicit width (100) — or omission — since the bytes already fix the
+  look. The revision stores no axis fields.
 - **Editing `--font`** keeps the current weight and width when the new font
-  supports them; otherwise the edit is refused and names what the new font
-  allows — nothing changes silently. When the current revision stores no
-  axes, the new font's defaults apply.
+  supports them; otherwise the edit is refused and names the one-command
+  fix — nothing changes silently. Explicit `--weight`/`--width` on the same
+  edit replace the carried values before validation, so a variable-font
+  Layer switches to a static face in one edit
+  (`--font "IBM Plex Mono" --weight 500 --width 100`). When the current
+  revision stores no axes, the new font's defaults apply.
 - **Editing `weight`/`width` without `--font`** validates against the
   Layer's retained font, resolved by its content hash; if the retained bytes
   match no bundled face, the edit requires `--font`.

@@ -189,9 +189,9 @@ Options:
                         against the bundled font's real weight axis —
                         Archivo 100-900 (default 400); static faces accept
                         only their own weight
-  --width <num>         Text width for a text Layer (#179): variable fonts
-                        only — Archivo 62-125 (default 100); static faces
-                        refuse width
+  --width <num>         Text width for a text Layer (#179/#196): variable
+                        fonts — Archivo 62-125 (default 100); static faces
+                        accept only their implicit width 100
   --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
   --order <names>       Comma-separated permutation of use names (required for reorder)
   --out <path>          Export path for a render or replay; fresh in-Project

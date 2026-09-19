@@ -391,10 +391,10 @@ export async function addTextLayerToComposition(
     /** Strict hex color (#RGB / #RRGGBB); default #ffffff. */
     color?: string;
     /**
-     * Optional text axes (#179, ADR-0021): validated against the face's real
-     * axis ranges — a variable face stores the resolved pair (omitted
+     * Optional text axes (#179/#196, ADR-0021): validated against the face's
+     * real axis ranges — a variable face stores the resolved pair (omitted
      * controls resolve to its default instance), a static face accepts only
-     * its own weight and refuses width outright.
+     * its own weight and its implicit width (100) or omission.
      */
     weight?: number;
     width?: number;

@@ -14,7 +14,7 @@ import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js"
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
-import { STATIC_FACE_WIDTH, faceByContentHash, resolveFace, resolveTextAxes, fontAssetBytes, type FontFace, type TextAxes } from "./fonts.js";
+import { staticFaceAcceptedAxes, faceByContentHash, resolveFace, resolveTextAxes, fontAssetBytes, type FontFace, type TextAxes } from "./fonts.js";
 import {
   selectGenerationOutput,
   retainGenerationRecord,
@@ -1191,9 +1191,10 @@ export interface EditLayerOptions {
    */
   weight?: number;
   /**
-   * Select the text look's width (#179, ADR-0021): variable faces only —
-   * validated against the face's `wdth` range, and refused on static faces
-   * outright. Carries across a `--font` switch the same way `weight` does.
+   * Select the text look's width (#179/#196, ADR-0021): validated against
+   * the face's `wdth` range on a variable face; a static face accepts only
+   * its implicit width (100) or omission. Carries across a `--font` switch
+   * the same way `weight` does.
    */
   width?: number;
   /**
@@ -1719,19 +1720,25 @@ function boundedScale(
 }
 
 /**
- * Resolve the text axes an edit publishes (#179, ADR-0021): the one home for
- * the edit semantics, layered on `resolveTextAxes`'s face validation.
+ * Resolve the text axes an edit publishes (#179/#196, ADR-0021): the one
+ * home for the edit semantics, layered on `resolveTextAxes`'s face
+ * validation.
  *
  * - A variable target: the explicit control wins, otherwise the current
  *   revision's axes carry across the font switch, otherwise the face's
  *   default instance — then the pair validates against the face's real
  *   ranges.
- * - A static target: an explicit width is refused; an explicit or carried
- *   weight must be the face's own weight (refused otherwise, naming what it
- *   allows). A carried width is refused unless it is the static face's
- *   implicit width (`STATIC_FACE_WIDTH`): the face has no width axis, so a
- *   different width has no equivalent and cannot change silently
- *   (ADR-0021), while a carried width-100 look carries as nothing-to-store.
+ * - A static target: explicit controls replace the carried values before
+ *   validation and validate through the same one validator — weight accepts
+ *   only the face's own weight, width only its implicit width — so a
+ *   variable-to-static switch works in one edit (#196). A still-carried
+ *   axis the face cannot express (a different weight, or a width other
+ *   than the implicit 100) conflicts with retained state and is refused
+ *   naming the one-command fix: the explicit flags that resolve every
+ *   remaining conflict in this same edit, built from the same accepted
+ *   pair (`staticFaceAcceptedAxes`, the one home for that rule). A carried
+ *   width-100 look carries as nothing-to-store. Either way the revision
+ *   stores no axis fields.
  */
 function resolveEditTextAxes(
   face: FontFace,
@@ -1744,19 +1751,29 @@ function resolveEditTextAxes(
       width: options.width ?? prevRev.width,
     });
   }
-  const carriedWidth = options.width !== undefined ? undefined : prevRev.width;
-  if (carriedWidth !== undefined && carriedWidth !== STATIC_FACE_WIDTH) {
-    throw new Error(
-      `Font "${face.family}" is a static face at weight ${face.weight} — it has no width axis, so the current width ${carriedWidth} cannot be kept.`,
-    );
-  }
-  const carriedWeight = options.weight !== undefined ? undefined : prevRev.weight;
-  return resolveTextAxes(face, {
-    ...(options.weight !== undefined || carriedWeight !== undefined
-      ? { weight: options.weight ?? carriedWeight }
-      : {}),
+  const accepted = staticFaceAcceptedAxes(face);
+  const axes = resolveTextAxes(face, {
+    ...(options.weight !== undefined ? { weight: options.weight } : {}),
     ...(options.width !== undefined ? { width: options.width } : {}),
   });
+  const carriedWeight = options.weight !== undefined ? undefined : prevRev.weight;
+  const carriedWidth = options.width !== undefined ? undefined : prevRev.width;
+  const conflicts: string[] = [];
+  const fix: string[] = [];
+  if (carriedWeight !== undefined && carriedWeight !== accepted.weight) {
+    conflicts.push(`weight ${carriedWeight}`);
+    fix.push(`--weight ${accepted.weight}`);
+  }
+  if (carriedWidth !== undefined && carriedWidth !== accepted.width) {
+    conflicts.push(`width ${carriedWidth}`);
+    fix.push(`--width ${accepted.width}`);
+  }
+  if (conflicts.length > 0) {
+    throw new Error(
+      `Font "${face.family}" is a static face at weight ${accepted.weight} — the current ${conflicts.join(" and ")} cannot be kept; add ${fix.join(" ")}.`,
+    );
+  }
+  return axes;
 }
 
 /**

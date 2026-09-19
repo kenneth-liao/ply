@@ -12,6 +12,7 @@ import {
   familyResolved,
   resolveTextAxes,
   resolveFace,
+  staticFaceAcceptedAxes,
   STATIC_FACE_WIDTH,
   type FontFace,
 } from "../src/fonts.js";
@@ -199,23 +200,29 @@ describe("Groundline faces (#179, ADR-0021)", () => {
       expect(() => resolveTextAxes(archivo, { width: 61 })).toThrow(/62-125/);
     });
 
-    it("a static face accepts only its own weight and refuses width, naming what it allows", () => {
+    it("a static face accepts only its own weight and its implicit width, naming what it allows", () => {
       expect(resolveTextAxes(plex, {})).toEqual({});
       expect(resolveTextAxes(plex, { weight: 500 })).toEqual({});
+      expect(resolveTextAxes(plex, { width: 100 })).toEqual({});
+      expect(resolveTextAxes(plex, { weight: 500, width: 100 })).toEqual({});
       expect(() => resolveTextAxes(plex, { weight: 700 })).toThrow(/"IBM Plex Mono".*500.*700/);
-      expect(() => resolveTextAxes(plex, { width: 100 })).toThrow(/"IBM Plex Mono".*width/i);
-      expect(resolveTextAxes(oswald, { weight: 700 })).toEqual({});
+      expect(() => resolveTextAxes(plex, { width: 122 })).toThrow(/"IBM Plex Mono".*122.*100/);
+      expect(resolveTextAxes(oswald, { weight: 700, width: 100 })).toEqual({});
       expect(() => resolveTextAxes(oswald, { weight: 400 })).toThrow(/"Oswald".*700/);
-      expect(() => resolveTextAxes(oswald, { width: 100 })).toThrow(/"Oswald".*width/i);
+      expect(() => resolveTextAxes(oswald, { width: 62 })).toThrow(/"Oswald".*100/);
     });
 
-    it("every static face accepts only its own weight and refuses width", () => {
+    it("every static face accepts only its own weight and its implicit width", () => {
     for (const face of BUNDLED_FACES.values()) {
       if (face.variant !== "static") continue;
+      // staticFaceAcceptedAxes is the one home for the acceptance rule —
+      // the validator and the edit path's carried check read the same pair.
+      expect(staticFaceAcceptedAxes(face), face.family).toEqual({ weight: face.weight, width: STATIC_FACE_WIDTH });
       expect(resolveTextAxes(face, {}), face.family).toEqual({});
       expect(resolveTextAxes(face, { weight: face.weight }), face.family).toEqual({});
+      expect(resolveTextAxes(face, { width: STATIC_FACE_WIDTH }), face.family).toEqual({});
       expect(() => resolveTextAxes(face, { weight: face.weight + 1 })).toThrow(face.family);
-      expect(() => resolveTextAxes(face, { width: STATIC_FACE_WIDTH })).toThrow(/width axis/);
+      expect(() => resolveTextAxes(face, { width: STATIC_FACE_WIDTH + 1 })).toThrow(face.family);
     }
   });
 
