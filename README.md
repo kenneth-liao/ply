@@ -42,7 +42,9 @@ longer run, and their existing records remain inspectable (see below).
 The preserved legacy workflow uses a versioned **Scene** for 1280×720 images
 and is documented under [Legacy surface](#legacy-surface-preserved). It is not
 the entry path for new work, and its terms are not the target glossary.
-Architectural decisions are in [docs/adr/](docs/adr/).
+Architectural decisions are in [docs/adr/](docs/adr/); the user guide's
+[Limits and render quality](docs/guide/limits.md) page collects the size,
+quality, and refusal limits a caller can hit (index: [docs/guide/](docs/guide/)).
 
 ## Projects and Compositions (new surface)
 
@@ -269,8 +271,9 @@ ply composition measure poster --json                # machine-readable
   grid, while canvas offsets are layout-derived and may be fractional.
   Capture is bounded — one windowed screenshot per Layer, never scaled by
   off-canvas distance and widened by each Layer's effect extent; a Layer
-  whose layout box plus effect extent exceeds the 8192×8192px
-  window is refused with an actionable error instead of growing memory.
+  too large to capture is refused with an actionable error instead of
+  growing memory (the bound and the ≤1 px tolerances:
+  [Limits and render quality](docs/guide/limits.md)).
   Painted bounds are the
   browser's own paint of the exact markup rendering uses, so
   measurement and rendering agree; opacity scaling
@@ -400,11 +403,11 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
   effect-extended result. The ring is an exact geometry: an
   `feMorphology` dilate extends the content's alpha by exactly `width`
   px in every direction, so painted ink and measurement reach agree
-  exactly (ADR-0019). Every successful render draws that full ring;
-  when raster dilation (width × layer scale × supersample) exceeds
-  Chromium's 256-raster-px kernel cap, the outline is drawn as a chain
-  of smaller dilate steps so outlines render unclipped at any scale
-  and factor (see supersampled rendering, ADR-0019, ADR-0022).
+  exactly (ADR-0019). Every successful render draws that full ring —
+  over Chromium's raster cap it is drawn as chained dilate steps, never
+  refused; [Limits and render quality](docs/guide/limits.md) states the
+  width bound, the visible-width rule, and the measured cost (ADR-0019,
+  ADR-0022).
 - **Painted bounds include the outline:** `ply composition measure`
   reports the outlined (and shadowed) ink in
   `painted`/`paintedOnCanvas`/`clipped` and the effective outline
@@ -452,9 +455,9 @@ ply layer edit <layerId> --weight 600 --width 100 --in-place
   supports them; otherwise the edit is refused and names the one-command
   fix — nothing changes silently. Explicit `--weight`/`--width` on the same
   edit replace the carried values before validation, so a variable-font
-  Layer switches to a static face in one edit
-  (`--font "IBM Plex Mono" --weight 500 --width 100`). When the current
-  revision stores no axes, the new font's defaults apply.
+  Layer switches to a static face in one edit — the refusal and the route
+  are in [Limits and render quality](docs/guide/limits.md). When the
+  current revision stores no axes, the new font's defaults apply.
 - **Editing `weight`/`width` without `--font`** validates against the
   Layer's retained font, resolved by its content hash; if the retained bytes
   match no bundled face, the edit requires `--font`.
@@ -586,13 +589,10 @@ stay in canvas pixels. Override it with `--supersample <n>` (integer ≥ 1);
 renders made before supersampling. The render pixel limits apply to the
 supersampled paint (canvas × factor per axis): a canvas that fits at 1× but
 not at the requested factor is refused with the fix named — it is never
-painted at a lower factor on its own. Outlines render at any factor and
-Layer scale without clipping (#194): Chromium caps an individual
-`feMorphology` dilate kernel at 256 raster pixels in device space, but
-when a Layer's raster dilation (`outline.width × max(|scaleX|, |scaleY|) × supersample`)
-exceeds 256 px, the outline is rendered as a chain of smaller dilate steps
-whose local radii sum to `width`. Box structuring elements add up exactly,
-so geometry and painted extents stay identical at any renderable factor
+painted at a lower factor on its own. Outlines over Chromium's
+`feMorphology` raster cap render as chained dilate steps at any factor and
+Layer scale (#194). [Limits and render quality](docs/guide/limits.md) gives
+the bounds, the canvas/factor table, and the measured outline cost
 (ADR-0019, ADR-0022).
 
 ```bash
