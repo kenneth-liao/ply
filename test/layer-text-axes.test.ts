@@ -155,7 +155,7 @@ test("Archivo stores its resolved axes; omitted controls resolve to the default 
   expect(blobs.filter((b) => b !== ".gitkeep").length).toBe(1);
 });
 
-test("static faces store no axis fields: IBM Plex Mono accepts omission or 500, refuses 700 and any width", async () => {
+test("static faces store no axis fields: IBM Plex Mono accepts omission, 500, and its implicit width 100", async () => {
   await makeComposition("poster", 600, 400);
   const ok1 = await addText("poster", "mono", { text: "util", font: "IBM Plex Mono", fontSize: 48 });
   expect(ok1.code).toBe(0);
@@ -170,26 +170,37 @@ test("static faces store no axis fields: IBM Plex Mono accepts omission or 500, 
   expect(mono500.revision.weight).toBeUndefined();
   expect(mono500.revision.width).toBeUndefined();
 
-  for (const args of [
-    ["--weight", "700"],
-    ["--width", "100"],
-  ]) {
-    const refused = await invoke([
-      "composition", "add", "poster", "refused", "--text", "util", "--font", "IBM Plex Mono",
-      ...args, "--project", projDir,
-    ]);
-    expect(refused.code).toBe(2);
-    expect(refused.stderr).toContain("IBM Plex Mono");
-    expect(refused.stderr).toContain("500");
-  }
-  // The refusals published nothing: the Composition still has 2 Layers.
+  // #196: a static face accepts its implicit width (100) as well as its own
+  // weight, and still stores no axis fields.
+  const ok3 = await addText("poster", "mono100", { text: "util", font: "IBM Plex Mono", fontSize: 48, width: 100 });
+  expect(ok3.code).toBe(0);
+  const mono100 = await readStoredTextRevision(JSON.parse(ok3.stdout).use.layerId as string);
+  expect(mono100.revision.weight).toBeUndefined();
+  expect(mono100.revision.width).toBeUndefined();
+
+  const badWeight = await invoke([
+    "composition", "add", "poster", "refused", "--text", "util", "--font", "IBM Plex Mono",
+    "--weight", "700", "--project", projDir,
+  ]);
+  expect(badWeight.code).toBe(2);
+  expect(badWeight.stderr).toContain("IBM Plex Mono");
+  expect(badWeight.stderr).toContain("500");
+  // Any width other than the face's implicit 100 is refused, naming it.
+  const badWidth = await invoke([
+    "composition", "add", "poster", "refused", "--text", "util", "--font", "IBM Plex Mono",
+    "--width", "122", "--project", projDir,
+  ]);
+  expect(badWidth.code).toBe(2);
+  expect(badWidth.stderr).toContain("IBM Plex Mono");
+  expect(badWidth.stderr).toContain("100");
+  // The refusals published nothing: the Composition still has 3 Layers.
   const layers = JSON.parse(
     (await invoke(["composition", "inspect", "poster", "--project", projDir, "--json"])).stdout,
   ).composition.layers;
-  expect(layers.length).toBe(2);
+  expect(layers.length).toBe(3);
 });
 
-test("every pre-#179 static face accepts only its own weight and refuses width (Oswald)", async () => {
+test("every pre-#179 static face accepts only its own weight and its implicit width (Oswald)", async () => {
   await makeComposition("poster", 600, 400);
   const ok = await addText("poster", "head", { text: "Ply", font: "Oswald", fontSize: 64, weight: 700 });
   expect(ok.code).toBe(0);
@@ -204,11 +215,22 @@ test("every pre-#179 static face accepts only its own weight and refuses width (
   expect(badWeight.stderr).toContain("Oswald");
   expect(badWeight.stderr).toContain("700");
 
+  // The implicit width 100 is accepted and stores nothing (#196); any other
+  // width is refused, naming the allowed value.
+  const okWidth = await invoke([
+    "composition", "add", "poster", "w100", "--text", "Ply", "--font", "Oswald", "--width", "100", "--project", projDir, "--json",
+  ]);
+  expect(okWidth.code).toBe(0);
+  const w100 = await readStoredTextRevision(JSON.parse(okWidth.stdout).use.layerId as string);
+  expect(w100.revision.weight).toBeUndefined();
+  expect(w100.revision.width).toBeUndefined();
+
   const badWidth = await invoke([
-    "composition", "add", "poster", "ww", "--text", "Ply", "--font", "Oswald", "--width", "100", "--project", projDir,
+    "composition", "add", "poster", "ww", "--text", "Ply", "--font", "Oswald", "--width", "80", "--project", projDir,
   ]);
   expect(badWidth.code).toBe(2);
   expect(badWidth.stderr).toContain("Oswald");
+  expect(badWidth.stderr).toContain("100");
 });
 
 test("out-of-range Archivo values are refused naming the allowed ranges, and publish nothing", async () => {
@@ -328,17 +350,23 @@ test("editing weight/width without --font validates against the Layer's retained
   const after = await readStoredTextRevision(layerId);
   expect(after.revHash).toBe(before.revHash);
 
-  // A static retained face refuses width and any other weight.
+  // A static retained face accepts its implicit width 100 as a no-op and
+  // its own weight; any other width or weight is refused, naming what it
+  // allows (#196).
   const staticRes = await addText("poster", "mono", { text: "util", font: "IBM Plex Mono", fontSize: 32 });
   const staticId = JSON.parse(staticRes.stdout).use.layerId as string;
-  const staticWidth = await invoke(["layer", "edit", staticId, "--width", "100", "--in-place", "--project", projDir]);
+  const revBefore = (await readStoredTextRevision(staticId)).revHash;
+  const staticWidthOk = await invoke(["layer", "edit", staticId, "--width", "100", "--in-place", "--project", projDir, "--json"]);
+  expect(staticWidthOk.code).toBe(0);
+  expect((await readStoredTextRevision(staticId)).revHash).toBe(revBefore);
+  const staticWidth = await invoke(["layer", "edit", staticId, "--width", "122", "--in-place", "--project", projDir]);
   expect(staticWidth.code).toBe(1);
   expect(staticWidth.stderr).toContain("IBM Plex Mono");
+  expect(staticWidth.stderr).toContain("100");
   const staticWeight = await invoke(["layer", "edit", staticId, "--weight", "700", "--in-place", "--project", projDir]);
   expect(staticWeight.code).toBe(1);
   expect(staticWeight.stderr).toContain("500");
   // Its own weight is accepted (and is a no-op on the revision).
-  const revBefore = (await readStoredTextRevision(staticId)).revHash;
   const staticOk = await invoke(["layer", "edit", staticId, "--weight", "500", "--in-place", "--project", projDir, "--json"]);
   expect(staticOk.code).toBe(0);
   expect((await readStoredTextRevision(staticId)).revHash).toBe(revBefore);
@@ -349,11 +377,13 @@ test("editing --font keeps the current axes when the new font supports them, and
   const res = await addText("poster", "display", { text: "Ply", fontSize: 72, weight: 800, width: 122 });
   const layerId = JSON.parse(res.stdout).use.layerId as string;
 
-  // Archivo 800 -> IBM Plex Mono is refused, naming the only available weight.
+  // Archivo 800/122 -> IBM Plex Mono is refused: the carried axes conflict
+  // with the static face, and the refusal names the one-command fix (#196).
   const refused = await invoke(["layer", "edit", layerId, "--font", "IBM Plex Mono", "--in-place", "--project", projDir]);
   expect(refused.code).toBe(1);
   expect(refused.stderr).toContain("IBM Plex Mono");
   expect(refused.stderr).toContain("500");
+  expect(refused.stderr).toContain("add --weight 500 --width 100");
 
   // Archivo 500/100 -> IBM Plex Mono succeeds, storing no axis fields.
   await invoke(["layer", "edit", layerId, "--weight", "500", "--width", "100", "--in-place", "--project", projDir, "--json"]);
@@ -378,13 +408,23 @@ test("editing --font keeps the current axes when the new font supports them, and
   expect(resolved.revision.width).toBe(100);
 
   // A carried width with no static equivalent refuses — nothing changes
-  // silently (Archivo 500/122 -> IBM Plex Mono has no width-122 cut).
+  // silently (Archivo 500/122 -> IBM Plex Mono has no width-122 cut), and
+  // the refusal names the one-command fix (#196).
   const condensed = await addText("poster", "condensed", { text: "Ply", fontSize: 48, weight: 500, width: 122 });
   const condensedId = JSON.parse(condensed.stdout).use.layerId as string;
   const widthRefused = await invoke(["layer", "edit", condensedId, "--font", "IBM Plex Mono", "--in-place", "--project", projDir]);
   expect(widthRefused.code).toBe(1);
   expect(widthRefused.stderr).toContain("IBM Plex Mono");
   expect(widthRefused.stderr).toContain("122");
+  expect(widthRefused.stderr).toContain("add --width 100");
+
+  // The explicit flag alone completes the switch when the other carried
+  // axis is already the face's own (#196).
+  const condensedOk = await invoke(["layer", "edit", condensedId, "--font", "IBM Plex Mono", "--width", "100", "--in-place", "--project", projDir, "--json"]);
+  expect(condensedOk.code).toBe(0);
+  const condensedMono = await readStoredTextRevision(condensedId);
+  expect(condensedMono.revision.weight).toBeUndefined();
+  expect(condensedMono.revision.width).toBeUndefined();
 
   // Variable -> variable via --font (same family): the current axes carry.
   await invoke(["layer", "edit", legacyId, "--weight", "700", "--width", "88", "--in-place", "--project", projDir, "--json"]);
@@ -393,6 +433,59 @@ test("editing --font keeps the current axes when the new font supports them, and
   const carried = await readStoredTextRevision(legacyId);
   expect(carried.revision.weight).toBe(700);
   expect(carried.revision.width).toBe(88);
+});
+
+test("a variable-font Layer switches to a static face in one edit with explicit axes (#196)", async () => {
+  await makeComposition("poster", 600, 400);
+  const res = await addText("poster", "display", { text: "Ply", fontSize: 72, weight: 800, width: 122 });
+  const layerId = JSON.parse(res.stdout).use.layerId as string;
+
+  // One edit: explicit --weight/--width replace the carried axes before
+  // validation, and the static face still stores no axis fields — the same
+  // stored shape the two-edit route produces.
+  const oneEdit = await invoke([
+    "layer", "edit", layerId, "--font", "IBM Plex Mono", "--weight", "500", "--width", "100",
+    "--in-place", "--project", projDir, "--json",
+  ]);
+  expect(oneEdit.code).toBe(0);
+  const mono = await readStoredTextRevision(layerId);
+  expect(mono.revision.weight).toBeUndefined();
+  expect(mono.revision.width).toBeUndefined();
+
+  // A command-line width other than the face's implicit 100 is a usage
+  // error at the --font boundary (exit 2), naming the allowed value.
+  const badWidth = await invoke(["layer", "edit", layerId, "--font", "IBM Plex Mono", "--width", "122", "--in-place", "--project", projDir]);
+  expect(badWidth.code).toBe(2);
+  expect(badWidth.stderr).toContain("IBM Plex Mono");
+  expect(badWidth.stderr).toContain("100");
+
+  // Nothing was published by the refusal.
+  expect((await readStoredTextRevision(layerId)).revHash).toBe(mono.revHash);
+});
+
+test("a still-conflicting carried axis refuses the --font edit, naming the missing flag (#196)", async () => {
+  await makeComposition("poster", 600, 400);
+  const res = await addText("poster", "display", { text: "Ply", fontSize: 72, weight: 800, width: 122 });
+  const layerId = JSON.parse(res.stdout).use.layerId as string;
+
+  // --width 100 alone: the carried weight 800 still conflicts — a semantic
+  // refusal (exit 1) naming the missing flag.
+  const widthOnly = await invoke(["layer", "edit", layerId, "--font", "IBM Plex Mono", "--width", "100", "--in-place", "--project", projDir]);
+  expect(widthOnly.code).toBe(1);
+  expect(widthOnly.stderr).toContain("IBM Plex Mono");
+  expect(widthOnly.stderr).toContain("add --weight 500");
+
+  // --weight 500 alone: the carried width 122 still conflicts.
+  const weightOnly = await invoke(["layer", "edit", layerId, "--font", "IBM Plex Mono", "--weight", "500", "--in-place", "--project", projDir]);
+  expect(weightOnly.code).toBe(1);
+  expect(weightOnly.stderr).toContain("IBM Plex Mono");
+  expect(weightOnly.stderr).toContain("add --width 100");
+
+  // Nothing was published by the refusals.
+  const { revHash } = await readStoredTextRevision(layerId);
+  const after = await invoke(["layer", "edit", layerId, "--font", "IBM Plex Mono", "--weight", "500", "--width", "100", "--in-place", "--project", projDir, "--json"]);
+  expect(after.code).toBe(0);
+  expect((await readStoredTextRevision(layerId)).revHash).not.toBe(revHash);
 });
 
 test("editing a Layer whose retained bytes match no bundled face requires --font", async () => {

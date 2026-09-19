@@ -57,8 +57,9 @@ export type FontFace = StaticFontFace | VariableFontFace;
 
 /** A static face's implicit width: the face has no width axis, and its
  * single look is the width-100 (normal) instance. The one home for that
- * fact — a carried width of this value across a font switch to a static
- * face changes nothing; any other width is refused (#179, ADR-0021). */
+ * fact — an explicit or carried width of this value across a font switch
+ * to a static face changes nothing; any other width is refused (#179,
+ * #196, ADR-0021). */
 export const STATIC_FACE_WIDTH = 100;
 
 /** The face's default-instance weight — a static face's own weight, or a
@@ -83,20 +84,22 @@ export interface TextAxes {
  * The ONE validator for text weight/width controls against a bundled face
  * (#179, ADR-0021): a variable face resolves omitted controls to its default
  * instance and refuses anything outside the axis ranges it actually contains;
- * a static face accepts only its own weight and refuses width outright — the
- * bytes already fix the look. Every refusal names the family and the values
- * it allows. Never synthesizes: out-of-range and unsupported values are
- * refused here, before anything is published.
+ * a static face accepts only its own weight and its implicit width
+ * (`STATIC_FACE_WIDTH`, 100) or omission — the bytes already fix the look.
+ * Every refusal names the family and the values it allows. Never
+ * synthesizes: out-of-range and unsupported values are refused here, before
+ * anything is published.
  *
- * Scope note for the one split in that story (#179, INT-FONTS-3): EVERY
- * explicit width is refused on a static face — including the implicit
- * `STATIC_FACE_WIDTH` — because an explicit control must name a width the
- * face has. The edit path's carried-axes rule (`resolveEditTextAxes` in
- * src/layer.ts) tolerates a carried width equal to `STATIC_FACE_WIDTH` as
- * nothing-to-store, since a static look IS the width-100 instance; that
- * carry tolerance is edit semantics, deliberately not part of this
- * validator. #187 did extend the control surface alongside this validator
- * (as this note directed, never a second weight/width validator) — but its
+ * #196 amended the static-face width rule (ADR-0021): under #179 EVERY
+ * explicit width was refused here — including the implicit
+ * `STATIC_FACE_WIDTH` — because an explicit control had to name a width the
+ * face has, and only the edit path's carried-axes rule tolerated a carried
+ * width-100 as nothing-to-store. A static look IS the width-100 instance,
+ * so the amended rule accepts `STATIC_FACE_WIDTH` outright — matching the
+ * weight rule — while the edit path keeps refusing a carried width with no
+ * static equivalent (`resolveEditTextAxes` in src/layer.ts). #187 did
+ * extend the control surface alongside this validator (as this note
+ * directed, never a second weight/width validator) — but its
  * tracking/line-height controls are font-independent (ADR-0021: stored only
  * when set, validated against fixed Ply ranges, not a face's bytes), so they
  * live in their own one validator, `resolveTextTypographyControls` in
@@ -125,9 +128,9 @@ export function resolveTextAxes(face: FontFace, controls: TextAxesControls): Tex
     }
     return { weight, width };
   }
-  if (controls.width !== undefined) {
+  if (controls.width !== undefined && controls.width !== STATIC_FACE_WIDTH) {
     throw new Error(
-      `Font "${face.family}" is a static face at weight ${face.weight} — it has no width axis; width is not supported.`,
+      `Font "${face.family}" is a static face at weight ${face.weight} — width ${controls.width} is not available; the face's implicit width is ${STATIC_FACE_WIDTH}.`,
     );
   }
   if (controls.weight !== undefined && controls.weight !== face.weight) {
