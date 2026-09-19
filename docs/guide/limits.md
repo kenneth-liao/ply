@@ -29,17 +29,20 @@ when a render or replay paints:
 | 3840×2160 | ✓  | —            | —  |
 | 5120×2880 | ✓  | —            | —  |
 
+The general rule for any factor f: a w×h canvas renders iff
+**w·f ≤ 8192**, **h·f ≤ 8192**, and **w·h·f² ≤ 16,777,216**.
+
 **Rule of thumb for the default 2×:** each canvas side ≤ 4096 px and the
 canvas area ≤ 4,194,304 px.
 
 **Example.** A 5120×2880 canvas at the default factor paints 10240×5760
-device pixels — over the per-axis bound:
+device pixels — over the per-axis bound, so the command exits 1:
 
 ```
 $ ply composition render big -p proj
 Error: Composition "big" is 5120×2880 canvas pixels; supersample 2 paints
 10240×5760 device pixels — over the 8192px per-axis render limit.
-Render with --supersample 1 or a smaller factor.   (exit 1)
+Render with --supersample 1 or a smaller factor.
 ```
 
 **Fix:** render with `--supersample 1` or a smaller factor. An over-limit
@@ -71,14 +74,17 @@ outline or factor refusal — the full ring draws at any renderable scale
 and factor, and `measure`'s painted extents agree with it.
 
 **Cost.** Chained steps paint one full morphology pass each over the
-device raster, so paint time grows with steps × raster size. Measured on
-a 600×600 canvas with a 200 px outline at scale 1 (#194): n = 1 step
-took about 0.4 s, n = 2 about 1.8 s, and n = 4 about 30 s. The screenshot
+device raster, so paint time grows with steps × raster size. On one
+machine (#194), a 600×600 canvas with a 200 px outline at scale 1 took
+about 0.4 s at n = 1, about 1.8 s at n = 2, and about 30 s at n = 4 —
+treat the figures as order-of-magnitude, not a guarantee. The screenshot
 pass has a 60 s timeout, so a very wide outline on a large canvas at a
 high factor can hit it.
 
 **Fix:** if a chained outline paints too slowly or times out, use a
-thinner outline, a smaller Layer scale, or `--supersample 1`.
+thinner outline, a smaller Layer scale, or `--supersample 1` — a refused
+or timed-out render publishes nothing and never mutates live state, so
+retrying is safe (see [Exit codes](#exit-codes)).
 
 ## What `measure` reports
 
@@ -163,6 +169,12 @@ retrying is always safe.
 
 ---
 
-Other option ranges — shadow offsets ±256 px and blur 0–256 px, tracking
-−0.5–1 em, line-height 0.5–3, font size, resize factors — are documented
-in their README feature sections and `ply layer edit --help`.
+Other bounded inputs — shadow offsets ±256 px and blur 0–256 px
+([Layer shadows](../../README.md#layer-shadows-new-surface)), tracking
+−0.5–1 em and line-height 0.5–3
+([Text tracking and line height](../../README.md#text-tracking-and-line-height-new-surface)),
+font size and resize factor up to 8192
+([Layer resize](../../README.md#layer-resize-new-surface)), and text
+content up to 2000 characters (`MAX_TEXT_LENGTH`) — are refused before
+anything publishes; their option details live in the README feature
+sections and `ply layer edit --help`.
