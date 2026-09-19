@@ -12,6 +12,7 @@ import {
   familyResolved,
   resolveTextAxes,
   resolveFace,
+  staticFaceAcceptedAxes,
   STATIC_FACE_WIDTH,
   type FontFace,
 } from "../src/fonts.js";
@@ -214,6 +215,9 @@ describe("Groundline faces (#179, ADR-0021)", () => {
     it("every static face accepts only its own weight and its implicit width", () => {
     for (const face of BUNDLED_FACES.values()) {
       if (face.variant !== "static") continue;
+      // staticFaceAcceptedAxes is the one home for the acceptance rule —
+      // the validator and the edit path's carried check read the same pair.
+      expect(staticFaceAcceptedAxes(face), face.family).toEqual({ weight: face.weight, width: STATIC_FACE_WIDTH });
       expect(resolveTextAxes(face, {}), face.family).toEqual({});
       expect(resolveTextAxes(face, { weight: face.weight }), face.family).toEqual({});
       expect(resolveTextAxes(face, { width: STATIC_FACE_WIDTH }), face.family).toEqual({});

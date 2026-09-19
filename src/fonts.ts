@@ -68,6 +68,16 @@ export function faceDefaultWeight(face: FontFace): number {
   return face.variant === "variable" ? face.axes.wght.default : face.weight;
 }
 
+/** The only axes a static face accepts: its own weight and its implicit
+ * width (`STATIC_FACE_WIDTH`). The ONE home for that acceptance rule
+ * (#196, ADR-0021): `resolveTextAxes` refuses explicit controls outside
+ * it, and the edit path's carried-conflict check and one-command-fix text
+ * (`resolveEditTextAxes` in src/layer.ts) read the same pair, so a future
+ * amendment changes one place. */
+export function staticFaceAcceptedAxes(face: StaticFontFace): { weight: number; width: number } {
+  return { weight: face.weight, width: STATIC_FACE_WIDTH };
+}
+
 /** Optional weight/width controls on a text Layer (#179, ADR-0021). The
  * same shape flows both ways — callers pass it as controls to
  * `resolveTextAxes`, which returns the resolved axes — so it is one type
@@ -86,9 +96,10 @@ export interface TextAxes {
  * instance and refuses anything outside the axis ranges it actually contains;
  * a static face accepts only its own weight and its implicit width
  * (`STATIC_FACE_WIDTH`, 100) or omission — the bytes already fix the look.
- * Every refusal names the family and the values it allows. Never
- * synthesizes: out-of-range and unsupported values are refused here, before
- * anything is published.
+ * The accepted pair lives in `staticFaceAcceptedAxes`, the one home for
+ * that rule. Every refusal names the family and the values it allows.
+ * Never synthesizes: out-of-range and unsupported values are refused here,
+ * before anything is published.
  *
  * #196 amended the static-face width rule (ADR-0021): under #179 EVERY
  * explicit width was refused here — including the implicit
@@ -128,14 +139,15 @@ export function resolveTextAxes(face: FontFace, controls: TextAxesControls): Tex
     }
     return { weight, width };
   }
-  if (controls.width !== undefined && controls.width !== STATIC_FACE_WIDTH) {
+  const accepted = staticFaceAcceptedAxes(face);
+  if (controls.width !== undefined && controls.width !== accepted.width) {
     throw new Error(
-      `Font "${face.family}" is a static face at weight ${face.weight} — width ${controls.width} is not available; the face's implicit width is ${STATIC_FACE_WIDTH}.`,
+      `Font "${face.family}" is a static face at weight ${accepted.weight} — width ${controls.width} is not available; the face's implicit width is ${accepted.width}.`,
     );
   }
-  if (controls.weight !== undefined && controls.weight !== face.weight) {
+  if (controls.weight !== undefined && controls.weight !== accepted.weight) {
     throw new Error(
-      `Font "${face.family}" is a static face at weight ${face.weight} — weight ${controls.weight} is not available.`,
+      `Font "${face.family}" is a static face at weight ${accepted.weight} — weight ${controls.weight} is not available.`,
     );
   }
   return {};

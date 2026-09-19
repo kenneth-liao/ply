@@ -14,7 +14,7 @@ import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js"
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
-import { STATIC_FACE_WIDTH, faceByContentHash, resolveFace, resolveTextAxes, fontAssetBytes, type FontFace, type TextAxes } from "./fonts.js";
+import { staticFaceAcceptedAxes, faceByContentHash, resolveFace, resolveTextAxes, fontAssetBytes, type FontFace, type TextAxes } from "./fonts.js";
 import {
   selectGenerationOutput,
   retainGenerationRecord,
@@ -1730,12 +1730,13 @@ function boundedScale(
  *   ranges.
  * - A static target: explicit controls replace the carried values before
  *   validation and validate through the same one validator — weight accepts
- *   only the face's own weight, width only its implicit width
- *   (`STATIC_FACE_WIDTH`) — so a variable-to-static switch works in one
- *   edit (#196). A still-carried axis the face cannot express (a different
- *   weight, or a width other than the implicit 100) conflicts with retained
- *   state and is refused naming the one-command fix: the explicit flags
- *   that resolve every remaining conflict in this same edit. A carried
+ *   only the face's own weight, width only its implicit width — so a
+ *   variable-to-static switch works in one edit (#196). A still-carried
+ *   axis the face cannot express (a different weight, or a width other
+ *   than the implicit 100) conflicts with retained state and is refused
+ *   naming the one-command fix: the explicit flags that resolve every
+ *   remaining conflict in this same edit, built from the same accepted
+ *   pair (`staticFaceAcceptedAxes`, the one home for that rule). A carried
  *   width-100 look carries as nothing-to-store. Either way the revision
  *   stores no axis fields.
  */
@@ -1750,6 +1751,7 @@ function resolveEditTextAxes(
       width: options.width ?? prevRev.width,
     });
   }
+  const accepted = staticFaceAcceptedAxes(face);
   const axes = resolveTextAxes(face, {
     ...(options.weight !== undefined ? { weight: options.weight } : {}),
     ...(options.width !== undefined ? { width: options.width } : {}),
@@ -1758,17 +1760,17 @@ function resolveEditTextAxes(
   const carriedWidth = options.width !== undefined ? undefined : prevRev.width;
   const conflicts: string[] = [];
   const fix: string[] = [];
-  if (carriedWeight !== undefined && carriedWeight !== face.weight) {
+  if (carriedWeight !== undefined && carriedWeight !== accepted.weight) {
     conflicts.push(`weight ${carriedWeight}`);
-    fix.push(`--weight ${face.weight}`);
+    fix.push(`--weight ${accepted.weight}`);
   }
-  if (carriedWidth !== undefined && carriedWidth !== STATIC_FACE_WIDTH) {
+  if (carriedWidth !== undefined && carriedWidth !== accepted.width) {
     conflicts.push(`width ${carriedWidth}`);
-    fix.push(`--width ${STATIC_FACE_WIDTH}`);
+    fix.push(`--width ${accepted.width}`);
   }
   if (conflicts.length > 0) {
     throw new Error(
-      `Font "${face.family}" is a static face at weight ${face.weight} — the current ${conflicts.join(" and ")} cannot be kept; add ${fix.join(" ")}.`,
+      `Font "${face.family}" is a static face at weight ${accepted.weight} — the current ${conflicts.join(" and ")} cannot be kept; add ${fix.join(" ")}.`,
     );
   }
   return axes;
