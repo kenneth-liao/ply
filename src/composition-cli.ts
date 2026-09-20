@@ -18,8 +18,29 @@ import {
   type ResolvedCompositionLayer,
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
-import { resolveFace, resolveTextAxes } from "./fonts.js";
-import { resolveTextTypographyControls } from "./layer.js";
+import {
+  COMPOSITION_ADD_OPTION_KEYS,
+  COMPOSITION_ADD_OPTION_PARSE_ARGS,
+  layerContentKindConflict,
+  layerDashNumericFlags,
+  parseGenerationJobId,
+  parseGenerationOutputSelector,
+  parseGenerationOutputValue,
+  parseLayerCoordinate,
+  parseLayerFontSize,
+  parseLayerLineHeight,
+  parseLayerOpacity,
+  parseLayerTracking,
+  parseLayerWeight,
+  parseLayerWidth,
+  parseMatteId,
+  parseNumericArgument,
+  someLayerOptionProvided,
+  validateTextFaceAxes,
+  validateTextTypographyControls,
+  TEXT_CONTENT_KEYS,
+  type LayerOptionArgs,
+} from "./layer-options.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -234,31 +255,21 @@ function output(
   }
 }
 
-/** A negative number is a valid coordinate value (#128) — the shared join in
- * cli-present.ts handles it, scoped here to the composition placement flags. */
-const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), ["--x", "--y", "--tracking", "--line-height", "--supersample"]);
+// Dash-numeric join (#128): the Layer options this surface accepts so far
+// (the shared definition's dash-numeric subset, DEC-001) plus --supersample
+// (#184).
+const rawArgs = joinDashLeadingNumericValues(
+  process.argv.slice(2),
+  [...layerDashNumericFlags(COMPOSITION_ADD_OPTION_KEYS), "--supersample"],
+);
 const isJson = rawArgs.includes("--json");
-let values: {
+let values: Pick<LayerOptionArgs, (typeof COMPOSITION_ADD_OPTION_KEYS)[number]> & {
   project?: string;
   width?: string;
   height?: string;
-  image?: string;
-  text?: string;
-  font?: string;
-  "font-size"?: string;
-  weight?: string;
-  tracking?: string;
-  "line-height"?: string;
-  color?: string;
   order?: string;
   out?: string;
   "from-project"?: string;
-  "from-generation"?: string;
-  "from-matte"?: string;
-  output?: string;
-  x?: string;
-  y?: string;
-  opacity?: string;
   supersample?: string;
   regions?: string;
   json?: boolean;
@@ -274,25 +285,14 @@ try {
       project: { type: "string", short: "p" },
       width: { type: "string" },
       height: { type: "string" },
-      image: { type: "string" },
-      text: { type: "string" },
-      font: { type: "string" },
-      "font-size": { type: "string" },
-      weight: { type: "string" },
-      tracking: { type: "string" },
-      "line-height": { type: "string" },
-      color: { type: "string" },
       order: { type: "string" },
       out: { type: "string" },
       "from-project": { type: "string" },
-      "from-generation": { type: "string" },
-      "from-matte": { type: "string" },
-      output: { type: "string" },
-      x: { type: "string" },
-      y: { type: "string" },
-      opacity: { type: "string" },
       supersample: { type: "string" },
       regions: { type: "string" },
+      // The one declaration of the add surface's Layer options (DEC-001):
+      // the same parseArgs entries layer edit spreads for these keys.
+      ...COMPOSITION_ADD_OPTION_PARSE_ARGS,
       json: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -363,47 +363,55 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (values.image && (values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
-        output({ ok: false, error: "--image and --text are mutually exclusive content kinds; use one per Layer." }, isJson);
+      // Content-kind exclusivity (#107, #108): one rule from the shared
+      // option table (DEC-001), with this surface's established wording.
+      const imageConflict = layerContentKindConflict(values, "image", "add");
+      if (imageConflict) {
+        output({ ok: false, error: imageConflict }, isJson);
         process.exitCode = 2;
         return;
       }
-      // Generated-content ingestion (#107): --from-generation is a third,
-      // mutually exclusive content kind; --output selects one output of the
-      // referenced Generation Job and is meaningless without it.
-      if (values["from-generation"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
-        output({ ok: false, error: "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer." }, isJson);
+      const generationConflict = layerContentKindConflict(values, "from-generation", "add");
+      if (generationConflict) {
+        output({ ok: false, error: generationConflict }, isJson);
         process.exitCode = 2;
         return;
       }
-      // Matting-content ingestion (#108): --from-matte is a fourth, mutually
-      // exclusive content kind.
-      if (values["from-matte"] !== undefined && (values.image !== undefined || values.text !== undefined || values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values["from-generation"] !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
-        output({ ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer." }, isJson);
+      const matteConflict = layerContentKindConflict(values, "from-matte", "add");
+      if (matteConflict) {
+        output({ ok: false, error: matteConflict }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (values["from-matte"] !== undefined && !values["from-matte"].trim()) {
-        output({ ok: false, error: "--from-matte takes a matte id (see ply matte)." }, isJson);
+      const matteId = parseMatteId(values["from-matte"]);
+      if (!matteId.ok) {
+        output({ ok: false, error: matteId.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (values.output !== undefined && values["from-generation"] === undefined) {
-        output({ ok: false, error: "--output is only valid together with --from-generation <jobId>." }, isJson);
+      const outputSelector = parseGenerationOutputSelector(values.output, values["from-generation"] !== undefined);
+      if (!outputSelector.ok) {
+        output({ ok: false, error: outputSelector.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (values["from-generation"] !== undefined && !values["from-generation"].trim()) {
-        output({ ok: false, error: "--from-generation takes a Generation Job id (see ply generate list)." }, isJson);
+      const generationJobId = parseGenerationJobId(values["from-generation"]);
+      if (!generationJobId.ok) {
+        output({ ok: false, error: generationJobId.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (values.output !== undefined && !/^([1-9]\d*|[0-9a-f]{64})$/.test(values.output)) {
-        output({ ok: false, error: `--output takes a 1-based output index or the full sha-256 output identity (got "${values.output}")` }, isJson);
-        process.exitCode = 2;
-        return;
+      if (values.output !== undefined) {
+        const outputValue = parseGenerationOutputValue(values.output);
+        if (!outputValue.ok) {
+          output({ ok: false, error: outputValue.error }, isJson);
+          process.exitCode = 2;
+          return;
+        }
       }
-      if (values.text === undefined && (values.font !== undefined || values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined || values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)) {
+      // The text style options (and the canvas --width value this surface's
+      // established checks read as the text width axis) require --text.
+      if (values.text === undefined && someLayerOptionProvided(values, TEXT_CONTENT_KEYS.filter((key) => key !== "text"))) {
         output({ ok: false, error: "--font, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>." }, isJson);
         process.exitCode = 2;
         return;
@@ -414,26 +422,35 @@ async function run() {
         return;
       }
 
-      const x = values.x !== undefined ? parseNumericArgument(values.x) : 0;
-      const y = values.y !== undefined ? parseNumericArgument(values.y) : 0;
-      const opacity = values.opacity !== undefined ? parseNumericArgument(values.opacity) : 1.0;
-
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
-        output({ ok: false, error: "Placement coordinates (--x, --y) must be finite numbers." }, isJson);
+      // Placement shape validation through the shared validators (DEC-001);
+      // this surface's established defaults apply when absent.
+      const placementX = parseLayerCoordinate("x", values.x, "add");
+      if (!placementX.ok) {
+        output({ ok: false, error: placementX.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
-        output({ ok: false, error: "Opacity (--opacity) must be a finite number between 0 and 1." }, isJson);
+      const x = placementX.value ?? 0;
+      const placementY = parseLayerCoordinate("y", values.y, "add");
+      if (!placementY.ok) {
+        output({ ok: false, error: placementY.error }, isJson);
         process.exitCode = 2;
         return;
       }
+      const y = placementY.value ?? 0;
+      const parsedOpacity = parseLayerOpacity(values.opacity);
+      if (!parsedOpacity.ok) {
+        output({ ok: false, error: parsedOpacity.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const opacity = parsedOpacity.value ?? 1.0;
 
       try {
         if (values["from-generation"] !== undefined) {
           const res = await addGeneratedLayerToComposition(
             targetProj, compName, localName,
-            { jobRoot: path.resolve("out", "generation"), jobId: values["from-generation"].trim(), output: values.output },
+            { jobRoot: path.resolve("out", "generation"), jobId: generationJobId.value!, output: values.output },
             { x, y, opacity },
           );
           mutationCommitted = true;
@@ -460,7 +477,7 @@ async function run() {
             targetProj, compName, localName,
             {
               matteRoot: path.resolve("out", "matting"),
-              matteId: values["from-matte"].trim(),
+              matteId: matteId.value!,
               generationRoot: path.resolve("out", "generation"),
             },
             { x, y, opacity },
@@ -500,63 +517,62 @@ async function run() {
             process.exitCode = 2;
             return;
           }
-          const fontSize = values["font-size"] !== undefined ? parseNumericArgument(values["font-size"]) : 48;
-          if (!Number.isFinite(fontSize)) {
-            output({ ok: false, error: "Font size (--font-size) must be a finite number." }, isJson);
+          // Font size, text axes (#179, ADR-0021), and text typography
+          // (#187, ADR-0021): shape and range at the command boundary as a
+          // usage error (exit 2) through the SAME shared validators the edit
+          // boundary runs (DEC-001), so the two boundaries never disagree;
+          // the add path re-resolves against the face before anything
+          // publishes. This surface's established font-size default (48)
+          // applies when absent.
+          const parsedFontSize = parseLayerFontSize(values["font-size"], "add");
+          if (!parsedFontSize.ok) {
+            output({ ok: false, error: parsedFontSize.error }, isJson);
             process.exitCode = 2;
             return;
           }
-          // Text axes (#179, ADR-0021): shape and range at the command
-          // boundary as a usage error (exit 2) through the SAME validator
-          // the add path uses, so the two boundaries never disagree; the
-          // add path re-resolves against the face before anything publishes.
-          const weight = values.weight !== undefined ? parseNumericArgument(values.weight) : undefined;
-          const width = values.width !== undefined ? parseNumericArgument(values.width) : undefined;
-          if (values.weight !== undefined && !Number.isFinite(weight)) {
-            output({ ok: false, error: "Weight (--weight) must be a finite number." }, isJson);
+          const fontSize = parsedFontSize.value ?? 48;
+          const parsedWeight = parseLayerWeight(values.weight);
+          if (!parsedWeight.ok) {
+            output({ ok: false, error: parsedWeight.error }, isJson);
             process.exitCode = 2;
             return;
           }
-          if (values.width !== undefined && !Number.isFinite(width)) {
-            output({ ok: false, error: "Width (--width) must be a finite number." }, isJson);
+          const weight = parsedWeight.value;
+          // The canvas --width value is the established text width axis on
+          // this surface (the flag is shared with --width <canvas>).
+          const parsedWidth = parseLayerWidth(values.width);
+          if (!parsedWidth.ok) {
+            output({ ok: false, error: parsedWidth.error }, isJson);
             process.exitCode = 2;
             return;
           }
+          const width = parsedWidth.value;
           // An unknown family keeps its established semantic refusal (exit
           // 1, from the add path's resolveFace); only weight/width range
           // errors are usage errors here (exit 2).
-          const face = resolveFace(values.font);
-          try {
-            resolveTextAxes(face, { weight, width });
-          } catch (err) {
-            output({ ok: false, error: (err as Error).message }, isJson);
+          const axesError = validateTextFaceAxes(values.font!, weight, width);
+          if (axesError !== undefined) {
+            output({ ok: false, error: axesError }, isJson);
             process.exitCode = 2;
             return;
           }
-          // Text typography (#187, ADR-0021): font-independent, so shape and
-          // range are usage errors (exit 2) here unconditionally, through the
-          // SAME validator the add path uses — the add path re-resolves
-          // before anything publishes. `--tracking 0` and `--line-height
-          // normal` are the clear syntaxes; the resolver normalizes both to
-          // absent (one stored form per look).
-          const tracking = values.tracking !== undefined ? parseNumericArgument(values.tracking) : undefined;
-          const lineHeightValue = values["line-height"];
-          const lineHeight =
-            lineHeightValue === undefined ? undefined : lineHeightValue === "normal" ? null : parseNumericArgument(lineHeightValue);
-          if (values.tracking !== undefined && !Number.isFinite(tracking)) {
-            output({ ok: false, error: "Tracking (--tracking) must be a finite number." }, isJson);
+          const parsedTracking = parseLayerTracking(values.tracking);
+          if (!parsedTracking.ok) {
+            output({ ok: false, error: parsedTracking.error }, isJson);
             process.exitCode = 2;
             return;
           }
-          if (lineHeightValue !== undefined && lineHeightValue !== "normal" && !Number.isFinite(lineHeight)) {
-            output({ ok: false, error: 'Line height (--line-height) must be a finite number or "normal".' }, isJson);
+          const tracking = parsedTracking.value;
+          const parsedLineHeight = parseLayerLineHeight(values["line-height"]);
+          if (!parsedLineHeight.ok) {
+            output({ ok: false, error: parsedLineHeight.error }, isJson);
             process.exitCode = 2;
             return;
           }
-          try {
-            resolveTextTypographyControls({ tracking, lineHeight });
-          } catch (err) {
-            output({ ok: false, error: (err as Error).message }, isJson);
+          const lineHeight = parsedLineHeight.value;
+          const typographyError = validateTextTypographyControls(tracking, lineHeight);
+          if (typographyError !== undefined) {
+            output({ ok: false, error: typographyError }, isJson);
             process.exitCode = 2;
             return;
           }
@@ -978,11 +994,6 @@ function emitRender(
   } else {
     console.error(`Error: ${result.error}`);
   }
-}
-
-/** Blank supplied values are invalid, never implicit zero. */
-function parseNumericArgument(value: string | undefined): number {
-  return value?.trim() ? Number(value) : NaN;
 }
 
 /** Compact content description for a measured Layer. */
