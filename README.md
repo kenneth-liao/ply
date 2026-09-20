@@ -612,10 +612,11 @@ explicit `solid:` prefix — or a gradient:
   the CSS convention; `-45deg` and `315deg` are the same fill).
 - `radial:<stop>,<stop>[,...]` — a radial gradient radiating from the box's
   centre, a circle whose radius reaches the box's farthest side (the last
-  stop's colour lands exactly on the box's edge midpoints).
+  stop's colour lands exactly on the box's farthest edge midpoints).
 
 A stop is `<color>` or `<color>:<position>` — position 0–100 percent (the
-`%` suffix is optional); omitted positions are distributed evenly, and a
+`%` suffix is optional); omitted positions interpolate evenly between the
+surrounding explicit positions (0 at the start, 100 at the end), and a
 stop colour takes the same hex forms as a solid (alpha allowed).
 
 ```bash

@@ -22,9 +22,12 @@
  * A stop is `<color>` or `<color>:<position>`, where position is 0–100
  * percent (the `%` suffix is optional). A stop colour takes the same hex
  * forms as a solid (#RGB/#RRGGBB/#RRGGBBAA — alpha is first-class). Omitted
- * positions are distributed evenly (first stop 0, last stop 100); explicit
- * positions, after that distribution, must not decrease — CSS would clamp a
- * decreasing list silently, and the stored form must describe the paint.
+ * positions are distributed evenly — every position omitted means first
+ * stop 0 and last stop 100 (the CSS default); otherwise each omitted run
+ * interpolates evenly between the surrounding explicit positions (0 at the
+ * start, 100 at the end). Explicit positions, after that resolution, must
+ * not decrease — CSS would clamp a decreasing list silently, and the stored
+ * form must describe the paint.
  */
 
 /** One gradient stop in canonical form: a hex color and its position
@@ -82,13 +85,17 @@ function parseGradientStop(token: string, label: string): { color: string; posit
     return { color: canonicalizeFillColor(colorPart) };
   }
   const withUnit = positionPart.endsWith("%") ? positionPart.slice(0, -1) : positionPart;
-  const position = Number(withUnit);
-  if (withUnit.trim() === "" || !Number.isFinite(position) || position < 0 || position > 100) {
+  // Strict decimal only: Number() would read 0x10 as 16 and 1e2 as 100 —
+  // spellings outside the documented 0–100 percent grammar.
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(withUnit.trim()) ||
+      !Number.isFinite(Number(withUnit)) ||
+      Number(withUnit) < 0 ||
+      Number(withUnit) > 100) {
     throw new Error(
       `Invalid ${label} stop position "${positionPart}" (stop colour ${canonicalizeFillColor(colorPart)}): must be a number between 0 and 100 (percent of the gradient line).`,
     );
   }
-  return { color: canonicalizeFillColor(colorPart), position };
+  return { color: canonicalizeFillColor(colorPart), position: Number(withUnit) };
 }
 
 /** Canonicalize a stop list for storage: ≥2 stops, every position present,
@@ -117,6 +124,21 @@ function canonicalizeAngleDeg(angleDeg: number): number {
   const normalized = ((angleDeg % 360) + 360) % 360;
   // -0 normalizes to 0 so equivalent forms hash identically.
   return normalized === 0 ? 0 : normalized;
+}
+
+/** Split the comma-separated stop tokens, refusing empty segments (a
+ *  typo'd double or trailing comma would otherwise be silently dropped,
+ *  erasing the fault this boundary exists to name). */
+function splitStopTokens(value: string, type: "linear" | "radial"): string[] {
+  const tokens = value.split(",").map((t) => t.trim());
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === "") {
+      throw new Error(
+        `Invalid ${type} gradient: an empty stop at comma ${i + 1} — every comma must be followed by a stop (got "${value}").`,
+      );
+    }
+  }
+  return tokens;
 }
 
 /**
@@ -163,9 +185,10 @@ export function parseFillSpec(spec: string): LayerFill {
         : `A radial gradient needs at least two stops: "radial:#ff0000,#00ff00" (got "${spec.trim()}").`,
     );
   }
-  const tokens = value.split(",").map((t) => t.trim()).filter((t) => t !== "");
+  const kind = type as "linear" | "radial";
+  const tokens = splitStopTokens(value, kind);
   if (type === "linear") {
-    const angleMatch = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))deg$/.exec(tokens[0] ?? "");
+    const angleMatch = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))deg$/i.exec(tokens[0] ?? "");
     if (angleMatch === null) {
       throw new Error(
         `Invalid linear gradient: the first part must be an angle in degrees like "45deg" (got "${tokens[0] ?? ""}") — e.g. "linear:45deg,#ff0000,#00ff00".`,
@@ -194,7 +217,7 @@ export function parseFillSpec(spec: string): LayerFill {
     };
   }
   // radial
-  const degToken = tokens.find((t) => /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)deg$/.test(t));
+  const degToken = tokens.find((t) => /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)deg$/i.test(t));
   if (degToken !== undefined) {
     throw new Error(
       `Invalid radial gradient: a radial gradient takes no angle (got "${degToken}") — it radiates from the content box's centre — e.g. "radial:#ff0000,#00ff00".`,
@@ -214,13 +237,47 @@ export function parseFillSpec(spec: string): LayerFill {
   };
 }
 
-/** Fill in still-missing positions (an explicit-position subset) by even
- *  distribution across all stops, then drop the sentinel. */
-function resolveMissing(stops: { color: string; position: number }[]): LayerFillStop[] {
-  const n = stops.length;
-  return stops.map(
-    (s, i) => ({ color: s.color, position: Number.isNaN(s.position) ? (i / (n - 1)) * 100 : s.position }),
-  );
+/** Resolve omitted stop positions by even interpolation: an all-omitted
+ *  stop list distributes evenly across the full gradient line (first stop
+ *  0, last stop 100 — the CSS default); a mixed list interpolates each
+ *  omitted run evenly between its surrounding explicit positions (0 at
+ *  the start, 100 at the end), so `#f00:90,#0f0,#00f:100` puts the middle
+ *  stop at 95 — not 50, which would falsely read as decreasing. The form
+ *  painted, so the stored stops always carry explicit positions. */
+function resolveMissing(
+  stops: { color: string; position: number }[],
+): LayerFillStop[] {
+  if (stops.every((s) => Number.isNaN(s.position))) {
+    const n = stops.length;
+    return stops.map(
+      (s, i) => ({ color: s.color, position: (i / (n - 1)) * 100 }),
+    );
+  }
+  const resolved: LayerFillStop[] = [];
+  let left = 0;
+  let i = 0;
+  while (i < stops.length) {
+    if (!Number.isNaN(stops[i]!.position)) {
+      left = stops[i]!.position;
+      resolved.push(stops[i]!);
+      i++;
+      continue;
+    }
+    // One omitted run: stops[i..j) all carry the NaN sentinel.
+    let j = i;
+    while (j < stops.length && Number.isNaN(stops[j]!.position)) j++;
+    const right = j < stops.length ? stops[j]!.position : 100;
+    const m = j - i;
+    for (let k = i; k < j; k++) {
+      resolved.push({
+        color: stops[k]!.color,
+        position: left + ((right - left) * (k - i + 1)) / (m + 1),
+      });
+    }
+    left = right;
+    i = j;
+  }
+  return resolved;
 }
 
 /**
@@ -346,8 +403,9 @@ export function formatFill(fill: LayerFill): string {
  * reuses). A solid paints its colour; a linear paints a CSS linear-gradient
  * over the content box at the stored angle; a radial paints a circle
  * centered on the content box whose radius reaches the box's farthest side,
- * so the last stop's colour lands exactly on the box's edge midpoints and
- * everything beyond them. All colours are validated hex, so the value is
+ * so the last stop's colour lands exactly on the box's farthest edge
+ * midpoints (only those on the farthest side) and everything beyond them.
+ * All colours are validated hex, so the value is
  * markup-safe (no quoting, no user text).
  */
 export function fillCssBackground(fill: LayerFill): string {

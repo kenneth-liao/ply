@@ -10,8 +10,9 @@
   `composition add --shape` and `layer edit --fill` both take them through
   the same parser. Grammar (DEC-009): `linear:<angle>deg,<stop>,<stop>` or
   `radial:<stop>,<stop>`; a stop is `<color>` or `<color>:<position>`
-  (0–100 percent, the `%` suffix optional, omitted positions distributed
-  evenly); stop colours take the same hex forms as a solid (alpha allowed).
+  (0–100 percent, the `%` suffix optional, omitted positions interpolating
+  evenly between the surrounding explicit positions); stop colours take the
+  same hex forms as a solid (alpha allowed).
   The representation is shape-agnostic (DEC-003) — a later gradient text
   reuses it. Fewer than two stops, an out-of-range position, a decreasing
   stop list (CSS would clamp it silently; the stored form must describe the

@@ -93,8 +93,9 @@ composition — Composition authoring and inspection
       with ONE fill — a solid color (#RGB/#RRGGBB/#RRGGBBAA, alpha
       allowed) or a gradient (#210): "linear:45deg,<stop>,<stop>" or
       "radial:<stop>,<stop>"; a stop is "<color>" or "<color>:<position>"
-      (0–100 percent, the % optional; omitted positions are distributed
-      evenly). No image file is read and no image bytes are stored: the
+      (0–100 percent, the % optional; omitted positions interpolate evenly
+      between the surrounding explicit positions). No image file is read and
+      no image bytes are stored: the
       Layer's content IS its parameters. A full-canvas background is an
       ordinary shape Layer sized to the canvas. Non-positive size, a
       negative or oversized radius, and a malformed fill (a malformed
@@ -287,8 +288,9 @@ Options:
                         degrees clockwise from bottom-to-top) or a radial
                         gradient "radial:<stop>,<stop>". A stop is "<color>"
                         or "<color>:<position>" — position 0–100, the %
-                        suffix optional, omitted positions distributed
-                        evenly. Fewer than two stops, an out-of-range
+                        suffix optional, omitted positions interpolating
+                        evenly between the surrounding explicit positions.
+                        Fewer than two stops, an out-of-range
                         position, or a malformed colour is refused before
                         anything is published. Required with --shape.
   --order <names>       Comma-separated permutation of use names (required for reorder)

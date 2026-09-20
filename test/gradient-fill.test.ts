@@ -248,7 +248,7 @@ test("a radial gradient renders its first stop at the centre and its last at the
 });
 
 test("radial gradient stops accept alpha and explicit positions", async () => {
-  await addShape("glow", "radial:#ff000080,#00ff00:75,#0000ff", "100x100", "50", "10");
+  await addShape("glow", "radial:#ff000080:0,#00ff00:75,#0000ff:100", "100x100", "50", "10");
   const png = await renderPng("poster");
   const stops: RadialStop[] = [
     { rgba: [255, 0, 0, 128], position: 0 },
@@ -277,10 +277,13 @@ test("gradient colours and angles canonicalize at the one ingestion boundary", a
       { color: "#00ff00", position: 100 },
     ],
   });
-  // The equivalent spelling normalizes to the SAME content identity (DEC-003):
-  // -45deg and 315deg are one fill; case and #RGB shorthand collapse.
+  // Equivalent-angle spellings are one fill (DEC-003): -45deg and 315deg
+  // normalize to one form; case and #RGB shorthand collapse; the deg unit is
+  // case-insensitive like the type discriminator.
   const b = await addShape("b", "linear:315deg,#ff0000,#0F0", "60x60", "120", "30");
   expect(b.layer.currentRevision.contentHash).toBe(a.layer.currentRevision.contentHash);
+  const c = await addShape("c", "linear:315DEG,#ff0000,#0F0", "60x60", "20", "90");
+  expect(c.layer.currentRevision.contentHash).toBe(b.layer.currentRevision.contentHash);
 });
 
 test("omitted stop positions distribute evenly and feed the content hash", async () => {
@@ -288,6 +291,32 @@ test("omitted stop positions distribute evenly and feed the content hash", async
   const explicit = await addShape("explicit", "linear:90deg,#ff0000:0%,#00ff00:100%", "60x60", "120", "30");
   expect(even.layer.currentRevision.fill).toEqual(explicit.layer.currentRevision.fill);
   expect(even.layer.currentRevision.contentHash).toBe(explicit.layer.currentRevision.contentHash);
+});
+
+test("omitted positions interpolate between surrounding explicit positions (mixed lists)", async () => {
+  // The review's false-refusal case: an omitted middle stop between explicit
+  // 90 and 100 interpolates to 95 — accepted, not refused as decreasing.
+  const middle = await addShape(
+    "middle", "linear:90deg,#ff0000:90,#00ff00,#0000ff:100", "60x60", "20", "30",
+  );
+  expect(middle.layer.currentRevision.fill).toEqual({
+    type: "linear",
+    angleDeg: 90,
+    stops: [
+      { color: "#ff0000", position: 90 },
+      { color: "#00ff00", position: 95 },
+      { color: "#0000ff", position: 100 },
+    ],
+  });
+  // A leading run interpolates from the 0 bound, a trailing run towards 100.
+  const runs = await addShape(
+    "runs", "linear:90deg,#ff0000,#00ff00:40,#0000ff", "60x60", "120", "30",
+  );
+  expect(runs.layer.currentRevision.fill.stops).toEqual([
+    { color: "#ff0000", position: 20 },
+    { color: "#00ff00", position: 40 },
+    { color: "#0000ff", position: 70 },
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -305,6 +334,10 @@ const refusals: [string, string, string][] = [
   ["an angle on a radial gradient", "radial:45deg,#ff0000,#00ff00", "no angle"],
   ["a decreasing stop position list", "linear:45deg,#ff0000:75,#00ff00:25", "must not decrease"],
   ["an unknown fill type", "gradient:#ff0000,#00ff00", 'Unknown fill type "gradient"'],
+  ["a double comma in a linear gradient", "linear:45deg,,#ff0000,#00ff00", "an empty stop at comma 2"],
+  ["a trailing comma in a radial gradient", "radial:#ff0000,#00ff00,", "an empty stop at comma 3"],
+  ["a hexadecimal position spelling", "linear:45deg,#ff0000:0x10,#00ff00", "between 0 and 100"],
+  ["an exponential position spelling", "radial:#ff0000,#00ff00:1e2", "between 0 and 100"],
 ];
 
 test("each malformed gradient is refused before publication, naming the fault, and live state is unchanged", async () => {
@@ -362,6 +395,7 @@ test("layer edit sets a radial gradient through the same parser, and a repeated 
   ]);
   expect(edit.code).toBe(0);
   const edited = JSON.parse(edit.stdout).layer.currentRevision;
+  // An all-omitted stop list distributes evenly: first 0, last 100.
   expect(edited.fill).toEqual({
     type: "radial",
     stops: [
