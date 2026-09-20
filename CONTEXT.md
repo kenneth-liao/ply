@@ -30,6 +30,13 @@ including its placement and effects. Later Layers paint over earlier Layers.
 An immutable version of a Layer. Editing in place advances the same Layer's
 current revision; a fork creates a new Layer identity for the forking Composition.
 
+**Name address**:
+A Composition-plus-use form (`<composition>/<use>`) accepted wherever a
+Layer id is accepted — edit, inspect, review. It resolves to the
+referenced Layer's id once, at the command boundary; unknown names are
+refused listing what exists. Layer ids remain valid everywhere.
+_Avoid_: storing Layer ids in side files, addressing across Projects
+
 **Render**:
 The image produced locally from a resolved Composition. Its manifest preserves
 exact Layer revisions and required content so later edits do not change it.

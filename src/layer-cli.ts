@@ -8,13 +8,24 @@ import { parseShadowSpec, parseOutlineSpec } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { resolveTextTypographyControls } from "./layer.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
+import { parseLayerAddress, resolveLayerToken, LayerAddressSyntaxError, type ResolvedLayerToken } from "./layer-address.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
 const HELP = `
 layer — Layer management and inspection within a Project
 
+Name addressing: wherever a Layer id is accepted — layer edit, layer
+inspect, and layer review — a Composition-plus-use name address
+"<composition>/<use>" is also accepted. It resolves to the referenced
+Layer's id once, at the command boundary; unknown Compositions and uses
+are refused listing what exists, and a Layer id continues to work
+everywhere. With --fork, the address supplies the target Composition
+and use, so --composition/--use need not be repeated (repeating them
+must match the address).
+
   ply layer edit <layer-id> [options]
+  ply layer edit <composition>/<use> [options]
       Edit a Layer's content or placement, advancing its current revision.
       Requires --in-place when referenced by multiple Compositions.
       With --fork, publish a new Layer identity and retarget only the
@@ -30,9 +41,11 @@ layer — Layer management and inspection within a Project
       Layer's visible painted ink at a target position (see below).
 
   ply layer inspect <layer-id> [options]
+  ply layer inspect <composition>/<use> [options]
       Inspect a Layer's identity, current revision, and content details
 
   ply layer review <layer-id> --out <path> [options]
+  ply layer review <composition>/<use> --out <path> [options]
       Build the offline evidence review sheet for a generated or matted
       Layer from retained Project evidence — References (shown only when
       their recorded paths still verify; unavailable ones are labeled, never
@@ -339,15 +352,51 @@ if (values.help || positionals.length === 0) {
 const command = positionals[0]!;
 const targetProj = values.project ?? process.cwd();
 
+/**
+ * Name addressing (spec #226 US-003, DEC-003): the ONE command-boundary
+ * resolution of the id-accepting commands' target token. A plain Layer id
+ * passes through unchanged; a `<composition>/<use>` address resolves into
+ * the referenced Layer's id, and downstream sees only that id. A malformed
+ * address is a usage error (exit 2); an unknown Composition or use is a
+ * semantic refusal (exit 1) listing what exists — either way nothing is
+ * published. Returns undefined when the refusal has already been reported.
+ */
+async function resolveTarget(
+  targetProj: string,
+  token: string,
+  isJson: boolean,
+): Promise<ResolvedLayerToken | undefined> {
+  try {
+    return await resolveLayerToken(targetProj, token);
+  } catch (err) {
+    if (err instanceof LayerAddressSyntaxError) {
+      output({ ok: false, error: usageMessage((err as Error).message, "layer") }, isJson);
+      process.exitCode = 2;
+    } else {
+      output({ ok: false, error: (err as Error).message }, isJson);
+      process.exitCode = 1;
+    }
+    return undefined;
+  }
+}
+
 async function run() {
   try {
     if (command === "edit") {
-      const layerId = positionals[1];
-      if (!layerId) {
+      const layerToken = positionals[1];
+      if (!layerToken) {
         output({ ok: false, error: "Usage: ply layer edit <layer-id> [options]" }, isJson);
         process.exitCode = 2;
         return;
       }
+
+      // Name addressing (spec #226 US-003): resolve the target token ONCE, at
+      // this boundary — everything downstream receives only a Layer id.
+      const target = await resolveTarget(targetProj, layerToken, isJson);
+      if (!target) return;
+      const layerId = target.layerId;
+      const addressComposition = target.address?.composition;
+      const addressUse = target.address?.use;
 
       const hasEditOption =
         values.image !== undefined ||
@@ -387,7 +436,9 @@ async function run() {
 
       // Fork intent usage contract (#85): --fork and --in-place are mutually
       // exclusive; fork requires an explicit --composition/--use target;
-      // those flags are meaningless without --fork.
+      // those flags are meaningless without --fork. With an address target
+      // (#226), the address supplies the target Composition and use, so they
+      // need not be repeated — an explicit repetition must match the address.
       if (values.fork && values["in-place"]) {
         output(
           { ok: false, error: "--fork and --in-place are mutually exclusive edit intents." },
@@ -397,17 +448,37 @@ async function run() {
         return;
       }
       if (values.fork) {
-        if (!values.composition || values.composition.trim() === "") {
+        if (addressComposition !== undefined && values.composition !== undefined && values.composition !== addressComposition) {
           output(
-            { ok: false, error: "--composition <comp> is required with --fork: name the Composition whose use is retargeted." },
+            { ok: false, error: `--composition "${values.composition}" conflicts with the address's Composition "${addressComposition}".` },
             isJson,
           );
           process.exitCode = 2;
           return;
         }
-        if (!values.use || values.use.trim() === "") {
+        if (addressUse !== undefined && values.use !== undefined && values.use !== addressUse) {
           output(
-            { ok: false, error: "--use <local-name> is required with --fork: name the use in the target Composition to retarget." },
+            { ok: false, error: `--use "${values.use}" conflicts with the address's use "${addressUse}".` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+      }
+      const forkComposition = values.composition ?? addressComposition;
+      const forkUse = values.use ?? addressUse;
+      if (values.fork) {
+        if (!forkComposition || forkComposition.trim() === "") {
+          output(
+            { ok: false, error: "--composition <comp> is required with --fork: name the Composition whose use is retargeted (or address the Layer as <composition>/<use>)." },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+        if (!forkUse || forkUse.trim() === "") {
+          output(
+            { ok: false, error: "--use <local-name> is required with --fork: name the use in the target Composition to retarget (or address the Layer as <composition>/<use>)." },
             isJson,
           );
           process.exitCode = 2;
@@ -787,7 +858,7 @@ async function run() {
               anchor: parsedAnchor,
               targetX: x,
               targetY: y,
-              contextComposition: values.fork ? values.composition : undefined,
+              contextComposition: values.fork ? forkComposition : undefined,
             });
           } catch (err) {
             const errObj = err as Error & { referringCompositions?: string[]; referrersCount?: number };
@@ -815,8 +886,10 @@ async function run() {
         const res = await editLayer(targetProj, layerId, {
           inPlace: values["in-place"],
           fork: values.fork,
-          composition: values.composition,
-          use: values.use,
+          // Forwarded only for a fork: the address's Composition/use pair is
+          // fork-targeting intent, never a downstream-visible address fact.
+          composition: values.fork ? forkComposition : undefined,
+          use: values.fork ? forkUse : undefined,
           image: values.image,
           fromGeneration:
             values["from-generation"] !== undefined
@@ -943,12 +1016,17 @@ async function run() {
         process.exitCode = 1;
       }
     } else if (command === "inspect") {
-      const layerId = positionals[1];
-      if (!layerId) {
+      const layerToken = positionals[1];
+      if (!layerToken) {
         output({ ok: false, error: "Usage: ply layer inspect <layer-id>" }, isJson);
         process.exitCode = 2;
         return;
       }
+
+      // Name addressing (spec #226 US-003): resolve once at this boundary.
+      const target = await resolveTarget(targetProj, layerToken, isJson);
+      if (!target) return;
+      const layerId = target.layerId;
 
       try {
         const layer = await inspectLayer(targetProj, layerId);
@@ -1013,12 +1091,18 @@ async function run() {
         process.exitCode = 1;
       }
     } else if (command === "review") {
-      const layerId = positionals[1];
-      if (!layerId) {
+      const layerToken = positionals[1];
+      if (!layerToken) {
         output({ ok: false, error: "Usage: ply layer review <layer-id> --out <path>" }, isJson);
         process.exitCode = 2;
         return;
       }
+
+      // Name addressing (spec #226 US-003): resolve once at this boundary.
+      const target = await resolveTarget(targetProj, layerToken, isJson);
+      if (!target) return;
+      const layerId = target.layerId;
+
       if (!values.out || !values.out.trim()) {
         output(
           { ok: false, error: "--out <path> is required: name the destination for the review sheet (a self-contained HTML file)." },

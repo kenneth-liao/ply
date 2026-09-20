@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- Layer name addressing (#227, spec #226 US-003): wherever a Layer id is
+  accepted — `ply layer edit`, `ply layer inspect`, `ply layer review` — a
+  Composition-plus-use name address `<composition>/<use>` (for example
+  `poster/headline`) is also accepted and resolves to the referenced Layer's
+  id once, at the command boundary; nothing downstream learns about
+  addresses. The form is unambiguous against Layer ids (a Layer id can never
+  contain a slash) and needs no shell quoting. An unknown Composition or use
+  is refused listing what exists, and nothing is published; a malformed
+  address is a usage error. Sharing rules are unchanged: a name address to a
+  shared Layer still requires `--in-place` or `--fork`, and with `--fork` the
+  address supplies the target Composition and use, so `--composition`/`--use`
+  need not be repeated (repeating them must match the address). Layer ids
+  continue to work everywhere (DEC-003)
+
 ### Fixed
 
 - Fixed outline-cap check ignoring Layer scale: raster dilation is now computed
