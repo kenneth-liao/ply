@@ -300,6 +300,32 @@ as bundled faces, against the file's own facts:
   weight/stretch and the text element disables font synthesis, so the
   browser never paints a look the bytes do not contain.
 
+## Comparison sheets — size and input limits
+
+`ply composition sheet` (#233) writes one PNG through the same paint path
+renders use, so the render pixel limits bind the **whole sheet**, not each
+cell:
+
+- **Sheet size.** A sheet is `columns` square `--cell`-px boxes wide
+  (default 2 × 512 px) with a label strip under each row, plus padding and
+  gutters. The finished sheet must stay within 8192 px per axis and
+  16,777,216 pixels; an over-limit grid is refused naming the computed size
+  and the fix (a smaller `--cell`, fewer `--columns`, or fewer inputs).
+  `--pair` is always two columns, so a long pair list grows only in height:
+  at the default cell nine pairs are 1048×4940.
+- **Inputs.** A local image input is capped at 64 MB encoded and at the
+  same per-axis and pixel limits as image ingestion; an SVG input passes
+  the same inertness gate as an imported vector (above). A Composition
+  input is painted at the render default (supersample 2), so a Composition
+  that `render` would refuse at 2× is refused here too.
+- **Resolution order.** An existing local file wins over a Composition of
+  the same name. An input that is neither is refused naming both readings,
+  and nothing is written.
+- **Exit codes.** A malformed option — a non-integer `--cell`, `--pair`
+  with an odd input count or with `--columns`, a `--label` index outside
+  the input list — is a usage error (exit 2); a missing, undecodable, or
+  over-limit input — or an over-limit sheet — is exit 1.
+
 ## Exit codes
 
 Every composer command reports its outcome through its exit code:

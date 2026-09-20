@@ -1,0 +1,8 @@
+Measured Composition "t2" (1280×720), 7 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720
+  2. "kenny" (image content 967×1241) box (510, -100) 779.21×1000 painted (510, -94) 779×994, on-canvas (510, 0) 770×720 — clipped [scale 0.8058017727639001×]
+  3. "wm" (text 612×102) box (90, 67) 612×102 painted (85, 62) 617×107 [shadow 8 8 0 #5a2a1c, outline 4 #d97757, font "Press Start 2P" (caller-supplied)]
+  4. "barS" (image content 344×130) box (90, 250) 344×130 painted (90, 250) 344×130 [fill solid #d97757]
+  5. "skills" (text 312.59×130) box (105, 253) 312.59×130 painted (110, 270) 304×90 [weight 700, width 100]
+  6. "barY" (image content 542×130) box (80, 420) 542×130 painted (80, 420) 542×130 [fill solid #fff200]
+  7. "insane" (text 513.39×130) box (92, 418) 513.39×130 painted (100, 440) 502×85 [weight 700, width 100]

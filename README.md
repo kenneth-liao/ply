@@ -1075,7 +1075,9 @@ existing Project state and reserved storage are never written over, and a
 recorded Render output is never overwritten. The default output is a fresh,
 never-colliding file under the Project's `guidelines/` review-output
 directory. A missing or undecodable input is refused naming it, and nothing
-is written. Local only: no network, no inference weights, no model calls.
+is written; an input that is neither an existing local file nor a
+Composition is refused saying so (size and input limits:
+`docs/guide/limits.md`). Local only: no network, no inference weights, no model calls.
 Compact text by default; `--json` emits one valid JSON result; usage errors
 exit 2, failures exit 1.
 
