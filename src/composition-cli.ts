@@ -231,8 +231,12 @@ Options:
                         (#213): its intrinsic size comes from its own
                         width/height attributes or viewBox, its bytes are
                         retained unchanged, and it renders crisply at any
-                        size through the browser's image path — scripts and
-                        external references never load.
+                        size through the browser's image path — scripts
+                        never block import and never run, and a file that
+                        references anything outside itself (a remote or
+                        local image, font, or stylesheet, or an out-of-file
+                        use target) is refused naming each reference and
+                        the fix (embed the resource as a data URI).
   --from-generation <jobId>
                         Add the selected output of a published Generation Job
                         (see ply generate) as an ordinary image Layer. The

@@ -4,6 +4,40 @@
 
 ### Added
 
+- Imported vectors are inert (#214, spec #207 US-006, DEC-007, TEST-005): the
+  one SVG ingestion branch now refuses a file that references anything
+  outside itself, naming each reference with its kind and line (the message
+  lists the first 20 and reports any beyond that bound) and the fix: embed
+  the resource as a data URI. The scan is generic, not a per-element
+  allowlist: every attribute value on every element is judged — any `url(…)`
+  occurrence anywhere (paint servers on fill/stroke/filter/mask/clip-path),
+  any `href`/`src`/`data`/`base`/`poster` value, each `srcset` candidate
+  separately — plus `<style>` bodies, `<?xml-stylesheet?>`, and the DOCTYPE.
+  Values are normalized in parser order before judging (XML entities decoded
+  once, CDATA joined into the text it represents, CSS backslash escapes
+  unescaped), so `&#104;ttps://…`, `@\69 mport`, `u\72 l(…)`, and CDATA-split
+  keywords cannot hide a reference. DOCTYPE entity declarations (internal or
+  external — a conformant parser expands internal entities, so
+  entity-expansion-to-markup cannot be judged at text level) and unterminated
+  constructs (comment, CDATA, script, style, PI, tag) refuse as malformed;
+  nested `data:image/svg+xml` payloads are re-scanned once (bounded depth 1).
+  Same-document `#id` fragments, embedded data URIs, the conventional DOCTYPE
+  DTD identifier, plain text mentioning a URL, and a script (element, `src`,
+  `on*` handler, `javascript:` href — never executed in the image path) do
+  not block import. The scan is text-level and region-aware at the single
+  ingestion point (`scanSvgExternalReferences` in src/svg-inertness.ts,
+  called from `validateImageBytes` after the identity gate), so add, edit,
+  and generated/matte byte ingestion all apply it; a refusal leaves nothing
+  published. Inertness is proven, not assumed: rendering, measuring,
+  reviewing, and replaying a script-only SVG issue zero network requests and
+  no script side effect, observed through the render page's request log (now
+  recorded and exposed from src/browser.ts).
+  Help, README (a new inertness section), the limits guide (external
+  references), the storage contract ingestion step, and CONTEXT.md's vector
+  term record the contract. No new dependency — the scan is text-level like
+  the SVG meta parse. The colour parameter for single-colour vectors is
+  still #215.
+
 - Local SVG import as an image Layer (#213, spec #207 US-004, DEC-007/009/010/011):
   `--image` accepts a regular local SVG file at add and at edit. An SVG is
   image-kind content with a recorded vector format — not a fourth Layer kind

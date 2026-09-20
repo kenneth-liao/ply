@@ -109,7 +109,10 @@ Options:
                         local PNG, JPEG, WebP, or SVG file. An SVG keeps its
                         vector format — the intrinsic size comes from the
                         file's own width/height or viewBox, and the bytes
-                        are retained unchanged (#213).
+                        are retained unchanged (#213). An SVG referencing
+                        anything outside itself is refused naming each
+                        reference and the fix (embed the resource as a data
+                        URI); scripts never block import and never run.
   --from-generation <jobId>
                         Replace an image Layer's content with the selected
                         output of a published Generation Job (see ply

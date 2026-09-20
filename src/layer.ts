@@ -11,6 +11,7 @@ import path from "node:path";
 import { MAX_DIMENSION, MAX_ENCODED_BYTES, MAX_PIXELS, decodePng } from "./png.js";
 import { readRasterMeta, type RasterMeta } from "./raster-meta.js";
 import { readSvgMeta, type SvgMeta } from "./svg-meta.js";
+import { scanSvgExternalReferences } from "./svg-inertness.js";
 import { escapesDirReal, outsideDir } from "./paths.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
@@ -784,10 +785,21 @@ export async function validateImageBytes(
   // viewBox — malformed or non-SVG bytes are refused right here — while every
   // other name takes the established raster-sniff path. The format fact rides
   // the same projection either way: an SVG is image-kind content with a
-  // vector format, not a fourth kind.
-  const meta: RasterMeta | SvgMeta | string = /\.svg$/i.test(sourceName)
-    ? readSvgMeta(bytes, sourceName)
-    : readRasterMeta(bytes, sourceName);
+  // vector format, not a fourth kind. Inertness is the second gate in the
+  // same branch (#214, US-006): a file referencing anything outside itself is
+  // refused here, naming each reference — after the identity gate (the file
+  // must first be an SVG document) so a non-SVG blob keeps its accurate
+  // message, and before anything is published.
+  let meta: RasterMeta | SvgMeta | string;
+  if (/\.svg$/i.test(sourceName)) {
+    meta = readSvgMeta(bytes, sourceName);
+    if (typeof meta !== "string") {
+      const inertnessRefusal = scanSvgExternalReferences(bytes, sourceName);
+      if (inertnessRefusal !== undefined) meta = inertnessRefusal;
+    }
+  } else {
+    meta = readRasterMeta(bytes, sourceName);
+  }
   if (typeof meta === "string") {
     throw new Error(meta);
   }
