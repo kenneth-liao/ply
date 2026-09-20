@@ -806,28 +806,41 @@ The colour parameter for single-colour vectors is a separate ticket (#215).
 
 An imported vector can never break offline operation or reproducible replay
 (#214, spec #207 US-006). The same ingestion point refuses a file that
-references anything outside itself — a remote or local image (either `href`
-spelling, across case, whitespace, and entity encodings), a font
-(`@font-face src: url(…)`), a stylesheet (`<?xml-stylesheet?>`, `<link>`,
-`@import`, or CSS `url()` in a `<style>` body or a `style` attribute), an
-out-of-file `use` target, an external entity declaration, or a resource
-reference inside `foreignObject` — naming each reference (with its kind and
-line; the message lists the first 20 and reports any beyond that bound) and
-the fix: embed the resource as a data URI. Same-document fragment
-references (`#id`) and embedded data URIs are accepted.
+references anything outside itself. The scan is generic, not a per-element
+allowlist: EVERY attribute value on EVERY element is judged — any `url(…)`
+occurrence anywhere (paint servers on `fill`/`stroke`/`filter`/`mask`/
+`clip-path` included), any `href`/`src`/`data`/`base`/`poster` value, and
+each `srcset` candidate separately — plus `<style>` bodies,
+`<?xml-stylesheet?>`, and the DOCTYPE. Values are normalized in the order
+the consuming parsers apply them — XML entities decoded once, CDATA joined
+into the text it represents, CSS backslash escapes unescaped — so an
+encoding cannot hide a reference: a remote or local image, a font
+(`@font-face src: url(…)`), a stylesheet (`@import` or CSS `url()`), an
+out-of-file `use` target, or a resource reference inside `foreignObject` is
+named with its kind and line (the message lists the first 20 and reports
+any beyond that bound), with the fix: embed the resource as a data URI.
+Same-document fragment references (`#id`) and embedded data URIs are
+accepted; a nested `data:image/svg+xml` payload is re-scanned once, so its
+own external references refuse too.
 
-A script in the file — a `<script>` element, an `on*` handler, a
-`javascript:` href — does not block import and is never executed: the vector
-paints through the browser's image path, where scripts are disabled by
-construction. Inertness is proven, not assumed: rendering, measuring,
-reviewing, and replaying a script-only SVG issue zero network requests,
-observed through the render page's request log.
+A script in the file — a `<script>` element (inline or `src`), an `on*`
+handler, a `javascript:` href — does not block import and is never
+executed: the vector paints through the browser's image path, where
+scripts are disabled by construction. Inertness is proven, not assumed:
+rendering, measuring, reviewing, and replaying a script-only SVG issue
+zero network requests, observed through the render page's request log.
 
 The refusal applies at import (add, edit, and every byte-ingestion path); a
 refused import publishes nothing. Retained SVG bytes from before this gate
 stay inert through the same browser image path. The DOCTYPE's own DTD
 identifier — the boilerplate design tools emit — is not a reference and
-does not block import; an external entity declaration does.
+does not block import; any DOCTYPE entity declaration (internal or
+external) does, because a conformant XML parser expands internal entities
+and entity expansion to markup cannot be judged at text level — the fix
+removes the entities. An unterminated comment, CDATA section, `<script>`,
+`<style>`, processing instruction, or tag refuses as malformed. Plain text
+content mentioning a URL is text, not a reference, and never blocks
+import.
 
 ## Region checking (new surface)
 

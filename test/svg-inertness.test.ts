@@ -35,7 +35,7 @@ import { measureCompositionLayers } from "../src/composition-measure.js";
 import { reviewRetainedLayer } from "../src/evidence-review.js";
 import {
   withRenderPage,
-  renderPageRequests,
+  renderPageNetworkRequests,
   clearRenderPageRequests,
   closeBrowser,
 } from "../src/browser.js";
@@ -102,8 +102,14 @@ function baseSvg(body: string, extra = ""): string {
 }
 
 /** Add `svg` under `name`; expect the import refusal naming every listed
- *  needle and the data-URI fix, with the live Project byte-identical. */
-async function expectAddRefused(svg: string, name: string, needles: string[]): Promise<void> {
+ *  needle and the fix needle (default: the data-URI fix), with the live
+ *  Project byte-identical. */
+async function expectAddRefused(
+  svg: string,
+  name: string,
+  needles: string[],
+  fixNeedle = "data URI",
+): Promise<void> {
   const svgPath = path.join(tempDir, name);
   await writeFile(svgPath, svg);
   const before = await snapshotTree(projDir);
@@ -116,7 +122,7 @@ async function expectAddRefused(svg: string, name: string, needles: string[]): P
   for (const needle of needles) {
     expect(json.error).toContain(needle);
   }
-  expect(json.error).toContain("data URI");
+  expect(json.error).toContain(fixNeedle);
   // The refusal leaves nothing published: the Project tree (compositions,
   // content store, records) is byte-identical to before the attempt.
   expect(await snapshotTree(projDir)).toEqual(before);
@@ -180,8 +186,10 @@ test("entity-encoded hrefs are decoded before the verdict", async () => {
     "entity.svg",
     ["https://evil.example/pic.png"],
   );
-  // A custom entity's replacement text is unknowable without its DOCTYPE —
-  // refuse on doubt rather than resolve to something unexpected.
+  // A custom entity's replacement text is unknowable — and any DOCTYPE
+  // entity declaration is refused on its own (a conformant XML parser
+  // expands internal entities, so entity expansion to markup cannot be
+  // judged at text level).
   await expectAddRefused(
     `<?xml version="1.0"?>\n` +
       `<!DOCTYPE svg [\n  <!ENTITY logo "https://evil.example/logo.png">\n]>\n` +
@@ -190,7 +198,8 @@ test("entity-encoded hrefs are decoded before the verdict", async () => {
           `<image href="&logo;" width="10" height="10"/>`,
       ),
     "custom-entity.svg",
-    ["&logo;"],
+    ["DOCTYPE entity declaration", "logo"],
+    "remove the DOCTYPE's entity declarations",
   );
 });
 
@@ -237,30 +246,211 @@ test("stylesheet references — @import, CSS url(), link, and the xml-stylesheet
   );
 });
 
-test("an external entity declaration is refused; the conventional DTD prolog is not a reference", async () => {
-  // The one DOCTYPE construct whose external replacement text could change
-  // what the document shows when resolved.
+test("any DOCTYPE entity declaration — internal or external — is refused, naming the fix", async () => {
+  // A conformant XML parser expands internal entities, so entity expansion
+  // to markup (`&x;` delivering an <image> element) cannot be judged at text
+  // level. Without DOCTYPE entities there is nothing to expand.
+  await expectAddRefused(
+    `<!DOCTYPE svg [\n  <!ENTITY x "<image href='http://e/x.png'/>">\n]>\n` +
+      baseSvg(`<rect width="80" height="40" fill="#ff0000"/>&x;`),
+    "entity-markup.svg",
+    ["DOCTYPE entity declaration", "x"],
+    "remove the DOCTYPE's entity declarations",
+  );
   await expectAddRefused(
     `<!DOCTYPE svg [\n  <!ENTITY logo SYSTEM "file:///etc/motd">\n]>\n` +
       baseSvg(`<rect width="80" height="40"/>`),
     "entity-decl.svg",
-    ["file:///etc/motd", "external entity declaration"],
+    ["logo", "DOCTYPE entity declaration"],
+    "remove the DOCTYPE's entity declarations",
   );
   await expectAddRefused(
     `<!DOCTYPE svg [\n  <!ENTITY % pe PUBLIC "-//x//y" "http://evil.example/pe.dtd">\n]>\n` +
       baseSvg(`<rect width="80" height="40"/>`),
     "parameter-entity.svg",
-    ["http://evil.example/pe.dtd", "external entity declaration"],
+    ["pe", "DOCTYPE entity declaration"],
+    "remove the DOCTYPE's entity declarations",
   );
   // The conventional SVG 1.1 prolog every design tool emits names the
-  // document's own type definition — not a rendered resource, never fetched
-  // in the browser's image path — so it imports.
+  // document's own type definition — not an entity declaration, not a
+  // rendered resource, never fetched in the browser's image path — so it
+  // imports.
   const svgPath = path.join(tempDir, "conventional-prolog.svg");
   await writeFile(
     svgPath,
     `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n` +
       `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n` +
       baseSvg(`<rect width="80" height="40" fill="#ff0000"/>`),
+  );
+  const add = await invoke([
+    "composition", "add", "poster", "logo", "--image", svgPath, "--project", projDir, "--json",
+  ]);
+  expect(add.code).toBe(0);
+  expect(JSON.parse(add.stdout).ok).toBe(true);
+});
+
+test("a paint-server url() on any presentation attribute is refused; url(#fragment) is not", async () => {
+  // The canonical external paint-server reference — fill, stroke, filter,
+  // mask, and clip-path all carry url() values the scan judges on every
+  // element.
+  await expectAddRefused(
+    baseSvg(
+      `<rect width="80" height="40" fill="url(https://evil.example/g.svg#g)"/>`,
+    ),
+    "fill-url.svg",
+    ["https://evil.example/g.svg#g", "CSS url() in fill attribute on <rect>"],
+  );
+  await expectAddRefused(
+    baseSvg(
+      `<rect width="80" height="40" stroke="url(strokes.svg#s)" filter="url(https://evil.example/f.svg#f)"/>`,
+    ),
+    "paint-attrs.svg",
+    ["strokes.svg#s", "https://evil.example/f.svg#f"],
+  );
+});
+
+test("srcset candidates are judged separately", async () => {
+  // A fragment- or data:-first list cannot smuggle a remote candidate past
+  // the gate.
+  await expectAddRefused(
+    baseSvg(
+      `<foreignObject width="80" height="40"><body xmlns="http://www.w3.org/1999/xhtml">` +
+        `<img srcset="data:image/png;base64,iVBORw0KGgo= 1x, https://evil.example/x.png 2x"/>` +
+        `</body></foreignObject>`,
+    ),
+    "srcset-mixed.svg",
+    ["https://evil.example/x.png", "srcset candidate on <img>"],
+  );
+  await expectAddRefused(
+    baseSvg(
+      `<foreignObject width="80" height="40"><body xmlns="http://www.w3.org/1999/xhtml">` +
+        `<img srcset="#a 1x, ../evil.png 2x"/>` +
+        `</body></foreignObject>`,
+    ),
+    "srcset-fragment-first.svg",
+    ["../evil.png"],
+  );
+});
+
+test("CSS escapes and CDATA splits cannot hide a keyword or target", async () => {
+  // CSS unescapes backslash sequences exactly as the tokenizer does —
+  // AFTER the XML entity decode and BEFORE url()/@import matching — so the
+  // escape-decoded keyword is matched.
+  await expectAddRefused(
+    baseSvg(`<style>@\\69 mport "https://evil.example/evil.css";</style>`),
+    "css-escape.svg",
+    ["https://evil.example/evil.css", "@import in <style> body"],
+  );
+  // Entity-encoded backslash + hex digit: same normalization pipeline.
+  await expectAddRefused(
+    baseSvg(`<style>@&#92;69 mport "https://evil.example/evil.css";</style>`),
+    "css-escape-entity.svg",
+    ["https://evil.example/evil.css"],
+  );
+  // A CSS-escaped url() keyword inside a presentation attribute.
+  await expectAddRefused(
+    baseSvg(`<rect width="80" height="40" fill="u\\72 l(https://evil.example/g.svg#g)"/>`),
+    "attr-css-escape.svg",
+    ["https://evil.example/g.svg#g"],
+  );
+  // XML joins CDATA into the style body's character data — the scan joins
+  // it before matching, so the split keyword is still matched.
+  await expectAddRefused(
+    baseSvg(`<style>@imp<![CDATA[ort "https://evil.example/evil.css"]]></style>`),
+    "cdata-split.svg",
+    ["https://evil.example/evil.css", "@import in <style> body"],
+  );
+});
+
+test("an unterminated comment, CDATA section, script, style, PI, or tag refuses as malformed", async () => {
+  const cases: Array<[string, string, string]> = [
+    ["unterminated-comment.svg", baseSvg(`<rect width="80" height="40"/>`) + "\n<!-- never closed", "unterminated <!-- comment"],
+    ["unterminated-cdata.svg", baseSvg(`<style>fill: <![CDATA[never closed</style>`), "unterminated CDATA section"],
+    ["unterminated-script.svg", baseSvg(`<script>window.x = 1;`), "a <script> element"],
+    ["unterminated-style.svg", baseSvg(`<style>rect { fill: #f00;`), "a <style> element"],
+    ["unterminated-pi.svg", baseSvg(`<rect width="80" height="40"/>`) + `\n<?xml-stylesheet type="text/css" href="theme.css"`, "a processing instruction"],
+    ["unterminated-doctype.svg", baseSvg(`<rect width="80" height="40"/>`) + `\n<!DOCTYPE svg SYSTEM "http://evil.example/x.dtd"`, "<!DOCTYPE declaration is unterminated"],
+    ["unterminated-tag.svg", baseSvg(`<rect width="80" height="40"/>`) + `\n<image href="pic.png" width="10"`, "a <image> start tag"],
+  ];
+  for (const [name, content, needle] of cases) {
+    const svgPath = path.join(tempDir, name);
+    await writeFile(svgPath, content);
+    const add = await invoke([
+      "composition", "add", "poster", "logo", "--image", svgPath, "--project", projDir, "--json",
+    ]);
+    expect(add.code).toBe(1);
+    const error = JSON.parse(add.stdout).error as string;
+    // The scan refuses the unterminated construct as malformed; the identity
+    // gate may refuse a prolog-terminated file first — either refusal is the
+    // fail-fast answer, and both are actionable, never a crash.
+    expect(error).toMatch(/not a valid SVG document|not an SVG document|Malformed SVG|truncated/);
+    expect(error).toContain(needle);
+  }
+});
+
+test("a nested data:image/svg+xml payload is re-scanned once", async () => {
+  // The inner document's external reference is named — the gate does not
+  // trust recursive image-mode blocking.
+  const dot = encodePng(8, 8, () => [255, 0, 0, 255]);
+  const inner = baseSvg(
+    `<rect width="80" height="40" fill="#ff0000"/>` +
+      `<image href="https://evil.example/inner.png" width="10" height="10"/>`,
+  );
+  await expectAddRefused(
+    baseSvg(`<image href="data:image/svg+xml;base64,${Buffer.from(inner).toString("base64")}" width="40" height="20"/>`),
+    "nested-remote.svg",
+    ["https://evil.example/inner.png", "nested data:image/svg+xml: href on <image>"],
+  );
+  // Percent-encoded (non-base64) inner payloads are re-scanned too.
+  await expectAddRefused(
+    baseSvg(
+      `<image href="data:image/svg+xml,${encodeURIComponent(inner)}" width="40" height="20"/>`,
+    ),
+    "nested-remote-raw.svg",
+    ["https://evil.example/inner.png"],
+  );
+  // A nested SVG with only inert references imports.
+  const clean = baseSvg(`<rect width="80" height="40" fill="url(#g)"/><image href="data:image/png;base64,${dot.toString("base64")}"/>`);
+  const svgPath = path.join(tempDir, "nested-clean.svg");
+  await writeFile(
+    svgPath,
+    baseSvg(
+      `<image href="data:image/svg+xml;base64,${Buffer.from(clean).toString("base64")}" width="40" height="20"/>`,
+    ),
+  );
+  const add = await invoke([
+    "composition", "add", "poster", "logo", "--image", svgPath, "--project", projDir, "--json",
+  ]);
+  expect(add.code).toBe(0);
+  expect(JSON.parse(add.stdout).ok).toBe(true);
+});
+
+test("the xml-stylesheet PI without a href refuses on doubt, never crashes", async () => {
+  // INT-1: the no-href PI and an unquoted href are actionable refusals, not
+  // an internal TypeError.
+  await expectAddRefused(
+    `<?xml-stylesheet type="text/css"?>\n` + baseSvg(`<rect width="80" height="40"/>`),
+    "pi-no-href.svg",
+    ["xml-stylesheet reference", "(no href"],
+  );
+  await expectAddRefused(
+    `<?xml-stylesheet type="text/css" href=theme.css?>\n` + baseSvg(`<rect width="80" height="40"/>`),
+    "pi-unquoted.svg",
+    ["theme.css"],
+  );
+});
+
+test("plain text content and url()-like names are not references", async () => {
+  // Must not false-refuse: text mentioning a URL is text; "bgurl(" is not a
+  // url( token; a comment is not markup.
+  const svgPath = path.join(tempDir, "plain-text.svg");
+  await writeFile(
+    svgPath,
+    baseSvg(
+      `<desc>docs live at https://example.com and see url(https://example.com) in prose</desc>` +
+        `<rect class="bgurl(x)" width="80" height="40" fill="#ff0000"/>` +
+        `<!-- <image href="https://evil.example/pic.png"/> -->`,
+    ),
   );
   const add = await invoke([
     "composition", "add", "poster", "logo", "--image", svgPath, "--project", projDir, "--json",
@@ -362,9 +552,10 @@ test("same-document fragments and embedded data URIs are accepted", async () => 
   const dot = encodePng(8, 8, () => [255, 0, 0, 255]);
   const svg = baseSvg(
     `<defs><circle id="dot" cx="20" cy="20" r="8" fill="#00ff00"/></defs>` +
+      `<rect width="2" height="2" fill="url(#dot)"/>` +
       `<rect width="80" height="40" fill="#ff0000"/>` +
       `<use href="#dot"/>` +
-      `<image href="data:image/png;base64,${dot.toString("base64")}" x="40" y="10" width="20" height="20"/>`,
+      `<image href="DATA:image/png;base64,${dot.toString("base64")}" x="40" y="10" width="20" height="20"/>`,
   );
   const svgPath = path.join(tempDir, "embedded.svg");
   await writeFile(svgPath, svg);
@@ -390,11 +581,13 @@ test("same-document fragments and embedded data URIs are accepted", async () => 
 // A script never blocks import (US-006 bullet 3)
 // ---------------------------------------------------------------------------
 
-/** A script-only SVG: an inline script, event handlers, a javascript: href,
- *  and a URL that appears only inside a comment (not a reference). */
+/** A script-only SVG: an inline script, a remote-src script, event handlers,
+ *  a javascript: href, and a URL that appears only inside a comment (not a
+ *  reference). Everything here is scan-accepted and must never run or fetch. */
 function scriptOnlySvg(): string {
   return baseSvg(
     `<script>window.__plyVectorScriptRan = true;</script>` +
+      `<script src="https://evil.example/tracker.js"></script>` +
       `<rect width="80" height="40" fill="#ff0000" onclick="window.__plyVectorOnclick = true"/>` +
       `<a href="javascript:window.__plyVectorJs = true"><rect x="10" y="10" width="20" height="20" fill="#0000ff"/></a>`,
     `onload="window.__plyVectorOnload = true"`,
@@ -441,9 +634,7 @@ test("render, measure, review, and replay of a script-only SVG issue zero networ
   // calls — on the shared render page whose request log this test reads.
   clearRenderPageRequests();
   const rendered = await renderComposition(projDir, "poster", { supersample: 1 });
-  const networkRequests = (reqs: readonly { url: string }[]) =>
-    reqs.filter((r) => !/^(data:|about:)/i.test(r.url));
-  expect(networkRequests(renderPageRequests())).toEqual([]);
+  expect(renderPageNetworkRequests()).toEqual([]);
   const painted = decodePng(await readFile(rendered.output));
   expect(pixel(painted, 115, 65).slice(0, 3)).toEqual([255, 0, 0]);
   expect(pixel(painted, 70, 50).slice(0, 3)).toEqual([0, 0, 255]);
@@ -463,12 +654,13 @@ test("render, measure, review, and replay of a script-only SVG issue zero networ
   clearRenderPageRequests();
   const measured = await measureCompositionLayers(projDir, "poster");
   expect(measured.layers[0]!.painted).not.toBeNull();
-  expect(networkRequests(renderPageRequests())).toEqual([]);
+  expect(renderPageNetworkRequests()).toEqual([]);
 
-  // Review — `layer review` resolves evidence offline and refuses a current
-  // revision no generation or matte claims (a plain imported Layer has no
-  // lineage), which itself touches no browser and no network; the review
-  // sheet is data-URI-only HTML by construction.
+  // Review — `layer review` of a plain imported Layer is refused at its
+  // pre-existing lineage gate (no generation or matte claims it), which
+  // touches no browser: this leg proves the refusal happens before any
+  // request could exist, NOT that a sheet rendered. A rendered review sheet
+  // is data-URI-only HTML by construction (CSP default-src 'none').
   clearRenderPageRequests();
   let reviewError = "";
   try {
@@ -477,7 +669,7 @@ test("render, measure, review, and replay of a script-only SVG issue zero networ
     reviewError = (err as Error).message;
   }
   expect(reviewError).toContain("not generated or matted content");
-  expect(networkRequests(renderPageRequests())).toEqual([]);
+  expect(renderPageNetworkRequests()).toEqual([]);
 
   // Replay — the exact library entry point `composition replay` calls, on a
   // manifest captured by the CLI subprocess render above (same environment
@@ -488,7 +680,7 @@ test("render, measure, review, and replay of a script-only SVG issue zero networ
   const cliOutputPath = JSON.parse(cliRender.stdout).render.output as string;
   clearRenderPageRequests();
   const replayed = await replayRender(projDir, manifestPath);
-  expect(networkRequests(renderPageRequests())).toEqual([]);
+  expect(renderPageNetworkRequests()).toEqual([]);
   // Replay is byte-identical to the render that captured the manifest.
   expect((await readFile(replayed.output)).equals(await readFile(cliOutputPath))).toBe(true);
 });

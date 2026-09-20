@@ -2,77 +2,119 @@
  * External-reference scan for SVG ingestion (#214, spec #207 US-006, DEC-007):
  * the trust boundary that keeps an imported vector inert. The browser's
  * `<img>` paint path disables scripts and external loads by construction —
- * this scan is the additional ingestion gate so a file never renders with a
- * silently missing part (fail fast): any reference to a resource outside the
- * file is refused at import, naming each reference and the fix.
+ * this is the ingestion gate so a file never renders with a silently missing
+ * part (fail fast). The scan is generic, not a per-element allowlist: EVERY
+ * attribute value on EVERY element is judged — any `url(…)` occurrence
+ * anywhere (paint servers on `fill`/`stroke`/`filter`/`mask`/`clip-path`
+ * included), any `href`/`src`/`data`/`base`/`poster` value, and each
+ * `srcset` candidate separately — plus `<style>` bodies, `<?xml-stylesheet?>`
+ * processing instructions, and the DOCTYPE.
  *
- * What is scanned, and why — the threat model:
+ * Values are normalized before judging, in the order the consuming parsers
+ * apply them, so an encoding cannot hide a reference from the verdict: XML
+ * character/entity references are decoded once (CDATA content kept verbatim,
+ * as XML delivers it), CDATA sections are joined into the text they
+ * represent (style bodies included), and CSS backslash escapes are unescaped
+ * exactly as CSS tokenization decodes them — so `@\\69 mport` is matched as
+ * `@import`. Nested `data:image/svg+xml` payloads are re-scanned once
+ * (bounded depth 1) instead of being trusted to the browser's recursive
+ * image-mode blocking.
  *
- * - **href / xlink:href, both spellings, any case, whitespace around `=`** —
- *   every attribute whose local name is `href`, `src`, `data`, `srcset`, or
- *   `base` (xml:base) is evaluated on every element, so `<image>`, `<use>`,
- *   `<feImage>`, `<cursor>`, foreignObject HTML (`<img src>`, `<iframe src>`,
- *   `<object data>`), and `<link>` are all covered without an element list.
- * - **Entity-encoded values** — attribute values are XML-decoded first
- *   (numeric character references and the five predefined entities), so
- *   `&#104;ttps://…` is caught. An entity the processor cannot resolve
- *   without a DTD (`&custom;`) refuses on doubt.
- * - **Stylesheets** — `<?xml-stylesheet … href=…?>`, `<link …>`, `@import`,
- *   and any CSS `url()` inside `<style>` bodies or `style` attributes
- *   (`@font-face src: url(…)` is the font case of the same rule).
- * - **External entity declarations** — `<!ENTITY … SYSTEM/PUBLIC …>` inside
- *   the DOCTYPE, scanned quote-aware (a quoted value may contain `>` or
- *   `]`): the one DOCTYPE construct whose external replacement text could
- *   change what the document shows when resolved. The DOCTYPE's own
- *   external identifier — the conventional SVG 1.1 DTD boilerplate design
- *   tools emit — is not a rendered resource and is never fetched in the
- *   browser's image path, so it does not block import.
- * - **Comments and `<script>` bodies are excluded**: a URL mentioned inside a
- *   comment or a script's source text is not a reference the browser can
- *   act on in image mode, and a script must never block import (below).
+ * What is refused:
+ *
+ * - **Images** — remote and local: `http(s)://`, `file://`, relative and
+ *   absolute local paths, protocol-relative, unknown schemes. Either href
+ *   spelling, any case, any whitespace around `=`.
+ * - **Fonts** — `url(…)` inside an `@font-face` block.
+ * - **Stylesheets** — `<?xml-stylesheet …?>` (a missing href refuses on
+ *   doubt), `<link … href=…>`, `@import`, and any CSS `url()`.
+ * - **`use` targets outside the file**; the DOCTYPE's own DTD identifier is
+ *   NOT a reference and does not block import.
+ * - **DOCTYPE entity declarations — internal or external.** A conformant XML
+ *   parser expands internal entities, so `<!ENTITY x "<image href='…'/>">`
+ *   used as `&x;` injects markup the text-level scan cannot judge. Without
+ *   DOCTYPE entities there is nothing to expand; the fix inlines the values.
+ * - **Malformed structure** — an unterminated comment, CDATA section,
+ *   `<script>`, `<style>`, processing instruction, DOCTYPE, or tag refuses
+ *   as malformed. Never accept on doubt.
  *
  * What is accepted:
  *
- * - Same-document fragment references (`#id`) — e.g. `<use href="#dot">`.
- * - Embedded `data:` URIs — the fix the refusal names.
- * - `javascript:` hrefs, `<script>` elements, and `on*` handlers — a script
- *   does not block import and is never executed: the vector is painted as an
- *   image, where scripts are disabled by construction. Script source text is
- *   opaque, never scanned for references.
+ * - Same-document fragment references (`#id`), embedded `data:` URIs (the
+ *   fix the refusal names), and `javascript:` hrefs.
+ * - References inside comments (stripped first) and plain text content —
+ *   text mentioning a URL is not a reference.
+ * - A script — `<script>` element, `src`, inline body, `on*` handlers —
+ *   never blocks import and never runs: its body and attributes are skipped
+ *   wholesale.
  *
  * The scan is text-level like src/svg-meta.ts — no XML parser is pulled in —
- * and refuses on doubt: any value that is not a fragment, `data:`, or
- * `javascript:` (relative paths, absolute local paths, `http(s)://`,
- * protocol-relative, `file://`, mailto, unknown schemes) is a refusal.
- * Line numbers are diagnostic, best-effort, and derived from a scan that
- * preserves line structure.
+ * and bounds its own work and message against pathological files (see the
+ * MAX_* constants). Line numbers are diagnostic, best-effort.
  */
 
 /** One out-of-file reference found in the document. */
 interface ExternalRef {
   /** What kind of reference it is — the words the refusal names. */
   kind: string;
-  /** The reference target as it appears (entity-decoded, bounded). */
+  /** The reference target as it appears (normalized, bounded). */
   target: string;
-  /** 1-based line, best-effort. */
+  /** 1-based line of the document the scan judged, best-effort. */
   line: number;
 }
 
 /** Findings collection with the pathological-input bounds: a bounded number
  *  of distinct references is collected (the message reports the bound when
- *  it is hit), and the collector answers `capped()` so callers can skip
- *  further expensive target extraction once the bound is hit. */
-interface Collector {
-  push(kind: string, target: string, offset: number): void;
+ *  it is hit) and `capped()` lets the walk stop early. Nested scans share
+ *  one collector, so a nested payload's references are named in the same
+ *  refusal as the outer document's. */
+interface Collector extends ScanParent {
+  readonly findings: readonly ExternalRef[];
+  push(kind: string, target: string, line: number): void;
   capped(): boolean;
 }
 
-const ACCEPTED_SCHEMES = new Set(["data", "javascript"]);
+/** The findings sink every document in one scan shares: the collector at the
+ *  top, with the nesting-aware push supplied by each scanDocument level. */
+interface ScanParent {
+  push(kind: string, target: string, line: number): void;
+  capped(): boolean;
+}
+
+/** One document's scan context: sub-scans push offsets and the context maps
+ *  them to the line the OUTER refusal should name (this document's lines at
+ *  depth 0; the outer document's nesting point below it), with the kind
+ *  prefix that says where a nested finding came from. */
+interface DocScan extends ScanParent {
+  push(kind: string, target: string, offset: number): void;
+  lineAt(offset: number): number;
+  capped(): boolean;
+}
+
+/**
+ * Bounds that keep a pathological file (up to the 64 MB ingestion cap) from
+ * turning the refusal itself into a hang or an unbounded message: distinct
+ * references collected, references shown in the message, and the length of
+ * one named target. When the collection bound is hit the message says so —
+ * the count it reports is a lower bound, never an invented total.
+ */
+const MAX_COLLECTED = 64;
+const MESSAGE_CAP = 20;
+const TARGET_MAX = 200;
+
+/** Attributes whose value is a resource reference, by local name (namespace
+ *  prefix stripped, case-folded) — element-agnostic: both href spellings via
+ *  href, foreignObject HTML via src/data/poster, xml:base (it silently
+ *  re-roots every relative reference in its scope). srcset is judged
+ *  candidate-by-candidate, not as one string. */
+const URL_ATTRS = new Set(["href", "src", "data", "base", "poster"]);
 
 /** The XML decode a conformant processor applies without a DTD: numeric
- *  character references and the five predefined entities. A custom entity
- *  (`&name;`) is left encoded and refuses on doubt below — its replacement
- *  text is unknowable without the DOCTYPE that declares it. */
+ *  character references and the five predefined entities, applied ONCE —
+ *  this module judges exactly the value the XML parser hands the consumer.
+ *  A custom entity (`&name;`) is left encoded: a document using one is
+ *  malformed without a DOCTYPE, and DOCTYPE entities are refused on their
+ *  own. */
 function decodeXmlEntities(value: string): string {
   return value.replace(/&(#[0-9]+|#[xX][0-9a-fA-F]+|amp|lt|gt|quot|apos);/g, (match, body: string) => {
     if (body.startsWith("#")) {
@@ -98,83 +140,172 @@ function decodeXmlEntities(value: string): string {
 }
 
 /**
- * The verdict for one URL-ish value. Returns the reference to name when the
- * value points outside the file, or undefined when it is inert: a
- * same-document fragment, an embedded data URI, or a javascript: href (a
- * script never blocks import and never runs — image mode disables scripts).
- * Whitespace is compacted before the scheme check so `h ttps://` cannot slip
- * past, and an entity the processor cannot resolve refuses on doubt.
+ * CSS unescape, exactly as CSS tokenization decodes backslash escapes:
+ * `\` + 1–6 hex digits (plus one consumed trailing whitespace) is a code
+ * point; `\` + any other char is that char literally. Applied AFTER the XML
+ * decode and BEFORE any `url(`/`@import` matching, so `@\\69 mport` cannot
+ * hide the keyword.
  */
-function externalTarget(raw: string): string | undefined {
-  const decoded = decodeXmlEntities(raw).trim();
-  if (decoded === "") return undefined;
-  if (/&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/.test(decoded)) {
-    return decoded; // a custom entity — its replacement text is unknowable
+function cssUnescape(text: string): string {
+  if (!text.includes("\\")) return text;
+  return text.replace(/\\(?:([0-9a-fA-F]{1,6})\s?|([\s\S]))/g, (_, hex?: string, ch?: string) => {
+    if (hex !== undefined) {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+    }
+    return ch ?? "";
+  });
+}
+
+/** One maximal run of text the XML parser delivers verbatim: either ordinary
+ *  character data (entity references still encoded) or CDATA content
+ *  (delivered verbatim). */
+interface TextSegment {
+  text: string;
+  cdata: boolean;
+}
+
+/** Split text into its CDATA and ordinary-character-data segments. CDATA
+ *  sections represent their inner text verbatim; joining them into the text
+ *  closes the CDATA-split-keyword evasion (`@imp<![CDATA[ort …]]>`). */
+function splitCdata(text: string): { segments: TextSegment[]; unterminated: boolean } {
+  if (!text.includes("<![CDATA[")) return { segments: [{ text, cdata: false }], unterminated: false };
+  const segments: TextSegment[] = [];
+  let i = 0;
+  for (;;) {
+    const start = text.indexOf("<![CDATA[", i);
+    if (start === -1) {
+      segments.push({ text: text.slice(i), cdata: false });
+      return { segments, unterminated: false };
+    }
+    if (start > i) segments.push({ text: text.slice(i, start), cdata: false });
+    const close = text.indexOf("]]>", start + 9);
+    if (close === -1) {
+      segments.push({ text: text.slice(start + 9), cdata: true });
+      return { segments, unterminated: true };
+    }
+    segments.push({ text: text.slice(start + 9, close), cdata: true });
+    i = close + 3;
   }
-  const compact = decoded.replace(/\s+/g, "");
-  if (compact.startsWith("#")) return undefined; // same-document fragment
-  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(compact);
-  if (scheme && ACCEPTED_SCHEMES.has(scheme[1]!.toLowerCase())) return undefined;
-  return decoded; // remote, local, relative, protocol-relative, or unknown scheme
+}
+
+/** The text a style body or CSS-bearing attribute value represents, with
+ *  entity references decoded only where XML would decode them and CSS
+ *  escapes unescaped where the CSS tokenizer would. */
+function cssTextOf(raw: string): { text: string; unterminatedCdata: boolean } {
+  const { segments, unterminated } = splitCdata(raw);
+  const joined = segments.map((s) => (s.cdata ? s.text : decodeXmlEntities(s.text))).join("");
+  return { text: cssUnescape(joined), unterminatedCdata: unterminated };
 }
 
 /** Replace each comment's characters (newlines kept) with spaces, so the
  *  comment's text can never look like markup and line numbers survive. An
- *  unterminated comment runs to the end of the file. */
-function stripComments(text: string): string {
+ *  unterminated comment is malformed — the caller refuses it. */
+function stripComments(text: string): { text: string; unterminated: boolean } {
   let out = "";
   let i = 0;
   for (;;) {
     const start = text.indexOf("<!--", i);
-    if (start === -1) return out + text.slice(i);
+    if (start === -1) return { text: out + text.slice(i), unterminated: false };
     out += text.slice(i, start);
     const end = text.indexOf("-->", start + 4);
-    if (end === -1) return out + text.slice(start).replace(/[^\n]/g, " ");
+    if (end === -1) return { text: out + text.slice(start), unterminated: true };
     out += text.slice(start, end + 3).replace(/[^\n]/g, " ");
     i = end + 3;
   }
 }
 
 /**
- * Bounds that keep a pathological file (up to the 64 MB ingestion cap) from
- * turning the refusal itself into a hang or an unbounded message: distinct
- * references collected, references shown in the message, and the length of
- * one named target. When the collection bound is hit the message says so —
- * the count it reports is a lower bound, never an invented total.
+ * The verdict for one already-XML-decoded URL value: the reference to name
+ * when the value points outside the file, or undefined when it is inert — a
+ * same-document fragment, an embedded data URI, or a javascript: href (a
+ * script never blocks import and never runs in the image path). Whitespace
+ * is compacted before the scheme check so `h ttps://` cannot slip past, and
+ * an unresolvable custom entity (`&name;` — a malformed document without a
+ * DOCTYPE) refuses on doubt.
  */
-const MAX_COLLECTED = 64;
-const MESSAGE_CAP = 20;
-const TARGET_MAX = 200;
-
-/** The quoted strings at-or-after `from`, in order, XML-decoded. */
-function quotedAfter(text: string, from: number): string[] {
-  const values: string[] = [];
-  for (let i = from; i < text.length; i++) {
-    const c = text[i]!;
-    if (c !== '"' && c !== "'") continue;
-    const close = text.indexOf(c, i + 1);
-    if (close === -1) break;
-    values.push(decodeXmlEntities(text.slice(i + 1, close)));
-    i = close;
+function externalTarget(xmlDecoded: string): string | undefined {
+  const value = xmlDecoded.trim();
+  if (value === "") return undefined;
+  if (/&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/.test(value)) {
+    return value; // a custom entity — its replacement text is unknowable
   }
-  return values;
+  const compact = value.replace(/\s+/g, "");
+  if (compact.startsWith("#")) return undefined; // same-document fragment
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(compact);
+  if (scheme && (scheme[1]!.toLowerCase() === "data" || scheme[1]!.toLowerCase() === "javascript")) {
+    return undefined;
+  }
+  return value; // remote, local, relative, protocol-relative, or unknown scheme
+}
+
+/** `url(` as CSS tokenizes it — an ident followed by `(`, never the tail of
+ *  a longer name like `bgurl(`. */
+const CSS_URL = /(?<![\w-])url\(/i;
+
+/** 1-based line of an offset in `text`: a lazy newline index (one pass) and
+ *  a binary search per finding — never a rescan of the document. */
+function makeLineAt(text: string): (offset: number) => number {
+  let lineIndex: number[] | undefined;
+  return (offset: number): number => {
+    if (lineIndex === undefined) {
+      lineIndex = [];
+      for (let pos = text.indexOf("\n"); pos !== -1; pos = text.indexOf("\n", pos + 1)) {
+        lineIndex.push(pos);
+      }
+    }
+    let lo = 0;
+    let hi = lineIndex.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (lineIndex[mid]! < offset) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo + 1;
+  };
+}
+
+function createCollector(): Collector {
+  const findings: ExternalRef[] = [];
+  let capped = false;
+  return {
+    findings,
+    push(kind, target, line) {
+      if (findings.length >= MAX_COLLECTED) {
+        capped = true;
+        return;
+      }
+      // The named target is bounded and stripped of control characters: a
+      // huge or control-bearing value cannot blow up the refusal message or
+      // spoof its line structure.
+      const cleaned =
+        target.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, TARGET_MAX) +
+        (target.length > TARGET_MAX ? "…" : "");
+      if (findings.some((f) => f.kind === kind && f.target === cleaned)) return;
+      findings.push({ kind, target: cleaned, line });
+    },
+    capped: () => capped,
+  };
 }
 
 /**
- * Scan one DOCTYPE (possibly with an internal subset) for the one construct
- * that can change what the document shows when resolved: an external entity
- * declaration (`<!ENTITY … SYSTEM/PUBLIC …>`). Quoted values may contain
- * `>` and `]`, so the region and the keyword search are quote-aware. The
- * DOCTYPE's own SYSTEM/PUBLIC identifier — the conventional SVG DTD
- * boilerplate — is not a rendered resource and is ignored by the browser's
- * image path, so it does not block import. Returns the index to resume the
- * document walk from.
+ * Scan one DOCTYPE (possibly with an internal subset). Quoted SystemLiterals
+ * may contain `[`, `]`, and `>`, so the region is found quote-aware — a
+ * quoted `[` never opens a subset and a `>` inside a literal never closes
+ * the declaration. ANY entity declaration — internal or external — is
+ * refused: a conformant XML parser expands internal entities, so entity
+ * expansion to markup cannot be judged at text level; without DOCTYPE
+ * entities there is nothing to expand. The DOCTYPE's own DTD identifier is
+ * not an entity declaration and does not block import. Returns the index to
+ * resume the walk from, plus a malformed-document refusal when the
+ * declaration never closes.
  */
-function scanDoctype(text: string, start: number, out: Collector): number {
-  // Quote-aware walk from the declaration's start: the subset opens at a `[`
-  // OUTSIDE a quoted SystemLiteral — `<!DOCTYPE svg SYSTEM "x[y">` is
-  // well-formed XML, and treating its quoted `[` as a subset start would
-  // swallow the rest of the document and silently skip every reference in it.
+function scanDoctype(
+  text: string,
+  start: number,
+  doc: DocScan,
+  file: string,
+): { end: number; refusal?: string } {
   let quote: string | undefined;
   let subsetStart = -1;
   let firstGt = -1;
@@ -195,12 +326,10 @@ function scanDoctype(text: string, start: number, out: Collector): number {
     }
   }
   let end: number;
+  let refusal: string | undefined;
   if (subsetStart !== -1 && (firstGt === -1 || subsetStart < firstGt)) {
     // Internal subset: scan to the subset's closing `]`, quote-aware, then
-    // the declaration's own `>` after it. An unterminated subset is
-    // malformed XML (the browser decode gate refuses it later), but the
-    // scan still falls back to the next `>` so the rest of the document —
-    // and any references in it — is never skipped.
+    // the declaration's own `>` after it.
     let j = subsetStart;
     quote = undefined;
     while (j < text.length) {
@@ -215,90 +344,158 @@ function scanDoctype(text: string, start: number, out: Collector): number {
       j++;
     }
     if (j >= text.length) {
+      // Unterminated subset: the file is malformed XML. Judge what is
+      // present (its entity declarations are still refused) and resume at
+      // the next `>` so the rest of the document is walked, not skipped.
       const gt = text.indexOf(">", subsetStart);
       end = gt === -1 ? text.length : gt + 1;
     } else {
       const gt = text.indexOf(">", j);
       end = gt === -1 ? text.length : gt + 1;
     }
+  } else if (firstGt === -1) {
+    end = text.length;
+    refusal =
+      `"${file}" is not a valid SVG document: the <!DOCTYPE declaration is unterminated ` +
+      `(line ${doc.lineAt(start)}) — close or remove it, then import again.`;
   } else {
-    end = firstGt === -1 ? text.length : firstGt + 1;
+    end = firstGt + 1;
   }
 
   const region = text.slice(start, end);
-  // Quote-aware SYSTEM/PUBLIC keyword search over the whole declaration.
-  let kwQuote: string | undefined;
-  for (let i = 0; i < region.length; i++) {
-    const c = region[i]!;
-    if (kwQuote !== undefined) {
-      if (c === kwQuote) kwQuote = undefined;
-      continue;
-    }
-    if (c === '"' || c === "'") {
-      kwQuote = c;
-      continue;
-    }
-    if (c !== "S" && c !== "s" && c !== "P" && c !== "p") continue;
-    const keyword = /^(SYSTEM|PUBLIC)\b/i.exec(region.slice(i, i + 7));
-    if (!keyword) continue;
-    // A declaration keyword is inside an ENTITY declaration when the nearest
-    // opening `<` begins one — only that construct can change the document's
-    // content when its external replacement text resolves.
-    const lastLt = region.lastIndexOf("<", i);
-    const inEntity = lastLt !== -1 && /^<\s*!entity/i.test(region.slice(lastLt, lastLt + 30));
-    if (inEntity && !out.capped()) {
-      // A SYSTEM declaration names one URI; a PUBLIC declaration names a
-      // public identifier followed by the system URI that is the actual
-      // fetch target — name the system URI, falling back to the first
-      // quoted literal.
-      const literals = quotedAfter(region, i + keyword[1]!.length);
-      const target =
-        (keyword[1]!.toUpperCase() === "PUBLIC" ? literals[1] : literals[0]) ??
-        literals[0] ??
-        "(unquoted external identifier)";
-      out.push("external entity declaration", target, start + i);
-    }
-    i += keyword[1]!.length;
+  // Every entity declaration is refused, internal or external, general or
+  // parameter — each named.
+  for (const m of region.matchAll(/<\s*!entity\s+(?:%\s+)?([^\s>]+)/gi)) {
+    doc.push("DOCTYPE entity declaration", decodeXmlEntities(m[1]!), start + (m.index ?? 0));
   }
-  return end;
+  return { end, refusal };
 }
 
-/** CSS text scan: every `url()` target and `@import` string, with a url()
- *  inside an `@font-face` block named as the font case. */
-function scanCss(css: string, baseOffset: number, out: Collector): void {
-  const decoded = decodeXmlEntities(css);
+/** CSS scan of one style body or CSS-bearing attribute value: normalize
+ *  (CDATA joined, entities decoded, CSS escapes unescaped), then judge
+ *  every `url()` target and `@import` string, with a url() inside an
+ *  `@font-face` block named as the font case. Accepted
+ *  `data:image/svg+xml` targets are re-scanned (bounded depth 1). */
+function scanCss(
+  label: string,
+  raw: string,
+  baseOffset: number,
+  doc: DocScan,
+  file: string,
+  depth: number,
+): string | undefined {
+  const { text: css, unterminatedCdata } = cssTextOf(raw);
+  if (unterminatedCdata) {
+    return (
+      `"${file}" is not a valid SVG document: an unterminated CDATA section inside ${label} ` +
+      `(line ${doc.lineAt(baseOffset)}) — close or remove it, then import again.`
+    );
+  }
   const fontFaceRanges: Array<[number, number]> = [];
-  for (const m of decoded.matchAll(/@font-face\b/gi)) {
-    const open = decoded.indexOf("{", m.index);
-    const close = open === -1 ? -1 : decoded.indexOf("}", open);
-    fontFaceRanges.push([open === -1 ? m.index : open, close === -1 ? decoded.length : close]);
+  for (const m of css.matchAll(/@font-face\b/gi)) {
+    const open = css.indexOf("{", m.index);
+    const close = open === -1 ? -1 : css.indexOf("}", open);
+    fontFaceRanges.push([open === -1 ? m.index : open, close === -1 ? css.length : close]);
   }
   const kindFor = (pos: number): string =>
     fontFaceRanges.some(([a, b]) => pos >= a && pos <= b)
       ? "font reference (@font-face src)"
-      : "CSS url() reference";
+      : `CSS url() in ${label}`;
 
-  for (const m of decoded.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"]*?))\s*\)/gi)) {
+  for (const m of css.matchAll(/(?<![\w-])url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"]*?))\s*\)/gi)) {
     const target = (m[1] ?? m[2] ?? m[3] ?? "").trim();
     const refused = externalTarget(target);
-    if (refused !== undefined) out.push(kindFor(m.index), refused, baseOffset + m.index);
+    if (refused !== undefined) {
+      doc.push(kindFor(m.index), refused, baseOffset + (m.index ?? 0));
+    } else {
+      const nested = nestedDataSvg(target, file, depth, doc, baseOffset + (m.index ?? 0));
+      if (nested) return nested;
+    }
   }
   // @import with a plain string target; the url() form is covered above.
-  for (const m of decoded.matchAll(/@import\s+(?:"([^"]*)"|'([^']*)')/gi)) {
+  for (const m of css.matchAll(/@import\s+(?:"([^"]*)"|'([^']*)')/gi)) {
     const target = (m[1] ?? m[2] ?? "").trim();
     const refused = externalTarget(target);
-    if (refused !== undefined) out.push("stylesheet @import", refused, baseOffset + m.index);
+    if (refused !== undefined) {
+      doc.push(`@import in ${label}`, refused, baseOffset + (m.index ?? 0));
+    } else {
+      const nested = nestedDataSvg(target, file, depth, doc, baseOffset + (m.index ?? 0));
+      if (nested) return nested;
+    }
   }
+  return undefined;
 }
 
-/** The attributes whose values are resource references, by local name
- *  (namespace prefix stripped, case-folded): both href spellings via href,
- *  foreignObject HTML via src/data/srcset, and xml:base (it silently
- *  re-roots every relative reference in its scope). */
-const REFERENCE_ATTRS = new Set(["href", "src", "data", "srcset", "base", "poster"]);
+/** Judge one already-XML-decoded URL value: push the refusal naming it, or —
+ *  when accepted — re-scan a nested data:image/svg+xml payload. */
+function judgeUrl(
+  kind: string,
+  xmlDecoded: string,
+  offset: number,
+  doc: DocScan,
+  file: string,
+  depth: number,
+): string | undefined {
+  const refused = externalTarget(xmlDecoded);
+  if (refused !== undefined) {
+    doc.push(kind, refused, offset);
+    return undefined;
+  }
+  return nestedDataSvg(xmlDecoded, file, depth, doc, offset);
+}
 
-/** Scan one start tag's attribute region. */
-function scanAttrs(tag: string, attrs: string, baseOffset: number, out: Collector): void {
+/** Depth-1 re-scan of a decodable nested data:image/svg+xml payload: the
+ *  browser blocks the inner document's external loads by construction, but
+ *  the gate refuses on doubt rather than trust recursion. Malformed inner
+ *  markup refuses the import (it would fail the decode gate anyway). */
+function nestedDataSvg(
+  xmlDecoded: string,
+  file: string,
+  depth: number,
+  doc: DocScan,
+  offset: number,
+): string | undefined {
+  if (depth >= 1) return undefined;
+  const compact = xmlDecoded.replace(/\s+/g, "");
+  if (!/^data:image\/svg\+xml(;|,|$)/i.test(compact)) return undefined;
+  const comma = xmlDecoded.indexOf(",");
+  if (comma === -1) return undefined;
+  const meta = compact.slice(4, compact.indexOf(","));
+  const payload = xmlDecoded.slice(comma + 1);
+  let inner: string | undefined;
+  if (/;base64/i.test(meta)) {
+    const bytes = Buffer.from(payload.replace(/\s+/g, ""), "base64");
+    inner = bytes.length > 0 ? bytes.toString("utf8") : undefined;
+  } else {
+    try {
+      const decoded = decodeURIComponent(payload);
+      inner = decoded.length > 0 ? decoded : undefined;
+    } catch {
+      return undefined; // not decodable — the decode gate owns it
+    }
+  }
+  if (inner === undefined) return undefined;
+  return scanDocument(
+    inner,
+    `${file} (inside a nested data:image/svg+xml URI)`,
+    depth + 1,
+    doc,
+    "nested data:image/svg+xml: ",
+    doc.lineAt(offset),
+  );
+}
+
+/** Scan one start tag's attribute region — every attribute value on every
+ *  element: the url() extractor over any value containing one, the
+ *  reference-attribute verdicts, and each srcset candidate separately. */
+function scanAttrs(
+  tag: string,
+  attrs: string,
+  baseOffset: number,
+  doc: DocScan,
+  file: string,
+  depth: number,
+): string | undefined {
   const attrRe = /([^\s=/<>"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]*)))?/g;
   for (const m of attrs.matchAll(attrRe)) {
     const rawName = m[1]!;
@@ -306,113 +503,118 @@ function scanAttrs(tag: string, attrs: string, baseOffset: number, out: Collecto
     const lower = local.toLowerCase();
     const value = m[2] ?? m[3] ?? m[4];
     if (value === undefined) continue;
-    if (lower === "style") {
-      scanCss(value, baseOffset + (m.index ?? 0), out);
-      continue;
+    // Normalize once, in the order the consuming parser would: XML entity
+    // references decoded (the value the XML parser hands over), then CSS
+    // escapes unescaped for the url(/@import probe. An encoding cannot hide
+    // a reference or a url() keyword from the verdict.
+    const xmlDecoded = decodeXmlEntities(value);
+    const offset = baseOffset + (m.index ?? 0);
+    if (lower === "style" || CSS_URL.test(cssUnescape(xmlDecoded))) {
+      const label = lower === "style" ? `style attribute on <${tag}>` : `${lower} attribute on <${tag}>`;
+      const early = scanCss(label, xmlDecoded, offset, doc, file, depth);
+      if (early) return early;
     }
-    if (!REFERENCE_ATTRS.has(lower)) continue;
-    const refused = externalTarget(value);
-    if (refused !== undefined) {
+    if (URL_ATTRS.has(lower)) {
       const kind =
-        tag === "use"
-          ? "use target outside the file"
-          : lower === "base"
-          ? "xml:base reference"
-          : `${lower} on <${tag}>`;
-      out.push(kind, refused, baseOffset + (m.index ?? 0));
+        tag === "use" ? "use target outside the file" : `${lower} on <${tag}>`;
+      const early = judgeUrl(kind, xmlDecoded, offset, doc, file, depth);
+      if (early) return early;
+    } else if (lower === "srcset") {
+      // Each candidate is judged separately — a fragment- or data:-first
+      // list cannot smuggle a remote candidate past the gate.
+      for (const candidate of xmlDecoded.split(",")) {
+        const urlToken = candidate.trim().split(/\s+/)[0] ?? "";
+        if (urlToken === "") continue;
+        const early = judgeUrl(`srcset candidate on <${tag}>`, urlToken, offset, doc, file, depth);
+        if (early) return early;
+      }
     }
   }
+  return undefined;
 }
 
 /**
- * The one out-of-file reference scan over an SVG document's text: comments
- * stripped (a URL in a comment is not a reference), script bodies skipped
- * (a script never blocks import and its source is inert text), style bodies
- * CSS-scanned, everything else walked for reference-bearing attributes,
- * processing instructions, and external entity declarations. Every finding
- * is collected — the refusal names EACH reference, not the first.
+ * The one out-of-file reference scan over an SVG document's text. Comments
+ * are stripped (a URL in a comment is not a reference); script elements are
+ * skipped wholesale (a script never blocks import and its source is inert
+ * text); style bodies, every attribute value, processing instructions, and
+ * the DOCTYPE are judged with normalized text. Every finding is collected —
+ * the refusal names EACH reference, not the first. Unterminated constructs
+ * refuse as malformed; never accept on doubt.
  */
-export function scanSvgExternalReferences(bytes: Buffer, file: string): string | undefined {
-  let text = bytes.toString("utf8");
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  text = stripComments(text);
+function scanDocument(
+  rawText: string,
+  file: string,
+  depth: number,
+  parent: ScanParent,
+  kindPrefix: string,
+  topLine: number,
+): string | undefined {
+  const comments = stripComments(rawText);
+  if (comments.unterminated) {
+    return (
+      `"${file}" is not a valid SVG document: an unterminated <!-- comment ` +
+      `is malformed XML — close or remove it, then import again.`
+    );
+  }
+  const text = comments.text;
   const lower = text.toLowerCase();
-  const findings: ExternalRef[] = [];
-  const seen = new Set<string>();
-  let capped = false;
-  // 1-based line of an offset: a lazy newline index (one O(n) pass, built
-  // only when a first finding needs it) and a binary search per finding —
-  // never a rescan of the document per reference.
-  let lineIndex: number[] | undefined;
-  const lineAt = (offset: number): number => {
-    if (lineIndex === undefined) {
-      lineIndex = [];
-      for (let pos = text.indexOf("\n"); pos !== -1; pos = text.indexOf("\n", pos + 1)) {
-        lineIndex.push(pos);
-      }
-    }
-    let lo = 0;
-    let hi = lineIndex.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (lineIndex[mid]! < offset) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo + 1;
+  const lineAt = makeLineAt(text);
+  const doc: DocScan = {
+    push: (kind, target, offset) =>
+      parent.push(`${kindPrefix}${kind}`, target, depth === 0 ? lineAt(offset) : topLine),
+    lineAt,
+    capped: () => parent.capped(),
   };
-  const out: Collector = {
-    push(kind, target, offset) {
-      if (findings.length >= MAX_COLLECTED) {
-        capped = true;
-        return;
-      }
-      // The named target is bounded and stripped of control characters: a
-      // huge or control-bearing attribute value cannot blow up the refusal
-      // message or spoof its line structure.
-      const cleaned =
-        target.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, TARGET_MAX) +
-        (target.length > TARGET_MAX ? "…" : "");
-      const key = `${kind}\n${cleaned}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      findings.push({ kind, target: cleaned, line: lineAt(offset) });
-    },
-    capped: () => capped,
-  };
+  const malformed = (what: string, offset: number): string =>
+    `"${file}" is not a valid SVG document: ${what} (line ${lineAt(offset)}) is unterminated — ` +
+    `close or remove it, then import again.`;
 
   let i = 0;
-  while (i < text.length) {
+  while (i < text.length && !doc.capped()) {
     const lt = text.indexOf("<", i);
     if (lt === -1) break;
     if (lower.startsWith("<![cdata[", lt)) {
       const close = lower.indexOf("]]>", lt + 9);
-      i = close === -1 ? text.length : close + 3;
+      if (close === -1) return malformed("an unterminated CDATA section", lt);
+      // Top-level CDATA is element character data — text, not a reference.
+      // Inside a <style> body the whole body slice is CSS-scanned instead.
+      i = close + 3;
       continue;
     }
     if (lower.startsWith("<?", lt)) {
       const close = text.indexOf("?>", lt + 2);
-      const body = text.slice(lt + 2, close === -1 ? text.length : close);
-      // The stylesheet processing instruction: its href is a reference.
-      if (/^[\s]*xml-stylesheet\b/i.test(body)) {
-        const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(body);
-        const target = href ? (href[1] ?? href[2] ?? "") : undefined;
-        if (href === undefined) {
-          out.push("xml-stylesheet reference", "(no href)", lt);
+      if (close === -1) return malformed("a processing instruction", lt);
+      const body = text.slice(lt + 2, close);
+      if (/^\s*xml-stylesheet\b/i.test(body)) {
+        // Processing-instruction content is opaque text in XML: entity
+        // references are NOT decoded there, so the href is judged literally.
+        const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s?>]+))/i.exec(body);
+        if (!href) {
+          // Refuse on doubt, never crash: an xml-stylesheet PI without a
+          // quoted or unquoted href is a malformed instruction.
+          doc.push("xml-stylesheet reference", "(no href — the instruction names no embedded stylesheet)", lt);
         } else {
-          const refused = externalTarget(target!);
-          if (refused !== undefined) out.push("xml-stylesheet reference", refused, lt);
+          const target = (href[1] ?? href[2] ?? href[3] ?? "").trim();
+          const early = judgeUrl("xml-stylesheet reference", target, lt, doc, file, depth);
+          if (early) return early;
         }
       }
-      i = close === -1 ? text.length : close + 2;
+      i = close + 2;
       continue;
     }
     if (lower.startsWith("<!doctype", lt)) {
-      i = scanDoctype(text, lt, out);
+      const dt = scanDoctype(text, lt, doc, file);
+      if (dt.refusal) return dt.refusal;
+      i = dt.end;
       continue;
     }
     if (lower.startsWith("<!", lt) || lower.startsWith("</", lt)) {
       const close = text.indexOf(">", lt);
-      i = close === -1 ? text.length : close + 1;
+      if (close === -1) {
+        return malformed(lower.startsWith("</", lt) ? "an end tag" : "a declaration", lt);
+      }
+      i = close + 1;
       continue;
     }
     // Start tag: name, then a quote-aware scan to the closing `>`.
@@ -437,48 +639,70 @@ export function scanSvgExternalReferences(bytes: Buffer, file: string): string |
       }
       j++;
     }
+    if (j >= text.length) return malformed(`a <${tag}> start tag`, lt);
     const attrsStart = lt + 1 + nameEnd[1]!.length;
-    const attrs = text.slice(attrsStart, j < text.length ? j : text.length);
+    const attrs = text.slice(attrsStart, j);
     const selfClosing = text[j - 1] === "/";
     if (tag === "script") {
       // A script element — self-closing, paired, src or inline — is never a
       // reference source: a script does not block import and never runs in
-      // the image path, so its source text is skipped wholesale. The same
-      // rule covers src on <script>: refusing a paired script's src while
-      // accepting an inline body would be an inconsistency, not a boundary.
+      // the image path, so its body and attributes are skipped wholesale.
       if (selfClosing) {
-        i = j < text.length ? j + 1 : text.length;
+        i = j + 1;
         continue;
       }
       const closeTag = lower.indexOf("</script", j);
-      if (closeTag === -1) return assemble(findings, capped, file);
+      if (closeTag === -1) return malformed("a <script> element", lt);
       const gt = text.indexOf(">", closeTag);
       i = gt === -1 ? text.length : gt + 1;
       continue;
     }
-    scanAttrs(tag, attrs, attrsStart, out);
+    const early = scanAttrs(tag, attrs, attrsStart, doc, file, depth);
+    if (early) return early;
     if (tag === "style" && !selfClosing) {
       const closeTag = lower.indexOf("</style", j);
-      const bodyEnd = closeTag === -1 ? text.length : closeTag;
-      scanCss(text.slice(j + 1, bodyEnd), j + 1, out);
-      if (closeTag === -1) return assemble(findings, capped, file);
+      if (closeTag === -1) return malformed("a <style> element", lt);
+      const early2 = scanCss("<style> body", text.slice(j + 1, closeTag), j + 1, doc, file, depth);
+      if (early2) return early2;
       const gt = text.indexOf(">", closeTag);
       i = gt === -1 ? text.length : gt + 1;
       continue;
     }
-    i = j < text.length ? j + 1 : text.length;
+    i = j + 1;
   }
-  return assemble(findings, capped, file);
+  return undefined;
+}
+
+/**
+ * The entry point: the out-of-file reference scan over an SVG document.
+ * Returns the refusal message when the file references anything outside
+ * itself (or is malformed), undefined when the file is inert.
+ */
+export function scanSvgExternalReferences(bytes: Buffer, file: string): string | undefined {
+  let text = bytes.toString("utf8");
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const out = createCollector();
+  const malformed = scanDocument(text, file, 0, out, "", 0);
+  if (malformed !== undefined) return malformed;
+  return assemble(out.findings, out.capped(), file);
 }
 
 /** The refusal message: every collected reference named, each with its kind
- *  and line, and the one fix. The message shows the first MESSAGE_CAP
+ *  and line, and the fixes. The message shows the first MESSAGE_CAP
  *  references; when the collection bound was hit it says so — the count it
  *  reports is a lower bound, never an invented total. */
-function assemble(findings: ExternalRef[], capped: boolean, file: string): string | undefined {
+function assemble(findings: readonly ExternalRef[], capped: boolean, file: string): string | undefined {
   if (findings.length === 0) return undefined;
   const shown = findings.slice(0, MESSAGE_CAP);
   const more = findings.length - shown.length;
+  const hasEntity = findings.some((f) => f.kind.startsWith("DOCTYPE entity"));
+  const fixes: string[] = [];
+  if (findings.some((f) => !f.kind.startsWith("DOCTYPE entity"))) {
+    fixes.push("embed each referenced resource as a data URI inside the SVG file");
+  }
+  if (hasEntity) {
+    fixes.push("remove the DOCTYPE's entity declarations (replace each &name; reference with the value it declares)");
+  }
   return (
     `"${file}" references resources outside itself — import refused. Found:\n` +
     shown.map((f) => `  - ${f.kind} "${f.target}" (line ${f.line})`).join("\n") +
@@ -487,6 +711,6 @@ function assemble(findings: ExternalRef[], capped: boolean, file: string): strin
       : more > 0
       ? `\n  ...and ${more} more reference(s)`
       : "") +
-    `\nThe fix: embed each referenced resource as a data URI inside the SVG file, then import again.`
+    `\nThe fix: ${fixes.join("; and ")}, then import again.`
   );
 }

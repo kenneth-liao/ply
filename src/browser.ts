@@ -153,6 +153,14 @@ export function renderPageRequests(): readonly RenderPageRequest[] {
   return [...renderRequestLog];
 }
 
+/** The network-protocol requests the shared render page has issued —
+ *  everything except data:/about: decodes, which are not network requests.
+ *  The inertness verdict (#214, TEST-005) reads this so the zero-request
+ *  assertion cannot drift from the log's scheme filter. */
+export function renderPageNetworkRequests(): readonly RenderPageRequest[] {
+  return renderRequestLog.filter((r) => !/^(data:|about:)/i.test(r.url));
+}
+
 /** Drop the request log — the boundary between observed operations. */
 export function clearRenderPageRequests(): void {
   renderRequestLog.length = 0;
