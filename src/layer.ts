@@ -1,4 +1,5 @@
 import { isStoredTimestamp } from "./stored-schema.js";
+import { parseFillSpec, normalizeStoredFill, type LayerFill } from "./fill.js";
 /**
  * Layer identity, immutable revisions, and content-addressed image/text
  * ingestion (ADR-0013, ADR-0014, DEC-001–006, #81).
@@ -214,7 +215,168 @@ export interface LayerTextRevision extends LayerRevisionBase {
   callerFont?: CallerFontFacts;
 }
 
-export type LayerRevision = LayerImageRevision | LayerTextRevision;
+/**
+ * A shape Layer revision (#208, spec #207 US-001, DEC-001/002): a filled
+ * geometric region created from parameters alone — a geometry (rectangle or
+ * ellipse), a width and height in canvas px, an optional corner radius
+ * (rectangle only), and ONE fill (DEC-003, src/fill.ts). It shares the
+ * identity/revision/use lifecycle, publication protocol, and storage layout
+ * with the other kinds; only the content contract differs:
+ *
+ * - Its content IS its parameters. The canonical parameter form hashes to
+ *   `contentHash` (`shapeContentIdentity`) — there is no retained byte blob
+ *   in `content/` for a shape (DEC-001), so the revision reader verifies the
+ *   parameter hash but reads no bytes, and every consumer sees the same
+ *   content-identity field the other kinds pin bytes with.
+ * - A `cornerRadius` is stored only when set and > 0 — a radius of 0 is the
+ *   same look as absent, so it is never stored (the established
+ *   store-only-when-it-differs rule, like tracking 0). It is a rectangle
+ *   fact: an ellipse revision stores no radius field, and supplying one is
+ *   refused at ingestion.
+ * - `width`/`height` are the geometry's size in canvas px: the shape's
+ *   intrinsic pixel facts. The canonical transform maps them exactly like an
+ *   image's intrinsic size, so `--resize-to` resolves against them.
+ */
+export interface LayerShapeRevision extends LayerRevisionBase {
+  kind: "shape";
+  contentHash: string;
+  /** The geometry: rectangle (optional corner radius) or ellipse (DEC-002). */
+  shape: "rectangle" | "ellipse";
+  /** The geometry's size in canvas px — the shape's intrinsic pixel facts. */
+  width: number;
+  height: number;
+  /**
+   * Corner radius in px (rectangle only): present ONLY when set and > 0.
+   * Validated at ingestion against 0..min(width,height)/2 — a larger radius
+   * would be silently clamped by CSS, so it is refused instead of pinned
+   * with parameters its paint does not obey.
+   */
+  cornerRadius?: number;
+  /** The ONE fill value (DEC-003): solid here; gradients join the union. */
+  fill: LayerFill;
+}
+
+export type LayerRevision = LayerImageRevision | LayerTextRevision | LayerShapeRevision;
+
+/** The shape geometries (#208, DEC-002): arbitrary shapes arrive as vector
+ *  files (US-004); Ply gains no path or drawing language. */
+export const SHAPE_GEOMETRIES = ["rectangle", "ellipse"] as const;
+export type LayerShapeGeometry = (typeof SHAPE_GEOMETRIES)[number];
+
+/**
+ * The canonical shape-content identity (DEC-001): the shape's parameters in
+ * their canonical form, hashed. The one string every shape revision's
+ * `contentHash` derives from — the stored parameters are hash-covered by the
+ * revision document itself, and this identity pins the content form the same
+ * way a byte hash pins retained bytes for image and text.
+ */
+export function shapeContentIdentity(rev: {
+  shape: string;
+  width: number;
+  height: number;
+  cornerRadius?: number;
+  fill: LayerFill;
+}): string {
+  return [
+    "shape:v1",
+    rev.shape,
+    `${rev.width}x${rev.height}`,
+    rev.cornerRadius !== undefined ? `r${rev.cornerRadius}` : "r0",
+    `fill(${rev.fill.type}:${rev.fill.color})`,
+  ].join(":");
+}
+
+/**
+ * The ONE shape-content validator (#208): geometry, size, corner radius, and
+ * fill, in their canonical ranges. Refused values name the parameter and its
+ * allowed range (US-001); the stored-revision reader reuses this validator,
+ * so a malformed stored document fails the same way a refused command does.
+ */
+export function validateShapeContent(
+  shape: unknown,
+  width: unknown,
+  height: unknown,
+  cornerRadius: unknown,
+  fill: unknown,
+): { shape: LayerShapeGeometry; width: number; height: number; cornerRadius?: number; fill: LayerFill } {
+  if (typeof shape !== "string" || !SHAPE_GEOMETRIES.includes(shape as LayerShapeGeometry)) {
+    throw new Error(
+      `Invalid shape "${String(shape)}": --shape takes rectangle or ellipse.`,
+    );
+  }
+  for (const [label, value] of [["width", width], ["height", height]] as const) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION) {
+      throw new Error(
+        `Invalid shape ${label} ${JSON.stringify(value)}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+      );
+    }
+  }
+  let resolvedRadius: number | undefined;
+  if (cornerRadius !== undefined) {
+    if (typeof cornerRadius !== "number" || !Number.isFinite(cornerRadius) || cornerRadius < 0) {
+      throw new Error(
+        `Invalid corner radius ${JSON.stringify(cornerRadius)}: must be a finite number between 0 and ${Math.min(width as number, height as number) / 2}.`,
+      );
+    }
+    if (shape === "ellipse") {
+      throw new Error(
+        `Invalid corner radius ${cornerRadius}: a corner radius is a rectangle fact — an ellipse has no straight corners. Remove --corner-radius.`,
+      );
+    }
+    const max = Math.min(width as number, height as number) / 2;
+    if (cornerRadius > max) {
+      throw new Error(
+        `Invalid corner radius ${cornerRadius}: must be a finite number between 0 and ${max} for a ${width}×${height} rectangle (a larger radius would be silently clamped, so the stored parameters would not describe the paint).`,
+      );
+    }
+    resolvedRadius = cornerRadius;
+  }
+  let resolvedFill: LayerFill;
+  if (fill === undefined) {
+    throw new Error("A shape Layer needs a fill: pass --fill <color> (a solid fill, e.g. \"#22c55e\").");
+  }
+  if (
+    typeof fill === "object" && fill !== null && !Array.isArray(fill) &&
+    (fill as LayerFill).type === "solid" && typeof (fill as LayerFill).color === "string"
+  ) {
+    // Already a canonical LayerFill (the ingestion path's parsed value).
+    resolvedFill = normalizeStoredFill(fill);
+  } else if (typeof fill === "string") {
+    resolvedFill = parseFillSpec(fill);
+  } else {
+    throw new Error(`Invalid fill ${JSON.stringify(fill)}: a fill takes a solid color like "#22c55e" or "solid:#22c55e".`);
+  }
+  return {
+    shape: shape as LayerShapeGeometry,
+    width: width as number,
+    height: height as number,
+    ...(resolvedRadius !== undefined && resolvedRadius > 0 ? { cornerRadius: resolvedRadius } : {}),
+    fill: resolvedFill,
+  };
+}
+
+/**
+ * Canonical stored-shape validation and normalization (#208): the one
+ * boundary every stored shape revision's kind-specific fields project
+ * through. A shape revision's fill is required; a malformed geometry, size,
+ * radius, or fill is a malformed document, refused loudly before the revision
+ * hash is consulted. A cornerRadius is stored only when set and > 0.
+ */
+export function normalizeStoredShape(revision: {
+  shape?: unknown;
+  width?: unknown;
+  height?: unknown;
+  cornerRadius?: unknown;
+  fill?: unknown;
+}): { shape: LayerShapeGeometry; width: number; height: number; cornerRadius?: number; fill: LayerFill } {
+  if (revision.shape === undefined && revision.width === undefined && revision.height === undefined && revision.fill === undefined) {
+    throw new Error("Malformed revision document: a shape revision needs its geometry, size, and fill.");
+  }
+  if (revision.fill === undefined) {
+    throw new Error("Malformed revision document: a shape revision needs a fill.");
+  }
+  return validateShapeContent(revision.shape, revision.width, revision.height, revision.cornerRadius, revision.fill);
+}
 
 /** Allowed `tracking` range in em, inclusive (#187, ADR-0021). */
 export const TRACKING_RANGE = { min: -0.5, max: 1 } as const;
@@ -431,7 +593,8 @@ export function normalizeStoredOutline(revision: { outline?: unknown }): LayerOu
 
 export type ResolvedLayerRevision =
   | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
-  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean });
+  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
+  | (LayerShapeRevision & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean });
 
 export interface ResolvedLayer {
   id: string;
@@ -900,7 +1063,21 @@ export function computeRevisionHash(rev: LayerRevision): string {
               : "") +
             ")")
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}${typographyFields}${callerFontFields}`).digest("hex").slice(0, 16)}`;
+  // The shape revision's kind-specific facts (#208): the stored geometry,
+  // size, and radius are hash-covered revision fields, and the fill's
+  // canonical form rides along. Appended only for shape revisions, so image
+  // and text revision ids are untouched.
+  const shapeFields =
+    rev.kind === "shape"
+      ? normalizeStoredShape(rev)
+      : undefined;
+  const shapeFieldsFields =
+    shapeFields !== undefined
+      ? `:shape(${shapeFields.shape},${shapeFields.width},${shapeFields.height}` +
+        (shapeFields.cornerRadius !== undefined ? `,r${shapeFields.cornerRadius}` : "") +
+        `,fill(${shapeFields.fill.type}:${shapeFields.fill.color}))`
+      : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}${typographyFields}${callerFontFields}${shapeFieldsFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1076,7 +1253,7 @@ export async function readRevisionInternalFull(
     );
   }
   const storedKind = (revision as { kind?: unknown }).kind;
-  if (storedKind !== "image" && storedKind !== "text") {
+  if (storedKind !== "image" && storedKind !== "text" && storedKind !== "shape") {
     throw new Error(
       `Malformed revision document "${revisionId}" for layer "${layerId}": unsupported kind "${String(storedKind)}".`,
     );
@@ -1091,6 +1268,10 @@ export async function readRevisionInternalFull(
     // same validator — no alternate representation exists.
     validateTextContent(revision.text, revision.fontSize, revision.color);
   }
+  // Canonical shape content (#208): validated here and at ingestion through
+  // the same validator — geometry, size, radius, and fill in their canonical
+  // ranges, before the revision hash is consulted.
+  const shapeContent = revision.kind === "shape" ? normalizeStoredShape(revision) : undefined;
   if (!Number.isFinite(revision.x) || !Number.isFinite(revision.y)) {
     throw new Error(
       `Malformed revision document "${revisionId}" for layer "${layerId}": x and y must be finite numbers.`,
@@ -1150,46 +1331,53 @@ export async function readRevisionInternalFull(
 
   // Read and verify content blob — existence first, then the resolved-location
   // gate, then the bytes (missing stays a clear failure, never raw ENOENT).
+  // A shape revision (#208, DEC-001) has no retained bytes: its content IS
+  // its parameters, hash-covered by the revision document itself, so there
+  // is no content blob to locate, bound, read, or hash-verify.
+  let contentBytes: Buffer | undefined;
   const contentBlob = path.join(resolvedRoot, "content", revision.contentHash);
-  if (outsideDir(resolvedRoot, contentBlob)) {
-    throw new Error(`Security error: content blob escapes project boundary.`);
-  }
+  if (revision.kind !== "shape") {
+    if (outsideDir(resolvedRoot, contentBlob)) {
+      throw new Error(`Security error: content blob escapes project boundary.`);
+    }
 
-  try {
-    await lstat(contentBlob);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+    try {
+      await lstat(contentBlob);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
+      }
+      throw err;
+    }
+    if (await escapesDirReal(resolvedRoot, contentBlob)) {
+      throw new Error(`Security error: content blob for layer "${layerId}" escapes project boundary.`);
+    }
+
+    try {
+      contentBytes = await readFile(contentBlob);
+    } catch {
       throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
     }
-    throw err;
-  }
-  if (await escapesDirReal(resolvedRoot, contentBlob)) {
-    throw new Error(`Security error: content blob for layer "${layerId}" escapes project boundary.`);
-  }
 
-  let contentBytes: Buffer;
-  try {
-    contentBytes = await readFile(contentBlob);
-  } catch {
-    throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
-  }
-
-  // Retained bytes must still hash to the content identity the revision pins
-  const actualHash = createHash("sha256").update(contentBytes).digest("hex");
-  if (actualHash !== revision.contentHash) {
-    throw new Error(
-      `Corrupted content blob "${revision.contentHash}" for layer "${layerId}": stored bytes do not match the content hash.`,
-    );
+    // Retained bytes must still hash to the content identity the revision pins
+    const actualHash = createHash("sha256").update(contentBytes).digest("hex");
+    if (actualHash !== revision.contentHash) {
+      throw new Error(
+        `Corrupted content blob "${revision.contentHash}" for layer "${layerId}": stored bytes do not match the content hash.`,
+      );
+    }
   }
 
   // Discriminated content resolution (#81): one resolver, one verification
   // pass, kind-specific projection. Image revisions derive intrinsic raster
   // facts from the verified bytes; text revisions carry their facts in the
-  // hash-covered revision document and pin the retained font bytes.
+  // hash-covered revision document and pin the retained font bytes; shape
+  // revisions (#208) carry their parameter facts in the document with no
+  // retained bytes at all (DEC-001).
   const resolved: ResolvedLayerRevision =
     revision.kind === "image"
       ? (() => {
-          const meta = readRasterMeta(contentBytes, contentBlob);
+          const meta = readRasterMeta(contentBytes!, contentBlob);
           if (typeof meta === "string") {
             throw new Error(`Invalid content blob "${revision.contentHash}" for layer "${layerId}": ${meta}`);
           }
@@ -1213,10 +1401,11 @@ export async function readRevisionInternalFull(
             format: meta.format,
             width: meta.width,
             height: meta.height,
-            bytes: contentBytes.length,
+            bytes: contentBytes!.length,
           };
         })()
-      : {
+      : revision.kind === "text"
+      ? {
           schemaVersion: revision.schemaVersion,
           revisionId,
           layerId: revision.layerId,
@@ -1239,10 +1428,35 @@ export async function readRevisionInternalFull(
           ...(textAxes ?? {}),
           ...(textTypography ?? {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
-          fontBytes: contentBytes.length,
+          fontBytes: contentBytes!.length,
+        }
+      : {
+          // Shape revision (#208): the parameter facts ride in the document;
+          // no bytes exist to count or verify.
+          schemaVersion: revision.schemaVersion,
+          revisionId,
+          layerId: revision.layerId,
+          createdAt: revision.createdAt,
+          kind: revision.kind,
+          contentHash: revision.contentHash,
+          shape: shapeContent!.shape,
+          width: shapeContent!.width,
+          height: shapeContent!.height,
+          ...(shapeContent!.cornerRadius !== undefined ? { cornerRadius: shapeContent!.cornerRadius } : {}),
+          fill: shapeContent!.fill,
+          x: revision.x,
+          y: revision.y,
+          opacity: revision.opacity,
+          scaleX: scale.scaleX,
+          scaleY: scale.scaleY,
+          rotationDeg,
+          flipX: flip.flipX,
+          flipY: flip.flipY,
+          ...(shadow !== undefined ? { shadow } : {}),
+          ...(outline !== undefined ? { outline } : {}),
         };
 
-  return { revision: resolved, contentBytes };
+  return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0) };
 }
 
 /** Unlocked internal reader for Layer identity and its active revision. Callers must hold the Project lock. */
@@ -1389,6 +1603,18 @@ export interface EditLayerOptions {
    * including content replacement and resize.
    */
   flip?: "horizontal" | "vertical" | "both" | "none";
+  /**
+   * Shape content options (#208): parsed at the command boundary, refused on
+   * EVERY layer kind by the edit path in #208 — shape parameters are not
+   * editable yet (the sibling edit-setters ticket owns them). They exist in
+   * the option table so `composition add` accepts them for shape content and
+   * the guard tests can enumerate the full surface; the edit path's refusal
+   * is the established kind-stability wording.
+   */
+  shape?: "rectangle" | "ellipse";
+  size?: { width: number; height: number };
+  cornerRadius?: number;
+  fill?: LayerFill;
   /**
    * Apply a shadow to the Layer's content (#139, ADR-0018): an ABSOLUTE
    * setter that replaces any previous shadow — the same command twice keeps
@@ -1880,13 +2106,15 @@ export function resolveEditScale(
 }
 
 /** Shared effective-size bound (#133): the scaled result shares the existing
- * content-dimension cap so no second constant exists. Refuses before staging. */
+ * content-dimension cap so no second constant exists. Refuses before staging.
+ * A shape Layer's (#208) stored width/height are intrinsic pixel facts like
+ * an image's, so the same effective-size bound applies. */
 function boundedScale(
   scale: LayerTransformScale,
   prevRev: ResolvedLayerRevision,
   layerId: string,
 ): LayerTransformScale {
-  if (prevRev.kind === "image") {
+  if (prevRev.kind === "image" || prevRev.kind === "shape") {
     const width = roundEffective(prevRev.width * scale.scaleX);
     const height = roundEffective(prevRev.height * scale.scaleY);
     if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
@@ -1988,6 +2216,21 @@ async function buildEditedRevision(
   retainedGeneration: RetainedGenerationProvenance | null;
 }> {
   const { x, y, opacity } = placement;
+
+  // Shape content options (#208): shape parameters are not editable on this
+  // surface yet — the edit-setters ticket owns the absolute setters. The
+  // refusal runs before any kind branch, before anything is staged, naming
+  // the parameters and their surface.
+  if (
+    options.shape !== undefined ||
+    options.size !== undefined ||
+    options.cornerRadius !== undefined ||
+    options.fill !== undefined
+  ) {
+    throw new Error(
+      "Shape parameters (--shape, --size, --corner-radius, --fill) are not editable on layer edit yet.",
+    );
+  }
 
   if (prevRev.kind === "image") {
     // Incompatible text options passed to image layer
@@ -2095,6 +2338,77 @@ async function buildEditedRevision(
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline);
     return { revision, unchanged, mattedFrom, retainedGeneration };
+  }
+
+  if (prevRev.kind === "shape") {
+    // Kind stability (#208, US-002 direction preserved): a shape Layer
+    // cannot become an image or text Layer by edit, and its parameters are
+    // not editable on this surface yet (the refusal above fires first when
+    // they are supplied). Everything kind-shared — placement, opacity, the
+    // canonical transform, the effects — resolves exactly as for the other
+    // kinds and carries into the new revision; the shape's parameters carry
+    // verbatim (validated once at ingestion, immutable here).
+    if (options.fromGeneration !== undefined) {
+      throw new Error(
+        `Cannot replace content from a Generation Job on a shape Layer. Layer "${layerId}" is a shape Layer.`,
+      );
+    }
+    if (options.fromMatte !== undefined) {
+      throw new Error(
+        `Cannot replace content from a matte on a shape Layer. Layer "${layerId}" is a shape Layer.`,
+      );
+    }
+    if (options.image !== undefined) {
+      throw new Error(`Cannot edit image source on a shape Layer. Layer "${layerId}" is a shape Layer.`);
+    }
+    if (
+      options.text !== undefined ||
+      options.font !== undefined ||
+      options.fontFile !== undefined ||
+      options.fontSize !== undefined ||
+      options.color !== undefined ||
+      options.weight !== undefined ||
+      options.width !== undefined ||
+      options.tracking !== undefined ||
+      options.lineHeight !== undefined
+    ) {
+      throw new Error(`Cannot edit text attributes on a shape Layer. Layer "${layerId}" is a shape Layer.`);
+    }
+
+    const revision: LayerRevision = {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      layerId,
+      createdAt,
+      kind: "shape",
+      contentHash: prevRev.contentHash,
+      shape: prevRev.shape,
+      width: prevRev.width,
+      height: prevRev.height,
+      ...(prevRev.cornerRadius !== undefined ? { cornerRadius: prevRev.cornerRadius } : {}),
+      fill: { ...prevRev.fill },
+      x,
+      y,
+      opacity,
+      scaleX: scale.scaleX,
+      scaleY: scale.scaleY,
+      rotationDeg,
+      flipX: flip.flipX,
+      flipY: flip.flipY,
+      ...(shadow !== undefined ? { shadow } : {}),
+      ...(outline !== undefined ? { outline } : {}),
+    };
+    const unchanged =
+      x === prevRev.x &&
+      y === prevRev.y &&
+      opacity === prevRev.opacity &&
+      scale.scaleX === prevRev.scaleX &&
+      scale.scaleY === prevRev.scaleY &&
+      rotationDeg === prevRev.rotationDeg &&
+      flip.flipX === prevRev.flipX &&
+      flip.flipY === prevRev.flipY &&
+      shadowEq(shadow, prevRev.shadow) &&
+      outlineEq(outline, prevRev.outline);
+    return { revision, unchanged, retainedGeneration: null };
   }
 
   if (prevRev.kind === "text") {
@@ -2436,7 +2750,7 @@ export async function editLayerInternal(
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
   const resizedReport =
-    prevRev.kind === "image"
+    prevRev.kind === "image" || prevRev.kind === "shape"
       ? {
           scaleX: scale.scaleX,
           scaleY: scale.scaleY,

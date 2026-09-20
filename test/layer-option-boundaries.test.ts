@@ -125,7 +125,7 @@ test("layer edit: the generation/output block precedes the numeric parses", asyn
   await expectRefusal(
     ["layer", "edit", layerId, "--output", "2", "--project", projDir],
     2,
-    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
+    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --shape, --size, --corner-radius, --fill, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
   );
   // With a real edit option supplied, the output-selector check precedes it.
   await expectRefusal(
@@ -209,7 +209,7 @@ test("composition add: the blank --image falls past the exclusivity refusal (INT
   await expectRefusal(
     ["composition", "add", "demo", "t5b", "--image", "", "--project", projDir],
     2,
-    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --from-generation <jobId>, or --from-matte <matteId>",
+    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>",
   );
 });
 

@@ -131,6 +131,7 @@ test("the guard table: every edit option is an accepted add option (TEST-003)", 
   const oneCommand = oneCommandAddOptionKeys();
   const established = [
     "image", "from-generation", "from-matte", "output", "text", "x", "y", "opacity",
+    "shape", "size", "corner-radius", "fill",
     "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height",
   ];
   for (const key of editOptions) {

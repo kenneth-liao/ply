@@ -124,7 +124,7 @@ async function resolveSnapshotLocked(
 
   const layers: SnapshotLayer[] = [];
   for (const use of comp.layers) {
-    if (use.kind !== "image" && use.kind !== "text") {
+    if (use.kind !== "image" && use.kind !== "text" && use.kind !== "shape") {
       throw new Error(
         `Layer "${use.name}" in Composition "${comp.name}" has kind "${use.kind}", ` +
           `which this foundation cannot render.`,

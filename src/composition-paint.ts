@@ -649,6 +649,27 @@ export function buildCompositionHtml(
           `font-size:${rev.fontSize}px;color:${rev.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
+      if (rev.kind === "shape") {
+        // A shape Layer (#208) paints as a filled div: the geometry is the
+        // element's box (width/height in canvas px), the fill is the
+        // validated hex color (alpha allowed), and the geometry variation is
+        // pure CSS — a corner radius becomes border-radius in px; an ellipse
+        // is the same box with a 50% border radius. No image bytes are
+        // involved (DEC-001): the element paints from the revision's
+        // validated parameters alone. The same element geometry feeds the
+        // shared effects chain and the measurement probe, so a shape measures
+        // exactly what it paints.
+        const radiusCss =
+          rev.shape === "ellipse"
+            ? "border-radius:50%;"
+            : rev.cornerRadius !== undefined
+              ? `border-radius:${rev.cornerRadius}px;`
+              : "";
+        const style =
+          `${base}${transformed}${effectsFilter}width:${rev.width}px;height:${rev.height}px;` +
+          `background:${rev.fill.color};${radiusCss}`;
+        return `<div style="${style}"></div>`;
+      }
       return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;
     })
     .join("");

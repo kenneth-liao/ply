@@ -22,9 +22,13 @@ import {
   readLayerInternal,
   readLayerInternalFull,
   resolveTextTypographyControls,
+  validateShapeContent,
+  shapeContentIdentity,
+  type LayerShapeGeometry,
 } from "./layer.js";
 import { resolveFace, resolveTextAxes, fontAssetBytes, callerFontFace, verifyCallerFontResolves, type CallerFontFacts } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
+import { type LayerFill } from "./fill.js";
 import {
   parseShadowSpec,
   parseOutlineSpec,
@@ -73,7 +77,7 @@ export interface Composition {
 export interface ResolvedCompositionLayer {
   name: string;
   layerId: string;
-  kind: "image" | "text";
+  kind: "image" | "text" | "shape";
   revision: ResolvedLayerRevision;
 }
 
@@ -867,6 +871,96 @@ export async function addTextLayerToComposition(
   });
 }
 
+/**
+ * Add a shape Layer (#208, spec #207 US-001, DEC-001/002/003) through the
+ * exact image/text publication protocol: same identity/revision/use staging,
+ * same lock, same rollback. The Layer is created from parameters alone —
+ * geometry, size, optional corner radius, and ONE fill — validated at this
+ * ONE ingestion boundary through the shared shape validator (`layer.ts`):
+ * non-positive size, a negative or oversized radius, and a malformed colour
+ * are refused here, naming the parameter and its range, before anything is
+ * published. No image file is read and no image bytes are stored (DEC-001):
+ * the revision's content identity is derived from the canonical parameter
+ * form, and nothing is written to `content/`.
+ */
+export async function addShapeLayerToComposition(
+  projectPath: string,
+  compName: string,
+  localName: string,
+  input: {
+    /** The geometry: rectangle (optional corner radius) or ellipse. */
+    shape: LayerShapeGeometry;
+    /** The geometry's size in canvas px (positive, ≤ MAX_DIMENSION). */
+    width: number;
+    height: number;
+    /** Optional corner radius in px (rectangle only, 0..min(w,h)/2). */
+    cornerRadius?: number;
+    /** The ONE fill (DEC-003): a solid color here. */
+    fill: LayerFill;
+  },
+  options: AddLayerOptions = {},
+): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
+  const sanitizedComp = sanitizeName(compName);
+  const sanitizedLocalName = sanitizeName(localName);
+
+  const { x, y, opacity } = parsePlacement(options);
+  // Canonical shape validation at the ingestion boundary; the stored-revision
+  // parser reuses the same validator. Runs BEFORE any publication, so a
+  // refused parameter publishes nothing — no Layer, no use, no storage churn.
+  const shape = validateShapeContent(input.shape, input.width, input.height, input.cornerRadius, input.fill);
+  // The content identity IS the canonical parameter form (DEC-001): hashed
+  // once here, verified by the revision reader, never stored as bytes.
+  const contentHash = createHash("sha256")
+    .update(shapeContentIdentity({ ...shape }))
+    .digest("hex");
+
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
+
+    return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
+      // One-command application (DEC-002) runs BEFORE any staging: a refused
+      // option publishes nothing. The shape's intrinsic size drives the scale
+      // resolution exactly like an image's; there are no content bytes to
+      // pass — the provisional paint builds the shape from its parameters.
+      const revision = await applyOneCommandOptions(
+        {
+          schemaVersion: LAYER_SCHEMA_VERSION,
+          layerId,
+          createdAt,
+          kind: "shape",
+          contentHash,
+          shape: shape.shape,
+          width: shape.width,
+          height: shape.height,
+          ...(shape.cornerRadius !== undefined ? { cornerRadius: shape.cornerRadius } : {}),
+          fill: shape.fill,
+          x,
+          y,
+          opacity,
+          scaleX: 1,
+          scaleY: 1,
+          rotationDeg: 0,
+          flipX: false,
+          flipY: false,
+        },
+        options.oneCommand,
+        {
+          composition: sanitizedComp,
+          canvas: comp.canvas,
+          contentBytes: Buffer.alloc(0),
+          intrinsic: { width: shape.width, height: shape.height },
+        },
+      );
+      return revision;
+    }, options.position).then(({ layerId, layer }) => ({
+      composition: sanitizedComp,
+      use: { name: sanitizedLocalName, layerId },
+      layer,
+    }));
+  });
+}
+
 /** A selected Generation Job output for ingestion (#107): the job id and, for
  * multi-output records, the explicit 1-based index or sha-256 selection. */
 export interface GenerationLayerSource extends GenerationOutputSelection {
@@ -1359,6 +1453,34 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
     };
   }
+  if (source.kind === "shape") {
+    // Shape copy (#208): the parameters ARE the content — re-validated
+    // through the one shared shape validator (the same rule ingestion
+    // applies), then copied verbatim. No content bytes exist to copy.
+    validateShapeContent(source.shape, source.width, source.height, source.cornerRadius, source.fill);
+    return {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      layerId: newLayerId,
+      createdAt,
+      kind: "shape",
+      contentHash: source.contentHash,
+      shape: source.shape,
+      width: source.width,
+      height: source.height,
+      ...(source.cornerRadius !== undefined ? { cornerRadius: source.cornerRadius } : {}),
+      fill: { ...source.fill },
+      x: source.x,
+      y: source.y,
+      opacity: source.opacity,
+      scaleX: source.scaleX,
+      scaleY: source.scaleY,
+      rotationDeg: source.rotationDeg,
+      flipX: source.flipX,
+      flipY: source.flipY,
+      ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+      ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+    };
+  }
   if (source.kind !== "image") {
     throw new Error(`Unsupported Layer kind "${(source as { kind: string }).kind}" on source Layer revision.`);
   }
@@ -1453,7 +1575,11 @@ async function copyCrossProject(
 
       // Copy the retained content bytes into the destination content store
       // (deduplicated, integrity-verified on reuse by storeContentBlob).
-      await storeContentBlob(destRoot, snapshot.revision.contentHash, snapshot.contentBytes);
+      // A shape Layer (#208, DEC-001) has no retained bytes: its content IS
+      // its parameters, so there is nothing to copy into content/.
+      if (snapshot.revision.kind !== "shape") {
+        await storeContentBlob(destRoot, snapshot.revision.contentHash, snapshot.contentBytes);
+      }
 
       const createdAt = new Date().toISOString();
       const revision = buildCopiedRevision(newId, createdAt, snapshot.revision);

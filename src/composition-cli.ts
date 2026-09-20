@@ -34,6 +34,7 @@ import {
   parseLayerCoordinate,
   parseLayerFontSize,
   parseLayerFontFile,
+  parseLayerFill,
   parseLayerFlip,
   parseLayerLineHeight,
   parseLayerOpacity,
@@ -46,13 +47,18 @@ import {
   parseMatteId,
   parseNumericArgument,
   parseResizeOptions,
+  parseShapeCornerRadius,
+  parseShapeGeometry,
+  parseShapeSize,
   someLayerOptionProvided,
   validateTextFaceAxes,
   validateTextFontSource,
   validateTextTypographyControls,
+  SHAPE_CONTENT_KEYS,
   TEXT_CONTENT_KEYS,
   type LayerOptionArgs,
 } from "./layer-options.js";
+import { addShapeLayerToComposition } from "./composition.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -79,6 +85,19 @@ composition — Composition authoring and inspection
       family's, or a caller-supplied local font file's (#232) — are retained
       into the Project, so rendering never needs the original font files.
       Mutually exclusive with --image.
+
+  ply composition add <comp> <name> --shape rectangle|ellipse --size <W>x<H> --fill <color> [options]
+      Add a shape Layer from parameters alone (#208): a filled rectangle
+      (optional --corner-radius) or ellipse, sized in canvas px, painted
+      with ONE fill — a solid color (#RGB/#RRGGBB/#RRGGBBAA, alpha
+      allowed). No image file is read and no image bytes are stored: the
+      Layer's content IS its parameters. A full-canvas background is an
+      ordinary shape Layer sized to the canvas. Non-positive size, a
+      negative or oversized radius, and a malformed color are refused
+      before anything is published. Shape parameters (--shape, --size,
+      --corner-radius, --fill) are not editable on 'layer edit' yet.
+      Mutually exclusive with --image, --text, --from-generation, and
+      --from-matte.
 
   ply composition import <target> <source> [options]
       Import a Composition's Layer references into another Composition
@@ -198,7 +217,7 @@ Options:
   --width <int>         Canvas width in pixels (required for create)
   --height <int>        Canvas height in pixels (required for create)
   --image <path>        Path to local source image file (required for add
-                        unless --text or --from-generation is used)
+                        unless --text, --shape, or --from-generation is used)
   --from-generation <jobId>
                         Add the selected output of a published Generation Job
                         (see ply generate) as an ordinary image Layer. The
@@ -246,6 +265,21 @@ Options:
                         100); static faces and files without a wdth axis
                         accept only the implicit width 100
   --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
+  --shape <geometry>    Shape geometry for a shape Layer (#208): rectangle
+                        or ellipse. Requires --size and --fill.
+  --size <W>x<H>        The shape geometry's width and height in canvas px,
+                        e.g. "400x80" — required with --shape
+  --corner-radius <px>  Corner radius in px for a rectangle shape (#208):
+                        0 to half the shorter side (a larger radius would
+                        be silently clamped, so it is refused instead);
+                        0 is the same look as absent and is never stored.
+                        Not valid on an ellipse.
+  --fill <spec>         The shape's ONE fill (#208): a solid color — a hex
+                        color like #22c55e, #2c5, or #22c55e80 (alpha
+                        allowed), optionally with the explicit
+                        "solid:" discriminator prefix. The prefix is the
+                        one fill grammar gradient fills join later.
+                        Required with --shape.
   --order <names>       Comma-separated permutation of use names (required for reorder)
   --position <spec>     Where the new use goes in paint order (add, or the
                         imported set for import; #230): "top" (default —
@@ -506,7 +540,7 @@ async function run() {
       const compName = positionals[1];
       const localName = positionals[2];
       if (!compName || !localName) {
-        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --text <str> --font-file <path> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
+        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --text <str> --font-file <path> | --shape rectangle|ellipse --size <W>x<H> --fill <color> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -527,6 +561,12 @@ async function run() {
       const matteConflict = layerContentKindConflict(values, "from-matte", "add");
       if (matteConflict) {
         output({ ok: false, error: matteConflict }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const shapeConflict = layerContentKindConflict(values, "shape", "add");
+      if (shapeConflict) {
+        output({ ok: false, error: shapeConflict }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -563,8 +603,14 @@ async function run() {
         process.exitCode = 2;
         return;
       }
-      if (!values.image && values.text === undefined && values["from-generation"] === undefined && values["from-matte"] === undefined) {
-        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
+      // The shape's parameter options require --shape (#208).
+      if (values.shape === undefined && someLayerOptionProvided(values, SHAPE_CONTENT_KEYS.filter((key) => key !== "shape"))) {
+        output({ ok: false, error: "--size, --corner-radius, and --fill require --shape rectangle or --shape ellipse." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (!values.image && values.text === undefined && values["from-generation"] === undefined && values["from-matte"] === undefined && values.shape === undefined) {
+        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -708,7 +754,9 @@ async function run() {
               const detail =
                 rev.kind === "text"
                   ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
-                  : `${rev.width}×${rev.height} ${rev.format}`;
+                  : rev.kind === "shape"
+                    ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
+                    : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(
                 `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
                   `[${detail}] from Generation Job ${res.generatedFrom.jobId} ` +
@@ -744,7 +792,9 @@ async function run() {
               const detail =
                 rev.kind === "text"
                   ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
-                  : `${rev.width}×${rev.height} ${rev.format}`;
+                  : rev.kind === "shape"
+                    ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
+                    : `${rev.width}×${rev.height} ${rev.format}`;
               const generated = res.generatedFrom
                 ? `; generation lineage from Generation Job ${res.generatedFrom.jobId} retained`
                 : "";
@@ -871,6 +921,73 @@ async function run() {
           );
           return;
         }
+        if (values.shape !== undefined) {
+          // Shape content kind (#208, DEC-009): the geometry's literal set is
+          // boundary shape (exit 2); the semantic ranges — positive size, the
+          // radius's rectangle rule and range, the fill's color grammar —
+          // resolve in the ingestion path BEFORE anything is published (exit
+          // 1 on refusal, live state unchanged).
+          const parsedShape = parseShapeGeometry(values.shape);
+          if (!parsedShape.ok) {
+            output({ ok: false, error: parsedShape.error }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const parsedSize = parseShapeSize(values.size);
+          if (!parsedSize.ok) {
+            output({ ok: false, error: parsedSize.error }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          if (parsedSize.value === undefined) {
+            output({ ok: false, error: "Missing required option: --size <W>x<H> (the geometry's width and height in canvas px) is required with --shape" }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const parsedRadius = parseShapeCornerRadius(values["corner-radius"]);
+          if (!parsedRadius.ok) {
+            output({ ok: false, error: parsedRadius.error }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const parsedFill = parseLayerFill(values.fill);
+          if (!parsedFill.ok) {
+            output({ ok: false, error: parsedFill.error }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          if (parsedFill.value === undefined) {
+            output({ ok: false, error: "Missing required option: --fill <color> (a solid fill, e.g. \"#22c55e\") is required with --shape" }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const res = await addShapeLayerToComposition(
+            targetProj, compName, localName,
+            {
+              shape: parsedShape.value!,
+              width: parsedSize.value.width,
+              height: parsedSize.value.height,
+              ...(parsedRadius.value !== undefined ? { cornerRadius: parsedRadius.value } : {}),
+              fill: parsedFill.value,
+            },
+            { x, y, opacity, oneCommand, position: stackPosition },
+          );
+          mutationCommitted = true;
+          output(
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+            isJson,
+            () => {
+              const rev = res.layer.currentRevision;
+              if (rev.kind !== "shape") return; // unreachable: shape ingestion returns a shape revision
+              const radius = rev.cornerRadius !== undefined ? `, corner radius ${rev.cornerRadius}px` : "";
+              console.log(
+                `Added shape Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
+                  `[${rev.shape} ${rev.width}×${rev.height}${radius}, ${rev.fill.type} fill ${rev.fill.color}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
+              );
+            },
+          );
+          return;
+        }
 
         const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity, oneCommand, position: stackPosition });
         mutationCommitted = true;
@@ -882,7 +999,9 @@ async function run() {
             const detail =
               rev.kind === "text"
                 ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
-                : `${rev.width}×${rev.height} ${rev.format}`;
+                : rev.kind === "shape"
+                  ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
+                  : `${rev.width}×${rev.height} ${rev.format}`;
             console.log(
               `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" [${detail}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
             );
@@ -1016,7 +1135,9 @@ async function run() {
               const detail =
                 rev.kind === "text"
                   ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
-                  : `${rev.width}×${rev.height} ${rev.format}`;
+                  : rev.kind === "shape"
+                    ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
+                    : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(
                 `  ${idx + 1}. "${layer.name}" [${layer.layerId}] (${rev.kind}, ${detail}) ` +
                   `@ (${rev.x}, ${rev.y}) opacity: ${rev.opacity}`,
