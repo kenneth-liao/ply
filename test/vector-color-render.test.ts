@@ -112,20 +112,24 @@ test("an interior pixel of a recoloured vector equals the requested colour exact
   const rendered = await renderComposition(projDir, "poster", { supersample: 1 });
   const png = decodePng(await readFile(rendered.output));
 
-  // Opaque interior (the red field away from the inner rect): exactly the
-  // requested colour, full alpha.
-  expectPixel(png, 65, 45, [0x22, 0xc5, 0x5e, 255]);
+  // Opaque interior (the red field away from the inner rect): EXACTLY the
+  // requested colour, full alpha — no tolerance (INT-3): an opaque interior
+  // is a mask-alpha-1 multiply, so the pixel is the requested colour.
+  expectPixel(png, 65, 45, [0x22, 0xc5, 0x5e, 255], 0);
   // The inner rect's authored blue is gone — whole-Layer replacement
   // (DEC-008): a multi-colour vector becomes a single-colour silhouette.
-  expectPixel(png, 85, 55, [0x22, 0xc5, 0x5e, 255]);
+  expectPixel(png, 85, 55, [0x22, 0xc5, 0x5e, 255], 0);
   // Outside the vector — and the transparent right half of it: untouched.
-  expectPixel(png, 30, 20, [0, 0, 0, 0]);
-  expectPixel(png, 145, 100, [0, 0, 0, 0]);
-  expectPixel(png, 135, 45, [0, 0, 0, 0]);
+  expectPixel(png, 30, 20, [0, 0, 0, 0], 0);
+  expectPixel(png, 145, 100, [0, 0, 0, 0], 0);
+  expectPixel(png, 135, 45, [0, 0, 0, 0], 0);
 
   // The semi-transparent circle's alpha edge is preserved: the requested
-  // colour at the authored alpha (0.5 × 255), not flattened to opaque.
-  expectPixel(png, 120, 60, [0x22, 0xc5, 0x5e, 127]);
+  // colour at the authored alpha (0.5 × 255 rounds to 128), not flattened
+  // to opaque. The ALPHA is asserted exact; the channels keep ±2 (the
+  // mask's antialiased alpha multiply rounds in premultiplied space).
+  expectPixel(png, 120, 60, [0x22, 0xc5, 0x5e, 128]);
+  expect(pixel(png, 120, 60)[3]).toBe(128);
 
   // Colour does not move ink: the painted box is the vector's own box
   // (60,40)-(140,80) — an uncoloured twin measures the same painted box.
@@ -139,7 +143,7 @@ test("an interior pixel of a recoloured vector equals the requested colour exact
 
 // ---------------------------------------------------------------------------
 // Paint order: colour is content paint; the region crops it and the effects
-// hug the cropped, coloured edge (ADR-0023)
+// hug the cropped, coloured edge (ADR-0023) — with or without a region.
 // ---------------------------------------------------------------------------
 
 test("with a visible region, outline, and shadow, the colour stays content paint: the region crops it and the outline hugs the region's edge", async () => {
@@ -166,6 +170,53 @@ test("with a visible region, outline, and shadow, the colour stays content paint
   expectPixel(png, 90, 47, [0, 255, 0, 255]);
   // Beyond the outline's reach: untouched.
   expectPixel(png, 70, 47, [0, 0, 0, 0]);
+});
+
+test("without a region, the outline and shadow hug the coloured silhouette (the mask never clips the effects)", async () => {
+  const layerId = await addSvgLayer(["--vector-color", "#22c55e"]);
+  const setEffects = await invoke([
+    "layer", "edit", layerId, "--outline", "4,#00ff00", "--shadow", "8,8,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+  expect(setEffects.code).toBe(0);
+  const rendered = await renderComposition(projDir, "poster", { supersample: 1 });
+  const png = decodePng(await readFile(rendered.output));
+
+  // The vector spans (60,40)-(140,80); the left half is opaque ink. The
+  // outline hugs the coloured content's edge: 4px LEFT of the silhouette's
+  // left edge is ring green, not backdrop — exact pixels throughout.
+  expectPixel(png, 56, 60, [0, 255, 0, 255], 0);
+  // The interior stays the requested colour. Behind an ACTIVE effect chain
+  // the channels keep ±2 (the SVG filter pipeline re-rasterises the source
+  // in premultiplied space and shifts some channels by one); the plain
+  // recolour test above pins the exact value.
+  expectPixel(png, 65, 45, [0x22, 0xc5, 0x5e, 255]);
+  // The shadow is cast from the outlined composite and survives the mask:
+  // offset (8,8), blur 0 — solid black below-right of opaque ink.
+  expectPixel(png, 69, 88, [0, 0, 0, 255], 0);
+  // And the shadow does not leak where nothing casts it: above the Layer.
+  expectPixel(png, 65, 30, [0, 0, 0, 0], 0);
+});
+
+// An alpha-bearing colour (#RRGGBBAA is first-class grammar): the stored
+// alpha multiplies the vector's own alpha at paint time, so an opaque
+// interior renders exactly colour × colour-alpha and the semi-transparent
+// edge is the product of both alphas.
+test("an alpha-bearing colour paints colour × alpha over the vector's alpha, exactly", async () => {
+  const layerId = await addSvgLayer(["--vector-color", "#22c55e80"]);
+  const rendered = await renderComposition(projDir, "poster", { supersample: 1 });
+  const png = decodePng(await readFile(rendered.output));
+
+  // Opaque mask interior: exactly the requested colour at its alpha 128
+  // (0x80) — the mask's own 255 alpha contributes nothing else.
+  expectPixel(png, 65, 45, [0x22, 0xc5, 0x5e, 128], 0);
+  expectPixel(png, 85, 55, [0x22, 0xc5, 0x5e, 128], 0);
+  // The semi-transparent circle: mask alpha 0.5 × colour alpha 128 → alpha
+  // 64 exactly; the channels keep ±2 (premultiplied rounding).
+  expectPixel(png, 120, 60, [0x22, 0xc5, 0x5e, 64]);
+  expect(pixel(png, 120, 60)[3]).toBe(64);
+  // The transparent half stays transparent, whatever the colour's alpha.
+  expectPixel(png, 135, 45, [0, 0, 0, 0], 0);
 });
 
 // ---------------------------------------------------------------------------

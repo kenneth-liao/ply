@@ -812,17 +812,22 @@ export function buildCompositionHtml(
             `display:block;`
           : "";
       if (rev.vectorColor !== undefined) {
-        if (rev.visibleRegion !== undefined) {
-          // The DEC-004 paint order falls out of the markup shape: the
-          // colour IS content paint — the masked element is the inner
-          // content element, the region clip crops it, and the wrapper's
-          // effect chain hugs the cropped, coloured edge.
-          return (
-            `<div style="${base}${transformed}${effectsFilter}">` +
-            `<div style="${vectorColorCss}${regionClip}"></div></div>`
-          );
-        }
-        return `<div style="${base}${transformed}${effectsFilter}${vectorColorCss}"></div>`;
+        // ONE two-element structure for every recoloured Layer, region or
+        // not (INT-1): the effect chain lives on the OUTER element and the
+        // mask (and the region clip, when set) on the INNER one. CSS applies
+        // an element's own mask AFTER its filters — a single element carrying
+        // both would clip the outline ring and the shadow to the silhouette,
+        // exactly the same-element failure that moved the region clip onto
+        // the inner element in #211. The DEC-004 paint order falls out of
+        // the markup shape: the colour IS content paint — the masked element
+        // is the inner content element, the region clip crops it, and the
+        // wrapper's effect chain hugs the cropped, coloured edge. Layers
+        // without a region emit the same wrapper shape the region path
+        // already used, with an empty clip.
+        return (
+          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${vectorColorCss}${regionClip}"></div></div>`
+        );
       }
       if (rev.visibleRegion !== undefined) {
         return (

@@ -342,12 +342,13 @@ for that Layer kind, with identical spelling, validation, and refusal
 texts. The options apply in the documented order — content (and its vector
 colour), then transforms, then the visible region, then anchored placement,
 then effects — and publish exactly one Layer revision; any refused option
-publishes nothing (no Layer, no use, no content). On 'layer edit', --anchor cannot
-combine with --shadow/--outline/--visible-region; on 'add' the combination
-is defined by that order: the anchor resolves the content+transform+region
-ink in the target Composition's canvas, and the effects are then applied to
-the same single revision. --anchor on add still requires explicit --x/--y
-targets for the anchored axes, exactly as on 'edit'. The transform, region,
+publishes nothing (no Layer, no use, no content). On 'add' the anchor
+combination is defined by that order: the anchor resolves the
+content+transform+region ink in the target Composition's canvas, and the
+effects are then applied to the same single revision. On 'layer edit',
+--anchor cannot combine with --shadow/--outline/--vector-color/
+--visible-region; --anchor on add still requires explicit --x/--y targets
+for the anchored axes, exactly as on 'edit'. The transform, paint, region,
 and effect facts are revision facts like on edit: shared, forked, replayed,
 and reported by 'measure' exactly as a multi-command Layer's are.
 

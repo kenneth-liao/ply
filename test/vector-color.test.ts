@@ -346,6 +346,9 @@ test("the revision hash appends the colour only when present (DEC-010: existing 
   delete colourless.vectorColor;
   delete colourless.revisionId;
   const baseHash = computeRevisionHash(colourless as never);
+  // The pin (INT-3): the colourless hash IS the revision id the tool actually
+  // assigned — the pre-#215 form, not merely "differs from the coloured form".
+  expect(baseHash).toBe(before.currentRevisionId);
   const withColour = { ...colourless, vectorColor: "#22c55e" };
   expect(computeRevisionHash(withColour as never)).not.toBe(baseHash);
   delete (withColour as Record<string, unknown>).vectorColor;
