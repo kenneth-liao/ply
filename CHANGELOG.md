@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Internal refactor, no version-visible behavior change (#228, spec #226
+  DEC-001): `ply layer edit` and `composition add` now share one option
+  definition and one validation path per Layer option (`src/layer-options.ts`)
+  — each option is declared in one option table (key, group, applicable Layer
+  kinds, dash-numeric fact, parseArgs entry), parsed once, and its shape and
+  range validated once through the same validators the ingestion paths use
+  (`parseShadowSpec`, `resolveTextAxes`, `resolveTextTypographyControls`), so
+  the two command boundaries can no longer drift apart and one-command
+  `composition add` (#229) can consume the same definitions. The surfaces'
+  established refusal wordings — including their few historical differences —
+  live in that one module; `--help` output and every refusal text on both
+  surfaces are byte-identical to before, and no option is accepted or refused
+  differently.
+
 ### Added
 
 - Layer name addressing (#227, spec #226 US-003): wherever a Layer id is

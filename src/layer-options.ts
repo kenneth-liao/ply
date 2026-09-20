@@ -1,0 +1,579 @@
+#!/usr/bin/env bun
+/**
+ * The ONE shared option definition for the Layer-editing option surface
+ * (spec #226 DEC-001): every option that `ply layer edit` accepts — and
+ * that `ply composition add` accepts today or gains with one-command
+ * creation (#229) — is declared here once and validated here once.
+ *
+ * Each option has exactly one declaration and one validation path:
+ *
+ * - **Declaration** — `LAYER_OPTION_DEFS` states the option's key, its
+ *   option group, the Layer kinds it applies to, whether it alone
+ *   qualifies as an `layer edit` edit option, and whether its value may
+ *   begin with "-" (a negative number). `LAYER_OPTION_PARSE_ARGS` states
+ *   the parseArgs entry; `satisfies Record<LayerOptionKey, …>` makes a
+ *   definition without a parseArgs entry (or vice versa) a compile error,
+ *   and a test pins the two key sets equal.
+ * - **Validation** — one `parse…`/`validate…` function per option below,
+ *   wrapping the same domain validators the ingestion paths use
+ *   (`parseShadowSpec`, `parseOutlineSpec`, `resolveTextAxes`,
+ *   `resolveTextTypographyControls`, `resolveFace`), so the CLI boundary
+ *   and the publish path can never disagree. Both command boundaries call
+ *   these functions; the refusal wording lives here too — where the two
+ *   surfaces' established wording differs (coordinates, font size, the
+ *   content-kind exclusivity refusals), both wordings live in this one
+ *   place, selected by surface, so today's texts survive byte-identically
+ *   and no option is ever worded in two files.
+ *
+ * What deliberately stays per-command: check *sequencing* (each surface
+ * keeps its established check order), command-level policy (edit intents
+ * like --fork/--in-place, add's defaults and required-content rules), and
+ * the help text (each surface's manual describes its own contract). Adding
+ * an option means adding it here — to the table, the parseArgs entries,
+ * and one validator — and both surfaces inherit it.
+ */
+import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
+import { parseShadowSpec, parseOutlineSpec, resolveTextTypographyControls } from "./layer.js";
+import { resolveFace, resolveTextAxes } from "./fonts.js";
+
+/** Blank supplied values are invalid, never implicit zero (#128). */
+export function parseNumericArgument(value: string | undefined): number {
+  return value?.trim() ? Number(value) : NaN;
+}
+
+/** The command surfaces that share this option surface. */
+export type LayerOptionSurface = "edit" | "add";
+
+/** The Layer kinds an option can apply to. */
+export type LayerOptionKind = "image" | "text";
+
+export type LayerOptionGroup = "content" | "text" | "placement" | "transform" | "effect";
+
+export interface LayerOptionDef {
+  /** parseArgs key: the flag is `--<key>`. */
+  key: LayerOptionKey;
+  group: LayerOptionGroup;
+  /** For content options: which content kind the option belongs to. */
+  contentKind?: "image" | "text";
+  /** The Layer kinds the option applies to (an enumerable fact consumers
+   *  such as one-command `composition add` need). */
+  appliesTo: readonly LayerOptionKind[];
+  /** Whether the option alone qualifies as an `layer edit` edit option.
+   *  `--output` is an output selector for --from-generation, not an edit
+   *  option by itself. */
+  editOption: boolean;
+  /** The option's value may legitimately begin with "-" (a negative
+   *  number), so each command boundary joins it before parsing. */
+  dashNumeric?: boolean;
+}
+
+export type LayerOptionKey =
+  | "image"
+  | "from-generation"
+  | "from-matte"
+  | "output"
+  | "text"
+  | "font"
+  | "font-size"
+  | "color"
+  | "weight"
+  | "width"
+  | "tracking"
+  | "line-height"
+  | "x"
+  | "y"
+  | "opacity"
+  | "anchor"
+  | "resize"
+  | "resize-to"
+  | "rotate"
+  | "flip"
+  | "shadow"
+  | "outline";
+
+/**
+ * The one option table (DEC-001), in the order the edit surface's
+ * enumeration and refusals state the options. Every `layer edit` option
+ * and every `composition add` Layer option is declared exactly once here.
+ */
+export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
+  // Content options: what the Layer is made of. Mutually exclusive kinds.
+  { key: "image", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true },
+  { key: "from-generation", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true },
+  { key: "from-matte", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true },
+  { key: "output", group: "content", contentKind: "image", appliesTo: ["image"], editOption: false },
+  { key: "text", group: "content", contentKind: "text", appliesTo: ["text"], editOption: true },
+  // Text style options: only meaningful with a text content kind.
+  { key: "font", group: "text", appliesTo: ["text"], editOption: true },
+  { key: "font-size", group: "text", appliesTo: ["text"], editOption: true },
+  { key: "color", group: "text", appliesTo: ["text"], editOption: true },
+  { key: "weight", group: "text", appliesTo: ["text"], editOption: true },
+  { key: "width", group: "text", appliesTo: ["text"], editOption: true },
+  { key: "tracking", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true },
+  { key: "line-height", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true },
+  // Placement, transform, and effect options.
+  { key: "x", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
+  { key: "y", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
+  { key: "opacity", group: "placement", appliesTo: ["image", "text"], editOption: true },
+  { key: "anchor", group: "placement", appliesTo: ["image", "text"], editOption: true },
+  { key: "resize", group: "transform", appliesTo: ["image", "text"], editOption: true },
+  { key: "resize-to", group: "transform", appliesTo: ["image"], editOption: true },
+  { key: "rotate", group: "transform", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
+  { key: "flip", group: "transform", appliesTo: ["image", "text"], editOption: true },
+  { key: "shadow", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
+  { key: "outline", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
+];
+
+/** The one parseArgs declaration per option: `satisfies` makes a missing
+ *  (or misspelled) entry a compile error whenever the table changes. */
+export const LAYER_OPTION_PARSE_ARGS = {
+  image: { type: "string" },
+  "from-generation": { type: "string" },
+  "from-matte": { type: "string" },
+  output: { type: "string" },
+  text: { type: "string" },
+  font: { type: "string" },
+  "font-size": { type: "string" },
+  color: { type: "string" },
+  weight: { type: "string" },
+  width: { type: "string" },
+  tracking: { type: "string" },
+  "line-height": { type: "string" },
+  x: { type: "string" },
+  y: { type: "string" },
+  opacity: { type: "string" },
+  anchor: { type: "string" },
+  resize: { type: "string" },
+  "resize-to": { type: "string" },
+  rotate: { type: "string" },
+  flip: { type: "string" },
+  shadow: { type: "string" },
+  outline: { type: "string" },
+} as const satisfies Record<LayerOptionKey, { type: "string" }>;
+
+/** The parsed-CLI shape of this option surface: every key is a raw string
+ *  (or `undefined` when not supplied). Command-specific flags are
+ *  intersected per surface; see each entry point's `values` type. */
+export type LayerOptionArgs = { [K in LayerOptionKey]?: string };
+
+/** The `--text` content marker plus the text style options: the option set
+ *  the content-kind exclusivity rules treat as "the text content kind". */
+export const TEXT_CONTENT_KEYS: readonly LayerOptionKey[] = [
+  "text", "font", "font-size", "color", "weight", "width", "tracking", "line-height",
+];
+
+/** The keys of every option that qualifies as an `layer edit` edit option,
+ *  in the table's order — the enumeration the "no edit options" refusal
+ *  and any consumer (such as one-command add) state options by. */
+export function layerEditOptionKeys(): LayerOptionKey[] {
+  return LAYER_OPTION_DEFS.filter((def) => def.editOption).map((def) => def.key);
+}
+
+/** The Layer options `composition add` accepts today: content, text style,
+ *  and placement (one-command creation, #229, widens this to the edit
+ *  surface's transform and effect options by widening this list). The text
+ *  width axis is absent by name: on this surface `--width` names the canvas
+ *  dimension, and the add path's established checks read that value where
+ *  the edit surface reads the text axis. */
+export const COMPOSITION_ADD_OPTION_KEYS = [
+  "image", "from-generation", "from-matte", "output", "text", "font", "font-size",
+  "color", "weight", "tracking", "line-height", "x", "y", "opacity",
+] as const;
+
+/** The parseArgs entries for the add surface's accepted Layer options,
+ *  referencing the one declaration per option; `satisfies` keeps the
+ *  subset exhaustive against COMPOSITION_ADD_OPTION_KEYS. */
+export const COMPOSITION_ADD_OPTION_PARSE_ARGS = {
+  image: LAYER_OPTION_PARSE_ARGS.image,
+  "from-generation": LAYER_OPTION_PARSE_ARGS["from-generation"],
+  "from-matte": LAYER_OPTION_PARSE_ARGS["from-matte"],
+  output: LAYER_OPTION_PARSE_ARGS.output,
+  text: LAYER_OPTION_PARSE_ARGS.text,
+  font: LAYER_OPTION_PARSE_ARGS.font,
+  "font-size": LAYER_OPTION_PARSE_ARGS["font-size"],
+  color: LAYER_OPTION_PARSE_ARGS.color,
+  weight: LAYER_OPTION_PARSE_ARGS.weight,
+  tracking: LAYER_OPTION_PARSE_ARGS.tracking,
+  "line-height": LAYER_OPTION_PARSE_ARGS["line-height"],
+  x: LAYER_OPTION_PARSE_ARGS.x,
+  y: LAYER_OPTION_PARSE_ARGS.y,
+  opacity: LAYER_OPTION_PARSE_ARGS.opacity,
+} as const satisfies Record<(typeof COMPOSITION_ADD_OPTION_KEYS)[number], { type: "string" }>;
+
+/** The `--<key>` spellings of `keys` that take dash-leading numeric values,
+ *  for the shared dash-join at each command boundary (cli-present.ts). */
+export function layerDashNumericFlags(keys: readonly LayerOptionKey[]): string[] {
+  const dashNumeric = new Set(LAYER_OPTION_DEFS.filter((def) => def.dashNumeric).map((def) => def.key));
+  return keys.filter((key) => dashNumeric.has(key)).map((key) => `--${key}`);
+}
+
+/** Whether any option in `keys` is supplied in `args`. */
+export function someLayerOptionProvided(args: LayerOptionArgs, keys: readonly LayerOptionKey[]): boolean {
+  return keys.some((key) => args[key] !== undefined);
+}
+
+/** Whether any option that alone qualifies as an `layer edit` edit option
+ *  is supplied. */
+export function anyLayerEditOptionProvided(args: LayerOptionArgs): boolean {
+  return LAYER_OPTION_DEFS.some((def) => def.editOption && args[def.key] !== undefined);
+}
+
+/**
+ * The one content-kind exclusivity rule (DEC-001): an image content kind
+ * (--image, --from-generation, --from-matte), a text content (--text), and
+ * the text style options are mutually exclusive. Membership comes from the
+ * option table, so an option added to the text group automatically joins
+ * every content-kind refusal on every surface. Returns the surface's
+ * established refusal text for the offending pair, or undefined.
+ */
+export function layerContentKindConflict(
+  args: LayerOptionArgs,
+  kind: "image" | "from-generation" | "from-matte",
+  surface: LayerOptionSurface,
+): string | undefined {
+  const textSide =
+    args.text !== undefined ||
+    someLayerOptionProvided(args, TEXT_CONTENT_KEYS.filter((key) => key !== "text"));
+  const generationSide = args["from-generation"] !== undefined;
+  const matteSide = args["from-matte"] !== undefined;
+  switch (kind) {
+    case "image": {
+      // Presence, except for the add surface's established check, which
+      // reads truthiness: a blank --image falls through to that surface's
+      // missing-content refusal instead of the exclusivity refusal.
+      const imageTrigger = surface === "edit" ? args.image !== undefined : !!args.image;
+      if (imageTrigger && textSide) {
+        return surface === "edit"
+          ? "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive."
+          : "--image and --text are mutually exclusive content kinds; use one per Layer.";
+      }
+      return undefined;
+    }
+    case "from-generation":
+      if (generationSide && (args.image !== undefined || textSide)) {
+        return surface === "edit"
+          ? "--from-generation and --image/--text options are mutually exclusive content options."
+          : "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer.";
+      }
+      return undefined;
+    case "from-matte":
+      if (matteSide && (args.image !== undefined || textSide || generationSide)) {
+        return surface === "edit"
+          ? "--from-matte and --image/--text/--from-generation options are mutually exclusive content options."
+          : "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer.";
+      }
+      return undefined;
+  }
+}
+
+export type OptionParse<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/**
+ * Placement coordinate (--x / --y): the ONE shape validation. Blank and
+ * non-finite values are refused; the two surfaces' established wording
+ * differs (edit names the single axis, add names the pair), so both wordings
+ * live here, selected by surface.
+ */
+export function parseLayerCoordinate(
+  key: "x" | "y",
+  raw: string | undefined,
+  surface: LayerOptionSurface,
+): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return {
+      ok: false,
+      error:
+        surface === "edit"
+          ? `Placement coordinate (--${key}) must be a finite number.`
+          : "Placement coordinates (--x, --y) must be finite numbers.",
+    };
+  }
+  return { ok: true, value };
+}
+
+/** Layer opacity (--opacity): 0..1, identical wording on every surface. */
+export function parseLayerOpacity(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    return { ok: false, error: "Opacity (--opacity) must be a finite number between 0 and 1." };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Font size (--font-size): the ONE shape validation. The edit surface's
+ * established wording and range are stricter (positive finite); the add
+ * surface's are looser (finite; semantic range enforcement stays in the
+ * ingestion path). Both wordings live here, selected by surface.
+ */
+export function parseLayerFontSize(
+  raw: string | undefined,
+  surface: LayerOptionSurface,
+): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (surface === "edit") {
+    if (!Number.isFinite(value) || value <= 0) {
+      return { ok: false, error: "Font size (--font-size) must be a positive finite number." };
+    }
+  } else if (!Number.isFinite(value)) {
+    return { ok: false, error: "Font size (--font-size) must be a finite number." };
+  }
+  return { ok: true, value };
+}
+
+/** Text weight (--weight): a finite number, identical wording everywhere. */
+export function parseLayerWeight(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: "Weight (--weight) must be a finite number." };
+  }
+  return { ok: true, value };
+}
+
+/** Text width (--width): a finite number, identical wording everywhere. */
+export function parseLayerWidth(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: "Width (--width) must be a finite number." };
+  }
+  return { ok: true, value };
+}
+
+/** Tracking (--tracking): a finite number, identical wording everywhere.
+ *  Range validation is `validateTextTypographyControls`'s job. */
+export function parseLayerTracking(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: "Tracking (--tracking) must be a finite number." };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Line height (--line-height): a finite number or the literal "normal"
+ * (resolved to `null` — the clear-stored-value form), identical wording
+ * everywhere. Range validation is `validateTextTypographyControls`'s job.
+ */
+export function parseLayerLineHeight(raw: string | undefined): OptionParse<number | null | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === "normal") return { ok: true, value: null };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: 'Line height (--line-height) must be a finite number or "normal".' };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * The one range validation for tracking and line height at a command
+ * boundary: the same validator the ingestion paths use, so the boundaries
+ * never disagree. Returns the refusal text, or undefined when valid.
+ */
+export function validateTextTypographyControls(
+  tracking: number | null | undefined,
+  lineHeight: number | null | undefined,
+): string | undefined {
+  try {
+    resolveTextTypographyControls({ tracking, lineHeight });
+    return undefined;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+/**
+ * The one boundary validation for --font together with explicit --weight/
+ * --width: resolves the bundled face — throwing the established semantic
+ * refusal, which each surface's established error envelope classifies —
+ * and range-checks the explicit axes. Returns the range refusal text, or
+ * undefined when valid.
+ */
+export function validateTextFaceAxes(
+  font: string,
+  weight: number | undefined,
+  width: number | undefined,
+): string | undefined {
+  const face = resolveFace(font);
+  try {
+    resolveTextAxes(face, { weight, width });
+    return undefined;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+/** --from-generation takes a Generation Job id; blank is invalid. Returns
+ *  the trimmed id. */
+export function parseGenerationJobId(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (!raw.trim()) {
+    return { ok: false, error: "--from-generation takes a Generation Job id (see ply generate list)." };
+  }
+  return { ok: true, value: raw.trim() };
+}
+
+/** --from-matte takes a matte id; blank is invalid. Returns the trimmed id. */
+export function parseMatteId(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (!raw.trim()) {
+    return { ok: false, error: "--from-matte takes a matte id (see ply matte)." };
+  }
+  return { ok: true, value: raw.trim() };
+}
+
+/** --output is only meaningful together with --from-generation. */
+export function parseGenerationOutputSelector(
+  raw: string | undefined,
+  hasFromGeneration: boolean,
+): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (!hasFromGeneration) {
+    return { ok: false, error: "--output is only valid together with --from-generation <jobId>." };
+  }
+  return { ok: true, value: raw };
+}
+
+/** --output selects one output: a 1-based index or the full sha-256
+ *  content identity. */
+export function parseGenerationOutputValue(raw: string): OptionParse<string> {
+  if (!/^([1-9]\d*|[0-9a-f]{64})$/.test(raw)) {
+    return {
+      ok: false,
+      error: `--output takes a 1-based output index or the full sha-256 output identity (got "${raw}")`,
+    };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
+ * The one validation path for the resize pair (--resize, --resize-to):
+ * mutual exclusivity, then each form's shape. Scale semantics, caps, and
+ * kind conflicts stay in the ingestion paths.
+ */
+export function parseResizeOptions(
+  resize: string | undefined,
+  resizeTo: string | undefined,
+): OptionParse<{ resizeFactor?: number; resizeTo?: { width?: number; height?: number } }> {
+  if (resize !== undefined && resizeTo !== undefined) {
+    return {
+      ok: false,
+      error: "--resize and --resize-to are mutually exclusive resize forms: use one per edit.",
+    };
+  }
+  let resizeFactor: number | undefined;
+  if (resize !== undefined) {
+    resizeFactor = parseNumericArgument(resize);
+    if (!Number.isFinite(resizeFactor) || resizeFactor <= 0) {
+      return {
+        ok: false,
+        error: `Resize factor (--resize) must be a finite number greater than 0 (got "${resize}").`,
+      };
+    }
+  }
+  let target: { width?: number; height?: number } | undefined;
+  if (resizeTo !== undefined) {
+    const raw = resizeTo.trim();
+    const m = raw.match(/^(\d+(?:\.\d+)?)?x(\d+(?:\.\d+)?)?$/);
+    if (!m || (m[1] === undefined && m[2] === undefined)) {
+      return {
+        ok: false,
+        error:
+          `--resize-to takes "<W>x<H>" (both axes: deliberate aspect change) or "<W>x" / "x<H>" ` +
+          `(one axis: aspect preserved), e.g. "800x600", "800x", "x600" — got "${resizeTo}".`,
+      };
+    }
+    target = {
+      ...(m[1] !== undefined ? { width: Number(m[1]) } : {}),
+      ...(m[2] !== undefined ? { height: Number(m[2]) } : {}),
+    };
+  }
+  return { ok: true, value: { ...(resizeFactor !== undefined ? { resizeFactor } : {}), ...(target !== undefined ? { resizeTo: target } : {}) } };
+}
+
+/** --rotate: a finite number of degrees, clockwise positive. */
+export function parseLayerRotation(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return {
+      ok: false,
+      error: `Rotation (--rotate) must be a finite number of degrees, clockwise positive (got "${raw}").`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/** --flip: an absolute reflection mode. */
+export function parseLayerFlip(
+  raw: string | undefined,
+): OptionParse<"horizontal" | "vertical" | "both" | "none" | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const mode = raw.trim().toLowerCase();
+  if (mode !== "horizontal" && mode !== "vertical" && mode !== "both" && mode !== "none") {
+    return { ok: false, error: `Flip (--flip) takes horizontal, vertical, both, or none (got "${raw}").` };
+  }
+  return { ok: true, value: mode };
+}
+
+/**
+ * --shadow: syntax and well-formedness through the SAME parser the edit
+ * path uses, so the two boundaries never disagree. Returns the raw spec
+ * (the ingestion path re-resolves it against live state).
+ */
+export function parseLayerShadow(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    parseShadowSpec(raw);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
+ * --outline: syntax and well-formedness through the SAME parser the edit
+ * path uses, so the two boundaries never disagree. Returns the raw spec
+ * (the ingestion path re-resolves it against live state).
+ */
+export function parseLayerOutline(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    parseOutlineSpec(raw);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
+ * --anchor: syntax and well-formedness through the SAME parser the edit
+ * path uses, so the two boundaries never disagree. Semantic refusals (no
+ * visible ink, divergent multi-Composition geometry) happen in the
+ * read-only resolution, never here.
+ */
+export function parseLayerAnchor(raw: string | undefined): OptionParse<ParsedAnchor | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    return { ok: true, value: parseAnchorSpec(raw) };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+/** The options --anchor cannot combine with: every edit option except the
+ *  anchor's own axes (--x, --y) and --opacity, which combine freely.
+ *  Derived from the option table, so a newly added option automatically
+ *  joins the conflict rule. */
+export function isAnchorConflicting(args: LayerOptionArgs): boolean {
+  const anchorFree = new Set<LayerOptionKey>(["x", "y", "opacity", "anchor"]);
+  return LAYER_OPTION_DEFS.some(
+    (def) => def.editOption && !anchorFree.has(def.key) && args[def.key] !== undefined,
+  );
+}

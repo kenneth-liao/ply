@@ -3,10 +3,36 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
-import { parseAnchorSpec, resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
-import { parseShadowSpec, parseOutlineSpec } from "./layer.js";
-import { resolveFace, resolveTextAxes } from "./fonts.js";
-import { resolveTextTypographyControls } from "./layer.js";
+import { resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
+import {
+  LAYER_OPTION_PARSE_ARGS,
+  anyLayerEditOptionProvided,
+  isAnchorConflicting,
+  layerContentKindConflict,
+  layerDashNumericFlags,
+  layerEditOptionKeys,
+  parseGenerationJobId,
+  parseGenerationOutputSelector,
+  parseGenerationOutputValue,
+  parseLayerAnchor,
+  parseLayerCoordinate,
+  parseLayerFlip,
+  parseLayerFontSize,
+  parseLayerLineHeight,
+  parseLayerOpacity,
+  parseLayerOutline,
+  parseLayerRotation,
+  parseLayerShadow,
+  parseLayerTracking,
+  parseLayerWeight,
+  parseLayerWidth,
+  parseMatteId,
+  parseResizeOptions,
+  validateTextFaceAxes,
+  validateTextTypographyControls,
+  type LayerOptionArgs,
+  type OptionParse,
+} from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { parseLayerAddress, resolveLayerToken, LayerAddressSyntaxError, type ResolvedLayerToken } from "./layer-address.js";
 import { closeCliBrowser } from "./cli-browser.js";
@@ -238,11 +264,6 @@ function output(
   }
 }
 
-/** Blank supplied values are invalid, never implicit zero. */
-function parseNumericArgument(value: string | undefined): number {
-  return value?.trim() ? Number(value) : NaN;
-}
-
 /** Compact anchor spec for the edit report: pair form "h,v", single form
  * otherwise. */
 function formatAnchorSpec(anchor: ParsedAnchor): string {
@@ -260,12 +281,12 @@ function formatAnchorTarget(anchored: AnchorResolution): string {
   return ` at y ${target.y}`;
 }
 
-const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), [
-  "--x", "--y", "--rotate", "--shadow", "--outline", "--tracking", "--line-height",
-]);
+// Dash-numeric options (#128): the shared join, driven by the ONE option
+// definition (DEC-001) — membership, not order, decides the join.
+const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), layerDashNumericFlags(layerEditOptionKeys()));
 const isJson = rawArgs.includes("--json");
 
-let values: {
+let values: LayerOptionArgs & {
   project?: string;
   json?: boolean;
   help?: boolean;
@@ -273,29 +294,7 @@ let values: {
   fork?: boolean;
   composition?: string;
   use?: string;
-  image?: string;
-  "from-generation"?: string;
-  "from-matte"?: string;
-  output?: string;
   out?: string;
-  text?: string;
-  font?: string;
-  "font-size"?: string;
-  weight?: string;
-  width?: string;
-  tracking?: string;
-  "line-height"?: string;
-  color?: string;
-  x?: string;
-  y?: string;
-  opacity?: string;
-  anchor?: string;
-  resize?: string;
-  "resize-to"?: string;
-  rotate?: string;
-  flip?: string;
-  shadow?: string;
-  outline?: string;
 };
 let positionals: string[];
 
@@ -311,29 +310,10 @@ try {
       fork: { type: "boolean", default: false },
       composition: { type: "string" },
       use: { type: "string" },
-      image: { type: "string" },
-      "from-generation": { type: "string" },
-      "from-matte": { type: "string" },
-      output: { type: "string" },
       out: { type: "string" },
-      text: { type: "string" },
-      font: { type: "string" },
-      "font-size": { type: "string" },
-      weight: { type: "string" },
-      width: { type: "string" },
-      tracking: { type: "string" },
-      "line-height": { type: "string" },
-      color: { type: "string" },
-      x: { type: "string" },
-      y: { type: "string" },
-      opacity: { type: "string" },
-      anchor: { type: "string" },
-      resize: { type: "string" },
-      "resize-to": { type: "string" },
-      rotate: { type: "string" },
-      flip: { type: "string" },
-      shadow: { type: "string" },
-      outline: { type: "string" },
+      // The one declaration of the Layer-editing option surface (DEC-001):
+      // composition add shares these entries with layer edit.
+      ...LAYER_OPTION_PARSE_ARGS,
     },
   });
   values = parsed.values;
@@ -398,35 +378,18 @@ async function run() {
       const addressComposition = target.address?.composition;
       const addressUse = target.address?.use;
 
-      const hasEditOption =
-        values.image !== undefined ||
-        values["from-generation"] !== undefined ||
-        values["from-matte"] !== undefined ||
-        values.text !== undefined ||
-        values.font !== undefined ||
-        values["font-size"] !== undefined ||
-        values.color !== undefined ||
-        values.weight !== undefined ||
-        values.width !== undefined ||
-        values.tracking !== undefined ||
-        values["line-height"] !== undefined ||
-        values.x !== undefined ||
-        values.y !== undefined ||
-        values.opacity !== undefined ||
-        values.anchor !== undefined ||
-        values.resize !== undefined ||
-        values["resize-to"] !== undefined ||
-        values.rotate !== undefined ||
-        values.flip !== undefined ||
-        values.shadow !== undefined ||
-        values.outline !== undefined;
+      // The one edit-option enumeration (DEC-001): "is any edit option
+      // supplied" reads the shared option table, and the refusal states
+      // exactly the options the table declares — so an option added to the
+      // definition is automatically an edit option here and automatically
+      // named in this list.
+      const hasEditOption = anyLayerEditOptionProvided(values);
 
       if (!hasEditOption && !values.fork) {
         output(
           {
             ok: false,
-            error:
-              "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --rotate, --flip, --shadow, --outline, or --fork.",
+            error: `No edit options provided: specify at least one of ${layerEditOptionKeys().map((key) => `--${key}`).join(", ")}, or --fork.`,
           },
           isJson,
         );
@@ -493,24 +456,12 @@ async function run() {
         return;
       }
 
-      if (
-        values.image !== undefined &&
-        (values.text !== undefined ||
-          values.font !== undefined ||
-          values["font-size"] !== undefined ||
-          values.color !== undefined ||
-          values.weight !== undefined ||
-          values.width !== undefined ||
-          values.tracking !== undefined ||
-          values["line-height"] !== undefined)
-      ) {
-        output(
-          {
-            ok: false,
-            error: "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
-          },
-          isJson,
-        );
+      // Content-kind exclusivity (#107, #108): one rule from the shared
+      // option table (DEC-001) — --image, --from-generation, --from-matte,
+      // --text, and the text style options are mutually exclusive kinds.
+      const imageConflict = layerContentKindConflict(values, "image", "edit");
+      if (imageConflict) {
+        output({ ok: false, error: imageConflict }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -518,132 +469,121 @@ async function run() {
       // Generated-content ingestion (#107): --from-generation is an image
       // content option, mutually exclusive with --image and the text options;
       // --output selects one output of the job and is meaningless without it.
-      if (values["from-generation"] !== undefined && !values["from-generation"].trim()) {
-        output(
-          { ok: false, error: "--from-generation takes a Generation Job id (see ply generate list)." },
-          isJson,
-        );
+      const generationJobId = parseGenerationJobId(values["from-generation"]);
+      if (!generationJobId.ok) {
+        output({ ok: false, error: generationJobId.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (
-        values["from-generation"] !== undefined &&
-        (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
-          values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined ||
-          values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined)
-      ) {
-        output(
-          { ok: false, error: "--from-generation and --image/--text options are mutually exclusive content options." },
-          isJson,
-        );
+      const generationConflict = layerContentKindConflict(values, "from-generation", "edit");
+      if (generationConflict) {
+        output({ ok: false, error: generationConflict }, isJson);
         process.exitCode = 2;
         return;
       }
       // Matting-content ingestion (#108): --from-matte is an image content
       // option, mutually exclusive with --image, --from-generation, and the
       // text options.
-      if (values["from-matte"] !== undefined && !values["from-matte"].trim()) {
-        output({ ok: false, error: "--from-matte takes a matte id (see ply matte)." }, isJson);
+      const matteId = parseMatteId(values["from-matte"]);
+      if (!matteId.ok) {
+        output({ ok: false, error: matteId.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (
-        values["from-matte"] !== undefined &&
-        (values.image !== undefined || values.text !== undefined || values.font !== undefined ||
-          values["font-size"] !== undefined || values.color !== undefined || values.weight !== undefined ||
-          values.width !== undefined || values.tracking !== undefined || values["line-height"] !== undefined ||
-          values["from-generation"] !== undefined)
-      ) {
-        output(
-          { ok: false, error: "--from-matte and --image/--text/--from-generation options are mutually exclusive content options." },
-          isJson,
-        );
+      const matteConflict = layerContentKindConflict(values, "from-matte", "edit");
+      if (matteConflict) {
+        output({ ok: false, error: matteConflict }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (values.output !== undefined && values["from-generation"] === undefined) {
-        output(
-          { ok: false, error: "--output is only valid together with --from-generation <jobId>." },
-          isJson,
-        );
+      const outputSelector = parseGenerationOutputSelector(values.output, values["from-generation"] !== undefined);
+      if (!outputSelector.ok) {
+        output({ ok: false, error: outputSelector.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (values.output !== undefined && !/^([1-9]\d*|[0-9a-f]{64})$/.test(values.output)) {
-        output(
-          { ok: false, error: `--output takes a 1-based output index or the full sha-256 output identity (got "${values.output}")` },
-          isJson,
-        );
-        process.exitCode = 2;
-        return;
+      if (values.output !== undefined) {
+        const outputValue = parseGenerationOutputValue(values.output);
+        if (!outputValue.ok) {
+          output({ ok: false, error: outputValue.error }, isJson);
+          process.exitCode = 2;
+          return;
+        }
       }
 
-      const x = values.x !== undefined ? parseNumericArgument(values.x) : undefined;
-      const y = values.y !== undefined ? parseNumericArgument(values.y) : undefined;
-      const opacity = values.opacity !== undefined ? parseNumericArgument(values.opacity) : undefined;
-      const fontSize = values["font-size"] !== undefined ? parseNumericArgument(values["font-size"]) : undefined;
-      const weight = values.weight !== undefined ? parseNumericArgument(values.weight) : undefined;
-      const width = values.width !== undefined ? parseNumericArgument(values.width) : undefined;
-      const tracking = values.tracking !== undefined ? parseNumericArgument(values.tracking) : undefined;
-      const lineHeightValue = values["line-height"];
-      const lineHeight =
-        lineHeightValue === undefined ? undefined : lineHeightValue === "normal" ? null : parseNumericArgument(lineHeightValue);
-
-      if (x !== undefined && !Number.isFinite(x)) {
-        output({ ok: false, error: "Placement coordinate (--x) must be a finite number." }, isJson);
+      // Each option's shape validation below is the shared validator from
+      // the option definition (DEC-001) — the same function composition add
+      // runs, so the two boundaries can never disagree.
+      const placementX = parseLayerCoordinate("x", values.x, "edit");
+      if (!placementX.ok) {
+        output({ ok: false, error: placementX.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (y !== undefined && !Number.isFinite(y)) {
-        output({ ok: false, error: "Placement coordinate (--y) must be a finite number." }, isJson);
+      const x = placementX.value;
+      const placementY = parseLayerCoordinate("y", values.y, "edit");
+      if (!placementY.ok) {
+        output({ ok: false, error: placementY.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (opacity !== undefined && (!Number.isFinite(opacity) || opacity < 0 || opacity > 1)) {
-        output({ ok: false, error: "Opacity (--opacity) must be a finite number between 0 and 1." }, isJson);
+      const y = placementY.value;
+      const parsedOpacity = parseLayerOpacity(values.opacity);
+      if (!parsedOpacity.ok) {
+        output({ ok: false, error: parsedOpacity.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (fontSize !== undefined && (!Number.isFinite(fontSize) || fontSize <= 0)) {
-        output({ ok: false, error: "Font size (--font-size) must be a positive finite number." }, isJson);
+      const opacity = parsedOpacity.value;
+      const parsedFontSize = parseLayerFontSize(values["font-size"], "edit");
+      if (!parsedFontSize.ok) {
+        output({ ok: false, error: parsedFontSize.error }, isJson);
         process.exitCode = 2;
         return;
       }
+      const fontSize = parsedFontSize.value;
       // Text axes (#179, ADR-0021): shape at the command boundary (exit 2),
       // and range when --font names the face — the SAME validator the edit
       // path uses, so the boundaries never disagree. Without --font the
       // face is the Layer's retained font, so the range refusal is semantic
       // (exit 1) inside the edit path, like the other retained-state refusals.
-      if (weight !== undefined && !Number.isFinite(weight)) {
-        output({ ok: false, error: "Weight (--weight) must be a finite number." }, isJson);
+      const parsedWeight = parseLayerWeight(values.weight);
+      if (!parsedWeight.ok) {
+        output({ ok: false, error: parsedWeight.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (width !== undefined && !Number.isFinite(width)) {
-        output({ ok: false, error: "Width (--width) must be a finite number." }, isJson);
+      const weight = parsedWeight.value;
+      const parsedWidth = parseLayerWidth(values.width);
+      if (!parsedWidth.ok) {
+        output({ ok: false, error: parsedWidth.error }, isJson);
         process.exitCode = 2;
         return;
       }
+      const width = parsedWidth.value;
       // Text typography (#187, ADR-0021): font-independent, so shape and
       // range are usage errors (exit 2) here unconditionally, through the
       // SAME validator the edit path uses — the edit path re-resolves before
       // anything publishes. `--tracking 0` and `--line-height normal` are
       // the clear syntaxes; the resolver normalizes both to absent (one
       // stored form per look).
-      if (values.tracking !== undefined && !Number.isFinite(tracking)) {
-        output({ ok: false, error: "Tracking (--tracking) must be a finite number." }, isJson);
+      const parsedTracking = parseLayerTracking(values.tracking);
+      if (!parsedTracking.ok) {
+        output({ ok: false, error: parsedTracking.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      if (lineHeightValue !== undefined && lineHeightValue !== "normal" && !Number.isFinite(lineHeight)) {
-        output({ ok: false, error: 'Line height (--line-height) must be a finite number or "normal".' }, isJson);
+      const tracking = parsedTracking.value;
+      const parsedLineHeight = parseLayerLineHeight(values["line-height"]);
+      if (!parsedLineHeight.ok) {
+        output({ ok: false, error: parsedLineHeight.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      try {
-        resolveTextTypographyControls({ tracking, lineHeight });
-      } catch (err) {
-        output({ ok: false, error: (err as Error).message }, isJson);
+      const lineHeight = parsedLineHeight.value;
+      const typographyError = validateTextTypographyControls(tracking, lineHeight);
+      if (typographyError !== undefined) {
+        output({ ok: false, error: typographyError }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -651,170 +591,98 @@ async function run() {
         // An unknown family keeps its established semantic refusal (exit 1,
         // from the edit path's resolveFace); only weight/width range errors
         // are usage errors here (exit 2).
-        const face = resolveFace(values.font);
-        try {
-          resolveTextAxes(face, { weight, width });
-        } catch (err) {
-          output({ ok: false, error: (err as Error).message }, isJson);
+        const axesError = validateTextFaceAxes(values.font, weight, width);
+        if (axesError !== undefined) {
+          output({ ok: false, error: axesError }, isJson);
           process.exitCode = 2;
           return;
         }
       }
 
       // Resize flags (#133): syntax and well-formedness at the command
-      // boundary; scale semantics, caps, and kind conflicts are enforced by
-      // the edit path before any staging, so invalid resize inputs never
-      // advance live state.
-      if (values.resize !== undefined && values["resize-to"] !== undefined) {
-        output(
-          { ok: false, error: "--resize and --resize-to are mutually exclusive resize forms: use one per edit." },
-          isJson,
-        );
+      // boundary through the shared one-path validator (DEC-001); scale
+      // semantics, caps, and kind conflicts are enforced by the edit path
+      // before any staging, so invalid resize inputs never advance live state.
+      const resize = parseResizeOptions(values.resize, values["resize-to"]);
+      if (!resize.ok) {
+        output({ ok: false, error: resize.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      let resizeFactor: number | undefined;
-      if (values.resize !== undefined) {
-        resizeFactor = parseNumericArgument(values.resize);
-        if (!Number.isFinite(resizeFactor) || resizeFactor <= 0) {
-          output(
-            { ok: false, error: `Resize factor (--resize) must be a finite number greater than 0 (got "${values.resize}").` },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-      }
-      let resizeTo: { width?: number; height?: number } | undefined;
-      if (values["resize-to"] !== undefined) {
-        const raw = values["resize-to"].trim();
-        const m = raw.match(/^(\d+(?:\.\d+)?)?x(\d+(?:\.\d+)?)?$/);
-        if (!m || (m[1] === undefined && m[2] === undefined)) {
-          output(
-            {
-              ok: false,
-              error:
-                `--resize-to takes "<W>x<H>" (both axes: deliberate aspect change) or "<W>x" / "x<H>" ` +
-                `(one axis: aspect preserved), e.g. "800x600", "800x", "x600" — got "${values["resize-to"]}".`,
-            },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-        resizeTo = {
-          ...(m[1] !== undefined ? { width: Number(m[1]) } : {}),
-          ...(m[2] !== undefined ? { height: Number(m[2]) } : {}),
-        };
-      }
+      const resizeFactor = resize.value.resizeFactor;
+      const resizeTo = resize.value.resizeTo;
 
       // Rotate flag (#134): syntax and well-formedness at the command
       // boundary; the finite-number semantic check is enforced again by the
       // edit path before any staging, so an invalid angle never advances
       // live state.
-      let rotateDeg: number | undefined;
-      if (values.rotate !== undefined) {
-        rotateDeg = parseNumericArgument(values.rotate);
-        if (!Number.isFinite(rotateDeg)) {
-          output(
-            { ok: false, error: `Rotation (--rotate) must be a finite number of degrees, clockwise positive (got "${values.rotate}").` },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
+      const rotation = parseLayerRotation(values.rotate);
+      if (!rotation.ok) {
+        output({ ok: false, error: rotation.error }, isJson);
+        process.exitCode = 2;
+        return;
       }
+      const rotateDeg = rotation.value;
 
       // Flip flag (#135): the reflection mode is validated at the command
       // boundary as a usage error (exit 2), so an invalid mode never reaches
       // the edit path; the absolute-setter semantics are enforced again by
       // the edit path before any staging.
-      let flip: "horizontal" | "vertical" | "both" | "none" | undefined;
-      if (values.flip !== undefined) {
-        const raw = values.flip.trim().toLowerCase();
-        if (raw !== "horizontal" && raw !== "vertical" && raw !== "both" && raw !== "none") {
-          output(
-            { ok: false, error: `Flip (--flip) takes horizontal, vertical, both, or none (got "${values.flip}").` },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-        flip = raw;
+      const parsedFlip = parseLayerFlip(values.flip);
+      if (!parsedFlip.ok) {
+        output({ ok: false, error: parsedFlip.error }, isJson);
+        process.exitCode = 2;
+        return;
       }
+      const flip = parsedFlip.value;
 
       // Shadow flag (#139, ADR-0018): syntax and well-formedness at the
       // command boundary as a usage error (exit 2) through the SAME parser
       // the edit path uses, so the two boundaries never disagree; the
       // absolute-setter semantics are enforced again by the edit path before
       // any staging.
-      let shadowSpec: string | undefined;
-      if (values.shadow !== undefined) {
-        try {
-          parseShadowSpec(values.shadow);
-        } catch (err) {
-          output({ ok: false, error: (err as Error).message }, isJson);
-          process.exitCode = 2;
-          return;
-        }
-        shadowSpec = values.shadow;
+      const parsedShadow = parseLayerShadow(values.shadow);
+      if (!parsedShadow.ok) {
+        output({ ok: false, error: parsedShadow.error }, isJson);
+        process.exitCode = 2;
+        return;
       }
+      const shadowSpec = parsedShadow.value;
 
       // Outline flag (#140, ADR-0019): syntax and well-formedness at the
       // command boundary as a usage error (exit 2) through the SAME parser
       // the edit path uses, so the two boundaries never disagree; the
       // absolute-setter semantics are enforced again by the edit path before
       // any staging.
-      let outlineSpec: string | undefined;
-      if (values.outline !== undefined) {
-        try {
-          parseOutlineSpec(values.outline);
-        } catch (err) {
-          output({ ok: false, error: (err as Error).message }, isJson);
-          process.exitCode = 2;
-          return;
-        }
-        outlineSpec = values.outline;
+      const parsedOutline = parseLayerOutline(values.outline);
+      if (!parsedOutline.ok) {
+        output({ ok: false, error: parsedOutline.error }, isJson);
+        process.exitCode = 2;
+        return;
       }
+      const outlineSpec = parsedOutline.value;
 
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2); semantic refusals (no visible ink,
       // divergent multi-Composition geometry) happen in the read-only
       // resolution BEFORE the edit is invoked (exit 1) — so no anchored
       // input ever mutates live state.
-      let parsedAnchor: ParsedAnchor | undefined;
-      if (values.anchor !== undefined) {
-        try {
-          parsedAnchor = parseAnchorSpec(values.anchor);
-        } catch (err) {
-          output({ ok: false, error: (err as Error).message }, isJson);
-          process.exitCode = 2;
-          return;
-        }
+      const parsedAnchorResult = parseLayerAnchor(values.anchor);
+      if (!parsedAnchorResult.ok) {
+        output({ ok: false, error: parsedAnchorResult.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedAnchor = parsedAnchorResult.value;
+      if (parsedAnchor !== undefined) {
         // Anchored placement is its own edit: transform and content edits
         // change the reference ink, so combining them in one edit is a
         // conflicting request (the same precedent as resize + content
         // replacement). --opacity combines freely: opacity scales alpha
-        // values, never the ink support.
-        const conflicting =
-          values.resize !== undefined ||
-          values["resize-to"] !== undefined ||
-          values.rotate !== undefined ||
-          values.flip !== undefined ||
-          values.shadow !== undefined ||
-          values.outline !== undefined ||
-          values.image !== undefined ||
-          values["from-generation"] !== undefined ||
-          values["from-matte"] !== undefined ||
-          values.text !== undefined ||
-          values.font !== undefined ||
-          values["font-size"] !== undefined ||
-          values.color !== undefined ||
-          values.weight !== undefined ||
-          values.width !== undefined ||
-          values.tracking !== undefined ||
-          values["line-height"] !== undefined;
-        if (conflicting) {
+        // values, never the ink support. The conflict set is derived from
+        // the shared option table (DEC-001), so a newly added option
+        // automatically joins it.
+        if (isAnchorConflicting(values)) {
           output(
             {
               ok: false,
@@ -893,13 +761,13 @@ async function run() {
           image: values.image,
           fromGeneration:
             values["from-generation"] !== undefined
-              ? { jobRoot: path.resolve("out", "generation"), jobId: values["from-generation"].trim(), output: values.output }
+              ? { jobRoot: path.resolve("out", "generation"), jobId: generationJobId.value!, output: values.output }
               : undefined,
           fromMatte:
             values["from-matte"] !== undefined
               ? {
                   matteRoot: path.resolve("out", "matting"),
-                  matteId: values["from-matte"].trim(),
+                  matteId: matteId.value!,
                   generationRoot: path.resolve("out", "generation"),
                 }
               : undefined,
