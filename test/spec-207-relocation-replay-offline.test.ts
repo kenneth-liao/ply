@@ -16,7 +16,7 @@
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { closeBrowser } from "../src/browser.js";
 import { decodePng, readPngHeader } from "../src/png.js";
