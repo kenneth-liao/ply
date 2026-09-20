@@ -1,0 +1,7 @@
+Measured Composition "t1" (1280×720), 6 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720 [fill radial #2a6e69 0%, #123b3a 100%]
+  2. "bar" (image content 830×110) box (140, 20) 830×110 painted (140, 20) 830×110 [fill solid #ffe27a]
+  3. "learn" (text 728.45×92) box (192, 31.5) 728.45×92 painted (195, 44) 720×63 [weight 600, width 100]
+  4. "card" (image content 820×477) box (-93, 99.72) 884.52×599.4 painted (-87, 106) 872×587, on-canvas (0, 106) 785×587 — clipped [fill solid #1d1d1f, rot -9°]
+  5. "wm" (image content 1159×482) box (33.5, 233.01) 652.7×351.66 painted (36, 234) 629×332 [scale 0.5349439171699741×, rot -9°]
+  6. "kenny" (image content 1934×1344) box (539, 120) 920.95×640 painted (539, 131) 921×629, on-canvas (539, 131) 741×589 — clipped [scale 0.47619047619047616×]
