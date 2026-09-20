@@ -15,7 +15,9 @@ accepted vocabulary. Two shipments are acceptance-audited against `main`:
 Caller-parameterized region checking has shipped for Compositions
 (`ply composition check`, [Region checking](#region-checking-new-surface))
 along with the guideline overlay view (`ply composition guidelines`,
-[Guideline view](#guideline-view)); a starter YouTube region file ships as a
+[Guideline view](#guideline-view)) and the comparison sheet
+(`ply composition sheet`, [Comparison sheet](#comparison-sheet)); a starter
+YouTube region file ships as a
 copy-and-own template ([Starter region file](#starter-region-file)); the
 legacy Scene surface still runs as documented under
 [Legacy surface](#legacy-surface-preserved), and ADR-0014 records what
@@ -1034,6 +1036,48 @@ Malformed region files, out-of-canvas regions, canvas mismatches, and
 missing Compositions fail loudly (exit 1, actionable error); usage errors
 exit 2. Default output is compact text; `--json` emits one valid JSON
 result. Local only: no network, no inference weights.
+
+### Comparison sheet
+
+`ply composition sheet <input...>` lays an ordered list of inputs out as one
+labelled PNG grid — the review contact sheet and the reference-versus-result
+comparison that previously needed an external `montage` call:
+
+```bash
+ply composition sheet thumb renders/thumb-*.manifest.json reference.png --pair --cell 300
+ply composition sheet candidateA candidateB ref.png --label 3="reference" --out /tmp/compare.png
+```
+
+Each input is, in one list:
+
+- a **Composition name** — rendered current through the existing render path
+  (no second rendering authority);
+- a **retained Render manifest** path (the Project's
+  `renders/*.manifest.json`) — painted from its pinned historical inputs
+  exactly as `replay` repaints them, with the same environment gate;
+- a **local image file** — PNG, JPEG, WebP, or SVG (an SVG rides the same
+  inertness gate `composition add --image` applies: it may not reference
+  anything outside itself).
+
+An existing local file wins over a Composition name of the same token. Labels
+default to the input's name (the Composition name, the file's base name, or
+the manifest's Composition) and can be overridden per cell with
+`--label <1-based index>=<text>`. `--columns` (default 2) and `--cell`
+(default 512, square) size the grid; mixed aspect ratios are fitted inside
+their cells without distortion. `--pair` lays the inputs out as
+reference-beside-result rows — an even number of inputs, each reference
+immediately followed by its result; it conflicts with `--columns`.
+
+The sheet is a **review artifact, not a Render**: it writes no Render
+manifest and adds nothing to retained Render history, and it publishes
+through the same export-target boundary as render and the guideline view —
+existing Project state and reserved storage are never written over, and a
+recorded Render output is never overwritten. The default output is a fresh,
+never-colliding file under the Project's `guidelines/` review-output
+directory. A missing or undecodable input is refused naming it, and nothing
+is written. Local only: no network, no inference weights, no model calls.
+Compact text by default; `--json` emits one valid JSON result; usage errors
+exit 2, failures exit 1.
 
 ## Setup
 

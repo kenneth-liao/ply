@@ -66,6 +66,8 @@ import { formatFill } from "./fill.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
+import { renderComparisonSheet, parseLabelOverrides } from "./composition-sheet.js";
+import { DEFAULT_SHEET_CELL, DEFAULT_SHEET_COLUMNS } from "./composition-sheet.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
@@ -199,6 +201,30 @@ composition — Composition authoring and inspection
       excluded from final renders — it exists only on this code path.
       Local only: no network, no inference weights.
 
+  ply composition sheet <input...> [options]
+      Build a comparison sheet (#233, spec #226 US-006): lay an ordered list
+      of inputs out as ONE labelled PNG grid — a review artifact like the
+      guideline view, not a Render: no Render manifest, nothing added to
+      Render history, destinations resolved through the same export-target
+      boundary (default: a fresh file under the Project's guidelines/).
+      Each input is, in one list:
+      - a Composition name — rendered current through the existing render
+        path (no second rendering authority);
+      - a retained Render manifest path (the Project's renders/*.manifest.json)
+        — painted from its pinned historical inputs exactly as 'replay'
+        repaints them, with the same environment gate;
+      - a local image file path — PNG, JPEG, WebP, or SVG.
+      An existing local file wins over a Composition name of the same token.
+      Labels default to the input's name (the Composition name, the file's
+      base name, or the manifest's Composition) and can be overridden with
+      --label <1-based index>=<text>. --columns (default 2) and --cell
+      (default 512, square) size the grid; mixed aspect ratios are fitted
+      inside their cells without distortion. --pair lays the inputs out as
+      reference-beside-result rows (an even number of inputs, in
+      reference-then-result order). A missing or undecodable input is
+      refused naming it, and nothing is written. Local only: no network,
+      no inference weights, no model calls.
+
   ply composition render <name> [options]
       Render a Composition to a PNG at exactly its canvas dimensions,
       supersampled by default (#184, ADR-0022): painted at 2 device pixels
@@ -308,6 +334,16 @@ Options:
                         position, or a malformed colour is refused before
                         anything is published. Required with --shape.
   --order <names>       Comma-separated permutation of use names (required for reorder)
+  --columns <int>       Sheet grid width in cells (default: 2)
+  --cell <px>           Sheet cell size in px — a square content box per cell
+                        (default: 512); content is fitted inside without
+                        distortion
+  --pair                Pairing mode: inputs are reference,result pairs, one
+                        pair per row (an even number of inputs, reference
+                        immediately before its result); conflicts with
+                        --columns
+  --label <i>=<text>    Override a sheet cell's label (1-based input index;
+                        repeatable), e.g. --label 2="result v2"
   --position <spec>     Where the new use goes in paint order (add, or the
                         imported set for import; #230): "top" (default —
                         appended last, painted on top), "bottom" (painted
@@ -520,6 +556,10 @@ let values: LayerOptionArgs & {
   supersample?: string;
   regions?: string;
   position?: string;
+  columns?: string;
+  cell?: string;
+  pair?: boolean;
+  label?: string[] | string;
   json?: boolean;
   help?: boolean;
 };
@@ -542,6 +582,12 @@ try {
       // the shared Layer option table (DEC-001). One grammar reader shared
       // by add and import (composition.parseStackPosition).
       position: { type: "string" },
+      // Comparison sheet options (#233, spec #226 US-006): a Composition
+      // surface concern, outside the shared Layer option table (DEC-001).
+      columns: { type: "string" },
+      cell: { type: "string" },
+      pair: { type: "boolean", default: false },
+      label: { type: "string", multiple: true },
       // The one declaration of the add surface's Layer options (DEC-001):
       // every Layer option this surface accepts, derived from the shared
       // option table (#229) — the same parseArgs entries layer edit spreads
@@ -1405,6 +1451,79 @@ async function run() {
       } catch (err) {
         teardownOutcome = "No guideline PNG was written.";
         emitRender({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
+    } else if (command === "sheet") {
+      const inputs = positionals.slice(1);
+      if (inputs.length === 0) {
+        output(
+          { ok: false, error: "Usage: ply composition sheet <input...> [--columns <n>] [--cell <px>] [--pair] [--label <i>=<text>] [--out <path>] — each input is a Composition name, a retained Render manifest path, or a local image file path" },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      // Value-shaped sheet options (#233): usage errors, like every
+      // value-range option. --label syntax and --pair's input-count
+      // contract are shaped here too, so a malformed caller argument
+      // exits 2; the module re-runs the same parses as its API fail-fast.
+      let columns: number | undefined;
+      let cellSize: number | undefined;
+      if (values.columns !== undefined) {
+        columns = parseNumericArgument(values.columns);
+        if (!Number.isInteger(columns) || columns < 1) {
+          output({ ok: false, error: "--columns must be an integer of at least 1." }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+      }
+      if (values.cell !== undefined) {
+        cellSize = parseNumericArgument(values.cell);
+        if (!Number.isInteger(cellSize) || cellSize < 1) {
+          output({ ok: false, error: "--cell must be an integer of at least 1." }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+      }
+      if (values.pair && values.columns !== undefined) {
+        output(
+          { ok: false, error: "--pair defines the layout itself (one reference beside one result per row); it cannot be combined with --columns." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      const labelSpecs = values.label === undefined ? [] : Array.isArray(values.label) ? values.label : [values.label];
+      try {
+        parseLabelOverrides(labelSpecs, inputs.length);
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      try {
+        const sheet = await renderComparisonSheet(targetProj, inputs, {
+          out: values.out,
+          columns,
+          cell: cellSize,
+          pair: values.pair,
+          labels: labelSpecs,
+        });
+        teardownOutcome = `The comparison sheet PNG was already written to ${sheet.output}. Do not re-render to recover it.`;
+        emitRender(
+          { ok: true, ...sheet },
+          isJson,
+          () => {
+            const rows = Math.ceil(inputs.length / sheet.columns);
+            console.log(
+              `Comparison sheet: ${inputs.length} input(s), ${sheet.columns}×${rows} grid of ${sheet.cell}px cells → ${sheet.output} ` +
+                `(${sheet.width}×${sheet.height} PNG; review artifact; no Render manifest)`,
+            );
+          },
+        );
+      } catch (err) {
+        teardownOutcome = "No comparison sheet PNG was written.";
+        output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;
       }
     } else if (command === "render") {

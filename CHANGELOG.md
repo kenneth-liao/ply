@@ -4,6 +4,36 @@
 
 ### Added
 
+- The comparison sheet command (`ply composition sheet <input...>`, #233,
+  spec #226 US-006, DEC-007/008/009, TEST-008): one command lays an ordered
+  list of inputs — Composition names (rendered current through the existing
+  render path: `resolveCompositionSnapshot` + `paintComposition`, no second
+  rendering authority), retained Render manifests (painted from their pinned
+  historical inputs through the replay path's own resolution machinery —
+  `readRenderManifest`, `resolveHistoricalLayers` under the Project lock,
+  the manifest's recorded canvas and supersample factor, and the same
+  environment-match gate — minus every history publication), and local image
+  files (PNG/JPEG/WebP headers through `raster-meta.ts`, SVG intrinsic sizes
+  through `svg-meta.ts` — the same two readers image ingestion uses, with
+  the same dimension caps and the same #214 inertness gate on SVG bytes) — out
+  as ONE labelled PNG grid, with a pairing mode (`--pair`) for
+  reference-beside-result rows. Labels default to the input's name (the
+  Composition name, the file's base name, or the manifest's Composition)
+  and are overridden per cell with `--label <1-based index>=<text>`;
+  `--columns` (default 2) and `--cell` (default 512, square) size the grid,
+  and mixed aspect ratios are fitted inside their cells without distortion.
+  It is a review artifact like `composition guidelines`: no Render manifest,
+  nothing added to Render history, destinations through the same
+  export-target boundary (default: a fresh file under the Project's
+  `guidelines/` review-output directory) with the same recorded-Render-output
+  refusal and atomic publication. Every refusal — an unknown Composition, a
+  missing or undecodable file, a bad manifest, an over-limit grid — names
+  its input and precedes any write, so a refused sheet writes nothing. The
+  legacy `scene compare` is untouched (OOS-006, DEC-008); no differencing,
+  overlays, or HTML output. Offline, no model calls; the sheet's input
+  images ride as data URLs. Compact text by default, valid JSON under
+  `--json`, usage errors exit 2, failures exit 1. A new term is recorded in
+  CONTEXT.md (DEC-010); README documents the command.
 - A vector colour parameter for vector image Layers (#215, spec #207 US-005,
   DEC-008/009/010, TEST-004): `--vector-color` paints a vector image Layer's
   shape in one colour at paint time, over the vector's own alpha — one

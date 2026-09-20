@@ -208,9 +208,10 @@ export async function renderComposition(
 /**
  * Render caps shared by current rendering and historical replay: a manifest's
  * recorded canvas is untrusted input, so replay applies the exact limits the
- * render boundary enforces before painting anything (CRAFT-2).
- */
-function assertRenderableCanvas(canvas: { width: number; height: number }, name: string): void {
+ * render boundary enforces before painting anything (CRAFT-2). Also consumed
+ * by the comparison sheet (#233), whose manifest cells paint at the recorded
+ * canvas and factor. */
+export function assertRenderableCanvas(canvas: { width: number; height: number }, name: string): void {
   const { width, height } = canvas;
   if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
     throw new Error(
@@ -234,9 +235,10 @@ function assertRenderableCanvas(canvas: { width: number; height: number }, name:
  * factor is refused loudly with the fix named; it is never painted at a
  * lower factor on its own. Only reachable for factor ≥ 2: the snapshot
  * boundary already refused over-limit canvases, and factor 1 paints at the
- * canvas size itself.
+ * canvas size itself. Exported for the comparison sheet (#233), whose
+ * composition and manifest cells paint through the same caps.
  */
-function assertSupersampledPaintSize(
+export function assertSupersampledPaintSize(
   canvas: { width: number; height: number },
   supersample: number,
   name: string,
