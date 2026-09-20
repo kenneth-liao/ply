@@ -14,6 +14,7 @@ import { escapesDirReal, outsideDir } from "./paths.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
+import { measureStandaloneSnapshot } from "./composition-measure.js";
 import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
 import { staticFaceAcceptedAxes, faceByContentHash, callerFontFace, verifyCallerFontResolves, resolveFace, resolveTextAxes, fontAssetBytes, type CallerFontFacts, type FontFace, type TextAxes } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
@@ -135,6 +136,27 @@ interface LayerRevisionBase {
    * when present, so revisions written before #140 keep their exact ids.
    */
   outline?: LayerOutline;
+  /**
+   * Canonical rectangular visible region (#211, spec #207 US-003, ADR-0023):
+   * the part of the Layer's content that is ink, as a rectangle in the
+   * Layer's OWN content pixels relative to the content box's top-left.
+   * Content outside the rectangle is not ink — it never paints, never
+   * counts as painted extent, and effects hug the region's edge instead of
+   * the full content edge. The fact is paint-time like the effects (the
+   * retained bytes and lineage are never touched) and is a revision fact
+   * shared as a whole (DEC-002).
+   *
+   * Present ⟺ a region exists: absence IS the canonical no-region form, so
+   * removal drops the field and every reader treats absence as none — no
+   * second "no region" representation. The revision hash appends it only
+   * when present, so revisions written before #211 keep their exact ids.
+   * The region is left-anchored (defined from the content box's top-left),
+   * so setting or removing it never moves the remaining pixels: the
+   * placement point and transform origin stay defined against the FULL
+   * content box (DEC-005), and the representation can gain an optional
+   * corner radius additively (#212) without reshaping this fact.
+   */
+  visibleRegion?: LayerVisibleRegion;
 }
 
 /** Canonical shadow parameters (#139, ADR-0018): offset, softening, color. */
@@ -149,6 +171,18 @@ export interface LayerShadow {
 export interface LayerOutline {
   width: number;
   color: string;
+}
+
+/** Canonical visible-region parameters (#211, spec #207 US-003, ADR-0023):
+ * the visible rectangle in the Layer's own content pixels, relative to the
+ * content box's top-left. Additively extensible (#212): an optional corner
+ * radius joins this object as another stored-only-when-set field without
+ * reshaping the rectangle facts. */
+export interface LayerVisibleRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /**
@@ -598,6 +632,49 @@ export function normalizeStoredOutline(revision: { outline?: unknown }): LayerOu
   return { width, color } as LayerOutline;
 }
 
+/**
+ * Canonical stored visible-region validation and normalization (#211,
+ * ADR-0023). The one normalization boundary for the region fact: documents
+ * written before #211 lack the field, and absence IS the canonical
+ * no-region form — every downstream reader projects through this function
+ * and never re-derives a default. A present field must be a valid region
+ * object: finite `x`/`y` ≥ 0 and finite positive `width`/`height` —
+ * anything else is a malformed document, refused loudly before the revision
+ * hash is consulted. Content-bounds conformance is deliberately NOT
+ * re-verified here: the set-time validation gates it against the content
+ * box of the revision it was set on, and the region keeps clipping
+ * deterministically whatever the current content box is (a region kept
+ * across a later content edit clips the intersection — documented, never a
+ * silent default).
+ */
+export function normalizeStoredVisibleRegion(revision: { visibleRegion?: unknown }): LayerVisibleRegion | undefined {
+  if (revision.visibleRegion === undefined) {
+    return undefined;
+  }
+  const raw = revision.visibleRegion;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `Malformed revision document: visibleRegion must be a region object when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  const { x, y, width, height } = raw as Record<string, unknown>;
+  for (const [label, value] of [["x", x], ["y", y]] as const) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      throw new Error(
+        `Malformed revision document: visibleRegion.${label} must be a finite number of px >= 0 (got ${JSON.stringify(value)}).`,
+      );
+    }
+  }
+  for (const [label, value] of [["width", width], ["height", height]] as const) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      throw new Error(
+        `Malformed revision document: visibleRegion.${label} must be a finite number of px greater than 0 (got ${JSON.stringify(value)}).`,
+      );
+    }
+  }
+  return { x, y, width, height } as LayerVisibleRegion;
+}
+
 export type ResolvedLayerRevision =
   | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
   | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
@@ -1029,7 +1106,9 @@ export function normalizeStoredCallerFont(revision: { callerFont?: unknown }): C
  * fields are appended only when present, so revisions written before #135
  * keep their exact ids (#135). The shadow and outline fields are appended
  * only when present, so revisions written before #139/#140 keep their exact
- * ids (#139, #140). The text weight/width fields are appended only when
+ * ids (#139, #140). The visible-region field is appended only when present,
+ * so revisions written before #211 keep their exact ids (#211). The text
+ * weight/width fields are appended only when
  * present (as one resolved pair), so revisions written before #179 keep
  * their exact ids (#179, ADR-0021). The text tracking and line-height
  * fields are appended only when present, so revisions written before #187
@@ -1050,6 +1129,10 @@ export function computeRevisionHash(rev: LayerRevision): string {
       : "";
   const outlineField =
     rev.outline !== undefined ? `:outline(${rev.outline.width},${rev.outline.color})` : "";
+  const regionField =
+    rev.visibleRegion !== undefined
+      ? `:region(${rev.visibleRegion.x},${rev.visibleRegion.y},${rev.visibleRegion.width},${rev.visibleRegion.height})`
+      : "";
   const textAxes = rev.kind === "text" ? normalizeStoredTextAxes(rev) : undefined;
   const textAxesFields = textAxes !== undefined ? `:textaxes(${textAxes.weight},${textAxes.width})` : "";
   const typography = rev.kind === "text" ? normalizeStoredTextTypography(rev) : undefined;
@@ -1084,7 +1167,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
         (shapeFields.cornerRadius !== undefined ? `,r${shapeFields.cornerRadius}` : "") +
         `,fill(${fillIdentityString(shapeFields.fill)}))`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}${typographyFields}${callerFontFields}${shapeFieldsFields}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${shapeFieldsFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1313,6 +1396,10 @@ export async function readRevisionInternalFull(
   // boundary (#140, ADR-0019) — a malformed stored field is refused loudly
   // before the revision hash is consulted. Absence IS the no-outline form.
   const outline = normalizeStoredOutline(revision);
+  // Canonical visible region: validated and normalized at this same one
+  // boundary (#211, ADR-0023) — a malformed stored field is refused loudly
+  // before the revision hash is consulted. Absence IS the no-region form.
+  const visibleRegion = normalizeStoredVisibleRegion(revision);
   // Canonical text axes: validated and normalized at this same one boundary
   // (#179, ADR-0021) — a malformed stored pair is refused loudly before the
   // revision hash is consulted. Absence IS the no-axes form (static fonts).
@@ -1405,6 +1492,7 @@ export async function readRevisionInternalFull(
             flipY: flip.flipY,
             ...(shadow !== undefined ? { shadow } : {}),
             ...(outline !== undefined ? { outline } : {}),
+            ...(visibleRegion !== undefined ? { visibleRegion } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -1429,6 +1517,7 @@ export async function readRevisionInternalFull(
           flipY: flip.flipY,
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
+          ...(visibleRegion !== undefined ? { visibleRegion } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -1461,6 +1550,7 @@ export async function readRevisionInternalFull(
           flipY: flip.flipY,
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
+          ...(visibleRegion !== undefined ? { visibleRegion } : {}),
         };
 
   return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0) };
@@ -1648,6 +1738,19 @@ export interface EditLayerOptions {
    */
   outline?: string;
   /**
+   * Set the Layer's rectangular visible region (#211, spec #207 US-003,
+   * ADR-0023): an ABSOLUTE setter "<x>,<y>,<width>,<height>" in the Layer's
+   * own content pixels, replacing any previous region — and "none" removes
+   * it. The region is validated against the content box before anything is
+   * staged: a region outside the content or with zero area is refused, and
+   * an omitted option preserves the current revision's region. It must not
+   * combine with content edits (content replacement, text content and
+   * style, shape parameters) in one edit — the region is validated against
+   * the content box, so those are separate edits — and not with --anchor,
+   * whose resolution would see different ink than the edit publishes.
+   */
+  visibleRegion?: string;
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -1724,6 +1827,9 @@ export interface EditLayerResult {
   /** Present when the edit set or removed the outline (#140): the absolute
    * outline state now recorded on the revision (null when removed). */
   outlined?: { outline: LayerOutline | null };
+  /** Present when the edit set or removed the visible region (#211): the
+   * absolute region state now recorded on the revision (null when removed). */
+  regionSet?: { visibleRegion: LayerVisibleRegion | null };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -1999,6 +2105,153 @@ function resolveEditOutline(options: EditLayerOptions, prevRev: ResolvedLayerRev
   return parseOutlineSpec(options.outline);
 }
 
+/**
+ * Canonical visible-region normalization (#211, spec #207 US-003, ADR-0023):
+ * `--visible-region` sets an ABSOLUTE region rectangle —
+ * "<x>,<y>,<width>,<height>" in the Layer's own content pixels, relative to
+ * the content box's top-left — replacing any previous one; "none" removes
+ * it. Every refusal runs before any staging, so an invalid region never
+ * advances live state. Exported for the CLI boundary: the command
+ * classifies malformed specs as usage errors (exit 2) with this same
+ * parser, so the two never disagree. Content-bounds conformance (a region
+ * outside the content is refused) is the edit path's job, against the
+ * content box the region is set on — this parser only judges the spec's own
+ * shape: finite `x`/`y` ≥ 0 and finite positive `width`/`height` (a
+ * zero-area region is refused here, before any content box is consulted).
+ */
+export function parseVisibleRegionSpec(spec: string): LayerVisibleRegion | undefined {
+  const raw = spec.trim();
+  if (raw.toLowerCase() === "none") {
+    return undefined;
+  }
+  const parts = raw.split(",").map((p) => p.trim());
+  if (parts.length !== 4) {
+    throw new Error(
+      `Invalid visible region "${raw}": --visible-region takes "<x>,<y>,<width>,<height>" in the Layer's own content px (e.g. "120,80,640,360") or "none".`,
+    );
+  }
+  const [xRaw, yRaw, widthRaw, heightRaw] = parts;
+  const x = Number(xRaw);
+  const y = Number(yRaw);
+  const width = Number(widthRaw);
+  const height = Number(heightRaw);
+  if (xRaw === "" || yRaw === "" || widthRaw === "" || heightRaw === "") {
+    throw new Error(
+      `Invalid visible region "${raw}": --visible-region takes "<x>,<y>,<width>,<height>" in the Layer's own content px (e.g. "120,80,640,360") or "none".`,
+    );
+  }
+  for (const [label, value, rawValue] of [["x", x, xRaw], ["y", y, yRaw]] as const) {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(
+        `Invalid visible region ${label} ${rawValue}: must be a finite number of px >= 0.`,
+      );
+    }
+  }
+  for (const [label, value, rawValue] of [["width", width, widthRaw], ["height", height, heightRaw]] as const) {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(
+        `Invalid visible region ${label} ${rawValue}: must be a finite number of px greater than 0 — a zero-area region shows nothing.`,
+      );
+    }
+  }
+  return { x, y, width, height };
+}
+
+/** Field-wise visible-region equality for the no-op check (#211): the flip
+ * precedent — re-issuing an identical region is a detected no-op, never a
+ * redundant revision. */
+function visibleRegionEq(a: LayerVisibleRegion | undefined, b: LayerVisibleRegion | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+/**
+ * The one content-bounds check for a set visible region (#211, ADR-0023):
+ * a region must lie inside the content box of the Layer it is set on —
+ * outside content or past the box's far edge is refused, naming the fault
+ * and the content box. The region is in the Layer's own content pixels;
+ * for image and shape Layers that box is the revision's intrinsic facts,
+ * and for a text Layer the measured line-box extent of the SAME content
+ * the edit would publish (the edit path refuses combining the region with
+ * content edits, so that is always the live revision's box).
+ */
+export function validateVisibleRegionAgainstContent(
+  region: LayerVisibleRegion,
+  content: { width: number; height: number },
+  layerId: string,
+): void {
+  if (region.x + region.width > content.width || region.y + region.height > content.height) {
+    throw new Error(
+      `Invalid visible region (${region.x}, ${region.y}, ${region.width}, ${region.height}) on Layer "${layerId}": ` +
+        `the region must lie inside the Layer's ${content.width}×${content.height}px content box — a region outside the content shows nothing and is refused before publication.`,
+    );
+  }
+}
+
+/**
+ * The options --visible-region cannot combine with in one edit (#211): the
+ * region is validated against the content box, so anything that replaces
+ * or reshapes the content — content replacement, the text content and its
+ * style options, and the shape parameters — is a separate edit (the same
+ * one-intent-per-edit precedent as --size with the resize forms). It
+ * combines freely with placement, the canonical transform, and the effects.
+ */
+const REGION_CONFLICTING_OPTION_PRESENT = (options: EditLayerOptions): boolean =>
+  options.image !== undefined ||
+  options.fromGeneration !== undefined ||
+  options.fromMatte !== undefined ||
+  options.text !== undefined ||
+  options.font !== undefined ||
+  options.fontFile !== undefined ||
+  options.fontSize !== undefined ||
+  options.color !== undefined ||
+  options.weight !== undefined ||
+  options.width !== undefined ||
+  options.tracking !== undefined ||
+  options.lineHeight !== undefined ||
+  options.shape !== undefined ||
+  options.size !== undefined ||
+  options.cornerRadius !== undefined ||
+  options.fill !== undefined;
+
+/**
+ * Canonical visible-region edit resolution (#211, ADR-0023): an omitted
+ * option preserves the current revision's region; a spec sets or removes it
+ * absolutely. A set region validates against the content box of the Layer
+ * it is set on — the revision's intrinsic facts for image and shape, and
+ * the measured line-box extent for text (the unwrapped standalone line,
+ * measured from the in-memory snapshot — never a second Project read).
+ * Every refusal runs before any staging, so an invalid region never
+ * advances live state.
+ */
+async function resolveEditVisibleRegion(
+  resolvedRoot: string,
+  options: EditLayerOptions,
+  prevRev: ResolvedLayerRevision,
+  contentBytes: Buffer,
+  layerId: string,
+): Promise<LayerVisibleRegion | undefined> {
+  if (options.visibleRegion === undefined) {
+    return prevRev.visibleRegion;
+  }
+  const region = parseVisibleRegionSpec(options.visibleRegion);
+  if (region === undefined) {
+    return undefined;
+  }
+  if (prevRev.kind === "text") {
+    // A text Layer has no stored intrinsic size: its content box is the
+    // DOM line-box extent of the retained face at this revision's settings,
+    // measured through the one measurement authority (DEC-006) on the
+    // already-resolved snapshot — the edit path holds the Project lock, so
+    // the lock-free snapshot variant is the only safe way to measure here.
+    const standalone = await measureStandaloneSnapshot({ ...prevRev, x: 0, y: 0 }, contentBytes);
+    validateVisibleRegionAgainstContent(region, standalone.content, layerId);
+  } else {
+    validateVisibleRegionAgainstContent(region, { width: prevRev.width, height: prevRev.height }, layerId);
+  }
+  return region;
+}
+
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
 export function roundEffective(px: number): number {
   return Math.round(px * 100) / 100;
@@ -2221,6 +2474,7 @@ async function buildEditedRevision(
   flip: LayerTransformFlip,
   shadow: LayerShadow | undefined,
   outline: LayerOutline | undefined,
+  visibleRegion: LayerVisibleRegion | undefined,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -2352,6 +2606,7 @@ async function buildEditedRevision(
       flipY: flip.flipY,
       ...(shadow !== undefined ? { shadow } : {}),
       ...(outline !== undefined ? { outline } : {}),
+      ...(visibleRegion !== undefined ? { visibleRegion } : {}),
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
@@ -2359,7 +2614,8 @@ async function buildEditedRevision(
       rotationDeg === prevRev.rotationDeg &&
       flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY &&
       shadowEq(shadow, prevRev.shadow) &&
-      outlineEq(outline, prevRev.outline);
+      outlineEq(outline, prevRev.outline) &&
+      visibleRegionEq(visibleRegion, prevRev.visibleRegion);
     return { revision, unchanged, mattedFrom, retainedGeneration };
   }
 
@@ -2461,6 +2717,7 @@ async function buildEditedRevision(
       flipY: flip.flipY,
       ...(shadow !== undefined ? { shadow } : {}),
       ...(outline !== undefined ? { outline } : {}),
+      ...(visibleRegion !== undefined ? { visibleRegion } : {}),
     };
     const unchanged =
       shapeContent.shape === prevRev.shape &&
@@ -2479,7 +2736,8 @@ async function buildEditedRevision(
       flip.flipX === prevRev.flipX &&
       flip.flipY === prevRev.flipY &&
       shadowEq(shadow, prevRev.shadow) &&
-      outlineEq(outline, prevRev.outline);
+      outlineEq(outline, prevRev.outline) &&
+      visibleRegionEq(visibleRegion, prevRev.visibleRegion);
     return {
       revision,
       unchanged,
@@ -2623,6 +2881,7 @@ async function buildEditedRevision(
       flipY: flip.flipY,
       ...(shadow !== undefined ? { shadow } : {}),
       ...(outline !== undefined ? { outline } : {}),
+      ...(visibleRegion !== undefined ? { visibleRegion } : {}),
     };
     const unchanged =
       contentHash === prevRev.contentHash &&
@@ -2643,7 +2902,8 @@ async function buildEditedRevision(
       flip.flipX === prevRev.flipX &&
       flip.flipY === prevRev.flipY &&
       shadowEq(shadow, prevRev.shadow) &&
-      outlineEq(outline, prevRev.outline);
+      outlineEq(outline, prevRev.outline) &&
+      visibleRegionEq(visibleRegion, prevRev.visibleRegion);
     return { revision, unchanged, retainedGeneration: null };
   }
 
@@ -2823,6 +3083,22 @@ export async function editLayerInternal(
   const outline = resolveEditOutline(options, prevRev);
   const hasOutline = options.outline !== undefined;
   const outlinedReport = { outline: outline ?? null };
+  // Visible region (#211, spec #207 US-003, ADR-0023): absolute setter,
+  // refusal before staging. The region is validated against the content box
+  // of the SAME content the edit would publish — content edits are refused
+  // in one edit with the region, so that is always the live revision's box;
+  // a text Layer's box is its measured line-box extent (the unwrapped
+  // standalone line, the same measurement authority anchored placement
+  // resolves an unreferenced Layer against).
+  if (options.visibleRegion !== undefined && REGION_CONFLICTING_OPTION_PRESENT(options)) {
+    throw new Error(
+      `Visible region and content edits are separate edits: Layer "${layerId}" cannot set --visible-region and replace or reshape its content in one edit, because the region is validated against the content box. ` +
+        `Set --visible-region in its own edit.`,
+    );
+  }
+  const visibleRegion = await resolveEditVisibleRegion(resolvedRoot, options, prevRev, current.contentBytes, layerId);
+  const hasRegion = options.visibleRegion !== undefined;
+  const regionSetReport = { visibleRegion: visibleRegion ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -2862,6 +3138,7 @@ export async function editLayerInternal(
       flip,
       shadow,
       outline,
+      visibleRegion,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
@@ -2875,7 +3152,8 @@ export async function editLayerInternal(
     const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
-    const withShape = shapeEdited ? { ...withOutline, shapeEdited } : withOutline;
+    const withRegion = hasRegion ? { ...withOutline, regionSet: regionSetReport } : withOutline;
+    const withShape = shapeEdited ? { ...withRegion, shapeEdited } : withRegion;
     return options.fromGeneration !== undefined
       ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
@@ -2902,6 +3180,7 @@ export async function editLayerInternal(
     flip,
     shadow,
     outline,
+    visibleRegion,
   );
 
   // No-op check: if all fields are identical to previous revision, avoid storage churn
@@ -2916,6 +3195,7 @@ export async function editLayerInternal(
       ...(flippedReport ? { flipped: flippedReport } : {}),
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(hasOutline ? { outlined: outlinedReport } : {}),
+      ...(hasRegion ? { regionSet: regionSetReport } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
@@ -2970,6 +3250,7 @@ export async function editLayerInternal(
     ...(flippedReport ? { flipped: flippedReport } : {}),
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(hasOutline ? { outlined: outlinedReport } : {}),
+    ...(hasRegion ? { regionSet: regionSetReport } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }

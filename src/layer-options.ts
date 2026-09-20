@@ -48,7 +48,7 @@
  * no rename and no alias.
  */
 import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
-import { parseShadowSpec, parseOutlineSpec, resolveTextTypographyControls } from "./layer.js";
+import { parseShadowSpec, parseOutlineSpec, parseVisibleRegionSpec, resolveTextTypographyControls } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { parseFillSpec, type LayerFill as LayerFillSpec } from "./fill.js";
 
@@ -63,7 +63,7 @@ export type LayerOptionSurface = "edit" | "add";
 /** The Layer kinds an option can apply to. */
 export type LayerOptionKind = "image" | "text" | "shape";
 
-export type LayerOptionGroup = "content" | "text" | "placement" | "transform" | "effect";
+export type LayerOptionGroup = "content" | "text" | "placement" | "transform" | "region" | "effect";
 
 export interface LayerOptionDef {
   /** parseArgs key: the flag is `--<key>`. */
@@ -112,7 +112,8 @@ export type LayerOptionKey =
   | "rotate"
   | "flip"
   | "shadow"
-  | "outline";
+  | "outline"
+  | "visible-region";
 
 /**
  * The one option table (DEC-001), in the order the edit surface's
@@ -152,6 +153,13 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "flip", group: "transform", appliesTo: ["image", "text"], editOption: true },
   { key: "shadow", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
   { key: "outline", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
+  // The rectangular visible region (#211, spec #207 US-003, ADR-0023): a
+  // Layer revision fact about what part of the content is ink — its own
+  // group between the transform and effect groups, because one-command add
+  // applies it after the transforms and BEFORE anchored placement (the
+  // anchor resolves against the region-clipped visible ink, DEC-005) and
+  // before the effects (which hug the region's edge, DEC-004).
+  { key: "visible-region", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -185,6 +193,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   flip: { type: "string" },
   shadow: { type: "string" },
   outline: { type: "string" },
+  "visible-region": { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string" }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
@@ -215,8 +224,8 @@ export function layerEditOptionKeys(): LayerOptionKey[] {
 
 /** The Layer options one-command `composition add` accepts (#229): EVERY
  *  option the table declares — content, text style, placement, transform,
- *  and effect — derived from the table, never re-declared (DEC-001). A
- *  future option joins one-command add and `layer edit` with one table
+ *  region, and effect — derived from the table, never re-declared (DEC-001).
+ *  A future option joins one-command add and `layer edit` with one table
  *  entry (the guard test pins the two surfaces' key sets agree), and the
  *  add path's group reader below drives its application order. Per-kind
  *  applicability is deliberately NOT enforced from `appliesTo` here: the
@@ -242,14 +251,20 @@ export const COMPOSITION_ADD_OPTION_PARSE_ARGS: Record<LayerOptionKey, { type: "
 };
 
 /** The post-content option keys of one-command `composition add` (#229,
- *  DEC-002): the table's transform and effect groups plus anchored
+ *  DEC-002): the table's transform, region, and effect groups plus anchored
  *  placement, derived from the group fact — a new option added to one of
  *  these groups joins one-command add (and the documented application
  *  order) automatically, and the guard test (TEST-003) pins that every
  *  edit option is accepted here. */
 export function oneCommandAddOptionKeys(): LayerOptionKey[] {
   return LAYER_OPTION_DEFS
-    .filter((def) => def.group === "transform" || def.group === "effect" || def.key === "anchor")
+    .filter(
+      (def) =>
+        def.group === "transform" ||
+        def.group === "region" ||
+        def.group === "effect" ||
+        def.key === "anchor",
+    )
     .map((def) => def.key);
 }
 
@@ -259,9 +274,11 @@ export function anyOneCommandOptionProvided(args: LayerOptionPresence): boolean 
 }
 
 /** The supplied one-command options in the documented application order
- *  (spec #226 DEC-002): the table's transform group first, then anchored
- *  placement, then the effect group — the stages derived from the group
- *  fact, in table order within a stage. Content and plain placement
+ *  (spec #226 DEC-002, extended by #211): the table's transform group
+ *  first, then the visible region (whose clipped ink the anchor and the
+ *  effects must both see), then anchored placement, then the effect group
+ *  — the stages derived from the group fact, in table order within a
+ *  stage. Content and plain placement
  *  (--x/--y/--opacity) are applied by the ingestion itself before this
  *  order runs. One-command add's publication path consumes this order, so
  *  the documented sequence lives in the shared table, not in a second
@@ -269,8 +286,9 @@ export function anyOneCommandOptionProvided(args: LayerOptionPresence): boolean 
 export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOptionKey[] {
   const stage = new Map<LayerOptionKey, number>([
     ...LAYER_OPTION_DEFS.filter((def) => def.group === "transform").map((def) => [def.key, 0] as const),
-    ["anchor" as LayerOptionKey, 1],
-    ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 2] as const),
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "region").map((def) => [def.key, 1] as const),
+    ["anchor" as LayerOptionKey, 2],
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 3] as const),
   ]);
   // Fail fast (review INT-plumb-3): a supplied key with no stage would
   // otherwise sort as NaN — an unpredictable order — instead of naming
@@ -799,6 +817,22 @@ export function parseLayerOutline(raw: string | undefined): OptionParse<string |
 }
 
 /**
+ * --visible-region: syntax and well-formedness through the SAME parser the
+ * edit path uses (#211, DEC-001), so the two boundaries never disagree.
+ * Returns the raw spec (the ingestion path re-resolves it against the
+ * content box and live state).
+ */
+export function parseLayerVisibleRegion(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    parseVisibleRegionSpec(raw);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
  * --anchor: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Semantic refusals (no
  * visible ink, divergent multi-Composition geometry) happen in the
@@ -838,6 +872,6 @@ export function anchorConflictOptionList(): string {
     LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === group).map((def) => def.key);
   const flags = (keys: readonly LayerOptionKey[]): string => keys.map((key) => `--${key}`).join(", ");
   const shape = `shape parameters (${SHAPE_CONTENT_KEYS.map((key) => `--${key}`).join(", ")})`;
-  return [flags(editKeysOfGroup("transform")), flags(editKeysOfGroup("effect")), shape, flags(editKeysOfGroup("text"))]
+  return [flags(editKeysOfGroup("transform")), flags(editKeysOfGroup("region")), flags(editKeysOfGroup("effect")), shape, flags(editKeysOfGroup("text"))]
     .join(", ");
 }

@@ -16,7 +16,13 @@
  * transform, which maps content+shadow together, and the Layer's opacity
  * fades both. A revision's outline (#140, ADR-0019) hugs the content in the
  * same LOCAL space, painted BEFORE the shadow — the shadow is therefore cast
- * from the outlined composite — and both map and fade together.
+ * from the outlined composite — and both map and fade together. A revision's
+ * visible region (#211, ADR-0023) crops the content BEFORE the effects —
+ * content, visible region, outline, shadow, then transform and opacity —
+ * so the effects hug the region's edge instead of the full content edge;
+ * the clip lives on an inner content element under the Layer's wrapper
+ * element, so `#canvas` keeps exactly one child per Layer and Layers
+ * without a region paint exactly the pre-#211 markup.
  * Areas no Layer covers stay transparent. Text Layers (#81) paint as DOM text
  * with their retained font bytes declared under an internal @font-face
  * family (never re-consulting assets/fonts/), and every text layer's family
@@ -35,7 +41,7 @@ import { decodePng, encodePngRgba } from "./png.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
 import { createHash } from "node:crypto";
-import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerOutline, type ResolvedLayerRevision } from "./layer.js";
+import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerOutline, type LayerVisibleRegion, type ResolvedLayerRevision } from "./layer.js";
 import { fillCssBackground } from "./fill.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
@@ -410,6 +416,39 @@ function outlineFilterDef(
   );
 }
 
+/**
+ * The visible region's SVG-clipPath id and def (#211, spec #207 US-003,
+ * ADR-0023): one `clipPath` (userSpaceOnUse) holding the region rectangle
+ * in the Layer's LOCAL px — the same coordinate system the outline filter
+ * region is sized in (origin at the element's own top-left). Referenced
+ * from the Layer's inner content element with `clip-path:url(#id)`, the
+ * clip applies to the CONTENT before the Layer element's filter chain, so
+ * the outline dilate and the drop-shadow hug the region's edge — the
+ * DEC-004 paint order (content, visible region, outline, shadow, transform
+ * and opacity) falls out of the markup shape: the region clip lives on the
+ * inner content element and the effects on the outer wrapper.
+ *
+ * An SVG reference clip (rather than `clip-path:inset(...)`) needs no
+ * knowledge of the element's far edges, which only the browser knows for a
+ * text Layer's wrapped line box: the region rect is absolute in the
+ * element's user space for every kind. One clip per LAYER WITH A REGION,
+ * not per distinct region: the id is a deterministic hash of the region
+ * facts plus the Layer's snapshot index, so the same facts always emit the
+ * same markup (the same recipe as the outline filter ids).
+ */
+function regionClipPathId(region: LayerVisibleRegion, layerIndex: number): string {
+  return `ply-r-${createHash("sha256").update(`${region.x}:${region.y}:${region.width}:${region.height}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+}
+
+function regionClipPathDef(region: LayerVisibleRegion, layerIndex: number): string {
+  const id = regionClipPathId(region, layerIndex);
+  return (
+    `<clipPath id="${id}" clipPathUnits="userSpaceOnUse">` +
+    `<rect x="${region.x}" y="${region.y}" width="${region.width}" height="${region.height}"/>` +
+    `</clipPath>`
+  );
+}
+
 /** Minimal HTML escaping for caller-owned text (#81; shared with every
  * module that interpolates caller strings into the page — the guideline
  * overlay's region id/label/reason use this exact recipe, #174). */
@@ -423,22 +462,30 @@ export function escapeHtml(text: string): string {
 }
 
 /**
- * The per-Layer `<defs>` markup for every outlined Layer in the snapshot
- * (#140, ADR-0019). Emitted once per Composition as an inline SVG OUTSIDE
+ * The per-Layer `<defs>` markup for every outlined Layer's filter (#140,
+ * ADR-0019) and every region-clipped Layer's clipPath (#211, ADR-0023) in
+ * the snapshot. Emitted once per Composition as an inline SVG OUTSIDE
  * the `#canvas` element — zero-size, so it paints nothing itself, and
  * outside so `#canvas`'s children remain exactly one element per Layer
  * (the measurement probe and the painted-ink pass index them by
- * position). Referenced from the Layer elements' CSS `filter` chains by
- * id; the region placeholder is sized in-page before any screenshot by
- * `sizeOutlineFilterRegions`.
+ * position). The outline filters are referenced from the Layer elements'
+ * CSS `filter` chains by id; the region clipPaths from the inner content
+ * elements' `clip-path`. The outline regions' placeholder is sized
+ * in-page before any screenshot by `sizeOutlineFilterRegions`.
  */
-function outlineDefs(layers: SnapshotLayer[], supersample = 1): string {
+function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
   const defs = layers
-    .map((l, i) =>
-      l.revision.outline !== undefined
-        ? outlineFilterDef(l.revision.outline, i, l.revision, supersample)
-        : "",
-    )
+    .map((l, i) => {
+      const outline =
+        l.revision.outline !== undefined
+          ? outlineFilterDef(l.revision.outline, i, l.revision, supersample)
+          : "";
+      const region =
+        l.revision.visibleRegion !== undefined
+          ? regionClipPathDef(l.revision.visibleRegion, i)
+          : "";
+      return outline + region;
+    })
     .join("");
   if (defs === "") return "";
   return `<svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>`;
@@ -616,6 +663,19 @@ export function buildCompositionHtml(
           : "";
       const effectsFns = [outlineFn, shadowFn].filter(Boolean).join(" ");
       const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
+      // The visible region's clip reference (#211, ADR-0023): applied to the
+      // INNER content element, so the clip crops the content BEFORE the
+      // Layer element's filter chain — the outline dilate and the drop-shadow
+      // hug the region's edge, and the transform then maps content+region+
+      // effects together (the DEC-004 paint order: content, visible region,
+      // outline, shadow, transform and opacity). The markup shape delivers
+      // the order without a second mechanism: a region-wearing Layer paints
+      // as an outer wrapper (placement, opacity, transform, effects) around
+      // the clipped content element. Emitted only when a region exists, so
+      // pre-#211 revisions and their pinned Render history paint exactly as
+      // before.
+      const regionClip =
+        rev.visibleRegion !== undefined ? `clip-path:url(#${regionClipPathId(rev.visibleRegion, layerIndex)});` : "";
       if (rev.kind === "text") {
         // Selected text axes (#179, ADR-0021): read from the revision alone
         // through the one stored-axes reader — this builder is the one
@@ -645,10 +705,16 @@ export function buildCompositionHtml(
         // fonts — bundled and legacy text elements keep their exact markup,
         // so pinned history paints byte-identically.
         const synthesisCss = rev.callerFont !== undefined ? "font-synthesis:none;" : "";
-        const style =
-          `${base}${transformed}${effectsFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
+        const textStyle =
+          `font-family:'${internalFontFamily(rev.contentHash)}';` +
           `font-size:${rev.fontSize}px;color:${rev.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
-        return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
+        if (rev.visibleRegion === undefined) {
+          return `<div style="${base}${transformed}${effectsFilter}${textStyle}">${escapeHtml(rev.text)}</div>`;
+        }
+        return (
+          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${textStyle}${regionClip}">${escapeHtml(rev.text)}</div></div>`
+        );
       }
       if (rev.kind === "shape") {
         // A shape Layer (#208) paints as a filled div: the geometry is the
@@ -668,10 +734,23 @@ export function buildCompositionHtml(
             : rev.cornerRadius !== undefined
               ? `border-radius:${rev.cornerRadius}px;`
               : "";
-        const style =
-          `${base}${transformed}${effectsFilter}width:${rev.width}px;height:${rev.height}px;` +
+        const shapeStyle =
+          `width:${rev.width}px;height:${rev.height}px;` +
           `background:${fillCssBackground(rev.fill)};${radiusCss}`;
-        return `<div style="${style}"></div>`;
+        if (rev.visibleRegion === undefined) {
+          return `<div style="${base}${transformed}${effectsFilter}${shapeStyle}"></div>`;
+        }
+        return (
+          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${shapeStyle}${regionClip}"></div></div>`
+        );
+      }
+      if (rev.visibleRegion !== undefined) {
+        return (
+          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="display:block;${regionClip}">` +
+          `</div>`
+        );
       }
       return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;
     })
@@ -691,6 +770,6 @@ export function buildCompositionHtml(
     (supersample > 1 ? `;transform:scale(${supersample});transform-origin:0 0` : "") +
     `}` +
     `</style></head>` +
-    `<body>${outlineDefs(layers, supersample)}<div id="canvas">${els}</div></body></html>`
+    `<body>${paintDefs(layers, supersample)}<div id="canvas">${els}</div></body></html>`
   );
 }

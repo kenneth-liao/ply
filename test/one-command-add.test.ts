@@ -116,6 +116,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "flip": return ["horizontal"];
     case "shadow": return ["2,3,4,#000000"];
     case "outline": return ["2,#00ff00"];
+    case "visible-region": return ["10,10,20,20"];
     default: throw new Error(`guard test: no value for option "${key}"`);
   }
 }
@@ -182,6 +183,7 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
       break;
     case "shadow": expect((rev.shadow as { dx: number } | undefined)?.dx).toBe(2); break;
     case "outline": expect((rev.outline as { width: number } | undefined)?.width).toBe(2); break;
+    case "visible-region": expect(rev.visibleRegion).toEqual({ x: 10, y: 10, width: 20, height: 20 }); break;
     case "font-size": expect(rev.fontSize).toBe(64); break;
     case "color": expect(rev.color).toBe("#ffcc00"); break;
     case "weight": expect(rev.weight).toBe(800); break;
@@ -354,6 +356,6 @@ test("composition add: --anchor requires explicit targets for the anchored axes"
 
 test("the one-command application order comes from the option table (transform, anchor, effect)", () => {
   expect(
-    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", scale: "1", outline: "1", flip: "1" }),
-  ).toEqual(["resize", "resize-to", "scale", "rotate", "flip", "anchor", "shadow", "outline"]);
+    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", scale: "1", outline: "1", flip: "1", "visible-region": "1" }),
+  ).toEqual(["resize", "resize-to", "scale", "rotate", "flip", "visible-region", "anchor", "shadow", "outline"]);
 });
