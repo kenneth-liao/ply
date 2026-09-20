@@ -41,6 +41,14 @@ stored as part of the Layer's revision, so the same representation can paint
 other content kinds later. Colours accept alpha.
 _Avoid_: baked backgrounds, drawn-in-advance helper images
 
+**Visible region**:
+The rectangular part of a Layer's own content that is ink, set and removed
+as a Layer revision fact without touching the retained file. Content outside
+the region is not ink: painting, measurement, anchored placement, and the
+effects' edge all follow it, while the placement point and transform origin
+stay defined against the full content box.
+_Avoid_: cropping the file, baking the crop
+
 **Layer revision**:
 An immutable version of a Layer. Editing in place advances the same Layer's
 current revision; a fork creates a new Layer identity for the forking Composition.

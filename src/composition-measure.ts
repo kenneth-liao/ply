@@ -28,8 +28,12 @@
  *   the canvas reports its full geometry).
  * - `painted` — the axis-aligned bounding box of the Layer's VISIBLE ink
  *   (alpha > 0) in Composition coordinates, UNCLIPPED: image alpha trimming
- *   excludes transparent padding from painted but not from content, and text
- *   painted bounds are tight glyph ink rather than the line-box extent.
+ *   excludes transparent padding from painted but not from content, text
+ *   painted bounds are tight glyph ink rather than the line-box extent, and
+ *   a Layer's visible region (#211, ADR-0023) narrows the ink the same way —
+ *   content outside the region is not ink, so painted extents report the
+ *   region-clipped ink while the layout `box` stays the full transformed
+ *   content box (DEC-005).
  *   The ink pass renders the same paint-identical page, hides the other
  *   Layers (no reflow — they are absolutely positioned), screenshots the
  *   Layer alone through a bounded per-Layer capture window (shifted, never
@@ -54,7 +58,11 @@
  *   |dx| + |dy| + 2·blur, additive — scaled by the transform's largest
  *   factor; the effects paint before the transform), from the facts
  *   alone — an effected Layer's full extent is captured or
- *   the measurement is refused loudly, never silently clipped.
+ *   the measurement is refused loudly, never silently clipped. The window
+ *   is judged against the VISIBLE ink (#211, ADR-0023): a region-carrying
+ *   Layer is windowed around its region's transformed box, so a large
+ *   padded source refused uncropped at a given scale measures once
+ *   cropped to its subject (DEC-006).
  * - `paintedOnCanvas` — `painted` ∩ the canvas rectangle: the footprint that
  *   actually shows in a render; `null` when empty (no visible ink, or ink
  *   entirely outside the canvas).
@@ -68,7 +76,8 @@
  * coordinates through the same retained font bytes and the same emitted
  * transforms. The shadow effect is reflected in painted extents and in the
  * reported `effects` facts (#139, ADR-0018); outline (#140) and any wider
- * effect surface extend the same contract.
+ * effect surface extend the same contract, and the visible region (#211,
+ * ADR-0023) narrows it — reported in the `visibleRegion` facts.
  *
  * The query writes no Project state: the Composition, its current revisions,
  * and verified retained bytes are resolved exactly once through the
@@ -126,6 +135,11 @@ export interface MeasuredLayerBounds {
    * none of that effect) — the same facts painting applies, reported for
    * auditability. */
   effects: { shadow: LayerShadow | null; outline: LayerOutline | null };
+  /** The revision's rectangular visible region (#211, ADR-0023): the stored
+   * region facts painting clips to (or null when the Layer has none —
+   * absence IS the no-region form). Content outside the region is not ink:
+   * `painted`, `paintedOnCanvas`, and `clipped` already follow it. */
+  visibleRegion: { x: number; y: number; width: number; height: number } | null;
   /** The revision's ONE fill (DEC-003), for shape Layers (#208/#210): the
    * canonical fill object painting applies — a solid colour, or a linear or
    * radial gradient with its stops. Other kinds report null. */
@@ -160,14 +174,23 @@ export interface MeasureCompositionResult {
  * and never paints), then maps the content rectangle's corners through the
  * restored transform and reports its axis-aligned bounding box — all in
  * coordinates relative to the canvas origin, i.e. Composition coordinates.
+ *
+ * The visible region (#211, ADR-0023) rides along as `regions`: for each
+ * Layer with a region, the transformed axis-aligned bounding box of the
+ * REGION rectangle — the same matrix authority maps the region's local
+ * corners (the region is defined in the Layer's own content px, relative
+ * to the content box's top-left, which is the element's layout corner) —
+ * so the bounded ink-capture window and its centering judge the ink the
+ * region leaves visible, never the full layout box. Layers without a
+ * region report null and keep the full layout box exactly as before.
  */
-const MEASURE_PROBE = () => {
+const MEASURE_PROBE = (regions: ({ x: number; y: number; width: number; height: number } | null)[]) => {
   const canvasEl = document.getElementById("canvas");
   if (!canvasEl) {
     throw new Error("measure probe: #canvas element missing");
   }
   const origin = canvasEl.getBoundingClientRect();
-  return Array.from(canvasEl.children, (el) => {
+  return Array.from(canvasEl.children, (el, i) => {
     const saved = (el as HTMLElement).style.transform;
     const matrix = saved ? new DOMMatrixReadOnly(saved) : new DOMMatrixReadOnly();
     // Untransformed content box: transform removal never reflows other
@@ -195,9 +218,33 @@ const MEASURE_PROBE = () => {
     const ys = corners.map((c) => c.y);
     const minX = Math.min(...xs);
     const minY = Math.min(...ys);
+    // The region box (#211, ADR-0023): the region rectangle's local corners
+    // mapped through the same matrix as the content corners — one shared
+    // geometry authority, never a second transform model.
+    const region = regions[i] ?? null;
+    let regionBox: Box | null = null;
+    if (region) {
+      const rCorners = [
+        corner(region.x, region.y),
+        corner(region.x + region.width, region.y),
+        corner(region.x + region.width, region.y + region.height),
+        corner(region.x, region.y + region.height),
+      ];
+      const rxs = rCorners.map((c) => c.x);
+      const rys = rCorners.map((c) => c.y);
+      const rMinX = Math.min(...rxs);
+      const rMinY = Math.min(...rys);
+      regionBox = {
+        x: rMinX,
+        y: rMinY,
+        width: Math.max(...rxs) - rMinX,
+        height: Math.max(...rys) - rMinY,
+      };
+    }
     return {
       content,
       corners,
+      regionBox,
       box: {
         x: minX,
         y: minY,
@@ -352,7 +399,10 @@ async function measureSnapshot(
     // The same retained-font gate as painting: an unresolved face is a
     // loud failure, never a fallback measurement.
     await rejectUnresolvedFonts(page, layers);
-    const measured = await page.evaluate(MEASURE_PROBE);
+    const measured = await page.evaluate(
+      MEASURE_PROBE,
+      layers.map((l) => (l.revision.visibleRegion !== undefined ? { ...l.revision.visibleRegion } : null)),
+    );
 
     // Painted-ink pass (#137): the same page that just measured layout —
     // the paint path's exact markup, the same decode and font gates — is
@@ -392,11 +442,18 @@ async function measureSnapshot(
       // Layers' extremes, so a Layer's measured numbers stay the same
       // whatever other Layers are in the Composition, and two Layers that
       // each fit alone can no longer combine into a window that does not.
-      const boxes = measured.map((m) => m.box);
       const reaches = layers.map((l) => effectReachPx(l.revision));
+      // The capture window judges the VISIBLE ink (#211, ADR-0023, DEC-006):
+      // a Layer with a region is windowed around its region box (the
+      // transformed region rectangle), never its full layout box — so a
+      // large padded source refused uncropped measures once cropped to its
+      // subject. The region clips ink, never extends it, so the effect
+      // reach widens the window around the region box exactly as it does
+      // around the layout box when no region is set.
+      const windowBoxes = measured.map((m) => m.regionBox ?? m.box);
       const windowFor = (i: number) => ({
-        w: Math.max(1, Math.ceil(boxes[i]!.width + 2 * reaches[i]! + 2 * INK_PAD_PX)),
-        h: Math.max(1, Math.ceil(boxes[i]!.height + 2 * reaches[i]! + 2 * INK_PAD_PX)),
+        w: Math.max(1, Math.ceil(windowBoxes[i]!.width + 2 * reaches[i]! + 2 * INK_PAD_PX)),
+        h: Math.max(1, Math.ceil(windowBoxes[i]!.height + 2 * reaches[i]! + 2 * INK_PAD_PX)),
       });
       // Loud refusal, per Layer (review INT-1/PROD-1, #185): the same
       // bounds the decoder enforces on the window screenshot — MAX_PIXELS
@@ -410,8 +467,10 @@ async function measureSnapshot(
         const { w, h } = windowFor(i);
         if (w > MAX_INK_VIEWPORT_PX || h > MAX_INK_VIEWPORT_PX || w * h > MAX_PIXELS) {
           const reach = reaches[i]!;
+          const wb = windowBoxes[i]!;
+          const boxKind = layers[i]!.revision.visibleRegion !== undefined ? "visible (region-clipped) box" : "layout box";
           throw new Error(
-            `Layer "${layers[i]!.name}" has a layout box ${Math.ceil(boxes[i]!.width)}×${Math.ceil(boxes[i]!.height)}px` +
+            `Layer "${layers[i]!.name}" has a ${boxKind} ${Math.ceil(wb.width)}×${Math.ceil(wb.height)}px` +
               (reach > 0 ? ` plus up to ${reach}px of effect extent` : "") +
               `, beyond the painted-extent capture window (max ${MAX_INK_VIEWPORT_PX}px per axis, ` +
               `${MAX_PIXELS.toLocaleString("en-US")}px total). Painted extents are refused ` +
@@ -420,7 +479,7 @@ async function measureSnapshot(
         }
       }
       for (let i = 0; i < measured.length; i++) {
-        const b = boxes[i]!;
+        const b = windowBoxes[i]!;
         // Per-Layer capture window and shift: position the canvas (and its
         // absolutely positioned children, so this Layer's box) inside ITS
         // OWN fixed capture window, centered with the pad on every side
@@ -535,6 +594,7 @@ export async function measureCompositionLayers(
           flipY: rev.flipY,
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
+        visibleRegion: rev.visibleRegion ?? null,
         // The revision's ONE fill (DEC-003), reported for shape Layers
         // (#208/#210): the canonical fill object — solid, linear, or radial —
         // the same facts painting applies, reported for auditability. Other
@@ -593,9 +653,27 @@ export async function measureStandaloneLayer(
   const { currentRevision, contentBytes } = await withProjectLock(resolvedRoot, () =>
     readLayerInternalFull(resolvedRoot, layerId),
   );
+  return measureStandaloneSnapshot(currentRevision, contentBytes, options);
+}
+
+/**
+ * Measure one Layer standalone from an ALREADY-RESOLVED snapshot — no
+ * Project state is consulted and no lock is taken (#211): the caller owns
+ * resolution (the standalone command line resolves under the Project lock;
+ * the Layer edit path resolves its snapshot under the lock it already
+ * holds, so a lock-taking measurement there would deadlock the file lock).
+ * The measured content box IS the text Layer's unwrapped line-box extent —
+ * the fact the visible region validates against when it is set on a text
+ * Layer.
+ */
+export async function measureStandaloneSnapshot(
+  currentRevision: ResolvedLayerRevision,
+  contentBytes: Buffer,
+  options: { page?: Page } = {},
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number } }> {
   const standalone: SnapshotLayer = {
-    name: layerId,
-    layerId,
+    name: currentRevision.layerId,
+    layerId: currentRevision.layerId,
     revision: { ...currentRevision, x: 0, y: 0 },
     contentBytes,
   };
@@ -607,7 +685,7 @@ export async function measureStandaloneLayer(
   // facts, exactly as before.
   const projected = projectMeasuredGeometry(
     measured,
-    `Standalone measurement of Layer "${layerId}" produced no geometry.`,
+    `Standalone measurement of Layer "${currentRevision.layerId}" produced no geometry.`,
   );
   return {
     ...projected,

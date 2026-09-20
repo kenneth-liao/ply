@@ -22,6 +22,7 @@ import {
   parseLayerLineHeight,
   parseLayerOpacity,
   parseLayerOutline,
+  parseLayerVisibleRegion,
   parseLayerRotation,
   parseLayerShadow,
   parseLayerTracking,
@@ -301,6 +302,32 @@ Options:
                         pixels. Combines with --resize/--rotate/--flip and
                         content replacement; cannot combine with --anchor
                         (anchor first, then add the outline).
+  --visible-region <spec>
+                        Show only a rectangular part of the Layer's content
+                        (#211), on image, text, and shape Layers alike: an
+                        ABSOLUTE setter "<x>,<y>,<width>,<height>" in the
+                        Layer's OWN content pixels, relative to the content
+                        box's top-left — e.g. "120,80,640,360" frames a face
+                        from a wide cutout without touching the file — and
+                        "none" removes the region (the same command twice
+                        keeps the same region). The region is a revision
+                        fact: content outside it is not ink — painted
+                        extents, anchored placement, the on-canvas
+                        footprint, and clipping follow it, and shadow and
+                        outline hug the region's edge instead of the full
+                        content edge. The placement point and transform
+                        origin stay defined against the FULL content box, so
+                        setting or removing a region never moves the
+                        remaining pixels. A region outside the content or
+                        with zero area is refused before publication. Never
+                        changes retained pixels or lineage. Combines with
+                        --resize/--rotate/--flip/--shadow/--outline; cannot
+                        combine with content edits (the region is validated
+                        against the content box) or --anchor (anchor first,
+                        then set the region). A region kept across a later
+                        content edit is re-validated against the new
+                        content box: outside is refused, fitting publishes
+                        with a note.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -778,6 +805,20 @@ async function run() {
       }
       const outlineSpec = parsedOutline.value;
 
+      // Visible-region flag (#211, ADR-0023): syntax and well-formedness at
+      // the command boundary as a usage error (exit 2) through the SAME
+      // parser the edit path uses, so the two boundaries never disagree;
+      // the absolute-setter semantics (including the content-bounds
+      // validation and the no-content-edit-in-the-same-edit rule) are
+      // enforced again by the edit path before any staging.
+      const parsedRegion = parseLayerVisibleRegion(values["visible-region"]);
+      if (!parsedRegion.ok) {
+        output({ ok: false, error: parsedRegion.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const regionSpec = parsedRegion.value;
+
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2); semantic refusals (no visible ink,
       // divergent multi-Composition geometry) happen in the read-only
@@ -907,6 +948,7 @@ async function run() {
           flip,
           shadow: shadowSpec,
           outline: outlineSpec,
+          visibleRegion: regionSpec,
           shape: parsedEditShape.value,
           size: parsedEditSize.value,
           cornerRadius: parsedEditRadius.value,
@@ -943,11 +985,24 @@ async function run() {
         if (res.outlined) {
           resultBody.outlined = res.outlined;
         }
+        if (res.regionSet) {
+          resultBody.regionSet = res.regionSet;
+        }
+        if (res.regionCarried) {
+          resultBody.regionCarried = res.regionCarried;
+        }
         if (res.shapeEdited) {
           resultBody.shapeEdited = res.shapeEdited;
         }
         if (anchored) {
           resultBody.anchored = anchored;
+        }
+        // A region kept across this content edit still fits the new content
+        // box (#211 review PROD-1): say so on stderr in BOTH output modes —
+        // the note is diagnostic, never part of the machine-readable result.
+        if (res.regionCarried) {
+          const r = res.regionCarried.visibleRegion;
+          console.error(`Note: kept visible region (${r.x}, ${r.y}, ${r.width}, ${r.height}) now frames the replaced content.`);
         }
 
         output(
@@ -981,6 +1036,11 @@ async function run() {
                 ? `; outline ${res.outlined.outline.width} ${res.outlined.outline.color}`
                 : "; outline none"
               : "";
+            const regionSet = res.regionSet
+              ? res.regionSet.visibleRegion
+                ? `; visible region (${res.regionSet.visibleRegion.x}, ${res.regionSet.visibleRegion.y}, ${res.regionSet.visibleRegion.width}, ${res.regionSet.visibleRegion.height})`
+                : "; visible region none"
+              : "";
             const shapeEdited = res.shapeEdited
               ? `; dropped carried corner radius ${res.shapeEdited.droppedCornerRadius}px (an ellipse has no corners)`
               : "";
@@ -990,10 +1050,10 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${shapeEdited}${anchorSummary}`);
             }
           },
         );
@@ -1096,7 +1156,11 @@ async function run() {
               rev.outline === undefined
                 ? ""
                 : `, Outline: ${rev.outline.width} ${rev.outline.color}`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}`);
+            const region =
+              rev.visibleRegion === undefined
+                ? ""
+                : `, Visible region: (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}`);
           },
         );
       } catch (err) {

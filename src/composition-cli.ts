@@ -39,6 +39,7 @@ import {
   parseLayerLineHeight,
   parseLayerOpacity,
   parseLayerOutline,
+  parseLayerVisibleRegion,
   parseLayerRotation,
   parseLayerShadow,
   parseLayerTracking,
@@ -323,18 +324,19 @@ Options:
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)
 
 One-command creation (#229, US-001): 'composition add' accepts every
-placement, transform, effect, and text option 'layer edit' accepts for that
-Layer kind, with identical spelling, validation, and refusal texts. The
-options apply in the documented order — content, then transforms, then
-anchored placement, then effects — and publish exactly one Layer revision;
-any refused option publishes nothing (no Layer, no use, no content). On
-'layer edit', --anchor cannot combine with --shadow/--outline; on 'add' the
-combination is defined by that order: the anchor resolves the content+transform
+placement, transform, region, effect, and text option 'layer edit' accepts
+for that Layer kind, with identical spelling, validation, and refusal
+texts. The options apply in the documented order — content, then
+transforms, then the visible region, then anchored placement, then effects
+— and publish exactly one Layer revision; any refused option publishes
+nothing (no Layer, no use, no content). On 'layer edit', --anchor cannot
+combine with --shadow/--outline/--visible-region; on 'add' the combination
+is defined by that order: the anchor resolves the content+transform+region
 ink in the target Composition's canvas, and the effects are then applied to
 the same single revision. --anchor on add still requires explicit --x/--y
-targets for the anchored axes, exactly as on 'edit'. The transform and
-effect facts are revision facts like on edit: shared, forked, replayed, and
-reported by 'measure' exactly as a multi-command Layer's are.
+targets for the anchored axes, exactly as on 'edit'. The transform, region,
+and effect facts are revision facts like on edit: shared, forked, replayed,
+and reported by 'measure' exactly as a multi-command Layer's are.
 
   --anchor <h>[,<v>]    Anchored placement (one-command add): resolve the
                         Layer's visible painted ink against the target
@@ -372,6 +374,17 @@ reported by 'measure' exactly as a multi-command Layer's are.
                         setter "<width>,<color>" (e.g. "4,#000000") or
                         "none". Width is px (0..256). Painted before the
                         shadow, which is cast from the outlined composite.
+  --visible-region <spec>
+                        Show only a rectangular part of the Layer's content
+                        (#211): an absolute setter "<x>,<y>,<width>,<height>"
+                        in the Layer's OWN content pixels, relative to the
+                        content box's top-left, or "none". Content outside
+                        the region is not ink — painted extents, the
+                        anchored placement's ink, and the effects' edge all
+                        follow it; a region outside the content or with
+                        zero area is refused. Never changes retained
+                        pixels. Applied before the anchor resolves, so
+                        --anchor centers the region-clipped ink.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -414,6 +427,7 @@ function oneCommandFacts(
     flipY: boolean;
     shadow?: { dx: number; dy: number; blur: number; color: string };
     outline?: { width: number; color: string };
+    visibleRegion?: { x: number; y: number; width: number; height: number };
   },
   anchorSpec?: string,
 ): string {
@@ -427,6 +441,9 @@ function oneCommandFacts(
   }
   if (rev.shadow) facts.push(`shadow ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`);
   if (rev.outline) facts.push(`outline ${rev.outline.width} ${rev.outline.color}`);
+  if (rev.visibleRegion) {
+    facts.push(`visible region (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})`);
+  }
   if (anchorSpec !== undefined) {
     facts.push(`anchored ${anchorSpec} -> placement (${rev.x}, ${rev.y})`);
   }
@@ -707,6 +724,16 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      // Visible-region flag (#211, ADR-0023): syntax and well-formedness at
+      // the command boundary through the SAME parser the edit path uses;
+      // the content-bounds validation runs in the publication path against
+      // the fresh content's box, before anything is stored.
+      const parsedRegion = parseLayerVisibleRegion(values["visible-region"]);
+      if (!parsedRegion.ok) {
+        output({ ok: false, error: parsedRegion.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2), like on the edit surface. Anchored
       // placement on add is defined by the documented order (it combines
@@ -747,6 +774,7 @@ async function run() {
             ...(parsedFlip.value !== undefined ? { flip: parsedFlip.value } : {}),
             ...(parsedShadow.value !== undefined ? { shadow: parsedShadow.value } : {}),
             ...(parsedOutline.value !== undefined ? { outline: parsedOutline.value } : {}),
+            ...(parsedRegion.value !== undefined ? { visibleRegion: parsedRegion.value } : {}),
             ...(parsedAnchor !== undefined ? { anchor: parsedAnchor } : {}),
           }
         : undefined;

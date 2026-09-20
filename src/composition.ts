@@ -32,11 +32,15 @@ import { type LayerFill } from "./fill.js";
 import {
   parseShadowSpec,
   parseOutlineSpec,
+  parseVisibleRegionSpec,
+  validateVisibleRegionAgainstContent,
   resolveEditScale,
   resolveEditRotation,
   resolveEditFlip,
   type LayerTransformFlip,
+  type LayerVisibleRegion,
 } from "./layer.js";
+import { measureStandaloneSnapshot } from "./composition-measure.js";
 import { resolveProvisionalAnchoredPlacement, type ParsedAnchor } from "./layer-anchor.js";
 import {
   oneCommandApplicationOrder,
@@ -365,6 +369,11 @@ export interface OneCommandOptions {
   /** The raw --outline spec; canonicalized here through the edit path's
    *  parser (ADR-0019). */
   outline?: string;
+  /** The raw --visible-region spec (#211, ADR-0023); validated here
+   *  against the fresh content's box through the edit path's parser and
+   *  bounds check, applied BEFORE the anchor resolves (the anchor
+   *  resolves against the region-clipped visible ink, DEC-005). */
+  visibleRegion?: string;
   /** The parsed --anchor axes; resolved against the content+transform ink
    *  in the target Composition's canvas before the effects apply. */
   anchor?: ParsedAnchor;
@@ -418,6 +427,7 @@ async function applyOneCommandOptions(
       options.flip !== undefined ||
       options.shadow !== undefined ||
       options.outline !== undefined ||
+      options.visibleRegion !== undefined ||
       options.anchor !== undefined);
   if (!hasOptions) {
     return revision;
@@ -432,6 +442,7 @@ async function applyOneCommandOptions(
     ...(options.flip !== undefined ? { flip: options.flip } : {}),
     ...(options.shadow !== undefined ? { shadow: options.shadow } : {}),
     ...(options.outline !== undefined ? { outline: options.outline } : {}),
+    ...(options.visibleRegion !== undefined ? { "visible-region": options.visibleRegion } : {}),
     ...(options.anchor !== undefined ? { anchor: options.anchor } : {}),
   });
   const rev = { ...revision } as LayerRevision & {
@@ -528,6 +539,43 @@ async function applyOneCommandOptions(
       case "outline": {
         const outline = parseOutlineSpec(options.outline!);
         if (outline !== undefined) rev.outline = outline;
+        break;
+      }
+      case "visible-region": {
+        // The visible region (#211, ADR-0023): "none" removes nothing on a
+        // fresh Layer (absence IS the no-region form) — an explicit region
+        // validates against the FRESH content's box before anything is
+        // retained: the image's intrinsic facts, the shape's geometry, or
+        // the text's measured line-box extent (the unwrapped standalone
+        // line, the same box the edit surface validates against). The refusal
+        // runs before any content retention or revision staging.
+        const region = parseVisibleRegionSpec(options.visibleRegion!);
+        if (region !== undefined) {
+          if (rev.kind === "text") {
+            // A text Layer's content box is its measured line-box extent —
+            // the SAME convention `layer edit` validates against (the
+            // unwrapped standalone line, DEC-006's one authority), measured
+            // from the in-memory provisional snapshot; no lock is held on
+            // this path (nothing is retained yet).
+            const measured = await measureStandaloneSnapshot(
+              { ...rev, x: 0, y: 0 } as ResolvedLayerRevision,
+              context.contentBytes,
+            );
+            validateVisibleRegionAgainstContent(region, measured.content, rev.layerId);
+          } else if (rev.kind === "shape") {
+            validateVisibleRegionAgainstContent(region, { width: rev.width, height: rev.height }, rev.layerId);
+          } else {
+            // An image Layer: the fresh content's intrinsic facts (always
+            // supplied on this path — the add boundary resolves them before
+            // any option application).
+            validateVisibleRegionAgainstContent(
+              region,
+              { width: context.intrinsic!.width, height: context.intrinsic!.height },
+              rev.layerId,
+            );
+          }
+          rev.visibleRegion = region;
+        }
         break;
       }
       default: {
@@ -1451,6 +1499,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       flipY: source.flipY,
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+      ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
   if (source.kind === "shape") {
@@ -1479,6 +1528,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       flipY: source.flipY,
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+      ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
   if (source.kind !== "image") {
@@ -1500,6 +1550,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     flipY: source.flipY,
     ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
     ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+    ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
   };
 }
 

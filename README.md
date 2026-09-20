@@ -479,6 +479,67 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
 - Invalid settings fail at the command boundary (exit 2) through the same
   parser the edit path uses — nothing invalid ever mutates live state.
 
+## Visible region (new surface)
+
+`ply layer edit --visible-region` shows only a rectangular part of a
+Layer's content — on image, text, and shape Layers alike — without touching
+the file (spec #207 US-003, ADR-0023):
+
+```bash
+ply layer edit <layerId> --visible-region "120,80,640,360"   # frame the subject
+ply layer edit <layerId> --visible-region "0,0,200,100"      # replaces any previous region
+ply layer edit <layerId> --visible-region none               # remove (its own edit)
+```
+
+- The spec is an ABSOLUTE setter `"<x>,<y>,<width>,<height>"` in the
+  Layer's OWN content pixels, relative to the content box's top-left, that
+  replaces any previous region (the same command twice keeps the same
+  region); `"none"` removes it. A region outside the content, or one with
+  zero area, is refused before publication — live state unchanged. A text
+  Layer's content box is its measured line-box extent (the unwrapped
+  standalone line); image and shape Layers validate against their stored
+  intrinsic facts.
+- **Ordering contract (DEC-004):** the region crops the content FIRST —
+  content, visible region, outline, shadow, then transform and opacity —
+  so shadow and outline hug the region's edge instead of the full content
+  edge. Content outside the region is not ink.
+- **Geometry follows the region (DEC-005/DEC-006):** painted extents, the
+  on-canvas footprint, and `clipped` follow the region (`ply composition
+  measure` reports the region in the `visibleRegion` facts), anchored
+  placement resolves against the region-clipped visible ink, and the
+  measurement capture window is judged against the region — a large
+  padded source refused uncropped at a given scale measures once cropped
+  to its subject. The placement point and transform origin stay defined
+  against the FULL content box, so setting or removing a region never
+  moves the remaining pixels on the canvas.
+- **Revision fact (DEC-002):** the region is shared as a whole like
+  placement and effects — in-place edits propagate it, forks isolate it,
+  cross-Project copies preserve it verbatim, and it participates in the
+  revision hash (a region edit is a new revision). Removing it restores
+  the prior render byte-for-byte (ISC-38): set-then-remove renders
+  byte-identically to never-set. Retained content bytes, Generation Job
+  lineage, and Matting lineage never change. The region is appended to
+  the hash only when present, so pre-#211 revisions keep their exact ids
+  and pinned Render history replays byte-identically (DEC-010).
+- One-command `composition add` accepts `--visible-region` in the
+  documented order — content, transforms, region, anchored placement,
+  effects — so `--anchor` resolves the region-clipped ink on add (the
+  framing use case: add, crop, and center in one command). On `layer
+  edit`, `--anchor` and `--visible-region` cannot combine in one edit —
+  make the region edit first, then anchor — and the region cannot combine
+  with content edits (content replacement, text content and style, shape
+  parameters), because it is validated against the content box. It
+  combines freely with placement, transforms, shadow, and outline.
+- **Content edits re-validate a kept region:** replacing or reshaping the
+  content in a later edit (a new `--image`, `--text`, or shape geometry)
+  re-validates the kept region against the NEW content box before anything
+  is published — a region that no longer lies inside is refused naming the
+  fix (adjust or remove it first); one that still fits publishes with a
+  stderr note that the kept region now frames the replaced content. The
+  region is left-anchored and additive by design: an optional corner
+  radius joins the same fact later (#212) without reshaping stored
+  revisions.
+
 ## Text weight and width (new surface)
 
 Text Layers select their look with an optional `weight` and `width`, next to

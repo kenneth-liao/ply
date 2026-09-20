@@ -4,6 +4,40 @@
 
 ### Added
 
+- The rectangular visible region on any Layer (#211, spec #207 US-003,
+  DEC-004/005/006/009/010, ADR-0023): `ply layer edit --visible-region
+  "<x>,<y>,<width>,<height>"` frames a rectangular part of a Layer's own
+  content pixels — image, text, and shape Layers alike — as an ABSOLUTE
+  revision-fact setter (`--visible-region none` removes it; the same command
+  twice keeps the same region), and one-command `composition add` accepts
+  the same option in the documented order (content, transforms, region,
+  anchored placement, effects), so `--anchor` resolves the region-clipped
+  ink in a single revision. Content outside the region is not ink: painted
+  extents, the on-canvas footprint, `clipped`, anchored placement, and the
+  measurement capture window all follow the region, and shadow and outline
+  hug the region's edge instead of the full content edge (the DEC-004
+  paint order: content, visible region, outline, shadow, transform and
+  opacity). The placement point and transform origin stay defined against
+  the FULL content box (DEC-005), so setting or removing a region never
+  moves the remaining pixels; a large padded source refused uncropped at a
+  given scale measures once cropped to its subject. A region outside the
+  content or with zero area is refused before publication, live state
+  unchanged; a text Layer's region validates against its measured
+  line-box extent. On `layer edit` the region cannot combine with
+  --anchor or with content edits (content replacement, text content and
+  style, shape parameters) — separate edits, the one-intent-per-edit
+  precedent. Retained bytes and Generation/Matting lineage are untouched;
+  set-then-remove renders byte-identically to never-set (ISC-38); the
+  region joins the revision hash only when present, so pre-#211 revisions
+  keep their exact ids and pinned Render history replays byte-identically
+  (DEC-010). `inspect`, `measure`, and the shape review sheet report the
+  region. A region kept across a later content edit (a new --image/--text,
+  a font or text-style change, a shape geometry/size edit) is re-validated
+  against the NEW content box before publication — outside is refused
+  naming the fix; fitting publishes with a stderr note that the kept
+  region now frames the replaced content (review PROD-1). The
+  representation is additive by design: an optional corner radius joins
+  the same fact later (#212) without reshaping stored revisions.
 - Gradient fills for shape Layers (#210, spec #207 US-001 gradient part,
   DEC-003/009/010): the ONE fill union gains `linear` and `radial` variants,
   normalized at the SAME single ingestion point (`src/fill.ts`) `--fill` —

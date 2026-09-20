@@ -75,7 +75,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   it("the one-command post-content set and its application order come from the group fact (#229 DEC-002)", () => {
     // The table's transform and effect groups plus anchored placement —
     // no re-declared list.
-    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline"]);
+    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region"]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
     expect(anyOneCommandOptionProvided({ opacity: "0.5" })).toBe(false);
@@ -101,7 +101,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "image", "from-generation", "from-matte", "text", "shape", "size", "corner-radius", "fill",
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
-      "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline",
+      "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region",
     ]);
   });
 
@@ -115,15 +115,16 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(layerDashNumericFlags(["x", "y", "tracking", "line-height"])).toEqual([
       "--x", "--y", "--tracking", "--line-height",
     ]);
-    // The edit surface's join covers the transform/effect numeric options too.
+    // The edit surface's join covers the transform/effect/region numeric
+    // options too.
     const editFlags = layerDashNumericFlags(layerEditOptionKeys());
     expect(editFlags).toEqual(
-      expect.arrayContaining(["--x", "--y", "--rotate", "--shadow", "--outline", "--tracking", "--line-height"]),
+      expect.arrayContaining(["--x", "--y", "--rotate", "--shadow", "--outline", "--visible-region", "--tracking", "--line-height"]),
     );
     // #208 adds the shape size and corner radius options (dash-numeric: a
     // negative value is legitimate input the ingestion validator refuses
-    // with its range).
-    expect(editFlags).toHaveLength(9);
+    // with its range); #211 adds --visible-region the same way.
+    expect(editFlags).toHaveLength(10);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
   });
 
