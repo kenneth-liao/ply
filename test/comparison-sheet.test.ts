@@ -342,6 +342,19 @@ test("a missing or undecodable input is refused naming it, and nothing is writte
   const missing = await sheet(["exists", "no-such-input"]);
   expect(missing.res.code).toBe(1);
   expect(JSON.parse(missing.res.stdout).error).toContain("no-such-input");
+  // A missing FILE path says so — never just a Composition-name character
+  // complaint about a token that was meant as a path (#234).
+  const missingFile = await sheet(["exists", path.join(tempDir, "gone.png")]);
+  expect(missingFile.res.code).toBe(1);
+  const missingFileError = JSON.parse(missingFile.res.stdout).error;
+  expect(missingFileError).toContain("gone.png");
+  expect(missingFileError).toContain("neither an existing local file nor a Composition");
+  expect(missingFileError).toContain("ply composition list");
+  expect(JSON.parse(missing.res.stdout).error).toContain("neither an existing local file nor a Composition");
+  // A directory is an existing path, not a missing one — it says so.
+  const directory = await sheet(["exists", tempDir]);
+  expect(directory.res.code).toBe(1);
+  expect(JSON.parse(directory.res.stdout).error).toContain("is a directory");
 
   const undecodable = await sheet(["exists", garbage]);
   expect(undecodable.res.code).toBe(1);

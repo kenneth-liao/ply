@@ -242,3 +242,18 @@ test("library add-logo and resolve support --json; operational failures stay exi
   expect(missing.code).toBe(1);
   expect(JSON.parse(missing.stdout).ok).toBe(false);
 });
+
+test("add and layer edit help name the same Layer kinds for the resize forms (#234 review INT-1)", async () => {
+  // DEC-001: the kind phrases have one home (layer-options.ts), so the two
+  // help surfaces cannot drift — shape Layers accept --resize-to and --scale.
+  const { RESIZE_TO_HELP_KINDS, SCALE_HELP_KINDS } = await import("../src/layer-options.js");
+  const squash = (s: string) => s.replace(/\s+/g, " ");
+  for (const module of ["composition", "layer"]) {
+    const help = await invoke([module, "--help"]);
+    expect(help.code).toBe(0);
+    const text = squash(help.stdout);
+    expect(text).toContain(`(${RESIZE_TO_HELP_KINDS} —`);
+    expect(text).toContain(`Works on ${SCALE_HELP_KINDS}`);
+    expect(text).not.toContain("(image Layers only");
+  }
+});
