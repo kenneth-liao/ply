@@ -25,6 +25,19 @@ import {
 } from "./layer.js";
 import { resolveFace, resolveTextAxes, fontAssetBytes } from "./fonts.js";
 import {
+  parseShadowSpec,
+  parseOutlineSpec,
+  resolveEditScale,
+  resolveEditRotation,
+  resolveEditFlip,
+  type LayerTransformFlip,
+} from "./layer.js";
+import { resolveProvisionalAnchoredPlacement, type ParsedAnchor } from "./layer-anchor.js";
+import {
+  oneCommandApplicationOrder,
+  type LayerOptionKey,
+} from "./layer-options.js";
+import {
   selectGenerationOutput,
   retainGenerationRecord,
   type GenerationOutputSelection,
@@ -219,6 +232,208 @@ export interface AddLayerOptions {
   x?: number;
   y?: number;
   opacity?: number;
+  /**
+   * One-command creation (#229, spec #226 US-001/DEC-002): the post-content
+   * options — transforms, anchored placement, effects — applied to the
+   * initial revision in the documented order, publishing exactly one Layer
+   * revision. Shape-validated at the command boundary; the semantic
+   * resolutions run here, before any content retention or revision staging,
+   * so a refused option publishes nothing. Absent (or empty) keeps the
+   * established single-option add behavior byte-identical.
+   */
+  oneCommand?: OneCommandOptions;
+}
+
+/** The parsed post-content options of one-command `composition add` (#229):
+ *  the values the command boundary shape-validated and parsed through the
+ *  shared option definition (DEC-001). The semantic resolutions (scale
+ *  bounds and aspect rules, kind applicability, anchored-placement ink
+ *  resolution, effect canonicalization) run in the documented application
+ *  order inside the publication path — the same paths `layer edit` uses,
+ *  so the two surfaces' results and refusals agree by construction. */
+export interface OneCommandOptions {
+  /** The --resize factor (a finite number > 0, boundary-validated). */
+  resizeFactor?: number;
+  /** The --resize-to target axes (boundary-validated shape). */
+  resizeTo?: { width?: number; height?: number };
+  /** The --rotate angle in degrees (a finite number, boundary-validated). */
+  rotateDeg?: number;
+  /** The --flip mode (a validated literal, boundary-validated). */
+  flip?: "horizontal" | "vertical" | "both" | "none";
+  /** The raw --shadow spec; canonicalized here through the edit path's
+   *  parser (ADR-0018). */
+  shadow?: string;
+  /** The raw --outline spec; canonicalized here through the edit path's
+   *  parser (ADR-0019). */
+  outline?: string;
+  /** The parsed --anchor axes; resolved against the content+transform ink
+   *  in the target Composition's canvas before the effects apply. */
+  anchor?: ParsedAnchor;
+}
+
+/**
+ * One-command option application (spec #226 US-001, DEC-002): the ONE home
+ * for applying one-command `composition add`'s post-content options to a
+ * freshly built content revision — transforms first, then anchored
+ * placement, then effects, the order derived from the shared option
+ * table's group fact (`oneCommandApplicationOrder`) — so the result equals
+ * the documented multi-command sequence and publishes exactly ONE Layer
+ * revision. Everything here runs inside the publication protocol BEFORE
+ * any content retention or revision staging, so a refused option publishes
+ * nothing: no Layer, no use, no content.
+ *
+ * With no post-content option supplied the revision is returned untouched,
+ * so existing `add` invocations keep their meaning and their exact stored
+ * revision bytes.
+ *
+ * Reused edit paths (DEC-001, one validation path per option): the scale
+ * resolution (including its image cap and text-Layer --resize-to refusal,
+ * identical wording) and the rotation/reflection normalizers come from
+ * `layer.ts`; the effects parse through the edit path's own spec parsers;
+ * anchored placement resolves through the same ink-measurement authority
+ * the edit surface resolves against, over a PROVISIONAL revision measured
+ * in the target Composition's canvas.
+ */
+async function applyOneCommandOptions(
+  revision: LayerRevision,
+  options: OneCommandOptions | undefined,
+  context: {
+    /** The target Composition's name (refusal wording, anchor context). */
+    composition: string;
+    /** The target Composition's canvas: the measurement context. */
+    canvas: { width: number; height: number };
+    /** The verified content bytes (the measurement's paint input). */
+    contentBytes: Buffer;
+    /** The image content's format fact, for the provisional paint markup. */
+    format?: "png" | "jpeg" | "webp";
+    /** The image content's intrinsic size, for the scale resolution. */
+    intrinsic?: { width: number; height: number };
+  },
+): Promise<LayerRevision> {
+  const hasOptions =
+    options !== undefined &&
+    (options.resizeFactor !== undefined ||
+      options.resizeTo !== undefined ||
+      options.rotateDeg !== undefined ||
+      options.flip !== undefined ||
+      options.shadow !== undefined ||
+      options.outline !== undefined ||
+      options.anchor !== undefined);
+  if (!hasOptions) {
+    return revision;
+  }
+  // The application order reads the option table by its own key names; the
+  // parsed OneCommandOptions shape maps onto it by option.
+  const supplied = oneCommandApplicationOrder({
+    ...(options.resizeFactor !== undefined ? { resize: options.resizeFactor } : {}),
+    ...(options.resizeTo !== undefined ? { "resize-to": options.resizeTo } : {}),
+    ...(options.rotateDeg !== undefined ? { rotate: options.rotateDeg } : {}),
+    ...(options.flip !== undefined ? { flip: options.flip } : {}),
+    ...(options.shadow !== undefined ? { shadow: options.shadow } : {}),
+    ...(options.outline !== undefined ? { outline: options.outline } : {}),
+    ...(options.anchor !== undefined ? { anchor: options.anchor } : {}),
+  });
+  const rev = { ...revision } as LayerRevision & {
+    scaleX: number;
+    scaleY: number;
+    rotationDeg: number;
+    flipX: boolean;
+    flipY: boolean;
+  };
+
+  // The scale resolution runs against the fresh content's intrinsic facts
+  // at scale 1: the same rules, caps, and refusal texts the edit surface's
+  // resize path produces (DEC-001) — including --resize-to's text-Layer
+  // refusal, thrown here with the would-be Layer id before anything is
+  // retained.
+  const pseudoPrev = context.intrinsic
+    ? ({
+        kind: "image",
+        width: context.intrinsic.width,
+        height: context.intrinsic.height,
+        scaleX: 1,
+        scaleY: 1,
+        rotationDeg: 0,
+        flipX: false,
+        flipY: false,
+      } as unknown as ResolvedLayerRevision)
+    : ({ kind: "text", scaleX: 1, scaleY: 1, rotationDeg: 0, flipX: false, flipY: false } as unknown as ResolvedLayerRevision);
+
+  for (const key of supplied) {
+    switch (key) {
+      case "resize": {
+        const scale = resolveEditScale({ resizeFactor: options.resizeFactor! }, pseudoPrev, rev.layerId);
+        rev.scaleX = scale.scaleX;
+        rev.scaleY = scale.scaleY;
+        break;
+      }
+      case "resize-to": {
+        const scale = resolveEditScale({ resizeTo: options.resizeTo! }, pseudoPrev, rev.layerId);
+        rev.scaleX = scale.scaleX;
+        rev.scaleY = scale.scaleY;
+        break;
+      }
+      case "rotate": {
+        rev.rotationDeg = resolveEditRotation({ rotateDeg: options.rotateDeg! }, pseudoPrev);
+        break;
+      }
+      case "flip": {
+        const flip: LayerTransformFlip = resolveEditFlip({ flip: options.flip! }, pseudoPrev);
+        rev.flipX = flip.flipX;
+        rev.flipY = flip.flipY;
+        break;
+      }
+      case "anchor": {
+        // Anchored placement (ADR-0017) resolves against the content+
+        // transform ink BEFORE the effects apply (the documented order),
+        // measuring the provisional revision in the target Composition's
+        // canvas; the resolved placement publishes as plain canonical
+        // (x, y) in the SAME single revision.
+        const resolved = await resolveProvisionalAnchoredPlacement(
+          context.canvas,
+          {
+            layerId: rev.layerId,
+            revision: {
+              ...rev,
+              ...(context.format !== undefined
+                ? { format: context.format, width: context.intrinsic!.width, height: context.intrinsic!.height }
+                : {}),
+            } as ResolvedLayerRevision,
+            contentBytes: context.contentBytes,
+          },
+          { anchor: options.anchor!, contextComposition: context.composition },
+        );
+        rev.x = resolved.placement.x;
+        rev.y = resolved.placement.y;
+        break;
+      }
+      case "shadow": {
+        // "none" resolves to undefined — absence IS the no-shadow form,
+        // the same canonical shape the edit path publishes (ADR-0018).
+        const shadow = parseShadowSpec(options.shadow!);
+        if (shadow !== undefined) rev.shadow = shadow;
+        break;
+      }
+      case "outline": {
+        const outline = parseOutlineSpec(options.outline!);
+        if (outline !== undefined) rev.outline = outline;
+        break;
+      }
+      default: {
+        // Fail fast (review INT-plumb-1): an option that parses at the
+        // command boundary but has no application case here would otherwise
+        // be silently dropped while the guard test stays green — exactly
+        // the parse-but-drop gap. One-command add must never publish a
+        // revision that quietly lacks a supplied option, so throw instead
+        // (this runs BEFORE any retention or staging, so the refusal stays
+        // fail-closed), and the guard test (TEST-003) reads the applied
+        // facts back from the published revision per kind, so a future
+        // table key without a case fails the build, not a Project.
+        throw new Error(`One-command add: no application case for the "--${key}" option.`);
+      }
+    }
+  }
+  return rev;
 }
 
 /**
@@ -355,22 +570,35 @@ export async function addLayerToComposition(
     return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
       // Ingest & decode input image, then stage the content blob.
       const ingested = await validateAndIngestImage(imagePath);
+      // One-command application (DEC-002) runs BEFORE any retention: a
+      // refused option publishes nothing — no Layer, no use, no content.
+      const revision = await applyOneCommandOptions(
+        {
+          schemaVersion: LAYER_SCHEMA_VERSION,
+          layerId,
+          createdAt,
+          kind: "image",
+          contentHash: ingested.contentHash,
+          x,
+          y,
+          opacity,
+          scaleX: 1,
+          scaleY: 1,
+          rotationDeg: 0,
+          flipX: false,
+          flipY: false,
+        },
+        options.oneCommand,
+        {
+          composition: sanitizedComp,
+          canvas: comp.canvas,
+          contentBytes: ingested.bytes,
+          format: ingested.format,
+          intrinsic: { width: ingested.width, height: ingested.height },
+        },
+      );
       await storeContentBlob(projectPath, ingested.contentHash, ingested.bytes);
-      return {
-        schemaVersion: LAYER_SCHEMA_VERSION,
-        layerId,
-        createdAt,
-        kind: "image",
-        contentHash: ingested.contentHash,
-        x,
-        y,
-        opacity,
-        scaleX: 1,
-        scaleY: 1,
-        rotationDeg: 0,
-        flipX: false,
-        flipY: false,
-      };
+      return revision;
     }).then(({ layerId, layer }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer }));
   });
 }
@@ -446,28 +674,39 @@ export async function addTextLayerToComposition(
       });
       const bytes = fontAssetBytes(face);
       const contentHash = createHash("sha256").update(bytes).digest("hex");
+      // One-command application (DEC-002) runs BEFORE any retention: a
+      // refused option publishes nothing — no Layer, no use, no content.
+      const revision = await applyOneCommandOptions(
+        {
+          schemaVersion: LAYER_SCHEMA_VERSION,
+          layerId,
+          createdAt,
+          kind: "text",
+          contentHash,
+          text: input.text,
+          fontSize,
+          color,
+          ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
+          ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
+          ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
+          x,
+          y,
+          opacity,
+          scaleX: 1,
+          scaleY: 1,
+          rotationDeg: 0,
+          flipX: false,
+          flipY: false,
+        },
+        options.oneCommand,
+        {
+          composition: sanitizedComp,
+          canvas: comp.canvas,
+          contentBytes: bytes,
+        },
+      );
       await storeContentBlob(projectPath, contentHash, bytes);
-      return {
-        schemaVersion: LAYER_SCHEMA_VERSION,
-        layerId,
-        createdAt,
-        kind: "text",
-        contentHash,
-        text: input.text,
-        fontSize,
-        color,
-        ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
-        ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
-        ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
-        x,
-        y,
-        opacity,
-        scaleX: 1,
-        scaleY: 1,
-        rotationDeg: 0,
-        flipX: false,
-        flipY: false,
-      };
+      return revision;
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
@@ -545,23 +784,36 @@ export async function addGeneratedLayerToComposition(
         selected.bytes,
         `Generation Job "${selected.job.jobId}" output "${selected.output.file}"`,
       );
+      // One-command application (DEC-002) runs BEFORE any retention: a
+      // refused option publishes nothing — no Layer, no use, no content.
+      const revision = await applyOneCommandOptions(
+        {
+          schemaVersion: LAYER_SCHEMA_VERSION,
+          layerId,
+          createdAt,
+          kind: "image",
+          contentHash: validated.contentHash,
+          x,
+          y,
+          opacity,
+          scaleX: 1,
+          scaleY: 1,
+          rotationDeg: 0,
+          flipX: false,
+          flipY: false,
+        },
+        options.oneCommand,
+        {
+          composition: sanitizedComp,
+          canvas: comp.canvas,
+          contentBytes: validated.bytes,
+          format: validated.format,
+          intrinsic: { width: validated.width, height: validated.height },
+        },
+      );
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
-      return {
-        schemaVersion: LAYER_SCHEMA_VERSION,
-        layerId,
-        createdAt,
-        kind: "image",
-        contentHash: validated.contentHash,
-        x,
-        y,
-        opacity,
-        scaleX: 1,
-        scaleY: 1,
-        rotationDeg: 0,
-        flipX: false,
-        flipY: false,
-      };
+      return revision;
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
@@ -622,6 +874,33 @@ export async function addMattedLayerToComposition(
         source.generationRoot,
         selectedOutput.matte.request.source.contentHash,
       );
+      // One-command application (DEC-002) runs BEFORE any retention: a
+      // refused option publishes nothing — no Layer, no use, no content.
+      const revision = await applyOneCommandOptions(
+        {
+          schemaVersion: LAYER_SCHEMA_VERSION,
+          layerId,
+          createdAt,
+          kind: "image" as const,
+          contentHash: validated.contentHash,
+          x,
+          y,
+          opacity,
+          scaleX: 1,
+          scaleY: 1,
+          rotationDeg: 0,
+          flipX: false,
+          flipY: false,
+        },
+        options.oneCommand,
+        {
+          composition: sanitizedComp,
+          canvas: comp.canvas,
+          contentBytes: validated.bytes,
+          format: validated.format,
+          intrinsic: { width: validated.width, height: validated.height },
+        },
+      );
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainMattingRecord(resolvedRoot, selectedOutput.matte.matteId, selectedOutput.recordBytes);
       if (selectedOutput.sourceBytes) {
@@ -637,21 +916,7 @@ export async function addMattedLayerToComposition(
           )!,
         };
       }
-      return {
-        schemaVersion: LAYER_SCHEMA_VERSION,
-        layerId,
-        createdAt,
-        kind: "image" as const,
-        contentHash: validated.contentHash,
-        x,
-        y,
-        opacity,
-        scaleX: 1,
-        scaleY: 1,
-        rotationDeg: 0,
-        flipX: false,
-        flipY: false,
-      };
+      return revision;
     }).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },

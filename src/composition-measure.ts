@@ -260,6 +260,37 @@ function roundBox(box: Box | null): Box | null {
   return box ? { x: round2(box.x), y: round2(box.y), width: round2(box.width), height: round2(box.height) } : null;
 }
 
+/**
+ * The rounded layout/ink projection of one measured Layer, shared by the
+ * standalone (#138) and provisional (#229) measurement lines so their
+ * rounding can never drift apart (review INT-apply-1 — anchored ink must
+ * measure identically whether it resolves an existing or a would-be
+ * Layer): the rounded painted box (or null), the rounded layout box, and
+ * the rounded measured content extent. A caller that has the revision's
+ * own canonical content facts (an image's intrinsic size) overrides the
+ * measured extent with them; text has none, so it keeps the measured one.
+ * `measured` undefined means the single-Layer measurement produced no
+ * geometry — refused loudly with the caller's named error.
+ */
+function projectMeasuredGeometry(
+  measured: { content: { width: number; height: number }; box: Box; painted: Box | null } | undefined,
+  missingError: string,
+): { painted: Box | null; box: Box; content: { width: number; height: number } } {
+  if (!measured) {
+    throw new Error(missingError);
+  }
+  return {
+    painted: measured.painted ? roundBox(measured.painted) : null,
+    box: {
+      x: round2(measured.box.x),
+      y: round2(measured.box.y),
+      width: round2(measured.box.width),
+      height: round2(measured.box.height),
+    },
+    content: { width: round2(measured.content.width), height: round2(measured.content.height) },
+  };
+}
+
 /** Intersection of a box with the canvas rectangle; null when empty. */
 function clipToCanvas(box: Box, canvas: { width: number; height: number }): Box | null {
   const x1 = Math.max(box.x, 0);
@@ -549,26 +580,55 @@ export async function measureStandaloneLayer(
   };
   const canvas = { width: STANDALONE_CANVAS_PX, height: STANDALONE_CANVAS_PX };
   const [measured] = await measureSnapshot(canvas, [standalone], options);
-  if (!measured) {
-    throw new Error(`Standalone measurement of Layer "${layerId}" produced no geometry.`);
-  }
+  // The shared rounding projection keeps the standalone line rounding-
+  // identical to the provisional line (review INT-apply-1); the image
+  // content extent is overridden with the canonical verified revision
+  // facts, exactly as before.
+  const projected = projectMeasuredGeometry(
+    measured,
+    `Standalone measurement of Layer "${layerId}" produced no geometry.`,
+  );
   return {
-    painted: measured.painted ? roundBox(measured.painted) : null,
-    box: {
-      x: round2(measured.box.x),
-      y: round2(measured.box.y),
-      width: round2(measured.box.width),
-      height: round2(measured.box.height),
-    },
+    ...projected,
     content: {
       width:
         currentRevision.kind === "image"
           ? currentRevision.width
-          : round2(measured.content.width),
+          : projected.content.width,
       height:
         currentRevision.kind === "image"
           ? currentRevision.height
-          : round2(measured.content.height),
+          : projected.content.height,
     },
   };
+}
+
+/**
+ * Measure a PROVISIONAL revision — a Layer that does not exist yet
+ * (one-command `composition add`, #229, DEC-002): its would-be revision
+ * and verified content bytes are supplied directly, so no Project state is
+ * consulted and nothing is written. The same paint-identical authority as
+ * every other measurement: the paint path's exact markup for the supplied
+ * revision in `canvas` (the Composition the Layer is about to join, so a
+ * text Layer's wrapping is the wrapping it will obey), the same decode and
+ * font gates, and the same per-Layer bounded ink-capture contract.
+ *
+ * One-command add's anchored placement resolves against this measurement:
+ * the provisional revision carries the transforms (the documented order
+ * applies transforms BEFORE the anchor resolves) and NO effects yet
+ * (effects are applied after the anchor, so the resolved placement anchors
+ * the content+transform ink — exactly the ink the multi-command sequence's
+ * anchor edit would resolve too).
+ */
+export async function measureProvisionalLayer(
+  canvas: { width: number; height: number },
+  provisional: SnapshotLayer,
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number } }> {
+  const [measured] = await measureSnapshot(canvas, [provisional]);
+  // The same shared rounding projection the standalone line uses
+  // (review INT-apply-1): the two lines' rounded output can never drift.
+  return projectMeasuredGeometry(
+    measured,
+    `Provisional measurement of Layer "${provisional.layerId}" produced no geometry.`,
+  );
 }

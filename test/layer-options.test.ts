@@ -13,10 +13,14 @@ import {
   LAYER_OPTION_PARSE_ARGS,
   TEXT_CONTENT_KEYS,
   anyLayerEditOptionProvided,
+  anyOneCommandOptionProvided,
   isAnchorConflicting,
   layerContentKindConflict,
   layerDashNumericFlags,
   layerEditOptionKeys,
+  layerOptionsApplicableTo,
+  oneCommandAddOptionKeys,
+  oneCommandApplicationOrder,
   parseGenerationJobId,
   parseGenerationOutputSelector,
   parseGenerationOutputValue,
@@ -55,6 +59,26 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     for (const key of COMPOSITION_ADD_OPTION_KEYS) {
       expect(LAYER_OPTION_DEFS.some((def) => def.key === key)).toBe(true);
     }
+  });
+
+  it("the add surface's accepted keys are DERIVED from the table, not re-declared (#229 DEC-001)", () => {
+    // One-command add accepts every option the table declares, by
+    // derivation — so the two surfaces' key sets can never drift apart.
+    expect([...COMPOSITION_ADD_OPTION_KEYS].sort()).toEqual(
+      LAYER_OPTION_DEFS.map((def) => def.key).sort(),
+    );
+    expect([...COMPOSITION_ADD_OPTION_KEYS].sort()).toEqual(
+      [...layerEditOptionKeys(), "output" as LayerOptionKey].sort(),
+    );
+  });
+
+  it("the one-command post-content set and its application order come from the group fact (#229 DEC-002)", () => {
+    // The table's transform and effect groups plus anchored placement —
+    // no re-declared list.
+    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "rotate", "flip", "shadow", "outline"]);
+    expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
+    expect(anyOneCommandOptionProvided({ opacity: "0.5" })).toBe(false);
+    expect(anyOneCommandOptionProvided({})).toBe(false);
   });
 
   it("a consumer can enumerate the options applicable to a Layer kind", () => {

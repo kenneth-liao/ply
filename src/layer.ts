@@ -1442,9 +1442,10 @@ function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision)
  * Canonical rotation normalization (#134, ADR-0016): `--rotate` sets an
  * ABSOLUTE angle in degrees, replacing any previous rotation. Omitted option
  * preserves the current revision's rotation. The refusal runs before any
- * staging, so an invalid angle never advances live state.
+ * staging, so an invalid angle never advances live state. Exported as the
+ * ONE rotation path for one-command `composition add` too (#229, DEC-001).
  */
-function resolveEditRotation(options: EditLayerOptions, prevRev: ResolvedLayerRevision): number {
+export function resolveEditRotation(options: EditLayerOptions, prevRev: ResolvedLayerRevision): number {
   if (options.rotateDeg === undefined) {
     return prevRev.rotationDeg;
   }
@@ -1459,9 +1460,10 @@ function resolveEditRotation(options: EditLayerOptions, prevRev: ResolvedLayerRe
  * Canonical reflection normalization (#135, ADR-0016): `--flip` sets an
  * ABSOLUTE reflection state, replacing any previous one. Omitted option
  * preserves the current revision's reflection. The refusal runs before any
- * staging, so an invalid mode never advances live state.
+ * staging, so an invalid mode never advances live state. Exported as the
+ * ONE reflection path for one-command `composition add` too (#229, DEC-001).
  */
-function resolveEditFlip(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerTransformFlip {
+export function resolveEditFlip(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerTransformFlip {
   if (options.flip === undefined) {
     return { flipX: prevRev.flipX, flipY: prevRev.flipY };
   }
@@ -1629,8 +1631,14 @@ export function roundEffective(px: number): number {
  * absolute target with one omitted axis preserves the Layer's current aspect
  * ratio (a deliberate both-axes change survives, never reset to intrinsic);
  * both axes supplied deliberately change it.
+ *
+ * Exported as the ONE scale-resolution path for one-command `composition
+ * add` too (#229, DEC-001/DEC-002): the add path calls it with the fresh
+ * content's intrinsic facts at scale 1, so add's resize refusals, caps, and
+ * aspect rules are byte-identical to the edit surface's by construction —
+ * including the text-Layer refusal for --resize-to (identical wording).
  */
-function resolveEditScale(
+export function resolveEditScale(
   options: EditLayerOptions,
   prevRev: ResolvedLayerRevision,
   layerId: string,

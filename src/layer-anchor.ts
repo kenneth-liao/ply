@@ -30,8 +30,13 @@
  * a fork resolves in its target Composition, whose use is about to own the
  * Layer.
  */
-import { findLayerReferrers, inspectLayer } from "./layer.js";
-import { measureCompositionLayers, measureStandaloneLayer } from "./composition-measure.js";
+import { findLayerReferrers, inspectLayer, type ResolvedLayerRevision } from "./layer.js";
+import {
+  measureCompositionLayers,
+  measureProvisionalLayer,
+  measureStandaloneLayer,
+} from "./composition-measure.js";
+import type { SnapshotLayer } from "./composition-paint.js";
 
 /** The axes of one anchored placement: each present component anchors the
  * corresponding coordinate as the target for that ink edge/center. */
@@ -244,4 +249,75 @@ function divergentRefusal(layerId: string, contexts: string[]): Error & { referr
   err.referringCompositions = contexts;
   err.referrersCount = contexts.length;
   return err;
+}
+
+/**
+ * Resolve an anchored placement for a PROVISIONAL revision (one-command
+ * `composition add`, spec #226 US-001/DEC-002): the Layer does not exist
+ * yet, so the reference ink is measured from the supplied would-be
+ * revision and verified content bytes alone, in the target Composition's
+ * canvas — the rendering context the Layer is about to join, whose text
+ * wrapping and canvas are what the ink obeys.
+ *
+ * The provisional revision carries the transforms (the documented
+ * one-command order applies transforms BEFORE the anchor resolves) and NO
+ * effects yet (effects are applied after the anchor, so the resolved
+ * placement anchors the content+transform ink — exactly the ink the
+ * multi-command sequence's anchor edit would resolve against). Read-only:
+ * it mutates nothing; the caller publishes the resolved placement inside
+ * the SAME single revision. The anchored axes' targets are the would-be
+ * placement coordinates, which the add boundary requires to be explicit
+ * (the same requirement `layer edit` states, so a missing target refuses
+ * there, before anything is measured).
+ */
+export async function resolveProvisionalAnchoredPlacement(
+  canvas: { width: number; height: number },
+  provisional: { layerId: string; revision: ResolvedLayerRevision; contentBytes: Buffer },
+  options: { anchor: ParsedAnchor; contextComposition: string },
+): Promise<AnchorResolution> {
+  const { anchor } = options;
+  const { layerId, contentBytes } = provisional;
+  const revision: ResolvedLayerRevision = { ...provisional.revision };
+  const targetX = revision.x;
+  const targetY = revision.y;
+
+  const snapshot: SnapshotLayer = {
+    name: layerId,
+    layerId,
+    revision,
+    contentBytes,
+  };
+  const measured = await measureProvisionalLayer(canvas, snapshot);
+  if (!measured.painted) {
+    throw noInkRefusal(layerId, options.contextComposition);
+  }
+  const painted = measured.painted;
+  // The painted box of the placement-point copy: the ink's offset from the
+  // placement point, the same fact the edit-path resolution measures.
+  const inkOffset = {
+    x: painted.x - revision.x,
+    y: painted.y - revision.y,
+  };
+
+  const placement = {
+    x:
+      anchor.horizontal !== undefined
+        ? round2(resolveAxis(anchor.horizontal, targetX, painted.x, painted.width, painted.x - inkOffset.x))
+        : revision.x,
+    y:
+      anchor.vertical !== undefined
+        ? round2(resolveAxis(anchor.vertical, targetY, painted.y, painted.height, painted.y - inkOffset.y))
+        : revision.y,
+  };
+
+  return {
+    anchor,
+    target: {
+      ...(anchor.horizontal !== undefined ? { x: targetX } : {}),
+      ...(anchor.vertical !== undefined ? { y: targetY } : {}),
+    },
+    placement,
+    painted,
+    contexts: [options.contextComposition],
+  };
 }

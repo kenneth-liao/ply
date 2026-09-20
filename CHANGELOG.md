@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Added
+
+- One-command Layers (#229, spec #226 US-001, DEC-001/DEC-002):
+  `composition add` now accepts every placement, transform, effect, and text
+  option `ply layer edit` accepts for that Layer kind — `--anchor`,
+  `--resize`, `--resize-to`, `--rotate`, `--flip`, `--shadow`, `--outline`
+  join the existing content, text, and placement options — so a Layer is
+  created in its final state with one command. The options are declared and
+  validated once in the shared option definition (#228's table, whose keys
+  add consumes by derivation) and applied in the documented order — content,
+  then transforms, then anchored placement, then effects — publishing
+  exactly one Layer revision; any refused option publishes nothing (no
+  Layer, no use, no content). The one-command Layer renders and measures
+  identically to the same Layer built by the multi-command sequence, and its
+  Render replays byte-identically; existing `add` invocations keep their
+  meaning and output. `layer edit`'s restriction that `--anchor` cannot
+  combine with `--shadow`/`--outline` is unchanged; on `add` the combination
+  is defined by the order (the anchor resolves the content+transform ink in
+  the target Composition's canvas, then the effects apply to the same single
+  revision). On add, `--width` is the text width axis — the same spelling
+  `layer edit` uses, validated through the same shared validator; the canvas
+  dimension meaning of `--width` belongs to `composition create` alone (the
+  decision recorded on #229). Not included: stack position, absolute scale,
+  and caller fonts (sibling tickets).
+
 ### Changed
 
 - Internal refactor, no version-visible behavior change (#228, spec #226
