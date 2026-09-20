@@ -1,6 +1,6 @@
 {
   "name": "ply",
-  "version": "4.33.0",
+  "version": "4.34.0",
   "bin": {
     "ply": "src/cli.ts"
   },

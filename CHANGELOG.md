@@ -4,6 +4,30 @@
 
 ### Added
 
+- Local SVG import as an image Layer (#213, spec #207 US-004, DEC-007/009/010/011):
+  `--image` accepts a regular local SVG file at add and at edit. An SVG is
+  image-kind content with a recorded vector format — not a fourth Layer kind
+  — painted through the browser's image path (`<img>` data URL, which
+  disables scripts and external loads by construction; the vector is never
+  inlined into the page DOM) and rasterized at the painted size and
+  supersample factor, so the same file is crisp at 60 px and at 600 px.
+  The intrinsic size is parsed from the file's own `width`/`height`
+  attributes (one declared size borrows the missing axis from the viewBox's
+  aspect ratio) or its `viewBox` — mirroring the browser's own computation,
+  so inspect, measure, and the render agree on one set of numbers — at the
+  single image ingestion point (`validateImageBytes`), where malformed or
+  non-SVG bytes with an `.svg` name are refused and a file declaring neither
+  is refused naming the fix. Retained bytes equal the source bytes, never
+  rewritten; the vector format derives from the retained bytes like a
+  raster's, so no revision schema changes and existing revision ids do not
+  move (DEC-010). Transforms, anchored placement, shadow, outline, the
+  visible region, `measure`, replay after edits and relocation, and
+  cross-Project import work exactly as for a raster image Layer; help,
+  README, and the limits guide record the contract, and CONTEXT.md adds the
+  term vector. The external-reference refusal and inertness proof (#214)
+  and the colour parameter (#215) are separate tickets — nothing here
+  fetches or executes.
+
 - Optional corner radius on the visible region (#212, spec #207 US-003,
   DEC-009, ADR-0023): `ply layer edit --visible-region-radius <px>` rounds
   the region rectangle's corners — corner pixels outside the radius are

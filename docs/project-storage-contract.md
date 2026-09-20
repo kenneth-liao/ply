@@ -128,7 +128,7 @@ Since #80, caller exports via `ply composition render --out` may create a fresh 
 - `contentHash` (string): Content-addressed SHA-256 hash pointing to `content/<contentHash>`.
 - `x`, `y` (number): Layer placement on the canvas.
 - `opacity` (number): Layer opacity in `[0, 1]`.
-- Image revisions derive intrinsic width, height, and format from the verified content blob; nothing raster-specific is duplicated in the revision.
+- Image revisions derive intrinsic width, height, and format from the verified content blob; nothing raster-specific is duplicated in the revision. An SVG blob derives its vector format the same way (#213): `readSvgMeta` parses the file's own width/height or viewBox for the intrinsic size, and the format fact `"svg"` rides the same resolved projection.
 
 **Text revision contract (#81).** A `"text"` revision additionally carries `text` (nonempty string, ≤ 2000 characters), `fontSize` (finite number in `(0, 8192]`), and `color` (strict hex `#RGB`/`#RRGGBB`) as immutable revision facts covered by the revision hash:
 
@@ -181,11 +181,11 @@ Readers never trust stored bytes blindly. `readLayerInternal` re-verifies on eve
    - `MAX_ENCODED_BYTES` (64 MB) enforced on the open file handle before full read.
    - `MAX_DIMENSION` (8192 px) and `MAX_PIXELS` (16,777,216 px) enforced on declared geometry.
 2. **Format & Decoding Verification**:
-   - Validated supported formats: PNG, JPEG, WebP.
-   - Sniffed via `readRasterMeta` (bounding checks).
+   - Validated supported formats: PNG, JPEG, WebP, and SVG (#213).
+   - Sniffed via `readRasterMeta` (bounding checks); an `.svg` name takes the one SVG parse branch instead (`readSvgMeta` in `src/svg-meta.ts`): intrinsic size from the file's own width/height or viewBox, with malformed or non-SVG bytes refused at the same boundary.
    - Full image decompression and decoding verified prior to staging:
      - PNGs verified via `decodePng` (chunk CRCs, IDAT inflate, scanlines, filter codes).
-     - Rasters verified via browser image decoding (`Image.decode()`).
+     - Rasters and SVGs verified via browser image decoding (`Image.decode()`) — for an SVG, the same `<img>` data-URL path painting uses, which disables scripts and external loads by construction; the vector is never inlined into the page DOM.
    - Truncated or corrupted image bodies with valid headers are rejected at the ingestion boundary.
 
 ---

@@ -224,8 +224,15 @@ Options:
   --project, -p <dir>   Path to Project root (default: current working directory)
   --width <int>         Canvas width in pixels (required for create)
   --height <int>        Canvas height in pixels (required for create)
-  --image <path>        Path to local source image file (required for add
-                        unless --text, --shape, or --from-generation is used)
+  --image <path>        Path to a local source image file (required for add
+                        unless --text, --shape, or --from-generation is used):
+                        a regular local PNG, JPEG, WebP, or SVG file. An SVG
+                        is image content with a recorded vector format
+                        (#213): its intrinsic size comes from its own
+                        width/height attributes or viewBox, its bytes are
+                        retained unchanged, and it renders crisply at any
+                        size through the browser's image path — scripts and
+                        external references never load.
   --from-generation <jobId>
                         Add the selected output of a published Generation Job
                         (see ply generate) as an ordinary image Layer. The
