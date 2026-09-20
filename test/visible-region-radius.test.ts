@@ -443,6 +443,121 @@ test("forks carry the rounded region", async () => {
   });
 }, 30000);
 
+/** Tracer 8 (review INT-3): the radius path is kind-shared — a rounded
+ * region on a SHAPE Layer (exact solid-rect corner pixels, like the image
+ * tracer) and on a TEXT Layer (the line-box region; notch ink the unrounded
+ * render pins goes transparent under the radius; removal restores the
+ * unrounded render byte-identically) — and the shape review sheet reports
+ * the `region corner radius` row once, and only when the radius is present.
+ * Also pins review INT-2's agreed behavior: `0` on a regionless Layer is
+ * the same idempotent no-op as `none`.
+ */
+test("rounded regions on text and shape Layers, and the review sheet's region-radius row", async () => {
+  await makeComp("poster", 400, 300);
+
+  // A shape Layer paints a SOLID rectangle, so the corner assertions are as
+  // exact as the image tracer's: region 20,10,80,40 at (30,40) → ink rect
+  // on canvas x 50..130, y 50..90; top-left arc center (62,62), r 12.
+  const barAdd = await invoke([
+    "composition", "add", "poster", "bar", "--shape", "rectangle", "--size", "200x100",
+    "--fill", "#0000ff", "--x", "30", "--y", "40", "--project", projDir, "--json",
+  ]);
+  expect(barAdd.code).toBe(0);
+  const barId = JSON.parse(barAdd.stdout).use.layerId as string;
+  const barSet = await invoke([
+    "layer", "edit", barId, "--visible-region", "20,10,80,40", "--visible-region-radius", "12", "--project", projDir, "--json",
+  ]);
+  expect(barSet.code).toBe(0);
+  const barPng = decodePng(await render("poster", path.join(tempDir, "shape-rounded.png")));
+  expect(pixel(barPng, 50, 50)[3]).toBe(0);
+  expect(pixel(barPng, 51, 51)[3]).toBe(0);
+  expect(pixel(barPng, 56, 56)).toEqual([0, 0, 255, 255]);
+  expect(pixel(barPng, 90, 50)).toEqual([0, 0, 255, 255]);
+  expect(pixel(barPng, 49, 70)[3]).toBe(0);
+
+  // The shape review sheet reports the region's radius as its own fact row —
+  // once, and only when the radius is present.
+  const sheetRes = await invoke([
+    "layer", "review", barId, "--out", path.join(tempDir, "sheet-rounded.html"), "--project", projDir, "--json",
+  ]);
+  expect(sheetRes.code).toBe(0);
+  const roundedSheet = await readFile(path.join(tempDir, "sheet-rounded.html"), "utf8");
+  expect(roundedSheet.split("region corner radius").length - 1).toBe(1);
+  expect(roundedSheet).toContain("<th>region corner radius</th><td>12px</td>");
+  expect((await invoke(["layer", "edit", barId, "--visible-region-radius", "none", "--project", projDir])).code).toBe(0);
+  expect(
+    (await invoke(["layer", "review", barId, "--out", path.join(tempDir, "sheet-plain.html"), "--project", projDir, "--json"])).code,
+  ).toBe(0);
+  const plainSheet = await readFile(path.join(tempDir, "sheet-plain.html"), "utf8");
+  expect(plainSheet).not.toContain("region corner radius");
+  expect(plainSheet).toContain("<th>visible region</th><td>(20, 10, 80, 40)</td>");
+
+  // The text Layer: the region is the measured line box; the radius rounds
+  // it (the full pill on the short side) and glyph ink the unrounded render
+  // pins in the corner notch goes transparent. Removal restores the
+  // unrounded render byte-identically.
+  const textAdd = await invoke([
+    "composition", "add", "poster", "head", "--text", "MM", "--font", "Archivo", "--font-size", "64",
+    "--x", "30", "--y", "40", "--project", projDir, "--json",
+  ]);
+  expect(textAdd.code).toBe(0);
+  const textId = JSON.parse(textAdd.stdout).use.layerId as string;
+  const measured = JSON.parse(
+    (await invoke(["composition", "measure", "poster", "head", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  ).layers[0];
+  const w = Math.floor(measured.content.width);
+  const h = Math.floor(measured.content.height);
+  const r = Math.floor(Math.min(w, h) / 2);
+  expect((await invoke(["layer", "edit", textId, "--visible-region", `0,0,${w},${h}`, "--project", projDir])).code).toBe(0);
+  const unrounded = decodePng(await render("poster", path.join(tempDir, "text-unrounded.png")));
+  const radiusSet = await invoke(["layer", "edit", textId, "--visible-region-radius", String(r), "--project", projDir, "--json"]);
+  expect(radiusSet.code).toBe(0);
+  expect(JSON.parse(radiusSet.stdout).regionSet).toEqual({
+    visibleRegion: { x: 0, y: 0, width: w, height: h, cornerRadius: r },
+  });
+  const rounded = decodePng(await render("poster", path.join(tempDir, "text-rounded.png")));
+
+  // The painted extents stay the rectangle's on the text Layer too.
+  const measuredRounded = JSON.parse(
+    (await invoke(["composition", "measure", "poster", "head", "--project", projDir, "--json"]).then(r2 => { expect(r2.code).toBe(0); return r2.stdout; })),
+  ).layers[0];
+  expect(measuredRounded.visibleRegion).toEqual({ x: 0, y: 0, width: w, height: h, cornerRadius: r });
+  expect(measuredRounded.painted).toEqual(measured.painted);
+
+  // Glyph ink the unrounded render pins INSIDE the corner square but beyond
+  // the arc (distance > r + 1 from the arc's center at (r, r)) goes
+  // transparent under the radius — the notch cuts real ink, deterministically.
+  const cornerX = 30;
+  const cornerY = 40;
+  let cut = 0;
+  for (let y = 0; y <= r; y++) {
+    for (let x = 0; x <= r; x++) {
+      if (Math.hypot(x - r, y - r) > r + 1 &&
+          pixel(unrounded, cornerX + x, cornerY + y)[3] >= 200 &&
+          pixel(rounded, cornerX + x, cornerY + y)[3] === 0) {
+        cut++;
+      }
+    }
+  }
+  expect(cut).toBeGreaterThan(0);
+
+  // Removing the radius restores the unrounded render byte-identically.
+  expect((await invoke(["layer", "edit", textId, "--visible-region-radius", "none", "--project", projDir])).code).toBe(0);
+  expect((await render("poster", path.join(tempDir, "text-unrounded-2.png"))).equals(
+    await readFile(path.join(tempDir, "text-unrounded.png")),
+  )).toBe(true);
+
+  // And `0` on a regionless Layer is the same idempotent no-op as `none`
+  // (review INT-2: the two removal spellings agree).
+  expect((await invoke(["layer", "edit", textId, "--visible-region", "none", "--project", projDir])).code).toBe(0);
+  const revBefore = JSON.parse(
+    (await invoke(["layer", "inspect", textId, "--project", projDir, "--json"])).stdout,
+  ).layer.currentRevisionId as string;
+  const zeroRes = await invoke(["layer", "edit", textId, "--visible-region-radius", "0", "--project", projDir, "--json"]);
+  expect(zeroRes.code).toBe(0);
+  expect(JSON.parse(zeroRes.stdout).layer.currentRevisionId).toBe(revBefore);
+}, 60000);
+
 /** Help documents the radius on both surfaces: the flag, the removal value,
  * and the refuse-never-clamp rule (the shape Layer's one corner-radius
  * rule). */

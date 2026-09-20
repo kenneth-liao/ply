@@ -591,21 +591,22 @@ async function applyOneCommandOptions(
       }
       case "visible-region-radius": {
         // The region's corner radius (#212): the rectangle's stage ran first
-        // (the table's region order), so the rect is whatever this add has —
-        // a fresh Layer has no region, and a radius without one is refused
-        // before anything is retained. The range rule is the ONE shared
-        // corner-radius validator (refuse, never clamp) against the region
-        // rectangle; a radius of 0 stores nothing (the same look as
-        // absent).
-        const region = rev.visibleRegion;
-        if (region === undefined) {
-          throw new Error(
-            `--visible-region-radius needs a visible region: Layer "${rev.layerId}" is fresh and has none. ` +
-              `Pass --visible-region "<x>,<y>,<width>,<height>" in the same add, then round its corners.`,
-          );
-        }
+        // (the table's region order), so the rect is whatever this add has.
+        // A positive radius without a region is refused before anything is
+        // retained; `none` and 0 — the removal forms — remove nothing, the
+        // same idempotent no-op the edit surface gives them. The range rule
+        // is the ONE shared corner-radius validator (refuse, never clamp)
+        // against the region rectangle; a radius of 0 stores nothing (the
+        // same look as absent).
         const radius = parseVisibleRegionRadiusSpec(options.visibleRegionRadius!);
         if (radius !== undefined && radius > 0) {
+          const region = rev.visibleRegion;
+          if (region === undefined) {
+            throw new Error(
+              `--visible-region-radius needs a visible region: Layer "${rev.layerId}" is fresh and has none. ` +
+                `Pass --visible-region "<x>,<y>,<width>,<height>" in the same add, then round its corners.`,
+            );
+          }
           validateRectangleCornerRadius(radius, region.width, region.height);
           rev.visibleRegion = { ...region, cornerRadius: radius };
         }

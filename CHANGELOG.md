@@ -14,8 +14,9 @@
   rectangle). One rule with the shape Layer's `--corner-radius`: a radius
   over half the region rectangle's shorter side is REFUSED, never clamped,
   through the same validator (`validateRectangleCornerRadius`), and a
-  negative radius is refused at the command boundary (exit 2). A radius
-  needs a visible region (refused otherwise, before publication); removing
+  negative radius is refused at the command boundary (exit 2). A positive
+  radius needs a visible region (refused otherwise, before publication;
+  the removal forms are idempotent); removing
   the region removes its radius. One-command `composition add` accepts the
   radius beside `--visible-region`. The radius is stored only when set and
   > 0 and joins the revision hash only when present, so pre-#212 revision

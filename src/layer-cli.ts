@@ -342,9 +342,10 @@ Options:
                         clamped (the paint would silently clamp it, so the
                         stored parameters would not describe the paint),
                         through the same validator; a negative radius is
-                        refused. Needs a visible region — a radius on a
-                        Layer without one, or combined with the region's
-                        removal, is refused. Removing the region removes its
+                        refused. Needs a visible region — a positive radius
+                        on a Layer without one, or combined with the
+                        region's removal, is refused (0 and none remove
+                        nothing). Removing the region removes its
                         radius. Corner pixels outside the radius are
                         transparent, the outline and shadow follow the
                         rounded edge, and painted extents stay the

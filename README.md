@@ -555,8 +555,9 @@ ply layer edit <layerId> --visible-region-radius none # remove the radius (0 wor
   shape Layer's `--corner-radius` — a radius over half the region
   rectangle's shorter side is refused, never clamped, through the same
   validator — and a negative radius is refused at the command boundary. It
-  needs a visible region (a radius without one, or combined with the
-  region's removal, is refused), and removing the region removes its
+  needs a visible region (a positive radius without one, or combined with
+  the region's removal, is refused; the removal forms are idempotent), and
+  removing the region removes its
   radius. Corner pixels outside the radius are transparent, the outline and
   shadow follow the rounded edge, and painted extents stay the rectangle's.
   The radius rides the same revision hash field when present, so pre-#212

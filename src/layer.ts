@@ -331,7 +331,7 @@ export function validateRectangleCornerRadius(radius: number, width: number, hei
 /**
  * The canonical shape-content identity (DEC-001): the shape's parameters in
  * their canonical form, hashed. The one string every shape revision's
- * `contentHash` derives from — the stored parameters are hash-covered by the the
+ * `contentHash` derives from — the stored parameters are hash-covered by the
  * revision document itself, and this identity pins the content form the same
  * way a byte hash pins retained bytes for image and text.
  */
@@ -2369,12 +2369,13 @@ async function resolveEditVisibleRegion(
   }
   const radius = radiusGiven ? parseVisibleRegionRadiusSpec(options.visibleRegionRadius!) : undefined;
   const rect = rectGiven ? parseVisibleRegionSpec(options.visibleRegion!) : prevRev.visibleRegion;
-  // A radius needs a region to round: a radius-only edit on a Layer without
-  // one, or a radius combined with the region's removal, is refused before
-  // anything is staged. A `none` radius with no region removes nothing —
-  // the same idempotent removal the rectangle's `none` has.
+  // A radius needs a region to round: a positive radius on a Layer without
+  // one, or combined with the region's removal, is refused before anything
+  // is staged. `none` — and 0, the no-rounding form — remove nothing: the
+  // same idempotent removal the rectangle's `none` has, so the two removal
+  // spellings agree even without a region.
   if (rect === undefined) {
-    if (radius !== undefined) {
+    if (radius !== undefined && radius > 0) {
       throw new Error(
         rectGiven
           ? `Invalid visible-region corner radius ${options.visibleRegionRadius}: Layer "${layerId}" cannot set a corner radius while removing the visible region — a radius rounds a region's corners, so it needs a visible region. Remove the radius (--visible-region-radius none) or keep the region.`

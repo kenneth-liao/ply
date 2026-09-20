@@ -394,7 +394,8 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         shorter side is REFUSED, never clamped, through the
                         same validator; a negative radius is refused. Needs
                         --visible-region in the same add (a fresh Layer has
-                        no region to round). Corner pixels outside the
+                        no region to round; 0 and none remove nothing).
+                        Corner pixels outside the
                         radius are transparent, and the outline and shadow
                         follow the rounded edge. Applied right after the
                         rectangle, before the anchor resolves.

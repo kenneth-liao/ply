@@ -55,9 +55,10 @@ refused at the command boundary. The command
 edits and removes INDEPENDENTLY of the rectangle (`none` or `0` removes the
 radius; an omitted option preserves it, even when the rectangle is re-set —
 a preserved radius that no longer fits the new rectangle is refused, the
-same refusal a re-issued radius would get); a radius needs a region — a
-radius on a Layer without one, or combined with the region's removal, is
-refused before publication — and removing the region removes its radius (one
+same refusal a re-issued radius would get); a positive radius needs a
+region — a positive radius on a Layer without one, or combined with the
+region's removal, is refused before publication (the removal forms are
+idempotent) — and removing the region removes its radius (one
 fact, one removal). One-command `composition add` accepts the radius in the
 documented order, applied right after the rectangle, still before the anchor
 resolves. The paint is the clip rect's `rx`: the same rectangle (painted
