@@ -5,7 +5,8 @@ composer destination. Project-scoped sharing and retained Render history have
 shipped, as have uniform source-image generation with caller-owned content policy
 and independently invoked local Matting; caller-parameterized region checking
 has shipped for Compositions (`ply composition check`), as have its guideline
-overlay view (`ply composition guidelines`) and the starter region-file
+overlay view (`ply composition guidelines`), the comparison sheet
+(`ply composition sheet`, spec #226 US-006), and the starter region-file
 relocation (`examples/youtube-regions.json`).
 `README.md` documents the current command surface;
 `ISA.md` owns destination criteria and progress. Decisions live in `docs/adr/`.
@@ -98,6 +99,17 @@ The image produced locally from a resolved Composition. Its manifest preserves
 exact Layer revisions and required content so later edits do not change it.
 A Render is always delivered at the canvas size; its supersample factor is
 render quality, never Composition geometry (ADR-0022).
+
+**Comparison sheet** (DEC-010):
+One labelled PNG grid laid out from an ordered list of inputs — Composition
+names (rendered current through the existing render path), retained Render
+manifests (painted from their pinned historical inputs exactly as replay
+repaints them), and local image files. A review artifact like the guideline
+view: no Render manifest, nothing added to Render history, the same
+export-target boundary and recorded-output refusals. It is assembled
+locally (DEC-007); it offers no differencing, overlays, or HTML output, and
+the legacy `scene compare` is untouched.
+_Avoid_: contact sheet via external tools, a second rendering authority
 
 **Generation Job**:
 An online request that produces image content for a Layer and records the
