@@ -268,6 +268,59 @@ test("--scale shape refusals are usage errors on both surfaces", async () => {
   }
 });
 
+test("--scale with content replacement is refused, and nothing publishes (INT-1)", async () => {
+  const { layerId, revisionId } = await addImage("hero");
+  const other = path.join(tempDir, "other.png");
+  await writeFile(other, solidPng(32, 32, [0, 0, 255, 255]));
+  const res = await editJson(layerId, ["--image", other, "--scale", "2"]);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toBe(
+    `Scale and content replacement are separate edits: Layer "${layerId}" cannot replace its source and set --scale in one edit, because the effective-size cap reads the retained content's intrinsic size.`,
+  );
+  // Refused before any staging: the revision is unchanged.
+  expect(await revisionIdOf(layerId)).toBe(revisionId);
+  // The retained content still resolves to the original file's identity.
+  const inspect = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(JSON.parse(inspect.stdout).layer.currentRevision.width).toBe(64);
+});
+
+// ---------------------------------------------------------------------------
+// The over-cap path: the boundary accepts any finite positive number; the
+// MAX_DIMENSION cap is the publication path's refusal (INT-2).
+// ---------------------------------------------------------------------------
+
+for (const overCap of ["8193", "99999"]) {
+  test(`--scale ${overCap} is over the cap: refused on edit, nothing publishes (INT-2)`, async () => {
+    const { layerId, revisionId } = await addImage("hero");
+    const res = await editJson(layerId, ["--scale", overCap]);
+    expect(res.code).toBe(1);
+    expect(JSON.parse(res.stdout).error).toBe(
+      `Invalid scale ${overCap}: must be a finite number between 0 and 8192.`,
+    );
+    expect(await revisionIdOf(layerId)).toBe(revisionId);
+  });
+
+  test(`--scale ${overCap} is over the cap: refused on add, nothing publishes (INT-2)`, async () => {
+    const compDoc = JSON.parse(await readFile(path.join(projDir, "compositions", "poster.json"), "utf8"));
+    const layersBefore = (await readdir(path.join(projDir, "layers"))).filter((f) => f.endsWith(".json"));
+    const contentBefore = await readdir(path.join(projDir, "content"));
+    const res = await invoke([
+      "composition", "add", "poster", "too-big", "--image", imagePath, "--scale", overCap,
+      "--project", projDir, "--json",
+    ]);
+    expect(res.code).toBe(1);
+    expect(JSON.parse(res.stdout).error).toBe(
+      `Invalid scale ${overCap}: must be a finite number between 0 and 8192.`,
+    );
+    const compAfter = JSON.parse(await readFile(path.join(projDir, "compositions", "poster.json"), "utf8"));
+    expect(compAfter.layers.map((l: { name: string }) => l.name)).toEqual(
+      compDoc.layers.map((l: { name: string }) => l.name),
+    );
+    expect((await readdir(path.join(projDir, "layers"))).filter((f) => f.endsWith(".json"))).toEqual(layersBefore);
+    expect(await readdir(path.join(projDir, "content"))).toEqual(contentBefore);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // A Render retained before the change replays byte-identically.
 // ---------------------------------------------------------------------------
