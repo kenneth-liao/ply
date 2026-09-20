@@ -371,6 +371,13 @@
 
 ### Fixed
 
+- `ply composition sheet` names both readings when an input is neither an
+  existing local file nor a Composition (#234, spec #226 US-007): a missing
+  file path such as `missing.png` used to be refused only as a Composition
+  name with invalid characters; the refusal now says the input is neither,
+  keeps the underlying reason, and names `ply composition list`. A directory
+  and an existing-but-unreadable path are refused as such, never as missing.
+
 - Gradient edge stops honour the CSS default position (#251, spec #207
   US-001 fill bullet, DEC-011): in a mixed stop list, an omitted FIRST stop
   position resolves to 0 and an omitted LAST to 100 — before, `resolveMissing`

@@ -356,19 +356,31 @@ export async function renderComparisonSheet(
     const target = path.resolve(input);
     // stat() (not lstat): a symlink to an image is an image — the same
     // followed-link reading every other local-file input takes. A missing
-    // or non-regular target means the token must be a Composition name.
+    // target means the token must be a Composition name.
     let st;
     try {
       st = await stat(target);
-    } catch {
+    } catch (err) {
+      // Only a path that does not exist falls through to the Composition
+      // reading; an existing but unreadable path says so.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw new Error(`Sheet input "${input}" cannot be read: ${(err as Error).message}`);
+      }
       st = undefined;
+    }
+    if (st !== undefined && st.isDirectory()) {
+      throw new Error(`Sheet input "${input}" is a directory — pass an image file, a Render manifest, or a Composition name.`);
     }
     if (st === undefined || !st.isFile()) {
       // Not an existing regular file → the token must be a Composition name,
       // rendered current through the existing render path (no second
       // rendering authority, DEC-007).
       const snapshot = await resolveCompositionSnapshot(resolvedRoot, input).catch((err: Error) => {
-        throw new Error(`Sheet input "${input}": ${err.message}`);
+        throw new Error(
+          `Sheet input "${input}" is neither an existing local file nor a Composition in this Project ` +
+            `(${err.message.replace(/\.$/, "")}). Check the path, or list Compositions with 'ply composition list'.`,
+        );
       });
       // The render path's default quality: the same supersampled paint
       // `composition render` performs (its factor cap is checked here too).
