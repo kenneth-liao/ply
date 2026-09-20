@@ -371,6 +371,12 @@
 
 ### Fixed
 
+- `ply composition add --help` names the Layer kinds `--resize-to` and
+  `--scale` really accept (#234 review INT-1, spec #226 DEC-001): it said
+  "image Layers only" and "image and text Layers", while shape Layers
+  accept both and `ply layer edit --help` said so. The kind phrases now
+  have one home in `layer-options.ts`, interpolated by both help texts and
+  pinned by a CLI-surface test. Behaviour is unchanged.
 - `ply composition sheet` names both readings when an input is neither an
   existing local file nor a Composition (#234, spec #226 US-007): a missing
   file path such as `missing.png` used to be refused only as a Composition

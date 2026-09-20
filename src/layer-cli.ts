@@ -42,6 +42,8 @@ import {
   validateTextTypographyControls,
   type LayerOptionArgs,
   type OptionParse,
+  RESIZE_TO_HELP_KINDS,
+  SCALE_HELP_KINDS,
 } from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { formatFill } from "./fill.js";
@@ -240,11 +242,11 @@ Options:
                         ratio is always preserved. Resizing changes placement
                         only: retained source bytes and lineage never change.
                         For an absolute setter use --scale instead.
-  --resize-to <WxH>     Set the effective painted size in px (image and
-                        shape Layers only — text has no intrinsic pixel
-                        size; use --resize; a shape's intrinsic size is its
-                        --size geometry). "800x600" deliberately changes
-                        the aspect ratio; "800x" or "x600" preserves the
+  --resize-to <WxH>     Set the effective painted size in px
+                        (${RESIZE_TO_HELP_KINDS} — text has no
+                        intrinsic pixel size; use --resize; a shape's
+                        intrinsic size is its --size geometry).
+                        "800x600" deliberately changes the aspect ratio; "800x" or "x600" preserves the
                         Layer's current aspect ratio (a deliberate aspect
                         change survives). Mutually exclusive with --resize
                         and with content-replacement options. The Layer's
@@ -253,8 +255,9 @@ Options:
   --scale <factor>      Set the Layer's scale to an ABSOLUTE factor: replaces
                         the current scale (uniform, both axes), so the same
                         command twice keeps the same scale — never compounding
-                        (unlike the relative --resize factor). Works on image
-                        text, and shape Layers, writes the one canonical scale (no
+                        (unlike the relative --resize factor). Works on
+                        ${SCALE_HELP_KINDS}, writes the one
+                        canonical scale (no
                         second scale field), and never changes retained
                         pixels. Mutually exclusive with --resize and
                         --resize-to.

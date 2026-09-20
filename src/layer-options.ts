@@ -181,6 +181,15 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
  *  (or misspelled) entry a compile error whenever the table changes. */
+/**
+ * The Layer kinds each resize form works on, as the help texts word them.
+ * One home (DEC-001, #234 review INT-1): 'composition add --help' and
+ * 'layer edit --help' both interpolate these, so the two surfaces cannot
+ * name different kinds for the same option.
+ */
+export const RESIZE_TO_HELP_KINDS = "image and shape Layers only";
+export const SCALE_HELP_KINDS = "image, text, and shape Layers";
+
 export const LAYER_OPTION_PARSE_ARGS = {
   image: { type: "string" },
   "from-generation": { type: "string" },

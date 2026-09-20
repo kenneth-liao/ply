@@ -60,6 +60,8 @@ import {
   SHAPE_CONTENT_KEYS,
   TEXT_CONTENT_KEYS,
   type LayerOptionArgs,
+  RESIZE_TO_HELP_KINDS,
+  SCALE_HELP_KINDS,
 } from "./layer-options.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill } from "./fill.js";
@@ -401,15 +403,17 @@ and reported by 'measure' exactly as a multi-command Layer's are.
   --resize <factor>     Scale the Layer by a RELATIVE factor (multiplies
                         scale 1 at creation); aspect ratio preserved. For an
                         absolute setter use --scale instead.
-  --resize-to <WxH>     Set the effective painted size in px (image Layers
-                        only — text has no intrinsic pixel size; use
-                        --resize). "800x600" changes the aspect ratio;
+  --resize-to <WxH>     Set the effective painted size in px
+                        (${RESIZE_TO_HELP_KINDS} — text has no
+                        intrinsic pixel size; use --resize).
+                        "800x600" changes the aspect ratio;
                         "800x" or "x600" preserves it. Mutually exclusive
                         with --resize.
   --scale <factor>      Set the Layer's scale to an ABSOLUTE factor (uniform,
                         both axes): the same command keeps the same scale,
-                        never compounding. Works on image and text Layers;
-                        mutually exclusive with --resize and --resize-to.
+                        never compounding. Works on
+                        ${SCALE_HELP_KINDS}; mutually exclusive
+                        with --resize and --resize-to.
   --rotate <deg>        Rotate to an ABSOLUTE angle in degrees, clockwise
                         positive, about the Layer's (x, y) corner.
   --flip <mode>         Flip to an ABSOLUTE reflection state: horizontal,
