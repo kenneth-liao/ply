@@ -577,7 +577,7 @@ async function addBar(): Promise<string> {
   return JSON.parse(add.stdout).use.layerId as string;
 }
 
-test("a shape Layer cannot become an image or text Layer by edit, and its parameters are not editable", async () => {
+test("a shape Layer cannot become an image or text Layer by edit", async () => {
   const layerId = await addBar();
   const before = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
   const beforeRev = JSON.stringify(JSON.parse(before.stdout).layer.currentRevision);
@@ -585,17 +585,14 @@ test("a shape Layer cannot become an image or text Layer by edit, and its parame
   const cases: [string[], string][] = [
     [["--image", "nope.png"], "is a shape Layer"],
     [["--text", "hi", "--font", "Anton"], "is a shape Layer"],
-    [["--shape", "ellipse"], "not editable"],
-    [["--size", "10x10"], "not editable"],
-    [["--corner-radius", "5"], "not editable"],
-    [["--fill", "#00ff00"], "not editable"],
   ];
   for (const [flags, expected] of cases) {
     const res = await invoke(["layer", "edit", layerId, ...flags, "--project", projDir, "--json"]);
     expect(res.code).toBe(1);
     expect(JSON.parse(res.stdout).error).toContain(expected);
   }
-  // Every refusal left live state unchanged.
+  // Every refusal left live state unchanged. The shape parameters themselves
+  // became absolute setters in #209 (test/layer-shape-edit.test.ts).
   const after = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
   expect(JSON.stringify(JSON.parse(after.stdout).layer.currentRevision)).toBe(beforeRev);
 });

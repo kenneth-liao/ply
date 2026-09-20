@@ -147,6 +147,35 @@ Options:
                         fonts — Archivo 62-125 (default 100); static faces
                         accept only their implicit width 100
   --color <hex>         Text color as #RGB or #RRGGBB
+  --shape <geometry>    Set a shape Layer's geometry to an ABSOLUTE value:
+                        rectangle or ellipse (#209). Omitted keeps the
+                        current geometry; switching to ellipse drops a
+                        carried corner radius (a rectangle fact with no
+                        ellipse meaning), and an explicitly supplied radius
+                        on an ellipse is refused. Refused on image and text
+                        Layers — a Layer's kind is stable across edits.
+  --size <WxH>          Set a shape Layer's geometry size to an ABSOLUTE
+                        "<W>x<H>" in canvas px (#209): the shape's intrinsic
+                        pixel facts. Omitted keeps the current size. A
+                        carried corner radius that exceeds the new range is
+                        refused (pass --corner-radius in the same edit).
+                        Mutually exclusive with --resize, --resize-to, and
+                        --scale in one edit (the effective-size cap and the
+                        resize reference read the intrinsic size). Refused
+                        on image and text Layers (kind stability).
+  --corner-radius <px>  Set a shape rectangle's corner radius to an ABSOLUTE
+                        value in px, 0 to half the shorter side (#209):
+                        omitted keeps the current radius, 0 removes it (the
+                        same look as absent, never stored). Refused on an
+                        ellipse and on image and text Layers (kind
+                        stability).
+  --fill <color>        Set a shape Layer's fill to an ABSOLUTE value
+                        (#209): the same solid-colour grammar as
+                        composition add --shape — a hex color (#RGB,
+                        #RRGGBB, #RRGGBBAA — alpha allowed), optionally with
+                        the explicit "solid:" prefix. Omitted keeps the
+                        current fill. Refused on image and text Layers (kind
+                        stability).
   --x <num>             X position on canvas
   --y <num>             Y position on canvas
   --opacity <num>       Layer opacity between 0 and 1
@@ -183,9 +212,10 @@ Options:
                         into plain placement (x, y) — no anchor facts are
                         stored, and "ply composition measure" verifies where
                         the ink landed. It is its own edit: it cannot be
-                        combined with --resize, --scale, --rotate, --flip, or
-                        content replacement (the reference ink would be
-                        ambiguous);
+                        combined with --resize, --scale, --rotate, --flip,
+                        shape parameters (--shape, --size, --corner-radius,
+                        --fill), or content replacement (the reference ink
+                        would be ambiguous);
                         make the transform/content edit first, then anchor.
                         --opacity combines freely. A subsequent content edit
                         keeps the resolved x/y literally.
@@ -689,11 +719,10 @@ async function run() {
       }
       const flip = parsedFlip.value;
 
-      // Shape content options (#208): grammar at the command boundary through
-      // the SAME parsers the add surface runs, then the edit path refuses
-      // them on every kind — shape parameters are not editable on this
-      // surface yet (the sibling edit-setters ticket owns the absolute
-      // setters), so a supplied option is refused with live state unchanged.
+      // Shape content options (#208, #209): grammar at the command boundary
+      // through the SAME parsers the add surface runs; semantics are the
+      // edit path's absolute setters on a shape Layer and the kind-stability
+      // refusal on image and text Layers, both before anything is staged.
       const parsedEditShape = parseShapeGeometry(values.shape);
       if (!parsedEditShape.ok) {
         output({ ok: false, error: parsedEditShape.error }, isJson);
@@ -770,7 +799,7 @@ async function run() {
             {
               ok: false,
               error:
-                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, --weight, --width, --tracking, --line-height, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
+                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, shape parameters (--shape, --size, --corner-radius, --fill), --weight, --width, --tracking, --line-height, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform, content, or effect edit first, then anchor.",
             },
             isJson,
           );

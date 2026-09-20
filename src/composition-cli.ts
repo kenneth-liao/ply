@@ -94,10 +94,10 @@ composition — Composition authoring and inspection
       Layer's content IS its parameters. A full-canvas background is an
       ordinary shape Layer sized to the canvas. Non-positive size, a
       negative or oversized radius, and a malformed color are refused
-      before anything is published. Shape parameters (--shape, --size,
-      --corner-radius, --fill) are not editable on 'layer edit' yet.
-      Mutually exclusive with --image, --text, --from-generation, and
-      --from-matte.
+      before anything is published. On 'layer edit' each shape parameter
+      (--shape, --size, --corner-radius, --fill) is an absolute setter
+      (#209). Mutually exclusive with --image, --text, --from-generation,
+      and --from-matte.
 
   ply composition import <target> <source> [options]
       Import a Composition's Layer references into another Composition

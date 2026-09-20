@@ -627,17 +627,37 @@ Non-positive size, a negative or oversized corner radius (0 to half the
 shorter side — a larger radius would be silently clamped, so it is refused
 instead of pinned with parameters its paint would not obey), a radius on an
 ellipse, and a malformed colour are refused before anything is published,
-naming the parameter and its range. Shape parameters (`--shape`, `--size`,
-`--corner-radius`, `--fill`) are not editable on `layer edit` yet; edits
-today carry the parameters verbatim and change placement, opacity, the
-canonical transform, and the shadow/outline effects. `inspect`, `measure`,
-and `layer review` report a shape Layer's parameters; `measure` reports its
-content box, transformed box, and painted extents like any other Layer.
-Cross-Project import and fork give the shape an independent identity with
-equal parameters, and a Render containing a shape replays byte-identically
-after later edits and Project relocation — a shape's content identity is
-derived from the canonical parameter form, so there is nothing to retain and
+naming the parameter and its range. On `layer edit` each shape parameter
+(`--shape`, `--size`, `--corner-radius`, `--fill`) is an absolute setter
+(#209): an omitted parameter keeps its value, an invalid value is refused
+without advancing live state, and a Layer's kind is stable — a shape cannot
+become image or text by edit, and the reverse. `--size` is the shape's
+intrinsic pixel size, so `--resize-to` resolves against it like an image's
+dimensions (text has no intrinsic pixel size and keeps that restriction);
+`--size` and the resize forms are separate edits. Position, opacity, scale,
+rotation, flip, anchored placement, shadow, and outline work on shape
+Layers as on any other kind. `inspect`, `measure`, and `layer review`
+report a shape Layer's parameters; `measure` reports its content box,
+transformed box, and painted extents like any other Layer. Cross-Project
+import and fork give the shape an independent identity with equal
+parameters, and a Render containing a shape replays byte-identically after
+later edits and Project relocation — a shape's content identity is derived
+from the canonical parameter form, so there is nothing to retain and
 nothing to lose.
+
+Refitting a shape is an edit, not a remake (#209) — each parameter is an
+absolute setter, an omitted parameter keeps its value, and kind is stable:
+
+```bash
+# Refit the bar to a new headline: absolute size and fill, geometry kept:
+ply layer edit <layerId> --size 560x110 --fill "#e11d48" -p ~/projects/my-poster
+# Round the corners (0 removes the radius); switch the geometry:
+ply layer edit <layerId> --corner-radius 24 -p ~/projects/my-poster
+ply layer edit <layerId> --shape ellipse -p ~/projects/my-poster
+# Placement, transforms, and effects work as on any other Layer:
+ply layer edit <layerId> --anchor center,center --x 640 --y 360 -p ~/projects/my-poster
+ply layer edit <layerId> --shadow "0,4,8,#00000066" -p ~/projects/my-poster
+```
 
 ## Region checking (new surface)
 
