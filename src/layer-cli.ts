@@ -59,7 +59,9 @@ must match the address).
       Resize changes placement, never retained pixels: --resize <factor>
       multiplies the current scale (relative), --resize-to <WxH> sets an
       absolute effective size (image Layers only; one omitted axis preserves
-      the aspect ratio). --rotate sets an ABSOLUTE rotation in degrees: the
+      the aspect ratio), and --scale <factor> sets the absolute scale — the
+      same command twice keeps the same scale (never compounding).
+      --rotate sets an ABSOLUTE rotation in degrees: the
       same command twice is still the same angle (unlike the relative resize
       factor), and 0 removes the rotation. --flip sets an ABSOLUTE reflection
       state (horizontal, vertical, both, or none): it replaces the current
@@ -164,8 +166,9 @@ Options:
                         into plain placement (x, y) — no anchor facts are
                         stored, and "ply composition measure" verifies where
                         the ink landed. It is its own edit: it cannot be
-                        combined with --resize, --rotate, --flip, or content
-                        replacement (the reference ink would be ambiguous);
+                        combined with --resize, --scale, --rotate, --flip, or
+                        content replacement (the reference ink would be
+                        ambiguous);
                         make the transform/content edit first, then anchor.
                         --opacity combines freely. A subsequent content edit
                         keeps the resolved x/y literally.
@@ -175,6 +178,7 @@ Options:
                         gives 4×). Works on image and text Layers; the aspect
                         ratio is always preserved. Resizing changes placement
                         only: retained source bytes and lineage never change.
+                        For an absolute setter use --scale instead.
   --resize-to <WxH>     Set the effective painted size in px (image Layers
                         only — text has no intrinsic pixel size; use
                         --resize). "800x600" deliberately changes the aspect
@@ -183,6 +187,14 @@ Options:
                         Mutually exclusive with --resize and with
                         content-replacement options. The Layer's (x, y) stays
                         its top-left corner: it grows/shrinks right and down.
+  --scale <factor>      Set the Layer's scale to an ABSOLUTE factor: replaces
+                        the current scale (uniform, both axes), so the same
+                        command twice keeps the same scale — never compounding
+                        (unlike the relative --resize factor). Works on image
+                        and text Layers, writes the one canonical scale (no
+                        second scale field), and never changes retained
+                        pixels. Mutually exclusive with --resize and
+                        --resize-to.
   --rotate <deg>        Rotate the Layer to an ABSOLUTE angle in degrees,
                         replacing any previous rotation: --rotate 45 twice is
                         still 45° (never 90° — unlike the relative --resize
@@ -603,7 +615,7 @@ async function run() {
       // boundary through the shared one-path validator (DEC-001); scale
       // semantics, caps, and kind conflicts are enforced by the edit path
       // before any staging, so invalid resize inputs never advance live state.
-      const resize = parseResizeOptions(values.resize, values["resize-to"]);
+      const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
       if (!resize.ok) {
         output({ ok: false, error: resize.error }, isJson);
         process.exitCode = 2;
@@ -687,7 +699,7 @@ async function run() {
             {
               ok: false,
               error:
-                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --rotate, --flip, --shadow, --outline, --weight, --width, --tracking, --line-height, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
+                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, --weight, --width, --tracking, --line-height, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform or effect edit first, then anchor.",
             },
             isJson,
           );
@@ -784,6 +796,7 @@ async function run() {
           opacity,
           resizeFactor,
           resizeTo,
+          scale: resize.value.scale,
           rotateDeg,
           flip,
           shadow: shadowSpec,

@@ -1233,6 +1233,18 @@ export interface EditLayerOptions {
    */
   resizeTo?: { width?: number; height?: number };
   /**
+   * Set the Layer's canonical scale to an ABSOLUTE factor (#231, spec #226
+   * US-004, DEC-005, ADR-0016): sets the Layer's canonical scale (uniform
+   * both axes), replacing any previous scale — repeating the same command
+   * keeps the same scale, never compounding (unlike the relative --resize
+   * factor). Writes the one canonical scale representation; no second
+   * scale field. Mutually exclusive with the other resize forms (--resize,
+   * --resize-to) and with content-replacement options — the effective-size
+   * cap check reads the retained content's intrinsic facts, so one edit
+   * carries one intent.
+   */
+  scale?: number;
+  /**
    * Rotate the Layer to an ABSOLUTE angle in degrees (#134, ADR-0016): sets
    * the Layer's canonical rotation, replacing any previous angle — repeating
    * the same command keeps the same angle, and 0 removes the rotation. Unlike
@@ -1645,19 +1657,47 @@ export function resolveEditScale(
 ): LayerTransformScale {
   const hasFactor = options.resizeFactor !== undefined;
   const hasTarget = options.resizeTo !== undefined;
-  if (!hasFactor && !hasTarget) {
+  const hasScale = options.scale !== undefined;
+  if (!hasFactor && !hasTarget && !hasScale) {
     return { scaleX: prevRev.scaleX, scaleY: prevRev.scaleY };
   }
 
-  if (hasFactor && hasTarget) {
-    throw new Error("--resize and --resize-to are mutually exclusive resize forms: use one per edit.");
+  // The ONE resize-form exclusivity rule (#133, extended by #231 to the
+  // absolute --scale setter): at most one of the three forms per edit. The
+  // refusal runs before any staging, so a conflicting request never
+  // advances live state.
+  const formCount = [hasFactor, hasTarget, hasScale].filter(Boolean).length;
+  if (formCount > 1) {
+    if (hasFactor && hasTarget) {
+      throw new Error("--resize and --resize-to are mutually exclusive resize forms: use one per edit.");
+    }
+    throw new Error(
+      hasFactor && hasScale
+        ? "--resize and --scale are mutually exclusive: use one resize form per edit (--resize is relative, --scale sets the absolute scale)."
+        : "--resize-to and --scale are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale sets the absolute scale).",
+    );
   }
   const replacesContent =
     options.image !== undefined || options.fromGeneration !== undefined || options.fromMatte !== undefined;
   if (replacesContent) {
     throw new Error(
-      `Resize and content replacement are separate edits: Layer "${layerId}" cannot replace its source and resize in one edit, because the resize reference size would be ambiguous.`,
+      hasScale
+        ? `Scale and content replacement are separate edits: Layer "${layerId}" cannot replace its source and set --scale in one edit, because the effective-size cap reads the retained content's intrinsic size.`
+        : `Resize and content replacement are separate edits: Layer "${layerId}" cannot replace its source and resize in one edit, because the resize reference size would be ambiguous.`,
     );
+  }
+
+  if (hasScale) {
+    // Absolute scale setter (#231): the value IS the canonical scale, so
+    // repeating the command is idempotent by construction. The same bounds
+    // and effective-size cap the resize paths publish apply here.
+    const scale = options.scale!;
+    if (!Number.isFinite(scale) || scale <= 0 || scale > MAX_DIMENSION) {
+      throw new Error(
+        `Invalid scale ${scale}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+      );
+    }
+    return boundedScale({ scaleX: scale, scaleY: scale }, prevRev, layerId);
   }
 
   if (hasFactor) {
@@ -2223,7 +2263,7 @@ export async function editLayerInternal(
           height: roundEffective(prevRev.height * scale.scaleY),
         }
       : { scaleX: scale.scaleX, scaleY: scale.scaleY };
-  const hasResize = options.resizeFactor !== undefined || options.resizeTo !== undefined;
+  const hasResize = options.resizeFactor !== undefined || options.resizeTo !== undefined || options.scale !== undefined;
   const hasRotate = options.rotateDeg !== undefined;
   const rotatedReport = { rotationDeg };
   // Narrowed once: a defined flip is always a validated literal mode, so the

@@ -111,6 +111,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "anchor": return ["right"];
     case "resize": return ["1.25"];
     case "resize-to": return ["96x"];
+    case "scale": return ["2"];
     case "rotate": return ["12"];
     case "flip": return ["horizontal"];
     case "shadow": return ["2,3,4,#000000"];
@@ -167,6 +168,11 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
       // "96x" on a 64px-wide image: aspect preserved.
       expect(rev.scaleX).toBe(1.5);
       expect(rev.scaleY).toBe(1.5);
+      break;
+    case "scale":
+      // The absolute scale setter writes the canonical scale directly.
+      expect(rev.scaleX).toBe(2);
+      expect(rev.scaleY).toBe(2);
       break;
     case "rotate": expect(rev.rotationDeg).toBe(12); break;
     case "flip":
@@ -347,6 +353,6 @@ test("composition add: --anchor requires explicit targets for the anchored axes"
 
 test("the one-command application order comes from the option table (transform, anchor, effect)", () => {
   expect(
-    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", outline: "1", flip: "1" }),
-  ).toEqual(["resize", "rotate", "flip", "anchor", "shadow", "outline"]);
+    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", scale: "1", outline: "1", flip: "1" }),
+  ).toEqual(["resize", "resize-to", "scale", "rotate", "flip", "anchor", "shadow", "outline"]);
 });

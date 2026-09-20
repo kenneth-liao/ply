@@ -102,6 +102,7 @@ export type LayerOptionKey =
   | "anchor"
   | "resize"
   | "resize-to"
+  | "scale"
   | "rotate"
   | "flip"
   | "shadow"
@@ -134,6 +135,7 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "anchor", group: "placement", appliesTo: ["image", "text"], editOption: true },
   { key: "resize", group: "transform", appliesTo: ["image", "text"], editOption: true },
   { key: "resize-to", group: "transform", appliesTo: ["image"], editOption: true },
+  { key: "scale", group: "transform", appliesTo: ["image", "text"], editOption: true },
   { key: "rotate", group: "transform", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
   { key: "flip", group: "transform", appliesTo: ["image", "text"], editOption: true },
   { key: "shadow", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
@@ -161,6 +163,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   anchor: { type: "string" },
   resize: { type: "string" },
   "resize-to": { type: "string" },
+  scale: { type: "string" },
   rotate: { type: "string" },
   flip: { type: "string" },
   shadow: { type: "string" },
@@ -544,18 +547,37 @@ export function parseGenerationOutputValue(raw: string): OptionParse<string> {
 }
 
 /**
- * The one validation path for the resize pair (--resize, --resize-to):
- * mutual exclusivity, then each form's shape. Scale semantics, caps, and
- * kind conflicts stay in the ingestion paths.
+ * The one validation path for the resize/scale family (--resize,
+ * --resize-to, --scale): the three forms are mutually exclusive — one
+ * intent per edit — then each form's shape. Scale semantics, caps, and
+ * kind conflicts stay in the ingestion paths (`resolveEditScale`, whose
+ * exclusivity rule this mirrors).
  */
 export function parseResizeOptions(
   resize: string | undefined,
   resizeTo: string | undefined,
-): OptionParse<{ resizeFactor?: number; resizeTo?: { width?: number; height?: number } }> {
-  if (resize !== undefined && resizeTo !== undefined) {
+  scale?: string,
+): OptionParse<{ resizeFactor?: number; resizeTo?: { width?: number; height?: number }; scale?: number }> {
+  const supplied = [resize !== undefined, resizeTo !== undefined, scale !== undefined].filter(Boolean).length;
+  if (supplied > 1) {
+    // Pair-specific wording, shared with resolveEditScale's ONE exclusivity
+    // rule — the boundary and the publication path refuse with the same
+    // text. With all three forms supplied the first pair names itself.
+    if (resize !== undefined && resizeTo !== undefined) {
+      return {
+        ok: false,
+        error: "--resize and --resize-to are mutually exclusive resize forms: use one per edit.",
+      };
+    }
+    if (resize !== undefined && scale !== undefined) {
+      return {
+        ok: false,
+        error: "--resize and --scale are mutually exclusive: use one resize form per edit (--resize is relative, --scale sets the absolute scale).",
+      };
+    }
     return {
       ok: false,
-      error: "--resize and --resize-to are mutually exclusive resize forms: use one per edit.",
+      error: "--resize-to and --scale are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale sets the absolute scale).",
     };
   }
   let resizeFactor: number | undefined;
@@ -585,7 +607,17 @@ export function parseResizeOptions(
       ...(m[2] !== undefined ? { height: Number(m[2]) } : {}),
     };
   }
-  return { ok: true, value: { ...(resizeFactor !== undefined ? { resizeFactor } : {}), ...(target !== undefined ? { resizeTo: target } : {}) } };
+  let scaleValue: number | undefined;
+  if (scale !== undefined) {
+    scaleValue = parseNumericArgument(scale);
+    if (!Number.isFinite(scaleValue) || scaleValue <= 0) {
+      return {
+        ok: false,
+        error: `Scale (--scale) must be a finite number greater than 0 (got "${scale}").`,
+      };
+    }
+  }
+  return { ok: true, value: { ...(resizeFactor !== undefined ? { resizeFactor } : {}), ...(target !== undefined ? { resizeTo: target } : {}), ...(scaleValue !== undefined ? { scale: scaleValue } : {}) } };
 }
 
 /** --rotate: a finite number of degrees, clockwise positive. */
