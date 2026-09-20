@@ -148,6 +148,28 @@ Error: Font "IBM Plex Mono" is a static face at weight 500 — the current
 weight 800 and width 122 cannot be kept; add --weight 500 --width 100.
 ```
 
+## Caller fonts — limits and refusals
+
+A caller-supplied font file (`--font-file`, #232) follows the same rules
+as bundled faces, against the file's own facts:
+
+- **Formats.** TrueType (`.ttf`) and CFF-based OpenType (`.otf`) faces are
+  accepted; WOFF, WOFF2, and TrueType collections (`.ttc`) are refused.
+- **Axes.** Weight and width validate against the axes the file really
+  contains — a variable font's real fvar ranges (a file without a `wdth`
+  axis accepts only the implicit width 100), or a static face's own weight
+  (its OS/2 `usWeightClass`) and implicit width. An out-of-range value is
+  refused naming the file's allowed range, and the file's bytes are
+  retained with the Layer — rendering, measure, replay, relocation, and
+  cross-Project import never need the original file.
+- **Publication gate.** A file that is not a usable font, and a file the
+  rendering browser cannot resolve, are refused before anything is
+  published — no Layer, no use, no content. The render-time
+  family-resolution probe re-verifies every caller font.
+- **No synthesis.** The emitted `@font-face` declares the face's real
+  weight/stretch and the text element disables font synthesis, so the
+  browser never paints a look the bytes do not contain.
+
 ## Exit codes
 
 Every composer command reports its outcome through its exit code:

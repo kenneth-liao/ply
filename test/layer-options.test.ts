@@ -98,7 +98,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
 
   it("the edit-option enumeration matches the established refusal list order", () => {
     expect(layerEditOptionKeys()).toEqual([
-      "image", "from-generation", "from-matte", "text", "font", "font-size", "color",
+      "image", "from-generation", "from-matte", "text", "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline",
     ]);
@@ -133,7 +133,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
 
   it("content-kind membership is derived from the text option set", () => {
     expect(TEXT_CONTENT_KEYS).toContain("text");
-    for (const key of ["font", "font-size", "color", "weight", "width", "tracking", "line-height"] as LayerOptionKey[]) {
+    for (const key of ["font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height"] as LayerOptionKey[]) {
       expect(TEXT_CONTENT_KEYS).toContain(key);
     }
     expect(layerContentKindConflict({ image: "a.png", tracking: "1" }, "image", "edit")).toBeDefined();
@@ -147,7 +147,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "add")).toBeUndefined();
     // The edit surface reads presence exactly: the exclusivity refusal fires.
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "edit")).toBe(
-      "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
+      "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
     );
     // The other content kinds keep strict presence on both surfaces: a
     // blank --image still conflicts with --from-generation/--from-matte.

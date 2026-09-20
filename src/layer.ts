@@ -14,7 +14,8 @@ import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js"
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
-import { staticFaceAcceptedAxes, faceByContentHash, resolveFace, resolveTextAxes, fontAssetBytes, type FontFace, type TextAxes } from "./fonts.js";
+import { staticFaceAcceptedAxes, faceByContentHash, callerFontFace, verifyCallerFontResolves, resolveFace, resolveTextAxes, fontAssetBytes, type CallerFontFacts, type FontFace, type TextAxes } from "./fonts.js";
+import { readCallerFontFile } from "./font-file.js";
 import {
   selectGenerationOutput,
   retainGenerationRecord,
@@ -197,6 +198,20 @@ export interface LayerTextRevision extends LayerRevisionBase {
    */
   tracking?: number;
   lineHeight?: number;
+  /**
+   * Caller font facts (#232, spec #226 US-005, DEC-006): present if and only
+   * if the retained bytes came from a caller-supplied font file. Read ONCE
+   * from the file's own tables at ingestion (`parseCallerFont` in
+   * src/font-file.ts) — the family name the file declares, its glyph format,
+   * and the axis facts weight/width controls validate against on every later
+   * edit (via `callerFontFace`, the same FontFace shape bundled faces use).
+   * For a caller font these facts are the ONE home of the font's axis facts:
+   * the bundled-face registry is never consulted beside them. Bundled-face
+   * revisions store no such field, and renders retained before #232 — which
+   * have none — keep their ids and paint unchanged (the field is appended
+   * to the revision hash only when present).
+   */
+  callerFont?: CallerFontFacts;
 }
 
 export type LayerRevision = LayerImageRevision | LayerTextRevision;
@@ -756,7 +771,86 @@ export function normalizeStoredTextAxes(revision: {
   return { weight, width };
 }
 
-/** Compute content-derived revision hash for an immutable revision record.
+/**
+ * Canonical stored-caller-font-facts validation and normalization (#232,
+ * spec #226 US-005, DEC-006). The ONE reader for a revision's caller font
+ * facts: documents written before #232 lack the field, and absence IS the
+ * bundled-or-legacy form — every downstream reader projects through this
+ * function and never re-derives the facts. A present field must be a valid
+ * facts object — a nonempty string family, a known variant and glyph
+ * format, a finite static weight, or a variable face's real fvar ranges
+ * (min ≤ default ≤ max, finite) — anything else is a malformed document,
+ * refused loudly before the revision hash is consulted. A conformant
+ * object with extra unknown keys is tolerated and those keys are dropped
+ * from the resolved view (the same reader tolerance the scale/rotation/
+ * flip normalizers apply).
+ */
+export function normalizeStoredCallerFont(revision: { callerFont?: unknown }): CallerFontFacts | undefined {
+  const raw = revision.callerFont;
+  if (raw === undefined) {
+    return undefined;
+  }
+  const malformed = (what: string, value: unknown): Error =>
+    new Error(
+      `Malformed revision document: callerFont.${what} is malformed (got ${JSON.stringify(value)}).`,
+    );
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw malformed("facts", raw);
+  }
+  const facts = raw as Record<string, unknown>;
+  if (typeof facts.family !== "string" || facts.family.trim() === "") {
+    throw malformed("family", facts.family);
+  }
+  if (facts.variant !== "static" && facts.variant !== "variable") {
+    throw malformed("variant", facts.variant);
+  }
+  if (facts.format !== "truetype" && facts.format !== "opentype") {
+    throw malformed("format", facts.format);
+  }
+  const axis = (value: unknown, name: string): { min: number; default: number; max: number } => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw malformed(`axes.${name}`, value);
+    }
+    const a = value as Record<string, unknown>;
+    for (const field of ["min", "default", "max"] as const) {
+      if (typeof a[field] !== "number" || !Number.isFinite(a[field] as number)) {
+        throw malformed(`axes.${name}.${field}`, a[field]);
+      }
+    }
+    const min = a.min as number;
+    const def = a.default as number;
+    const max = a.max as number;
+    if (min > def || def > max) {
+      throw malformed(`axes.${name} range (min ${min}, default ${def}, max ${max})`, value);
+    }
+    return { min, default: def, max };
+  };
+  if (facts.variant === "static") {
+    if (typeof facts.weight !== "number" || !Number.isFinite(facts.weight)) {
+      throw malformed("weight", facts.weight);
+    }
+    return { family: facts.family, variant: "static", format: facts.format, weight: facts.weight };
+  }
+  if (!facts.axes || typeof facts.axes !== "object") {
+    throw malformed("axes", facts.axes);
+  }
+  const axes = facts.axes as Record<string, unknown>;
+  if (typeof axes.wght === "undefined") {
+    throw malformed("axes.wght", axes.wght);
+  }
+  return {
+    family: facts.family,
+    variant: "variable",
+    format: facts.format,
+    axes: {
+      wght: axis(axes.wght, "wght"),
+      ...(axes.wdth !== undefined ? { wdth: axis(axes.wdth, "wdth") } : {}),
+    },
+  };
+}
+
+/**
+ * Compute content-derived revision hash for an immutable revision record.
  * The scale fields are appended only when present, so revisions written
  * before #133 hash to exactly their pre-resize ids: older revisions retain
  * their original hash and paint meaning (#133). The rotation field is
@@ -769,7 +863,9 @@ export function normalizeStoredTextAxes(revision: {
  * present (as one resolved pair), so revisions written before #179 keep
  * their exact ids (#179, ADR-0021). The text tracking and line-height
  * fields are appended only when present, so revisions written before #187
- * keep their exact ids (#187, ADR-0021). */
+ * keep their exact ids (#187, ADR-0021). The caller font facts are
+ * appended only when present, so revisions written before #232 — bundled
+ * faces and legacy blobs — keep their exact ids (#232). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
@@ -792,7 +888,19 @@ export function computeRevisionHash(rev: LayerRevision): string {
       ? (typography.tracking !== undefined ? `:tracking(${typography.tracking})` : "") +
         (typography.lineHeight !== undefined ? `:lineheight(${typography.lineHeight})` : "")
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}${typographyFields}`).digest("hex").slice(0, 16)}`;
+  const callerFont = rev.kind === "text" ? normalizeStoredCallerFont(rev) : undefined;
+  const callerFontFields =
+    callerFont !== undefined
+      ? `:callerfont(${callerFont.family},${callerFont.variant},${callerFont.format}` +
+        (callerFont.variant === "static"
+          ? `,w${callerFont.weight})`
+          : `,wght(${callerFont.axes!.wght.min},${callerFont.axes!.wght.default},${callerFont.axes!.wght.max})` +
+            (callerFont.axes!.wdth !== undefined
+              ? `,wdth(${callerFont.axes!.wdth!.min},${callerFont.axes!.wdth!.default},${callerFont.axes!.wdth!.max})`
+              : "") +
+            ")")
+      : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}${typographyFields}${callerFontFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1027,6 +1135,11 @@ export async function readRevisionInternalFull(
   // normal-line-height form.
   const textTypography =
     revision.kind === "text" ? normalizeStoredTextTypography(revision) : undefined;
+  // Canonical caller font facts: validated and normalized at this same one
+  // boundary (#232, DEC-006) — a malformed stored facts object is refused
+  // loudly before the revision hash is consulted. Absence IS the
+  // bundled-or-legacy form.
+  const callerFont = revision.kind === "text" ? normalizeStoredCallerFont(revision) : undefined;
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -1125,6 +1238,7 @@ export async function readRevisionInternalFull(
           color: revision.color,
           ...(textAxes ?? {}),
           ...(textTypography ?? {}),
+          ...(callerFont !== undefined ? { callerFont } : {}),
           fontBytes: contentBytes.length,
         };
 
@@ -1177,6 +1291,17 @@ export interface EditLayerOptions {
   image?: string;
   text?: string;
   font?: string;
+  /**
+   * Use a caller-supplied font file (#232, spec #226 US-005, DEC-006): a
+   * path to a local TrueType/OpenType font. The bytes are read ONCE here,
+   * their facts parsed from the file's own tables, and the file is retained
+   * by content identity through the same path bundled faces use. Mutually
+   * exclusive with `font` — one font source per edit. A later edit without
+   * either option keeps the retained caller font; switching to a bundled
+   * family or another file follows the existing carry-or-refuse rules for
+   * weight and width.
+   */
+  fontFile?: string;
   fontSize?: number;
   color?: string;
   /**
@@ -1592,6 +1717,14 @@ function shadowEq(a: LayerShadow | undefined, b: LayerShadow | undefined): boole
   return a.dx === b.dx && a.dy === b.dy && a.blur === b.blur && a.color === b.color;
 }
 
+/** Caller font facts equality (#232): both sides are normalized facts
+ *  objects (fixed key order from their constructors), so a structural
+ *  comparison is a serialized comparison. */
+function callerFontEq(a: CallerFontFacts | undefined, b: CallerFontFacts | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * Canonical shadow edit resolution (#139, ADR-0018): an omitted option
  * preserves the current revision's shadow; a spec sets or removes it
@@ -1979,20 +2112,39 @@ async function buildEditedRevision(
       throw new Error(`Cannot edit image source on a text Layer. Layer "${layerId}" is a text Layer.`);
     }
 
-    // Resolve the target face (#179, ADR-0021): a `--font` edit names it; an
-    // axes edit resolves the retained font by its content hash — the bytes
-    // are the only font identity. Edits that change neither the font nor the
-    // axes never consult the registry, so a Project whose retained bytes
-    // match no bundled face keeps editing text, size, and color as before.
+    // Resolve the target face (#179, ADR-0021; #232, DEC-006): a `--font`
+    // edit names a bundled face; a `--font-file` edit reads the caller font
+    // ONCE and converts its stored facts to the same FontFace shape; an axes
+    // edit resolves the retained font — a caller font by its revision's
+    // stored facts (the one home of a caller font's axis facts), anything
+    // else by its content hash in the bundled registry. Edits that change
+    // neither the font nor the axes never consult either home, so a Project
+    // whose retained bytes match no bundled face keeps editing text, size,
+    // and color as before.
     let face: FontFace | undefined;
-    if (options.font !== undefined) {
+    let callerFont: CallerFontFacts | undefined;
+    let ingestedCallerBytes: Buffer | undefined;
+    if (options.fontFile !== undefined) {
+      // The file is read and parsed ONCE at ingestion (DEC-006); a
+      // non-font or unusable file refuses here, before any retention.
+      const ingested = await readCallerFontFile(options.fontFile);
+      ingestedCallerBytes = ingested.bytes;
+      callerFont = ingested.facts;
+      face = callerFontFace(callerFont);
+    } else if (options.font !== undefined) {
       face = resolveFace(options.font);
     } else if (options.weight !== undefined || options.width !== undefined) {
-      face = faceByContentHash(prevRev.contentHash);
-      if (face === undefined) {
-        throw new Error(
-          `The retained font of Layer "${layerId}" (content hash ${prevRev.contentHash}) matches no bundled face — pass --font to choose a bundled family.`,
-        );
+      if (prevRev.callerFont !== undefined) {
+        // One home per fact (DEC-006): a caller font's axes come from its
+        // stored facts — never beside a bundled-face lookup.
+        face = callerFontFace(prevRev.callerFont);
+      } else {
+        face = faceByContentHash(prevRev.contentHash);
+        if (face === undefined) {
+          throw new Error(
+            `The retained font of Layer "${layerId}" (content hash ${prevRev.contentHash}) matches no bundled face — pass --font to choose a bundled family.`,
+          );
+        }
       }
     }
 
@@ -2002,7 +2154,17 @@ async function buildEditedRevision(
       // Axes resolve BEFORE any retention, so a refused edit publishes
       // nothing — not even a stray content blob.
       axes = resolveEditTextAxes(face, options, prevRev);
-      if (options.font !== undefined) {
+      if (callerFont !== undefined) {
+        // Caller font retention (#232, DEC-006): the SAME content-store path
+        // bundled bytes go through, and the SAME browser resolution gate the
+        // render probe applies — both run before anything publishes, so a
+        // file the browser cannot resolve refuses with no revision, no use,
+        // and no stray content blob.
+        const fontHash = createHash("sha256").update(ingestedCallerBytes!).digest("hex");
+        await verifyCallerFontResolves(fontHash, ingestedCallerBytes!, callerFont);
+        await storeContentBlob(resolvedRoot, fontHash, ingestedCallerBytes!);
+        contentHash = fontHash;
+      } else if (options.font !== undefined) {
         const bytes = fontAssetBytes(face);
         const fontHash = createHash("sha256").update(bytes).digest("hex");
         await storeContentBlob(resolvedRoot, fontHash, bytes);
@@ -2039,6 +2201,13 @@ async function buildEditedRevision(
     // Canonical text validation
     validateTextContent(text, fontSize, color);
 
+    // The revision's caller font facts (#232, DEC-006): a --font-file edit
+    // stores the file's facts; a later edit without a font option keeps the
+    // retained caller font verbatim; switching to a bundled family (--font)
+    // drops them — the revision is a bundled-face revision again.
+    const resolvedCallerFont =
+      callerFont ?? (options.font !== undefined ? undefined : prevRev.callerFont);
+
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
@@ -2051,6 +2220,7 @@ async function buildEditedRevision(
       ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
       ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
       ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
+      ...(resolvedCallerFont !== undefined ? { callerFont: resolvedCallerFont } : {}),
       x,
       y,
       opacity,
@@ -2071,6 +2241,7 @@ async function buildEditedRevision(
       axes.width === prevRev.width &&
       typography.tracking === prevRev.tracking &&
       typography.lineHeight === prevRev.lineHeight &&
+      callerFontEq(resolvedCallerFont, prevRev.callerFont) &&
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity &&
@@ -2214,6 +2385,15 @@ export async function editLayerInternal(
   }
   if (options.fromGeneration !== undefined && options.fromMatte !== undefined) {
     throw new Error("--from-generation and --from-matte are mutually exclusive content options.");
+  }
+  // One font source per edit (#232): a bundled family (--font) and a caller
+  // font file (--font-file) are mutually exclusive — the same exclusivity
+  // rule the command boundaries enforce, re-checked at the domain boundary
+  // so no caller of the functions can bypass it.
+  if (options.font !== undefined && options.fontFile !== undefined) {
+    throw new Error(
+      "--font and --font-file name one font per edit — pass a bundled family (--font) or a local font file (--font-file), not both.",
+    );
   }
 
   // Normalize intent once into the canonical discriminated shape (#85).

@@ -4,6 +4,38 @@
 
 ### Added
 
+- Caller-supplied fonts (--font-file, #232, spec #226 US-005, DEC-006/
+  DEC-009/DEC-010, OOS-005, ADR-0021): a text Layer takes a local
+  TrueType/OpenType font file in place of a bundled family, at add and at
+  edit, on both `composition add` and `layer edit` through the shared
+  option definition (#228). The file's bytes are retained in the Project by
+  content identity through the SAME path bundled faces use, and its own
+  facts — the family name its tables declare (read directly from the
+  name/OS/2/fvar tables, no new dependency) and its real weight/width
+  ranges — are read ONCE at ingestion and stored with the revision
+  (`callerFont`, additive and optional: renders retained before this change
+  replay byte-identically and keep their revision ids). Weight and width
+  validate against the axes the file really contains — a variable font's
+  real fvar ranges (a file without a `wdth` axis accepts only the implicit
+  width 100, the same rule static faces follow), or a static face's own
+  weight — and out-of-range values are refused naming the file's allowed
+  range. Ply never synthesizes a weight or width: the emitted `@font-face`
+  declares the face's real weight/stretch, the text element disables font
+  synthesis, and the SAME browser family-resolution probe the render path
+  applies runs BEFORE publication, so a non-font file and a file the
+  browser cannot resolve refuse with nothing published. A later edit
+  without a font option keeps the retained caller font; switching to a
+  bundled family (`--font`) or another file (`--font-file`) follows the
+  existing carry-or-refuse rules for weight and width — the two font
+  sources are mutually exclusive. Rendering, measure, replay, relocation,
+  and cross-Project import never need the original file (the import now
+  also carries the stored text axes, typography, and caller font facts it
+  previously dropped). `layer inspect` and `composition measure` report
+  the font's own family name and that it is caller-supplied; licensing of
+  a caller's font is the caller's concern. New term "caller font" in
+  `CONTEXT.md`. Offline, no font discovery, no system fonts, no remote
+  fetching, no subsetting, no font library.
+
 - Absolute scale setter (--scale, #231, spec #226 US-004, DEC-005/DEC-009,
   ADR-0016): `layer edit` and `composition add` take `--scale <factor>` — an
   ABSOLUTE setter that sets the Layer's canonical scale (uniform, both axes)

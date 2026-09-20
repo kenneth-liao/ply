@@ -29,6 +29,8 @@ import {
   parseMatteId,
   parseResizeOptions,
   validateTextFaceAxes,
+  validateTextFontSource,
+  parseLayerFontFile,
   validateTextTypographyControls,
   type LayerOptionArgs,
   type OptionParse,
@@ -113,6 +115,15 @@ Options:
                         Layers.
   --text <str>          New text content for a text Layer
   --font <family>       Bundled font family name for a text Layer
+  --font-file <path>    Path to a local TrueType/OpenType font file for a
+                        text Layer (#232): the file's bytes are retained
+                        with the Layer and its own facts are stored, so
+                        rendering, measure, replay, and cross-Project
+                        import never need the original file. Mutually
+                        exclusive with --font — one font source per edit.
+                        Weight/width validate against the file's real axes;
+                        a non-font or unresolvable file is refused before
+                        anything publishes.
   --font-size <num>     Font size in px for a text Layer
   --tracking <num>      Letter spacing in em for a text Layer (#187,
                         ADR-0021): -0.5 to 1 (0 removes stored tracking —
@@ -122,10 +133,11 @@ Options:
                         size (#187, ADR-0021): 0.5 to 3; "normal" removes
                         stored line height (the font's own line height
                         applies)
-  --weight <num>        Text weight for a text Layer (#179): validated
-                        against the Layer's font's real weight axis —
-                        Archivo 100-900 (default 400); static faces accept
-                        only their own weight
+  --weight <num>        Text weight for a text Layer (#179, #232):
+                        validated against the Layer's font's real weight
+                        axis — Archivo 100-900 (default 400); static faces
+                        accept only their own weight; a caller font file
+                        validates against the file's own fvar ranges
   --width <num>         Text width for a text Layer (#179/#196): variable
                         fonts — Archivo 62-125 (default 100); static faces
                         accept only their implicit width 100
@@ -599,6 +611,28 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      if (values.font !== undefined || values["font-file"] !== undefined) {
+        // One font source per edit (#232): --font and --font-file are
+        // mutually exclusive — a usage error (exit 2) at the boundary.
+        const fontSourceError = validateTextFontSource(values.font, values["font-file"]);
+        if (fontSourceError !== undefined) {
+          output({ ok: false, error: fontSourceError }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+      }
+      if (values["font-file"] !== undefined) {
+        // A font file's existence and validity are semantic (the ingestion
+        // path reads the bytes once and parses them — DEC-006), so its
+        // refusals stay exit-1 like the other retained-state refusals; only
+        // the blank-path shape is a usage error here.
+        const parsedFontFile = parseLayerFontFile(values["font-file"]);
+        if (!parsedFontFile.ok) {
+          output({ ok: false, error: parsedFontFile.error }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+      }
       if (values.font !== undefined) {
         // An unknown family keeps its established semantic refusal (exit 1,
         // from the edit path's resolveFace); only weight/width range errors
@@ -785,6 +819,7 @@ async function run() {
               : undefined,
           text: values.text,
           font: values.font,
+          fontFile: values["font-file"],
           fontSize,
           color: values.color,
           weight,
@@ -922,7 +957,15 @@ async function run() {
             console.log(`  Kind: ${rev.kind}`);
             if (rev.kind === "text") {
               console.log(`  Text: ${JSON.stringify(rev.text)}`);
-              console.log(`  Font: retained face (${(rev.fontBytes / 1024).toFixed(1)} KB), ${rev.fontSize}px, color ${rev.color}`);
+              // Caller fonts (#232): report the font's OWN family name (the
+              // name the file declares) and that it is caller-supplied.
+              // Bundled and legacy faces keep the established retained-face
+              // form — the retained bytes are their only identity.
+              const fontLabel =
+                rev.callerFont !== undefined
+                  ? `"${rev.callerFont.family}" (caller-supplied, ${(rev.fontBytes / 1024).toFixed(1)} KB)`
+                  : `retained face (${(rev.fontBytes / 1024).toFixed(1)} KB)`;
+              console.log(`  Font: ${fontLabel}, ${rev.fontSize}px, color ${rev.color}`);
               // Selected text axes (#179, ADR-0021): present ⟺ variable font.
               if (rev.weight !== undefined || rev.width !== undefined) {
                 console.log(`  Axes: weight ${rev.weight}, width ${rev.width}`);

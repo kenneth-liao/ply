@@ -9,6 +9,7 @@ import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { withRenderPage } from "./browser.js";
 
 /** One axis of a variable font face: the range its bytes actually contain
  * (the no-synthesis boundary, verified against the shipped bytes' fvar
@@ -31,8 +32,9 @@ export interface StaticFontFace {
   family: string;
   /** The face's real weight — the @font-face declaration and the CSS font-weight use it. */
   weight: number;
-  /** File name under assets/fonts/. */
-  file: string;
+  /** File name under assets/fonts/. Caller faces (#232) are not bundled:
+   *  they carry no `file` and render from their retained bytes. */
+  file?: string;
 }
 
 /**
@@ -45,12 +47,37 @@ export interface VariableFontFace {
   variant: "variable";
   /** The family name the CSS and @font-face rule use. */
   family: string;
-  /** File name under assets/fonts/. */
-  file: string;
+  /** File name under assets/fonts/. Caller faces (#232) are not bundled:
+   *  they carry no `file` and render from their retained bytes. */
+  file?: string;
   /** The axes the font actually contains — the one home of its axis facts.
    * Every weight/width control validates against these ranges and nothing
-   * else, so Ply never renders a synthesized weight or width. */
-  axes: { wght: FontAxis; wdth: FontAxis };
+   * else, so Ply never renders a synthesized weight or width. A missing
+   * `wdth` axis is the common case (#232): the face's single look is the
+   * width-100 instance, the same implicit-width rule a static face has. */
+  axes: { wght: FontAxis; wdth?: FontAxis };
+}
+
+/** The font facts of a caller-supplied font (#232, spec #226 US-005,
+ *  DEC-006): read ONCE from the file's own tables at ingestion
+ *  (`parseCallerFont` in src/font-file.ts), stored with the text revision
+ *  that retains the bytes, and converted back to a FontFace for the SAME
+ *  validation path bundled faces use. For a caller font these facts are
+ *  the one home of its axis facts — a revision's `callerFont` is never
+ *  consulted beside a bundled-face lookup, and vice versa. */
+export interface CallerFontFacts {
+  /** The family name the file's name table declares — what `inspect` and
+   *  `measure` report. */
+  family: string;
+  variant: "static" | "variable";
+  /** The sfnt glyph format: TrueType outlines ("truetype") or CFF
+   *  outlines ("opentype") — the @font-face format hint the paint path
+   *  declares for the retained bytes. */
+  format: "truetype" | "opentype";
+  /** Static: the face's own weight (OS/2 usWeightClass). */
+  weight?: number;
+  /** Variable: the real fvar ranges of the axes Ply controls. */
+  axes?: { wght: FontAxis; wdth?: FontAxis };
 }
 
 export type FontFace = StaticFontFace | VariableFontFace;
@@ -126,15 +153,29 @@ export function resolveTextAxes(face: FontFace, controls: TextAxesControls): Tex
   }
   if (face.variant === "variable") {
     const weight = controls.weight ?? face.axes.wght.default;
-    const width = controls.width ?? face.axes.wdth.default;
     if (weight < face.axes.wght.min || weight > face.axes.wght.max) {
       throw new Error(
         `Font "${face.family}" supports weight ${face.axes.wght.min}-${face.axes.wght.max} — weight ${weight} is out of range.`,
       );
     }
-    if (width < face.axes.wdth.min || width > face.axes.wdth.max) {
+    const widthAxis = face.axes.wdth;
+    if (widthAxis === undefined) {
+      // No width axis (#232): the face's single look IS the width-100
+      // instance — the same implicit-width rule a static face has
+      // (STATIC_FACE_WIDTH). The resolved pair still stores width so the
+      // stored-axes pair stays present-together; paint emits it explicitly
+      // and a font without the axis ignores it (no synthesis).
+      if (controls.width !== undefined && controls.width !== STATIC_FACE_WIDTH) {
+        throw new Error(
+          `Font "${face.family}" has no width axis — the face's implicit width is ${STATIC_FACE_WIDTH}; width ${controls.width} is not available.`,
+        );
+      }
+      return { weight, width: STATIC_FACE_WIDTH };
+    }
+    const width = controls.width ?? widthAxis.default;
+    if (width < widthAxis.min || width > widthAxis.max) {
       throw new Error(
-        `Font "${face.family}" supports width ${face.axes.wdth.min}-${face.axes.wdth.max} — width ${width} is out of range.`,
+        `Font "${face.family}" supports width ${widthAxis.min}-${widthAxis.max} — width ${width} is out of range.`,
       );
     }
     return { weight, width };
@@ -201,7 +242,35 @@ export function resolveFace(family: string): FontFace {
   );
 }
 
+/** The transient FontFace a caller font's stored facts convert to (#232,
+ *  DEC-006): the SAME shape bundled faces use, so `resolveTextAxes` and the
+ *  edit path's carried-axes rules validate a caller font through the ONE
+ *  validator — never a second weight/width validator. The face carries no
+ *  `file`: caller faces render from their retained bytes, never from
+ *  assets/fonts/. */
+export function callerFontFace(facts: CallerFontFacts): FontFace {
+  if (facts.variant === "variable") {
+    if (facts.axes === undefined) {
+      throw new Error(
+        `Malformed caller font facts for "${facts.family}": a variable face carries its fvar axis ranges.`,
+      );
+    }
+    return { variant: "variable", family: facts.family, axes: facts.axes };
+  }
+  if (facts.weight === undefined) {
+    throw new Error(
+      `Malformed caller font facts for "${facts.family}": a static face carries its own weight.`,
+    );
+  }
+  return { variant: "static", family: facts.family, weight: facts.weight };
+}
+
 export function fontAssetPath(face: FontFace): string {
+  if (face.file === undefined) {
+    throw new Error(
+      `Font "${face.family}" is not a bundled face — caller fonts render from their retained bytes.`,
+    );
+  }
   return path.join(FONTS_DIR, face.file);
 }
 
@@ -280,18 +349,77 @@ export function fontAssetBytes(face: FontFace): Buffer {
 /** @font-face rules for the given faces, each from its bundled bytes. A
  * variable face declares its real axis ranges (`font-weight`/`font-stretch`)
  * so CSS weight and stretch map onto the font's own axes — the browser never
- * synthesizes a weight or width (#179, ADR-0021). */
+ * synthesizes a weight or width (#179, ADR-0021). A face without a `wdth`
+ * axis declares no stretch range (#232). */
 export function fontFaceCss(...faces: FontFace[]): string {
   return faces
     .map((f) => {
       const { family, dataUri } = readFontAsset(f);
       const ranges =
         f.variant === "variable"
-          ? ` font-weight: ${f.axes.wght.min} ${f.axes.wght.max}; font-stretch: ${f.axes.wdth.min}% ${f.axes.wdth.max}%;`
+          ? ` font-weight: ${f.axes.wght.min} ${f.axes.wght.max};` +
+            (f.axes.wdth !== undefined ? ` font-stretch: ${f.axes.wdth.min}% ${f.axes.wdth.max}%;` : "")
           : ` font-weight: ${f.weight};`;
       return `@font-face { font-family: "${family}";${ranges} src: url(${dataUri}) format("truetype"); }`;
     })
     .join("\n");
+}
+
+/**
+ * Internal @font-face family name for a retained font blob (#81, #232).
+ * Derived from the content hash — the retained bytes are the only font
+ * identity, so the renderer never needs the bundled registry, the file's
+ * own family name, or the original file. One home for the derivation: the
+ * paint builder, the measurement gate, and the caller-font ingestion probe
+ * (#232) all mint the same name for the same bytes.
+ */
+export function internalFontFamily(contentHash: string): string {
+  return `ply-face-${contentHash.slice(0, 16)}`;
+}
+
+/**
+ * The @font-face rule for a caller font's retained bytes (#232, DEC-006):
+ * the same form the paint builder emits, with the face's REAL weight and
+ * stretch declared (`font-weight` descriptor; `font-stretch` only when the
+ * file has a `wdth` axis) and the file's own glyph format — the browser
+ * never synthesizes a weight or width (ADR-0021).
+ */
+export function callerFontFaceCss(family: string, bytes: Buffer, facts: CallerFontFacts): string {
+  const dataUri = `data:font/${facts.format === "opentype" ? "otf" : "ttf"};base64,${bytes.toString("base64")}`;
+  const ranges =
+    facts.variant === "variable"
+      ? ` font-weight: ${facts.axes!.wght.min} ${facts.axes!.wght.max};` +
+        (facts.axes!.wdth !== undefined
+          ? ` font-stretch: ${facts.axes!.wdth.min}% ${facts.axes!.wdth.max}%;`
+          : "")
+      : ` font-weight: ${facts.weight};`;
+  return `@font-face { font-family: "${family}";${ranges} src: url(${dataUri}) format("${facts.format}"); }`;
+}
+
+/**
+ * The caller-font publication gate (#232): the render probe's family-
+ * resolution check applies to a caller font BEFORE anything publishes —
+ * the bytes are declared under the internal family exactly as the paint
+ * builder will declare them, and the same shared probe verifies the face
+ * actually resolves. A file the rendering browser cannot resolve refuses
+ * here, with no revision, no use, and no stray content blob.
+ */
+export async function verifyCallerFontResolves(
+  contentHash: string,
+  bytes: Buffer,
+  facts: CallerFontFacts,
+): Promise<void> {
+  const family = internalFontFamily(contentHash);
+  const css = callerFontFaceCss(family, bytes, facts);
+  await withRenderPage(async (page) => {
+    await page.setContent(`<style>${css}</style><body>x</body>`);
+    if (!(await page.evaluate(familyResolved, family))) {
+      throw new Error(
+        `Font "${facts.family}" (caller-supplied) failed to load in the rendering browser — ` +
+          "the file is not a font the renderer can resolve; nothing was published.",
+      );
+    }
+  });
 }
 
 /**

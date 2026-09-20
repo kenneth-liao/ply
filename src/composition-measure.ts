@@ -129,6 +129,11 @@ export interface MeasuredLayerBounds {
    * and width a variable-font text Layer paints with (or null when the
    * retained font is static — a static revision stores no axis fields). */
   axes: { weight: number; width: number } | null;
+  /** The retained font's identity (#232): a caller-supplied font reports
+   * the family name its own file declares and `caller: true`; bundled and
+   * legacy faces have no stored family — the retained bytes are their only
+   * identity — and report null. */
+  font: { family: string; caller: true } | null;
   /** The revision's selected text typography (#187, ADR-0021): the stored
    * tracking and line height a text Layer paints with — each field present
    * only when set (an omitted control paints as normal spacing / the font's
@@ -525,6 +530,10 @@ export async function measureCompositionLayers(
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
         axes:
           rev.kind === "text" ? normalizeStoredTextAxes(rev) ?? null : null,
+        font:
+          rev.kind === "text" && rev.callerFont !== undefined
+            ? { family: rev.callerFont.family, caller: true }
+            : null,
         typography:
           rev.kind === "text"
             ? normalizeStoredTextTypography(rev)

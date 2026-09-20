@@ -89,7 +89,7 @@ test("layer edit: content-kind exclusivity precedes shape errors", async () => {
   await expectRefusal(
     ["layer", "edit", layerId, "--image", "a.png", "--text", "hi", "--opacity", "abc", "--project", projDir],
     2,
-    "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
+    "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
   );
 });
 
@@ -97,7 +97,7 @@ test("layer edit: the edit surface reads --image presence exactly (blank --image
   await expectRefusal(
     ["layer", "edit", layerId, "--image", "", "--text", "hi", "--project", projDir],
     2,
-    "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
+    "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
   );
 });
 
@@ -125,7 +125,7 @@ test("layer edit: the generation/output block precedes the numeric parses", asyn
   await expectRefusal(
     ["layer", "edit", layerId, "--output", "2", "--project", projDir],
     2,
-    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
+    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
   );
   // With a real edit option supplied, the output-selector check precedes it.
   await expectRefusal(
@@ -192,7 +192,7 @@ test("composition add: exclusivity and require-text precede the shape errors", a
   await expectRefusal(
     ["composition", "add", "demo", "t5", "--tracking", "5", "--project", projDir],
     2,
-    "--font, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>.",
+    "--font, --font-file, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>.",
   );
 });
 
@@ -204,12 +204,12 @@ test("composition add: the blank --image falls past the exclusivity refusal (INT
   await expectRefusal(
     ["composition", "add", "demo", "t5", "--image", "", "--text", "hi", "--project", projDir],
     2,
-    "Missing required option: --font <family> (required with --text)",
+    "Missing required option: a font — --font <family> (bundled) or --font-file <path> (caller-supplied) — is required with --text",
   );
   await expectRefusal(
     ["composition", "add", "demo", "t5b", "--image", "", "--project", projDir],
     2,
-    "Missing required content: --image <path>, --text <str> (with --font <family>), --from-generation <jobId>, or --from-matte <matteId>",
+    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --from-generation <jobId>, or --from-matte <matteId>",
   );
 });
 
