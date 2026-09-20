@@ -98,6 +98,7 @@ import {
   type ResolvedLayerRevision,
 } from "./layer.js";
 import type { Page } from "playwright";
+import type { LayerFill } from "./fill.js";
 
 /** One Layer's measured layout geometry (module doc documents each box). */
 export interface MeasuredLayerBounds {
@@ -125,6 +126,10 @@ export interface MeasuredLayerBounds {
    * none of that effect) — the same facts painting applies, reported for
    * auditability. */
   effects: { shadow: LayerShadow | null; outline: LayerOutline | null };
+  /** The revision's ONE fill (DEC-003), for shape Layers (#208/#210): the
+   * canonical fill object painting applies — a solid colour, or a linear or
+   * radial gradient with its stops. Other kinds report null. */
+  fill: LayerFill | null;
   /** The revision's selected text axes (#179, ADR-0021): the stored weight
    * and width a variable-font text Layer paints with (or null when the
    * retained font is static — a static revision stores no axis fields). */
@@ -530,6 +535,11 @@ export async function measureCompositionLayers(
           flipY: rev.flipY,
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
+        // The revision's ONE fill (DEC-003), reported for shape Layers
+        // (#208/#210): the canonical fill object — solid, linear, or radial —
+        // the same facts painting applies, reported for auditability. Other
+        // kinds have no fill and report null.
+        fill: rev.kind === "shape" ? rev.fill : null,
         axes:
           rev.kind === "text" ? normalizeStoredTextAxes(rev) ?? null : null,
         font:

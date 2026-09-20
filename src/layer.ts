@@ -1,5 +1,5 @@
 import { isStoredTimestamp } from "./stored-schema.js";
-import { parseFillSpec, normalizeStoredFill, type LayerFill } from "./fill.js";
+import { parseFillSpec, normalizeStoredFill, fillsEqual, fillIdentityString, FILL_TYPES, type LayerFill } from "./fill.js";
 /**
  * Layer identity, immutable revisions, and content-addressed image/text
  * ingestion (ADR-0013, ADR-0014, DEC-001–006, #81).
@@ -282,7 +282,7 @@ export function shapeContentIdentity(rev: {
     rev.shape,
     `${rev.width}x${rev.height}`,
     rev.cornerRadius !== undefined ? `r${rev.cornerRadius}` : "r0",
-    `fill(${rev.fill.type}:${rev.fill.color})`,
+    `fill(${fillIdentityString(rev.fill)})`,
   ].join(":");
 }
 
@@ -333,18 +333,25 @@ export function validateShapeContent(
   }
   let resolvedFill: LayerFill;
   if (fill === undefined) {
-    throw new Error("A shape Layer needs a fill: pass --fill <color> (a solid fill, e.g. \"#22c55e\").");
+    throw new Error(
+      'A shape Layer needs a fill: pass --fill <spec> (a solid color like "#22c55e" or a gradient like "linear:45deg,#ff0000,#00ff00").',
+    );
   }
   if (
     typeof fill === "object" && fill !== null && !Array.isArray(fill) &&
-    (fill as LayerFill).type === "solid" && typeof (fill as LayerFill).color === "string"
+    FILL_TYPES.includes((fill as LayerFill).type as (typeof FILL_TYPES)[number])
   ) {
-    // Already a canonical LayerFill (the ingestion path's parsed value).
+    // Already a canonical LayerFill (the ingestion path's parsed value) —
+    // the stored-fill normalizer re-projects it through the one canonical
+    // form (a parsed gradient object carries every field the normalizer
+    // re-validates, so a bad one is refused loudly either way).
     resolvedFill = normalizeStoredFill(fill);
   } else if (typeof fill === "string") {
     resolvedFill = parseFillSpec(fill);
   } else {
-    throw new Error(`Invalid fill ${JSON.stringify(fill)}: a fill takes a solid color like "#22c55e" or "solid:#22c55e".`);
+    throw new Error(
+      `Invalid fill ${JSON.stringify(fill)}: a fill takes a solid color like "#22c55e", "solid:#22c55e", or a gradient like "linear:45deg,#ff0000,#00ff00".`,
+    );
   }
   return {
     shape: shape as LayerShapeGeometry,
@@ -1075,7 +1082,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
     shapeFields !== undefined
       ? `:shape(${shapeFields.shape},${shapeFields.width},${shapeFields.height}` +
         (shapeFields.cornerRadius !== undefined ? `,r${shapeFields.cornerRadius}` : "") +
-        `,fill(${shapeFields.fill.type}:${shapeFields.fill.color}))`
+        `,fill(${fillIdentityString(shapeFields.fill)}))`
       : "";
   return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxesFields}${typographyFields}${callerFontFields}${shapeFieldsFields}`).digest("hex").slice(0, 16)}`;
 }
@@ -2460,8 +2467,9 @@ async function buildEditedRevision(
       shapeContent.width === prevRev.width &&
       shapeContent.height === prevRev.height &&
       shapeContent.cornerRadius === prevRev.cornerRadius &&
-      shapeContent.fill.type === prevRev.fill.type &&
-      shapeContent.fill.color === prevRev.fill.color &&
+      // The whole fill identity (fillsEqual, #210): a gradient edit compares
+      // the angle and every stop, never just the discriminator.
+      fillsEqual(shapeContent.fill, prevRev.fill) &&
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity &&
@@ -2472,9 +2480,6 @@ async function buildEditedRevision(
       flip.flipY === prevRev.flipY &&
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline);
-    // The fill comparison covers the solid fill's whole identity today; the
-    // gradient ticket (#210) must extend it per gradient stop or gradient
-    // edits would false-idempotent (review INT-4).
     return {
       revision,
       unchanged,

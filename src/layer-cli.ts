@@ -41,6 +41,7 @@ import {
   type OptionParse,
 } from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
+import { formatFill } from "./fill.js";
 import { parseLayerAddress, resolveLayerToken, LayerAddressSyntaxError, type ResolvedLayerToken } from "./layer-address.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
@@ -170,13 +171,15 @@ Options:
                         same look as absent, never stored). Refused on an
                         ellipse and on image and text Layers (kind
                         stability).
-  --fill <color>        Set a shape Layer's fill to an ABSOLUTE value
-                        (#209): the same solid-colour grammar as
-                        composition add --shape — a hex color (#RGB,
-                        #RRGGBB, #RRGGBBAA — alpha allowed), optionally with
-                        the explicit "solid:" prefix. Omitted keeps the
-                        current fill. Refused on image and text Layers (kind
-                        stability).
+  --fill <spec>         Set a shape Layer's fill to an ABSOLUTE value
+                        (#209): the same fill grammar as composition add
+                        --shape — a solid hex color (#RGB, #RRGGBB,
+                        #RRGGBBAA — alpha allowed, optional "solid:" prefix)
+                        or a gradient — "linear:45deg,<stop>,<stop>" or
+                        "radial:<stop>,<stop>"; a stop is "<color>" or
+                        "<color>:<position>" (0–100, % optional). Omitted
+                        keeps the current fill. Refused on image and text
+                        Layers (kind stability).
   --x <num>             X position on canvas
   --y <num>             Y position on canvas
   --opacity <num>       Layer opacity between 0 and 1
@@ -1064,7 +1067,7 @@ async function run() {
               if (rev.cornerRadius !== undefined) {
                 console.log(`  Corner radius: ${rev.cornerRadius}px`);
               }
-              console.log(`  Fill: ${rev.fill.type} ${rev.fill.color}`);
+              console.log(`  Fill: ${formatFill(rev.fill)}`);
             } else {
               console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
             }
@@ -1171,7 +1174,7 @@ async function run() {
                 rev.kind === "text"
                   ? `text ${JSON.stringify(rev.text)}, ${rev.fontSize}px`
                   : rev.kind === "shape"
-                    ? `${rev.shape} ${rev.width}×${rev.height}, ${rev.fill.type} fill ${rev.fill.color}`
+                    ? `${rev.shape} ${rev.width}×${rev.height}, ${formatFill(rev.fill)}`
                     : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(`  - ${l.id} [${rev.kind}: ${detail}, rev: ${l.currentRevisionId}]`);
             });

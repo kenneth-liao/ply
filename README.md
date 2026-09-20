@@ -602,11 +602,22 @@ ply layer edit <layerId> --tracking -0.032 --line-height 0.88 --in-place
 A shape Layer (#208) is a filled geometric region created from parameters
 alone — no image file is read and no image bytes are stored. Its content IS
 its parameters: a geometry (rectangle with an optional corner radius, or
-ellipse), a width and height in canvas px, and ONE fill. The fill is a solid
-colour today — a hex value like `#22c55e`, `#2c5`, or `#22c55e80` (alpha
-allowed), optionally with the explicit `solid:` prefix that gradient fills
-will join later. A full-canvas background is an ordinary shape Layer sized
-to the canvas — there is no separate background concept.
+ellipse), a width and height in canvas px, and ONE fill. The fill is one
+discriminated value (#210, DEC-003): a solid colour — a hex value like
+`#22c55e`, `#2c5`, or `#22c55e80` (alpha allowed), optionally with the
+explicit `solid:` prefix — or a gradient:
+
+- `linear:<angle>deg,<stop>,<stop>[,...]` — a linear gradient over the
+  shape's box at the given angle (degrees clockwise from bottom-to-top,
+  the CSS convention; `-45deg` and `315deg` are the same fill).
+- `radial:<stop>,<stop>[,...]` — a radial gradient radiating from the box's
+  centre, a circle whose radius reaches the box's farthest side (the last
+  stop's colour lands exactly on the box's farthest edge midpoints).
+
+A stop is `<color>` or `<color>:<position>` — position 0–100 percent (the
+`%` suffix is optional); omitted positions interpolate evenly between the
+surrounding explicit positions (0 at the start, 100 at the end), and a
+stop colour takes the same hex forms as a solid (alpha allowed).
 
 ```bash
 # A highlight bar and a pill — parameters only, nothing to draw in advance:
@@ -617,6 +628,14 @@ ply composition add poster pill --shape rectangle --size 220x44 \
 # An ellipse and a full-canvas background (an ordinary shape Layer):
 ply composition add poster dot --shape ellipse --size 80x60 --fill "#ff000080" -p ~/projects/my-poster
 ply composition add poster bg --shape rectangle --size 1280x720 --fill "#101828" -p ~/projects/my-poster
+# Gradients (#210): a left-to-right linear ramp and a centred radial glow —
+# stops accept alpha and explicit positions (0–100 percent, % optional):
+ply composition add poster ramp --shape rectangle --size 420x90 \
+  --fill "linear:90deg,#1d4ed8,#22c55e" -p ~/projects/my-poster
+ply composition add poster glow --shape ellipse --size 220x160 \
+  --fill "radial:#ff000080,#ffcc0000:70,#00000000" -p ~/projects/my-poster
+ply composition add poster banded --shape rectangle --size 300x80 \
+  --fill "linear:45deg,#1d4ed8:20%,#e11d48:80%" -p ~/projects/my-poster
 # One-command add and the shared transform/effect options work as for any
 # other Layer kind; --resize-to resolves against the shape's --size geometry:
 ply composition add poster hero --shape rectangle --size 100x50 --fill "#1d4ed8" \
@@ -626,8 +645,10 @@ ply composition add poster hero --shape rectangle --size 100x50 --fill "#1d4ed8"
 Non-positive size, a negative or oversized corner radius (0 to half the
 shorter side — a larger radius would be silently clamped, so it is refused
 instead of pinned with parameters its paint would not obey), a radius on an
-ellipse, and a malformed colour are refused before anything is published,
-naming the parameter and its range. On `layer edit` each shape parameter
+ellipse, and a malformed fill — a malformed colour, fewer than two stops,
+an out-of-range position, or a decreasing stop list (#210) — are refused
+before anything is published, naming the fault and live state stays
+unchanged. On `layer edit` each shape parameter
 (`--shape`, `--size`, `--corner-radius`, `--fill`) is an absolute setter
 (#209): an omitted parameter keeps its value, an invalid value is refused
 without advancing live state, and a Layer's kind is stable — a shape cannot
@@ -651,6 +672,8 @@ absolute setter, an omitted parameter keeps its value, and kind is stable:
 ```bash
 # Refit the bar to a new headline: absolute size and fill, geometry kept:
 ply layer edit <layerId> --size 560x110 --fill "#e11d48" -p ~/projects/my-poster
+# The fill setter takes gradients through the same grammar:
+ply layer edit <layerId> --fill "radial:#22c55e,#101828" -p ~/projects/my-poster
 # Round the corners (0 removes the radius); switch the geometry:
 ply layer edit <layerId> --corner-radius 24 -p ~/projects/my-poster
 ply layer edit <layerId> --shape ellipse -p ~/projects/my-poster
