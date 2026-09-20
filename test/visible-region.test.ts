@@ -24,6 +24,7 @@ import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { computeRevisionHash } from "../src/layer.js";
 
@@ -450,14 +451,15 @@ test("a Render with a region replays byte-identically and a region edit touches 
   expect((await readFile(path.join(tempDir, "replayed.png"))).equals(original)).toBe(true);
 
   // Lineage/bytes: another region edit changes only the revision document
-  // and the identity pointer — every other Project file is untouched.
+  // and the identity pointer — every other Project file is byte-identical
+  // (sha-256, not sizes: a same-size rewrite must fail this probe).
+  const hashOf = async (p: string) =>
+    createHash("sha256").update(await readFile(p)).digest("hex");
   const snapshotBefore = new Map<string, string>();
   for (const dir of ["layers", "content", "generation", "matting"]) {
     try {
       for (const entry of Array.from(new Bun.Glob("**/*").scanSync({ cwd: path.join(projDir, dir) }))) {
-        const p = path.join(projDir, dir, entry);
-        const f = Bun.file(p);
-        snapshotBefore.set(p, `${f.size}`);
+        snapshotBefore.set(path.join(projDir, dir, entry), await hashOf(path.join(projDir, dir, entry)));
       }
     } catch { /* absent dirs stay absent */ }
   }
@@ -466,9 +468,7 @@ test("a Render with a region replays byte-identically and a region edit touches 
   for (const dir of ["layers", "content", "generation", "matting"]) {
     try {
       for (const entry of Array.from(new Bun.Glob("**/*").scanSync({ cwd: path.join(projDir, dir) }))) {
-        const p = path.join(projDir, dir, entry);
-        const f = Bun.file(p);
-        snapshotAfter.set(p, `${f.size}`);
+        snapshotAfter.set(path.join(projDir, dir, entry), await hashOf(path.join(projDir, dir, entry)));
       }
     } catch { /* absent dirs stay absent */ }
   }
@@ -566,8 +566,18 @@ test("text region refusal, text/shape removal identity, rotated region measure, 
   expect(JSON.parse(textRemove.stdout).regionSet).toEqual({ visibleRegion: null });
   expect((await render("poster", path.join(tempDir, "text-after-remove.png"))).equals(neverSet)).toBe(true);
 
-  // Shape add + removal: the shape branch on `composition add` applies the
-  // region, and removal restores the never-set render byte-for-byte.
+  // Shape add + removal: set-then-remove renders byte-identically to
+  // never-set (the same ISC-38 seam the image and text branches assert).
+  const shapePlain = JSON.parse(
+    (await invoke(["composition", "add", "poster", "bar-plain", "--shape", "rectangle", "--size", "200x100", "--fill", "#22c55e", "--x", "100", "--y", "150", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  );
+  const shapePlainId = shapePlain.use.layerId as string;
+  const shapeNeverSet = await render("poster", path.join(tempDir, "shape-never-set.png"));
+  expect((await invoke(["layer", "edit", shapePlainId, "--visible-region", "0,0,50,50", "--project", projDir])).code).toBe(0);
+  expect((await invoke(["layer", "edit", shapePlainId, "--visible-region", "none", "--project", projDir])).code).toBe(0);
+  expect((await render("poster", path.join(tempDir, "shape-after-remove.png"))).equals(shapeNeverSet)).toBe(true);
+
+  // The shape branch on `composition add` also applies the region.
   const shapeAdd = JSON.parse(
     (await invoke(["composition", "add", "poster", "bar", "--shape", "rectangle", "--size", "200x100", "--fill", "#22c55e", "--x", "100", "--y", "150", "--visible-region", "0,0,50,50", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
   );
@@ -624,4 +634,93 @@ test("rotated region measures its rotated box and clipped follows the region", a
     (await invoke(["composition", "measure", "edge", "hero", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
   ).layers[0];
   expect(unclipped.clipped).toBe(true);
+}, 30000);
+
+/** Review INT-2: a cross-Project copy preserves the region verbatim (DEC-002
+ * claims it; the fork check alone does not cover the import path). */
+test("cross-Project import copies the region with the Layer", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(200, 100, RED));
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 50, y: 50 });
+  const layerId = addRes.use.layerId as string;
+  expect((await invoke(["layer", "edit", layerId, "--visible-region", "20,10,80,40", "--project", projDir])).code).toBe(0);
+
+  const otherDir = path.join(tempDir, "other");
+  expect((await invoke(["project", "init", otherDir, "--name", "other-proj"])).code).toBe(0);
+  expect((await invoke(["composition", "create", "copy", "--width", "400", "--height", "300", "--project", otherDir])).code).toBe(0);
+  const importRes = await invoke([
+    "composition", "import", "copy", "poster", "--from-project", projDir, "--project", otherDir, "--json",
+  ]);
+  expect(importRes.code).toBe(0);
+  const copy = JSON.parse(
+    (await invoke(["composition", "inspect", "copy", "--project", otherDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  ).composition;
+  const copyLayerId = copy.layers[0].layerId as string;
+  expect(copyLayerId).not.toBe(layerId); // an independent identity, not a live link
+  const inspect = JSON.parse((await invoke(["layer", "inspect", copyLayerId, "--project", otherDir, "--json"])).stdout);
+  expect(inspect.layer.currentRevision.visibleRegion).toEqual({ x: 20, y: 10, width: 80, height: 40 });
+}, 30000);
+
+/** Review PROD-1: a region KEPT across a content edit is re-validated
+ * against the NEW content box before publication — outside is refused with
+ * live state unchanged; fitting publishes with a stderr note (and the
+ * regionCarried JSON fact) that the kept region now frames the replaced
+ * content. */
+test("a kept region re-validates against the replaced content: refusal outside, note inside", async () => {
+  await makeComp("poster", 400, 300);
+  const red200 = path.join(tempDir, "red200.png");
+  await writeFile(red200, solidPng(200, 100, RED));
+  const red100 = path.join(tempDir, "red100.png");
+  await writeFile(red100, solidPng(100, 60, [0, 0, 255, 255]));
+  const red200blue = path.join(tempDir, "red200b.png");
+  await writeFile(red200blue, solidPng(200, 100, [0, 128, 255, 255]));
+
+  const addRes = await addImageLayer("poster", "hero", red200, { x: 10, y: 10 });
+  const layerId = addRes.use.layerId as string;
+  // Region over the right half (120..180 of the 200px width).
+  expect((await invoke(["layer", "edit", layerId, "--visible-region", "120,0,60,40", "--project", projDir])).code).toBe(0);
+  const regionRev = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout).layer.currentRevisionId;
+
+  // Replacing the content with a smaller image: the kept region (starting at
+  // x=120) no longer lies inside the 100×60 box — refused before publication
+  // (and before content retention), live state unchanged.
+  const refused = await invoke(["layer", "edit", layerId, "--image", red100, "--project", projDir, "--json"]);
+  expect(refused.code).toBe(1);
+  expect(JSON.parse(refused.stdout).error).toMatch(/Invalid kept visible region \(120, 0, 60, 40\).*100×60px.*--visible-region none/);
+  expect(JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout).layer.currentRevisionId).toBe(regionRev);
+
+  // Replacing with same-size content: the kept region still fits — the edit
+  // publishes, and the stderr note reports the kept region's new framing.
+  const fits = await invoke(["layer", "edit", layerId, "--image", red200blue, "--project", projDir, "--json"]);
+  expect(fits.code).toBe(0);
+  expect(fits.stderr).toContain("Note: kept visible region (120, 0, 60, 40) now frames the replaced content.");
+  const fitsJson = JSON.parse(fits.stdout);
+  expect(fitsJson.regionCarried).toEqual({ visibleRegion: { x: 120, y: 0, width: 60, height: 40 } });
+  expect(fitsJson.layer.currentRevision.visibleRegion).toEqual({ x: 120, y: 0, width: 60, height: 40 });
+
+  // A shape geometry edit re-validates the kept region the same way.
+  const shapeAdd = JSON.parse(
+    (await invoke(["composition", "add", "poster", "bar", "--shape", "rectangle", "--size", "200x100", "--fill", "#22c55e", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  );
+  const shapeId = shapeAdd.use.layerId as string;
+  expect((await invoke(["layer", "edit", shapeId, "--visible-region", "120,0,60,40", "--project", projDir])).code).toBe(0);
+  const refusedShape = await invoke(["layer", "edit", shapeId, "--size", "100x50", "--project", projDir, "--json"]);
+  expect(refusedShape.code).toBe(1);
+  expect(JSON.parse(refusedShape.stdout).error).toMatch(/Invalid kept visible region \(120, 0, 60, 40\).*100×50px.*no longer lies inside/);
+
+  // A text edit that shrinks the line box below the kept region refuses too
+  // (the measured-extent path); a text edit that grows it publishes with the
+  // note.
+  const addText = JSON.parse(
+    (await invoke(["composition", "add", "poster", "head", "--text", "Groundline", "--font", "Anton", "--font-size", "60", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  );
+  const textId = addText.use.layerId as string;
+  expect((await invoke(["layer", "edit", textId, "--visible-region", "0,0,40,20", "--project", projDir])).code).toBe(0);
+  const refusedText = await invoke(["layer", "edit", textId, "--font-size", "4", "--project", projDir, "--json"]);
+  expect(refusedText.code).toBe(1);
+  expect(JSON.parse(refusedText.stdout).error).toMatch(/Invalid kept visible region \(0, 0, 40, 20\).*--visible-region none/);
+  const grownText = await invoke(["layer", "edit", textId, "--font-size", "120", "--project", projDir, "--json"]);
+  expect(grownText.code).toBe(0);
+  expect(grownText.stderr).toContain("now frames the replaced content.");
 }, 30000);

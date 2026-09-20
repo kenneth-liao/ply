@@ -22,11 +22,16 @@ the content box; a text Layer's box is its measured line-box extent (the
 unwrapped standalone line, measured through the one measurement authority —
 both boundaries resolve it the same way, the edit path from the snapshot it
 already holds and the add path from its provisional snapshot, never a
-second Project read). The bounds are a set-time gate, not a stored-document
-invariant: the stored normalizer checks the numbers' self-consistency only,
-so a region kept across a later content edit keeps clipping
-deterministically (the intersection) instead of turning a valid Project
-into a malformed one.
+second Project read). The bounds gate also runs at the carry boundary: a
+content edit that KEEPS the previous revision's region (content
+replacement, text content and style, shape geometry/size) re-validates the
+kept region against the NEW content box before anything is published — a
+region that no longer fits is refused naming the fix, and one that still
+fits publishes with a `regionCarried` report and a compact stderr note
+that the kept region now frames the replaced content (#211 review
+PROD-1). The stored normalizer checks the numbers' self-consistency only —
+the publication-time gates are the enforcement points — so no valid
+Project ever becomes malformed.
 
 **Present ⟺ a region exists.** Absence IS the canonical no-region form:
 removal drops the field, and every reader treats absence as none — there is
@@ -108,4 +113,11 @@ Composition treatment of a refused Layer is untouched (#206, OOS-008).
   shows `Visible region: ...`; `ply composition measure` reports it in the
   `visibleRegion` facts), verify a render replays byte-identically, then
   switch binaries. Non-current revisions with regions stay pinned history
-  and recover by re-upgrading.
+  and recover by re-upgrading — downgrade is lossy for history visibility,
+  not just pinned renders (review PROD-3): the old binary cannot display
+  any region-carrying revision, current or historical, until re-upgraded.
+- **Forward compatibility (#212):** the region's optional corner radius
+  must extend the stored normalizer AND the revision hash together, the
+  same way this field joined the shadow/outline pattern — a normalizer
+  that silently strips a future field would break the hash check the same
+  way a missing field does (review INT-4).

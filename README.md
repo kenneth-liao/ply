@@ -530,11 +530,15 @@ ply layer edit <layerId> --visible-region none               # remove (its own e
   with content edits (content replacement, text content and style, shape
   parameters), because it is validated against the content box. It
   combines freely with placement, transforms, shadow, and outline.
-- A region kept across a later content edit keeps clipping deterministically
-  against the new content's box; if it no longer frames what you want,
-  remove it with `--visible-region none`. The region is left-anchored and
-  additive by design: an optional corner radius joins the same fact later
-  (#212) without reshaping stored revisions.
+- **Content edits re-validate a kept region:** replacing or reshaping the
+  content in a later edit (a new `--image`, `--text`, or shape geometry)
+  re-validates the kept region against the NEW content box before anything
+  is published — a region that no longer lies inside is refused naming the
+  fix (adjust or remove it first); one that still fits publishes with a
+  stderr note that the kept region now frames the replaced content. The
+  region is left-anchored and additive by design: an optional corner
+  radius joins the same fact later (#212) without reshaping stored
+  revisions.
 
 ## Text weight and width (new surface)
 

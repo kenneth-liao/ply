@@ -1499,6 +1499,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       flipY: source.flipY,
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+      ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
   if (source.kind === "shape") {
@@ -1527,6 +1528,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       flipY: source.flipY,
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+      ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
   if (source.kind !== "image") {
@@ -1548,6 +1550,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     flipY: source.flipY,
     ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
     ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+    ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
   };
 }
 

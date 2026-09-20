@@ -31,9 +31,13 @@
   region joins the revision hash only when present, so pre-#211 revisions
   keep their exact ids and pinned Render history replays byte-identically
   (DEC-010). `inspect`, `measure`, and the shape review sheet report the
-  region. The representation is additive by design: an optional corner
-  radius joins the same fact later (#212) without reshaping stored
-  revisions.
+  region. A region kept across a later content edit (a new --image/--text,
+  a font or text-style change, a shape geometry/size edit) is re-validated
+  against the NEW content box before publication — outside is refused
+  naming the fix; fitting publishes with a stderr note that the kept
+  region now frames the replaced content (review PROD-1). The
+  representation is additive by design: an optional corner radius joins
+  the same fact later (#212) without reshaping stored revisions.
 - Gradient fills for shape Layers (#210, spec #207 US-001 gradient part,
   DEC-003/009/010): the ONE fill union gains `linear` and `radial` variants,
   normalized at the SAME single ingestion point (`src/fill.ts`) `--fill` —

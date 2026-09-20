@@ -1830,6 +1830,12 @@ export interface EditLayerResult {
   /** Present when the edit set or removed the visible region (#211): the
    * absolute region state now recorded on the revision (null when removed). */
   regionSet?: { visibleRegion: LayerVisibleRegion | null };
+  /** Present when a content edit KEPT the previous revision's visible
+   * region and it still lies inside the new content box (#211, review
+   * PROD-1): the kept region now frames the replaced content — a compact
+   * stderr note reports it, and a region that no longer fits is refused
+   * before publication instead. */
+  regionCarried?: { visibleRegion: LayerVisibleRegion };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -2189,6 +2195,30 @@ export function validateVisibleRegionAgainstContent(
 }
 
 /**
+ * The content-edit re-validation for a region KEPT across a content edit
+ * (#211 review PROD-1): the region is validated against the content box, so
+ * an edit that replaces or reshapes the content re-validates the kept
+ * region against the NEW box before anything is published — a region that
+ * no longer lies inside is refused (US-003: a region outside the content is
+ * refused), naming the fix; one that still fits publishes with the
+ * `regionCarried` report, so the operator hears that the kept region now
+ * frames the replaced content.
+ */
+function validateKeptVisibleRegion(
+  region: LayerVisibleRegion,
+  content: { width: number; height: number },
+  layerId: string,
+): void {
+  if (region.x + region.width > content.width || region.y + region.height > content.height) {
+    throw new Error(
+      `Invalid kept visible region (${region.x}, ${region.y}, ${region.width}, ${region.height}) on Layer "${layerId}": ` +
+        `this edit changes the Layer's content box to ${content.width}×${content.height}px and the region no longer lies inside it. ` +
+        `Adjust (--visible-region "<x>,<y>,<width>,<height>") or remove (--visible-region none) the region in its own edit, then replace the content.`,
+    );
+  }
+}
+
+/**
  * The options --visible-region cannot combine with in one edit (#211): the
  * region is validated against the content box, so anything that replaces
  * or reshapes the content — content replacement, the text content and its
@@ -2475,6 +2505,11 @@ async function buildEditedRevision(
   shadow: LayerShadow | undefined,
   outline: LayerOutline | undefined,
   visibleRegion: LayerVisibleRegion | undefined,
+  /** The previous revision's verified content bytes (#211 review PROD-1):
+   * the text branch measures the resulting revision's standalone line box
+   * with the bytes the NEW revision pins (the previous bytes when no font
+   * edit runs), re-validating a kept region against the new extent. */
+  prevContentBytes: Buffer,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -2486,6 +2521,10 @@ async function buildEditedRevision(
    * (review PROD-5): the geometry switch to ellipse has no place for the
    * carried rectangle fact. */
   shapeEdited?: EditLayerResult["shapeEdited"];
+  /** Present when a content edit kept the previous revision's visible
+   * region and it still lies inside the new content box (#211 review
+   * PROD-1): the kept region now frames the replaced content. */
+  regionCarried?: EditLayerResult["regionCarried"];
 }> {
   const { x, y, opacity } = placement;
 
@@ -2528,6 +2567,20 @@ async function buildEditedRevision(
     let contentHash = prevRev.contentHash;
     let mattedFrom: EditLayerResult["mattedFrom"];
     let retainedGeneration: RetainedGenerationProvenance | null = null;
+    // A region KEPT across a content edit (#211 review PROD-1): the region
+    // is validated against the content box, so a content replacement
+    // re-validates the kept region against the NEW content's intrinsic box
+    // BEFORE anything is retained — outside is refused (US-03: a region
+    // outside the content is refused); fitting publishes with the
+    // `regionCarried` report. An explicitly supplied region cannot reach
+    // here (the edit path refuses --visible-region with content options).
+    let regionCarried: EditLayerResult["regionCarried"];
+    const keptRegionCheck = (box: { width: number; height: number }) => {
+      if (visibleRegion !== undefined) {
+        validateKeptVisibleRegion(visibleRegion, box, layerId);
+        regionCarried = { visibleRegion };
+      }
+    };
     if (options.fromGeneration !== undefined) {
       // Generated-content ingestion (#107): verify the selected output's bytes
       // against the recorded identity, retain the pixels in the content store,
@@ -2543,6 +2596,7 @@ async function buildEditedRevision(
         selected.bytes,
         `Generation Job "${selected.job.jobId}" output "${selected.output.file}"`,
       );
+      keptRegionCheck({ width: validated.width, height: validated.height });
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
       contentHash = validated.contentHash;
@@ -2567,6 +2621,7 @@ async function buildEditedRevision(
         options.fromMatte.generationRoot,
         selected.matte.request.source.contentHash,
       );
+      keptRegionCheck({ width: validated.width, height: validated.height });
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainMattingRecord(resolvedRoot, selected.matte.matteId, selected.recordBytes);
       if (selected.sourceBytes) {
@@ -2586,6 +2641,7 @@ async function buildEditedRevision(
       mattedFrom = { matteId: selected.matte.matteId, engine: selected.matte.result.engine, contentHash: validated.contentHash };
     } else if (options.image !== undefined) {
       const ingested = await validateAndIngestImage(options.image);
+      keptRegionCheck({ width: ingested.width, height: ingested.height });
       await storeContentBlob(resolvedRoot, ingested.contentHash, ingested.bytes);
       contentHash = ingested.contentHash;
     }
@@ -2616,7 +2672,7 @@ async function buildEditedRevision(
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline) &&
       visibleRegionEq(visibleRegion, prevRev.visibleRegion);
-    return { revision, unchanged, mattedFrom, retainedGeneration };
+    return { revision, unchanged, mattedFrom, retainedGeneration, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
 
   if (prevRev.kind === "shape") {
@@ -2738,10 +2794,25 @@ async function buildEditedRevision(
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline) &&
       visibleRegionEq(visibleRegion, prevRev.visibleRegion);
+    // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
+    // --size change the content box, so the kept region re-validates against
+    // the merged geometry before anything is published — outside is refused
+    // (US-003); fitting publishes with the `regionCarried` report. A radius
+    // or fill edit does not change the box.
+    let regionCarried: EditLayerResult["regionCarried"];
+    if (visibleRegion !== undefined && (options.shape !== undefined || options.size !== undefined)) {
+      validateKeptVisibleRegion(
+        visibleRegion,
+        { width: shapeContent.width, height: shapeContent.height },
+        layerId,
+      );
+      regionCarried = { visibleRegion };
+    }
     return {
       revision,
       unchanged,
       retainedGeneration: null,
+      ...(regionCarried !== undefined ? { regionCarried } : {}),
       ...(droppedCornerRadius !== undefined ? { shapeEdited: { droppedCornerRadius } } : {}),
     };
   }
@@ -2800,6 +2871,9 @@ async function buildEditedRevision(
 
     let contentHash = prevRev.contentHash;
     let axes: TextAxes;
+    // The font bytes the NEW revision pins (#211 review PROD-1): set by the
+    // font-edit paths, defaulting to the previous revision's retained bytes.
+    let newTextBytes: Buffer | undefined;
     if (face !== undefined) {
       // Axes resolve BEFORE any retention, so a refused edit publishes
       // nothing — not even a stray content blob.
@@ -2814,11 +2888,13 @@ async function buildEditedRevision(
         await verifyCallerFontResolves(fontHash, ingestedCallerBytes!, callerFont);
         await storeContentBlob(resolvedRoot, fontHash, ingestedCallerBytes!);
         contentHash = fontHash;
+        newTextBytes = ingestedCallerBytes!;
       } else if (options.font !== undefined) {
         const bytes = fontAssetBytes(face);
         const fontHash = createHash("sha256").update(bytes).digest("hex");
         await storeContentBlob(resolvedRoot, fontHash, bytes);
         contentHash = fontHash;
+        newTextBytes = bytes;
       }
     } else {
       // No font or axes edit: the current revision's axes carry verbatim
@@ -2904,7 +2980,29 @@ async function buildEditedRevision(
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline) &&
       visibleRegionEq(visibleRegion, prevRev.visibleRegion);
-    return { revision, unchanged, retainedGeneration: null };
+    // A region KEPT across a text edit (#211 review PROD-1): the text
+    // content box is the measured line-box extent, so a text edit that can
+    // change it re-measures the RESULTING revision's standalone line (the
+    // bytes the new revision pins) and re-validates the kept region against
+    // it before anything is published — outside is refused (US-003);
+    // fitting publishes with the `regionCarried` report. Color does not
+    // change the line box. An explicitly supplied region cannot reach here
+    // (the edit path refuses --visible-region with content options).
+    let regionCarried: EditLayerResult["regionCarried"];
+    if (
+      visibleRegion !== undefined &&
+      (options.text !== undefined || options.font !== undefined || options.fontFile !== undefined ||
+        options.fontSize !== undefined || options.weight !== undefined || options.width !== undefined ||
+        options.tracking !== undefined || options.lineHeight !== undefined)
+    ) {
+      const standalone = await measureStandaloneSnapshot(
+        { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
+        newTextBytes ?? prevContentBytes,
+      );
+      validateKeptVisibleRegion(visibleRegion, standalone.content, layerId);
+      regionCarried = { visibleRegion };
+    }
+    return { revision, unchanged, retainedGeneration: null, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
 
   throw new Error(`Unsupported Layer kind on layer "${layerId}".`);
@@ -3126,7 +3224,7 @@ export async function editLayerInternal(
     // New identity + edited revision through the shared canonical builder.
     const newLayerId = generateLayerId();
     const createdAt = new Date().toISOString();
-    const { revision, mattedFrom, retainedGeneration, shapeEdited } = await buildEditedRevision(
+    const { revision, mattedFrom, retainedGeneration, shapeEdited, regionCarried } = await buildEditedRevision(
       resolvedRoot,
       prevRev,
       newLayerId,
@@ -3139,6 +3237,7 @@ export async function editLayerInternal(
       shadow,
       outline,
       visibleRegion,
+      current.contentBytes,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision is field-identical to the current one (documented
@@ -3153,7 +3252,8 @@ export async function editLayerInternal(
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
     const withRegion = hasRegion ? { ...withOutline, regionSet: regionSetReport } : withOutline;
-    const withShape = shapeEdited ? { ...withRegion, shapeEdited } : withRegion;
+    const withCarried = regionCarried ? { ...withRegion, regionCarried } : withRegion;
+    const withShape = shapeEdited ? { ...withCarried, shapeEdited } : withCarried;
     return options.fromGeneration !== undefined
       ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
@@ -3168,7 +3268,7 @@ export async function editLayerInternal(
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
-  const { revision, unchanged, mattedFrom, retainedGeneration, shapeEdited } = await buildEditedRevision(
+  const { revision, unchanged, mattedFrom, retainedGeneration, shapeEdited, regionCarried } = await buildEditedRevision(
     resolvedRoot,
     prevRev,
     layerId,
@@ -3181,6 +3281,7 @@ export async function editLayerInternal(
     shadow,
     outline,
     visibleRegion,
+    current.contentBytes,
   );
 
   // No-op check: if all fields are identical to previous revision, avoid storage churn
@@ -3196,6 +3297,7 @@ export async function editLayerInternal(
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(hasOutline ? { outlined: outlinedReport } : {}),
       ...(hasRegion ? { regionSet: regionSetReport } : {}),
+      ...(regionCarried ? { regionCarried } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
@@ -3251,6 +3353,7 @@ export async function editLayerInternal(
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(hasOutline ? { outlined: outlinedReport } : {}),
     ...(hasRegion ? { regionSet: regionSetReport } : {}),
+    ...(regionCarried ? { regionCarried } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }

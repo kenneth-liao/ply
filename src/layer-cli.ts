@@ -324,7 +324,10 @@ Options:
                         --resize/--rotate/--flip/--shadow/--outline; cannot
                         combine with content edits (the region is validated
                         against the content box) or --anchor (anchor first,
-                        then set the region).
+                        then set the region). A region kept across a later
+                        content edit is re-validated against the new
+                        content box: outside is refused, fitting publishes
+                        with a note.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -985,11 +988,21 @@ async function run() {
         if (res.regionSet) {
           resultBody.regionSet = res.regionSet;
         }
+        if (res.regionCarried) {
+          resultBody.regionCarried = res.regionCarried;
+        }
         if (res.shapeEdited) {
           resultBody.shapeEdited = res.shapeEdited;
         }
         if (anchored) {
           resultBody.anchored = anchored;
+        }
+        // A region kept across this content edit still fits the new content
+        // box (#211 review PROD-1): say so on stderr in BOTH output modes —
+        // the note is diagnostic, never part of the machine-readable result.
+        if (res.regionCarried) {
+          const r = res.regionCarried.visibleRegion;
+          console.error(`Note: kept visible region (${r.x}, ${r.y}, ${r.width}, ${r.height}) now frames the replaced content.`);
         }
 
         output(
