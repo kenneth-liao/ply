@@ -103,7 +103,7 @@ import type { Page } from "playwright";
 export interface MeasuredLayerBounds {
   name: string;
   layerId: string;
-  kind: "image" | "text";
+  kind: "image" | "text" | "shape";
   /** Untransformed content box along the content's own axes (px). */
   content: { width: number; height: number };
   /** Axis-aligned bounding box of the transformed content rectangle in Composition coordinates (px, unclipped). */
@@ -502,13 +502,15 @@ export async function measureCompositionLayers(
         name: l.name,
         layerId: l.layerId,
         kind: rev.kind,
-        // Image content size is the canonical verified revision fact; text
-        // has no stored size — its measured line-box layout extent is the
-        // only source, from the same face bytes painting uses.
+        // Image content size is the canonical verified revision fact; shape
+        // content size (#208) is the same kind of fact — the geometry's
+        // stored parameters; text has no stored size — its measured line-box
+        // layout extent is the only source, from the same face bytes
+        // painting uses.
         content:
-          rev.kind === "image"
-            ? { width: rev.width, height: rev.height }
-            : { width: round2(m.content.width), height: round2(m.content.height) },
+          rev.kind === "text"
+            ? { width: round2(m.content.width), height: round2(m.content.height) }
+            : { width: rev.width, height: rev.height },
         box: {
           x: round2(m.box.x),
           y: round2(m.box.y),
@@ -601,13 +603,13 @@ export async function measureStandaloneLayer(
     ...projected,
     content: {
       width:
-        currentRevision.kind === "image"
-          ? currentRevision.width
-          : projected.content.width,
+        currentRevision.kind === "text"
+          ? projected.content.width
+          : currentRevision.width,
       height:
-        currentRevision.kind === "image"
-          ? currentRevision.height
-          : projected.content.height,
+        currentRevision.kind === "text"
+          ? projected.content.height
+          : currentRevision.height,
     },
   };
 }

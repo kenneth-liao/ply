@@ -50,6 +50,7 @@
 import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
 import { parseShadowSpec, parseOutlineSpec, resolveTextTypographyControls } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
+import { parseFillSpec, type LayerFill as LayerFillSpec } from "./fill.js";
 
 /** Blank supplied values are invalid, never implicit zero (#128). */
 export function parseNumericArgument(value: string | undefined): number {
@@ -60,7 +61,7 @@ export function parseNumericArgument(value: string | undefined): number {
 export type LayerOptionSurface = "edit" | "add";
 
 /** The Layer kinds an option can apply to. */
-export type LayerOptionKind = "image" | "text";
+export type LayerOptionKind = "image" | "text" | "shape";
 
 export type LayerOptionGroup = "content" | "text" | "placement" | "transform" | "effect";
 
@@ -69,7 +70,7 @@ export interface LayerOptionDef {
   key: LayerOptionKey;
   group: LayerOptionGroup;
   /** For content options: which content kind the option belongs to. */
-  contentKind?: "image" | "text";
+  contentKind?: "image" | "text" | "shape";
   /** The Layer kinds the option applies to. Read by the guard test's
    *  per-kind enumeration (TEST-003); production per-kind refusals stay
    *  with the domain validators (see `layerOptionsApplicableTo`). */
@@ -97,6 +98,10 @@ export type LayerOptionKey =
   | "width"
   | "tracking"
   | "line-height"
+  | "shape"
+  | "size"
+  | "corner-radius"
+  | "fill"
   | "x"
   | "y"
   | "opacity"
@@ -121,6 +126,11 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "from-matte", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true },
   { key: "output", group: "content", contentKind: "image", appliesTo: ["image"], editOption: false },
   { key: "text", group: "content", contentKind: "text", appliesTo: ["text"], editOption: true },
+  // Shape content options (#208): only meaningful with a shape content kind.
+  { key: "shape", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true },
+  { key: "size", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true },
+  { key: "corner-radius", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true },
+  { key: "fill", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true },
   // Text style options: only meaningful with a text content kind.
   { key: "font", group: "text", appliesTo: ["text"], editOption: true },
   { key: "font-file", group: "text", appliesTo: ["text"], editOption: true },
@@ -152,6 +162,10 @@ export const LAYER_OPTION_PARSE_ARGS = {
   "from-matte": { type: "string" },
   output: { type: "string" },
   text: { type: "string" },
+  shape: { type: "string" },
+  size: { type: "string" },
+  "corner-radius": { type: "string" },
+  fill: { type: "string" },
   font: { type: "string" },
   "font-file": { type: "string" },
   "font-size": { type: "string" },
@@ -183,6 +197,14 @@ export type LayerOptionArgs = { [K in LayerOptionKey]?: string };
 export const TEXT_CONTENT_KEYS: readonly LayerOptionKey[] = [
   "text", "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height",
 ];
+
+/** The `--shape` content marker plus the shape's parameter options: the
+ *  option set the content-kind exclusivity rules treat as "the shape content
+ *  kind" (#208). Derived from the table's shape contentKind, like the text
+ *  set, so a new shape option joins every refusal automatically. */
+export const SHAPE_CONTENT_KEYS: readonly LayerOptionKey[] = LAYER_OPTION_DEFS
+  .filter((def) => def.contentKind === "shape")
+  .map((def) => def.key);
 
 /** The keys of every option that qualifies as an `layer edit` edit option,
  *  in the table's order — the enumeration the "no edit options" refusal
@@ -296,7 +318,7 @@ export function layerDashNumericFlags(keys: readonly LayerOptionKey[]): string[]
  *  those established texts as a second wording home (review INT-plumb-2;
  *  the comments, not the refusal behavior, carry this fact). */
 export function layerOptionsApplicableTo(
-  kind: "image" | "text",
+  kind: "image" | "text" | "shape",
   keys: readonly LayerOptionKey[] = layerEditOptionKeys(),
 ): LayerOptionKey[] {
   const kindDefs = LAYER_OPTION_DEFS.filter((def) => def.editOption && def.appliesTo.includes(kind));
@@ -324,7 +346,7 @@ export function anyLayerEditOptionProvided(args: LayerOptionPresence): boolean {
  */
 export function layerContentKindConflict(
   args: LayerOptionArgs,
-  kind: "image" | "from-generation" | "from-matte",
+  kind: "image" | "from-generation" | "from-matte" | "shape",
   surface: LayerOptionSurface,
 ): string | undefined {
   const textSide =
@@ -332,14 +354,28 @@ export function layerContentKindConflict(
     someLayerOptionProvided(args, TEXT_CONTENT_KEYS.filter((key) => key !== "text"));
   const generationSide = args["from-generation"] !== undefined;
   const matteSide = args["from-matte"] !== undefined;
+  const shapeSide = someLayerOptionProvided(args, SHAPE_CONTENT_KEYS);
   switch (kind) {
+    case "shape": {
+      if (shapeSide && (textSide || generationSide || matteSide || args.image !== undefined)) {
+        return surface === "edit"
+          ? "--shape and --image/--from-generation/--from-matte/--text options are mutually exclusive content options."
+          : "--shape and --image/--from-generation/--from-matte/--text are mutually exclusive content kinds; use one per Layer.";
+      }
+      return undefined;
+    }
     case "image": {
       // Presence, except for the add surface's established check, which
       // reads truthiness: a blank --image is not a supplied content kind
       // there, so the command falls past this refusal to the add path's
       // later refusals (missing content, or the text branch).
       const imageTrigger = surface === "edit" ? args.image !== undefined : !!args.image;
-      if (imageTrigger && textSide) {
+      if (imageTrigger && (textSide || shapeSide)) {
+        if (shapeSide) {
+          return surface === "edit"
+            ? "--image and --shape options are mutually exclusive content options."
+            : "--image and --shape are mutually exclusive content kinds; use one per Layer.";
+        }
         return surface === "edit"
           ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive."
           : "--image and --text are mutually exclusive content kinds; use one per Layer.";
@@ -347,17 +383,17 @@ export function layerContentKindConflict(
       return undefined;
     }
     case "from-generation":
-      if (generationSide && (args.image !== undefined || textSide)) {
+      if (generationSide && (args.image !== undefined || textSide || shapeSide)) {
         return surface === "edit"
-          ? "--from-generation and --image/--text options are mutually exclusive content options."
-          : "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer.";
+          ? "--from-generation and --image/--text/--shape options are mutually exclusive content options."
+          : "--from-generation and --image/--text/--shape options are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
     case "from-matte":
-      if (matteSide && (args.image !== undefined || textSide || generationSide)) {
+      if (matteSide && (args.image !== undefined || textSide || shapeSide || generationSide)) {
         return surface === "edit"
-          ? "--from-matte and --image/--text/--from-generation options are mutually exclusive content options."
-          : "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer.";
+          ? "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content options."
+          : "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
   }
@@ -515,6 +551,63 @@ export function parseLayerFontFile(raw: string | undefined): OptionParse<string 
     return { ok: false, error: "--font-file takes a path to a local TrueType or OpenType font file." };
   }
   return { ok: true, value: raw };
+}
+
+/** --shape: the geometry (#208, DEC-002) — rectangle or ellipse, identical
+ *  wording everywhere. The radius's rectangle-only rule and the size/fill
+ *  ranges are semantic (the ingestion validator names the parameter and its
+ *  range); only the geometry's literal set is boundary shape. */
+export function parseShapeGeometry(
+  raw: string | undefined,
+): OptionParse<"rectangle" | "ellipse" | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = raw.trim().toLowerCase();
+  if (value !== "rectangle" && value !== "ellipse") {
+    return { ok: false, error: `Shape (--shape) takes rectangle or ellipse (got "${raw}").` };
+  }
+  return { ok: true, value };
+}
+
+/** --size takes "<W>x<H>": the geometry's size in canvas px, the same
+ *  grammar --resize-to established. Both axes are required (a shape with a
+ *  one-axis size is not a rectangle or an ellipse). Signed values parse here
+ *  and their range is enforced semantically by the ingestion validator
+ *  (which names the parameter and its range), the established split the
+ *  font-size option uses. */
+export function parseShapeSize(raw: string | undefined): OptionParse<{ width: number; height: number } | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const m = raw.trim().match(/^(-?\d+(?:\.\d+)?)x(-?\d+(?:\.\d+)?)$/);
+  if (!m) {
+    return {
+      ok: false,
+      error:
+        `--size takes "<W>x<H>" — the geometry's width and height in canvas px, e.g. "400x80" ` +
+        `(got "${raw}").`,
+    };
+  }
+  return { ok: true, value: { width: Number(m[1]), height: Number(m[2]) } };
+}
+
+/** --corner-radius: a finite number of px; range validation (rectangle-only,
+ *  0..min(w,h)/2) is the ingestion validator's job. */
+export function parseShapeCornerRadius(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: `Corner radius (--corner-radius) must be a finite number of px (got "${raw}").` };
+  }
+  return { ok: true, value };
+}
+
+/** --fill: syntax and well-formedness through the SAME parser the ingestion
+ *  path uses (DEC-003), so the boundaries never disagree. */
+export function parseLayerFill(raw: string | undefined): OptionParse<LayerFillSpec | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    return { ok: true, value: parseFillSpec(raw) };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }
 
 /**

@@ -31,6 +31,10 @@ import {
   validateTextFaceAxes,
   validateTextFontSource,
   parseLayerFontFile,
+  parseLayerFill,
+  parseShapeCornerRadius,
+  parseShapeGeometry,
+  parseShapeSize,
   validateTextTypographyControls,
   type LayerOptionArgs,
   type OptionParse,
@@ -60,8 +64,9 @@ must match the address).
       selected use in --composition; other Compositions are unaffected.
       Resize changes placement, never retained pixels: --resize <factor>
       multiplies the current scale (relative), --resize-to <WxH> sets an
-      absolute effective size (image Layers only; one omitted axis preserves
-      the aspect ratio), and --scale <factor> sets the absolute scale — the
+      absolute effective size (image and shape Layers only; one omitted axis
+      preserves the aspect ratio), and --scale <factor> sets the absolute
+      scale — the
       same command twice keeps the same scale (never compounding).
       --rotate sets an ABSOLUTE rotation in degrees: the
       same command twice is still the same angle (unlike the relative resize
@@ -187,23 +192,25 @@ Options:
   --resize <factor>     Scale the Layer by a RELATIVE factor: the new scale
                         is the current scale multiplied by <factor>, so the
                         same command twice keeps enlarging (e.g. 2 then 2
-                        gives 4×). Works on image and text Layers; the aspect
+                        gives 4×). Works on image, text, and shape Layers; the aspect
                         ratio is always preserved. Resizing changes placement
                         only: retained source bytes and lineage never change.
                         For an absolute setter use --scale instead.
-  --resize-to <WxH>     Set the effective painted size in px (image Layers
-                        only — text has no intrinsic pixel size; use
-                        --resize). "800x600" deliberately changes the aspect
-                        ratio; "800x" or "x600" preserves the Layer's current
-                        aspect ratio (a deliberate aspect change survives).
-                        Mutually exclusive with --resize and with
-                        content-replacement options. The Layer's (x, y) stays
-                        its top-left corner: it grows/shrinks right and down.
+  --resize-to <WxH>     Set the effective painted size in px (image and
+                        shape Layers only — text has no intrinsic pixel
+                        size; use --resize; a shape's intrinsic size is its
+                        --size geometry). "800x600" deliberately changes
+                        the aspect ratio; "800x" or "x600" preserves the
+                        Layer's current aspect ratio (a deliberate aspect
+                        change survives). Mutually exclusive with --resize
+                        and with content-replacement options. The Layer's
+                        (x, y) stays its top-left corner: it grows/shrinks
+                        right and down.
   --scale <factor>      Set the Layer's scale to an ABSOLUTE factor: replaces
                         the current scale (uniform, both axes), so the same
                         command twice keeps the same scale — never compounding
                         (unlike the relative --resize factor). Works on image
-                        and text Layers, writes the one canonical scale (no
+                        text, and shape Layers, writes the one canonical scale (no
                         second scale field), and never changes retained
                         pixels. Mutually exclusive with --resize and
                         --resize-to.
@@ -682,6 +689,36 @@ async function run() {
       }
       const flip = parsedFlip.value;
 
+      // Shape content options (#208): grammar at the command boundary through
+      // the SAME parsers the add surface runs, then the edit path refuses
+      // them on every kind — shape parameters are not editable on this
+      // surface yet (the sibling edit-setters ticket owns the absolute
+      // setters), so a supplied option is refused with live state unchanged.
+      const parsedEditShape = parseShapeGeometry(values.shape);
+      if (!parsedEditShape.ok) {
+        output({ ok: false, error: parsedEditShape.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedEditSize = parseShapeSize(values.size);
+      if (!parsedEditSize.ok) {
+        output({ ok: false, error: parsedEditSize.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedEditRadius = parseShapeCornerRadius(values["corner-radius"]);
+      if (!parsedEditRadius.ok) {
+        output({ ok: false, error: parsedEditRadius.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedEditFill = parseLayerFill(values.fill);
+      if (!parsedEditFill.ok) {
+        output({ ok: false, error: parsedEditFill.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+
       // Shadow flag (#139, ADR-0018): syntax and well-formedness at the
       // command boundary as a usage error (exit 2) through the SAME parser
       // the edit path uses, so the two boundaries never disagree; the
@@ -836,6 +873,10 @@ async function run() {
           flip,
           shadow: shadowSpec,
           outline: outlineSpec,
+          shape: parsedEditShape.value,
+          size: parsedEditSize.value,
+          cornerRadius: parsedEditRadius.value,
+          fill: parsedEditFill.value,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {
@@ -979,6 +1020,14 @@ async function run() {
               if (rev.lineHeight !== undefined) {
                 console.log(`  Line height: ${rev.lineHeight}`);
               }
+            } else if (rev.kind === "shape") {
+              // Shape parameters (#208): the geometry, its size, the corner
+              // radius when stored (absent = none), and the one fill.
+              console.log(`  Geometry: ${rev.shape} (${rev.width}×${rev.height})`);
+              if (rev.cornerRadius !== undefined) {
+                console.log(`  Corner radius: ${rev.cornerRadius}px`);
+              }
+              console.log(`  Fill: ${rev.fill.type} ${rev.fill.color}`);
             } else {
               console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
             }
@@ -1084,7 +1133,9 @@ async function run() {
               const detail =
                 rev.kind === "text"
                   ? `text ${JSON.stringify(rev.text)}, ${rev.fontSize}px`
-                  : `${rev.width}×${rev.height} ${rev.format}`;
+                  : rev.kind === "shape"
+                    ? `${rev.shape} ${rev.width}×${rev.height}, ${rev.fill.type} fill ${rev.fill.color}`
+                    : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(`  - ${l.id} [${rev.kind}: ${detail}, rev: ${l.currentRevisionId}]`);
             });
           },

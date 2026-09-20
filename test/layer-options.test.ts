@@ -98,7 +98,8 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
 
   it("the edit-option enumeration matches the established refusal list order", () => {
     expect(layerEditOptionKeys()).toEqual([
-      "image", "from-generation", "from-matte", "text", "font", "font-file", "font-size", "color",
+      "image", "from-generation", "from-matte", "text", "shape", "size", "corner-radius", "fill",
+      "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline",
     ]);
@@ -119,7 +120,11 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(editFlags).toEqual(
       expect.arrayContaining(["--x", "--y", "--rotate", "--shadow", "--outline", "--tracking", "--line-height"]),
     );
-    expect(editFlags).toHaveLength(7);
+    // #208 adds the shape size and corner radius options (dash-numeric: a
+    // negative value is legitimate input the ingestion validator refuses
+    // with its range).
+    expect(editFlags).toHaveLength(9);
+    expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
   });
 
   it("the anchor conflict set is derived from the table", () => {

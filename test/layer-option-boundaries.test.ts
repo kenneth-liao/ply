@@ -125,7 +125,7 @@ test("layer edit: the generation/output block precedes the numeric parses", asyn
   await expectRefusal(
     ["layer", "edit", layerId, "--output", "2", "--project", projDir],
     2,
-    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
+    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --shape, --size, --corner-radius, --fill, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
   );
   // With a real edit option supplied, the output-selector check precedes it.
   await expectRefusal(
@@ -168,12 +168,12 @@ test("composition add: content-kind conflicts precede the trim checks (opposite 
   await expectRefusal(
     ["composition", "add", "demo", "t1", "--from-generation", "", "--image", "a.png", "--project", projDir],
     2,
-    "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer.",
+    "--from-generation and --image/--text/--shape options are mutually exclusive content kinds; use one per Layer.",
   );
   await expectRefusal(
     ["composition", "add", "demo", "t2", "--from-matte", "", "--text", "hi", "--project", projDir],
     2,
-    "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer.",
+    "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content kinds; use one per Layer.",
   );
   // Without a conflicting kind, the trim check still fires.
   await expectRefusal(
@@ -209,7 +209,7 @@ test("composition add: the blank --image falls past the exclusivity refusal (INT
   await expectRefusal(
     ["composition", "add", "demo", "t5b", "--image", "", "--project", projDir],
     2,
-    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --from-generation <jobId>, or --from-matte <matteId>",
+    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>",
   );
 });
 

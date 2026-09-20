@@ -284,7 +284,7 @@ describe("layer review — retained evidence", () => {
     const review = await reviewRetainedLayer(moved, layerId, path.join(root, "retained-review.html"));
     expect(review.generation?.jobId).toBe("gen-retained-1");
     expect(review.matting).toBeNull();
-    expect(review.candidate.contentHash).toBe(outputHash);
+    expect(review.candidate!.contentHash).toBe(outputHash);
     // The Reference file is also gone: labeled unavailable with its recorded
     // identity — never substituted, and the review stays usable.
     expect(review.references[0]!.bytes).toBeNull();

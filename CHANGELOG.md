@@ -4,6 +4,50 @@
 
 ### Added
 
+- Shape Layers with a solid fill (--shape/--size/--corner-radius/--fill,
+  #208, spec #207 US-001 bullets 1/3/5 and the solid part of bullets 2/4,
+  US-007 bullet 2, DEC-001/002/003/009/010/011): a third Layer revision
+  kind beside image and text — a filled geometric region created from
+  parameters alone through `ply composition add`'s ONE shared option
+  surface (#228). Geometry is rectangle (optional corner radius) or ellipse
+  (DEC-002); the fill is ONE discriminated value normalized at ONE
+  ingestion boundary (DEC-003, new src/fill.ts) — solid only today, with
+  the representation deliberately reusable for gradient fills (#210) and
+  gradient text (ISC-33). A shape's content IS its parameters: the content
+  identity is derived from the canonical parameter form and NO image bytes
+  are stored (DEC-001) — `content/` gains no blob, cross-Project import
+  copies nothing byte-shaped, and relocation carries only revision
+  documents. Refusals before publication name the parameter and its range
+  (non-positive size, negative or oversized corner radius — 0 to half the
+  shorter side, since a larger radius would be silently clamped by CSS and
+  the pinned parameters would not describe the paint — a radius on an
+  ellipse, a malformed colour), and every refusal leaves live state
+  unchanged. The fill colour grammar is the established effect-colour hex
+  (#RGB/#RRGGBB/#RRGGBBAA, alpha allowed) with the `solid:` discriminator
+  prefix available for explicitness; bare hex and `solid:` are the same
+  fill, canonicalized to the same stored form.
+
+  Shape Layers are full Layer kinds everywhere (US-007): they render
+  through the ONE paint path (a filled element — no bytes), `layer inspect`
+  / `layer list` / `composition inspect` report geometry, radius, and fill;
+  `composition measure` reports the content box (the stored parameter
+  facts), transformed box, corners, and painted extents; `layer review`
+  publishes a parameter sheet (no candidate or matte — there is no pixel
+  evidence to invent); cross-Project import and fork give the shape an
+  independent identity with equal parameters; and a Render containing a
+  shape pins the revision in its manifest and replays byte-identically
+  after later edits and Project relocation, while manifests and revision
+  documents captured before this change keep their exact meaning (DEC-010:
+  additive and optional — the shape fields are appended to the revision
+  hash only for shape revisions, so no existing revision id moves).
+  Kind-shared edit options work as absolute setters (placement, opacity,
+  the canonical transform including `--resize-to` — a shape's `--size` IS
+  its intrinsic size, so the image-only restriction does not extend to
+  shapes — and shadow/outline); shape parameters themselves are NOT
+  editable on `layer edit` yet (sibling ticket #209) and the edit path
+  refuses them naming the surface. New terms "shape Layer" and "fill" in
+  `CONTEXT.md` (DEC-011). Offline, deterministic, no model calls.
+
 - Caller-supplied fonts (--font-file, #232, spec #226 US-005, DEC-006/
   DEC-009/DEC-010, OOS-005, ADR-0021): a text Layer takes a local
   TrueType/OpenType font file in place of a bundled family, at add and at

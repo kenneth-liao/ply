@@ -202,7 +202,10 @@ Other bounded inputs — shadow offsets ±256 px and blur 0–256 px
 −0.5–1 em and line-height 0.5–3
 ([Text tracking and line height](../../README.md#text-tracking-and-line-height-new-surface)),
 font size and resize/scale factor up to 8192
-([Layer resize](../../README.md#layer-resize-new-surface)), and text
-content up to 2000 characters (`MAX_TEXT_LENGTH`) — are refused before
-anything publishes; their option details live in the README feature
+([Layer resize](../../README.md#layer-resize-new-surface)), text
+content up to 2000 characters (`MAX_TEXT_LENGTH`), and shape parameters —
+size per axis 0–8192 px, corner radius 0 to half the shorter side of the
+rectangle, and the solid fill's hex colour grammar
+([Shape Layers](../../README.md#shape-layers-new-surface)) — are refused
+before anything publishes; their option details live in the README feature
 sections and `ply layer edit --help`.

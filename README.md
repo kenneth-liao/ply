@@ -24,11 +24,11 @@ remains target for it.
 ## Current implementation
 
 The composer surface is **Project**, **Composition**, and **Layer**:
-caller-selected canvas dimensions, local image and text Layers, generated and
-independently matted content ingested as ordinary Layers, shared edits and
-forks, independent cross-Project copies, and local deterministic Rendering.
-New work starts here — see [Quick start](#quick-start), the sections below, and
-the `ply-operating` skill.
+caller-selected canvas dimensions, local image, text, and shape Layers,
+generated and independently matted content ingested as ordinary Layers,
+shared edits and forks, independent cross-Project copies, and local
+deterministic Rendering. New work starts here — see
+[Quick start](#quick-start), the sections below, and the `ply-operating` skill.
 
 Models are optional source-asset producers. **Generation** is one uniform
 operation (`ply generate`) with no subject category (ADR-0014): full-canvas or
@@ -597,6 +597,48 @@ ply layer edit <layerId> --tracking -0.032 --line-height 0.88 --in-place
   `layer inspect` and `composition measure` show both values when they are
   set.
 
+## Shape Layers (new surface)
+
+A shape Layer (#208) is a filled geometric region created from parameters
+alone — no image file is read and no image bytes are stored. Its content IS
+its parameters: a geometry (rectangle with an optional corner radius, or
+ellipse), a width and height in canvas px, and ONE fill. The fill is a solid
+colour today — a hex value like `#22c55e`, `#2c5`, or `#22c55e80` (alpha
+allowed), optionally with the explicit `solid:` prefix that gradient fills
+will join later. A full-canvas background is an ordinary shape Layer sized
+to the canvas — there is no separate background concept.
+
+```bash
+# A highlight bar and a pill — parameters only, nothing to draw in advance:
+ply composition add poster bar --shape rectangle --size 420x90 \
+  --fill "#1d4ed8" --x 60 --y 300 -p ~/projects/my-poster
+ply composition add poster pill --shape rectangle --size 220x44 \
+  --corner-radius 22 --fill "#22c55ecc" -p ~/projects/my-poster
+# An ellipse and a full-canvas background (an ordinary shape Layer):
+ply composition add poster dot --shape ellipse --size 80x60 --fill "#ff000080" -p ~/projects/my-poster
+ply composition add poster bg --shape rectangle --size 1280x720 --fill "#101828" -p ~/projects/my-poster
+# One-command add and the shared transform/effect options work as for any
+# other Layer kind; --resize-to resolves against the shape's --size geometry:
+ply composition add poster hero --shape rectangle --size 100x50 --fill "#1d4ed8" \
+  --anchor center,center --rotate 12 --shadow "2,3,4,#000000" -p ~/projects/my-poster
+```
+
+Non-positive size, a negative or oversized corner radius (0 to half the
+shorter side — a larger radius would be silently clamped, so it is refused
+instead of pinned with parameters its paint would not obey), a radius on an
+ellipse, and a malformed colour are refused before anything is published,
+naming the parameter and its range. Shape parameters (`--shape`, `--size`,
+`--corner-radius`, `--fill`) are not editable on `layer edit` yet; edits
+today carry the parameters verbatim and change placement, opacity, the
+canonical transform, and the shadow/outline effects. `inspect`, `measure`,
+and `layer review` report a shape Layer's parameters; `measure` reports its
+content box, transformed box, and painted extents like any other Layer.
+Cross-Project import and fork give the shape an independent identity with
+equal parameters, and a Render containing a shape replays byte-identically
+after later edits and Project relocation — a shape's content identity is
+derived from the canonical parameter form, so there is nothing to retain and
+nothing to lose.
+
 ## Region checking (new surface)
 
 `ply composition check <comp> --regions <file>` tests a Composition's painted
@@ -806,6 +848,10 @@ ply composition add poster headline --text "Hello" --font Anton --x 540 --y 160 
 ply composition add poster wordmark --text "Hello" --font-file ~/fonts/PixelDisplay.ttf -p ~/projects/my-poster
 # Stack position (#230): put a bar behind existing text without a reorder:
 ply composition add poster bar --image bar.png --position before:headline -p ~/projects/my-poster
+# Shape Layers (#208): bars, pills, cards, and backgrounds from parameters
+# alone — no drawing tool, no image bytes:
+ply composition add poster highlight --shape rectangle --size 420x90 \
+  --corner-radius 16 --fill "#1d4ed8" -p ~/projects/my-poster
 ply composition render poster -p ~/projects/my-poster
 # Every successful render retains a manifest under the Project's renders/:
 ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster

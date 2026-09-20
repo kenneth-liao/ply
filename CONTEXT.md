@@ -26,6 +26,21 @@ _Avoid_: Scene
 An independently editable item with a stable identity, shared as a whole,
 including its placement and effects. Later Layers paint over earlier Layers.
 
+**Shape Layer**:
+A Layer whose content is a filled geometric region — a rectangle (with an
+optional corner radius) or an ellipse — defined entirely by parameters. A
+shape Layer stores no image bytes; its parameters are its content. It is a
+full Layer kind: it renders, measures, shares, forks, imports, and replays
+like any other Layer. A full-canvas background is an ordinary shape Layer
+sized to the canvas — there is no separate background concept.
+
+**Fill**:
+How a shape Layer's region is painted: one discriminated value — a solid
+colour, or (later) a gradient. The fill is normalized once at ingestion and
+stored as part of the Layer's revision, so the same representation can paint
+other content kinds later. Colours accept alpha.
+_Avoid_: baked backgrounds, drawn-in-advance helper images
+
 **Layer revision**:
 An immutable version of a Layer. Editing in place advances the same Layer's
 current revision; a fork creates a new Layer identity for the forking Composition.
