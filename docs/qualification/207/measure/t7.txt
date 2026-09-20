@@ -1,0 +1,9 @@
+Measured Composition "t7" (1280×720), 8 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720 [fill radial #f4f4f4 0%, #cfcfcf 100%]
+  2. "glyph" (image content 24×24) box (127, 162) 36×36 painted (130, 162) 30×36 [scale 1.5×]
+  3. "oc" (text 144×39) box (169, 157.5) 144×39 painted (170, 166) 142×29
+  4. "mins" (text 188.31×40) box (339, 161) 188.31×40 painted (340, 166) 187×28 [weight 700, width 100]
+  5. "master" (text 366.36×92) box (125, 256) 366.36×92 painted (130, 270) 362×61 [weight 800, width 100, tracking -0.02em]
+  6. "bar" (image content 500×90) box (125, 368) 500×90 painted (125, 368) 500×90 [fill solid #fff200]
+  7. "open" (text 491.42×92) box (127, 368.5) 491.42×92 painted (130, 383) 487×61 [weight 800, width 100, tracking -0.02em]
+  8. "kenny" (image content 1063×1277) box (621, -50) 649.29×780 painted (621, -50) 649×780, on-canvas (621, 0) 649×720 — clipped [scale 0.610806577916993×]
