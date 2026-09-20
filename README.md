@@ -66,6 +66,18 @@ written either way (`--x -40` or `--x=-40`, `--y -.5` or `--y=-.5`); a
 following option is never consumed as a number, and Layer effects' numeric
 values (`--rotate`, `--shadow`, `--outline`) accept both forms too.
 
+Layers are addressable by name wherever a Layer id is accepted (`layer edit`,
+`layer inspect`, `layer review`): a Composition-plus-use form
+`<composition>/<use>` — for example `poster/headline` — resolves to the
+referenced Layer's id at the command boundary, so ids never need capturing or
+storing. A slash always means an address (a Layer id can never contain one),
+so the form is unambiguous and needs no shell quoting. Unknown Compositions
+and uses are refused listing what exists; nothing is published. Layer ids
+continue to work everywhere. Sharing rules are unchanged: a name address to a
+shared Layer still requires `--in-place` or `--fork`, and with `--fork` the
+address supplies the target Composition and use, so `--composition`/`--use`
+need not be repeated (repeating them must match the address).
+
 ## Uniform generation (new surface)
 
 `ply generate` is one source-image generation operation with no subject

@@ -154,8 +154,12 @@ function parsePlacement(options: AddLayerOptions): { x: number; y: number; opaci
  * Unlocked internal reader for stored Composition JSON documents.
  * Verifies Project boundary containment and parses the stored document through
  * the canonical parser.
+ *
+ * Exported as the ONE read-only document reader for Layer name-address
+ * resolution (spec #226 US-003): the address boundary resolves an address
+ * through this parser and never a second one.
  */
-async function readCompositionDocument(
+export async function readCompositionDocument(
   resolvedRoot: string,
   compName: string,
 ): Promise<{ comp: Composition; compFile: string }> {
