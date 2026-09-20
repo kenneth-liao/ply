@@ -70,14 +70,14 @@ values (`--rotate`, `--shadow`, `--outline`) accept both forms too.
 transform, effect, and text option `ply layer edit` accepts for that Layer
 kind, with identical spelling, validation, and refusal texts — so a Layer is
 created in its final state with one command. The options apply in the
-documented order — content, then transforms (`--resize`, `--rotate`,
-`--flip`), then anchored placement (`--anchor`), then effects (`--shadow`,
-`--outline`) — and publish exactly one Layer revision; any refused option
-publishes nothing (no Layer, no use, no content). The one-command Layer
-renders and measures identically to the same Layer built by the
-multi-command sequence, and its Render replays byte-identically. On `layer
-edit`, `--anchor` cannot combine with `--shadow`/`--outline` (the reference
-ink would be ambiguous); on `add` the combination is defined by the order —
+documented order — content, then transforms (`--resize`, `--scale`,
+`--rotate`, `--flip`), then anchored placement (`--anchor`), then effects
+(`--shadow`, `--outline`) — and publish exactly one Layer revision; any
+refused option publishes nothing (no Layer, no use, no content). The
+one-command Layer renders and measures identically to the same Layer built by
+the multi-command sequence, and its Render replays byte-identically. On
+`layer edit`, `--anchor` cannot combine with `--shadow`/`--outline` (the
+reference ink would be ambiguous); on `add` the combination is defined by the order —
 the anchor resolves the content+transform ink in the target Composition's
 canvas, and the effects are then applied to the same single revision. On
 `add`, `--width` is the text width axis (the same spelling `layer edit`
@@ -205,7 +205,8 @@ content (ADR-0016) — resizing changes placement, never retained pixels:
 
 ```bash
 ply layer edit <layerId> --resize 2        # relative: current scale × 2
-ply layer edit <layerId> --resize-to 800x  # absolute, aspect preserved
+ply layer edit <layerId> --scale 2         # absolute: the scale IS 2
+ply layer edit <layerId> --resize-to 800x  # absolute size, aspect preserved
 ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
 ```
 
@@ -214,6 +215,14 @@ ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
   command twice keeps enlarging (2 then 2 gives 4×). The aspect ratio is
   always preserved. Every result (text and JSON) reports the absolute
   effective scale and, for image Layers, the absolute effective size.
+- `--scale <factor>` (#231) is the **absolute** alternative: it sets the
+  Layer's canonical scale (uniform, both axes), replacing any previous
+  scale, so repeating the command never compounds — `--scale 2` twice is
+  still 2×, and it is safe to repeat during iteration. Works on image and
+  text Layers, writes the one canonical scale representation (no second
+  scale field), and never changes retained pixels. Mutually exclusive with
+  `--resize` and `--resize-to` (and with content replacement, like the
+  other resize forms); refused before anything publishes.
 - `--resize-to <WxH>` is image-only (text has no intrinsic pixel size).
   Supplying one axis (`800x`, `x600`) preserves the Layer's current aspect
   ratio — a deliberate aspect change survives later one-axis resizes;
@@ -359,8 +368,8 @@ ply layer edit <layerId> --anchor center,top --x 100 --y 200
 - **Transform interaction:** resolution runs against the Layer's CURRENT
   scale/rotation/reflection (the rotated ink box is what gets anchored),
   and anchored placement is its own edit — it cannot be combined with
-  `--resize`, `--rotate`, `--flip`, `--shadow`, or content replacement in
-  one edit, because the reference ink would be ambiguous. `--opacity`
+  `--resize`, `--scale`, `--rotate`, `--flip`, `--shadow`, or content
+  replacement in one edit, because the reference ink would be ambiguous. `--opacity`
   combines freely. A later transform or content edit keeps the resolved
   x/y literally; re-anchor explicitly after changing the geometry.
 - **Resolution contexts:** a text Layer's ink depends on the referring

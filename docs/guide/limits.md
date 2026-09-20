@@ -173,7 +173,7 @@ Other bounded inputs — shadow offsets ±256 px and blur 0–256 px
 ([Layer shadows](../../README.md#layer-shadows-new-surface)), tracking
 −0.5–1 em and line-height 0.5–3
 ([Text tracking and line height](../../README.md#text-tracking-and-line-height-new-surface)),
-font size and resize factor up to 8192
+font size and resize/scale factor up to 8192
 ([Layer resize](../../README.md#layer-resize-new-surface)), and text
 content up to 2000 characters (`MAX_TEXT_LENGTH`) — are refused before
 anything publishes; their option details live in the README feature

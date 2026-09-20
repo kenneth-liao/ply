@@ -348,6 +348,8 @@ export interface OneCommandOptions {
   resizeFactor?: number;
   /** The --resize-to target axes (boundary-validated shape). */
   resizeTo?: { width?: number; height?: number };
+  /** The --scale absolute factor (a finite number > 0, boundary-validated). */
+  scale?: number;
   /** The --rotate angle in degrees (a finite number, boundary-validated). */
   rotateDeg?: number;
   /** The --flip mode (a validated literal, boundary-validated). */
@@ -406,6 +408,7 @@ async function applyOneCommandOptions(
     options !== undefined &&
     (options.resizeFactor !== undefined ||
       options.resizeTo !== undefined ||
+      options.scale !== undefined ||
       options.rotateDeg !== undefined ||
       options.flip !== undefined ||
       options.shadow !== undefined ||
@@ -419,6 +422,7 @@ async function applyOneCommandOptions(
   const supplied = oneCommandApplicationOrder({
     ...(options.resizeFactor !== undefined ? { resize: options.resizeFactor } : {}),
     ...(options.resizeTo !== undefined ? { "resize-to": options.resizeTo } : {}),
+    ...(options.scale !== undefined ? { scale: options.scale } : {}),
     ...(options.rotateDeg !== undefined ? { rotate: options.rotateDeg } : {}),
     ...(options.flip !== undefined ? { flip: options.flip } : {}),
     ...(options.shadow !== undefined ? { shadow: options.shadow } : {}),
@@ -461,6 +465,16 @@ async function applyOneCommandOptions(
       }
       case "resize-to": {
         const scale = resolveEditScale({ resizeTo: options.resizeTo! }, pseudoPrev, rev.layerId);
+        rev.scaleX = scale.scaleX;
+        rev.scaleY = scale.scaleY;
+        break;
+      }
+      case "scale": {
+        // Absolute scale setter (#231, DEC-005): the value IS the canonical
+        // scale (ADR-0016), resolved through the edit path's ONE scale
+        // resolution — so the add surface's refusals, bounds, and idempotence
+        // are byte-identical to the edit surface's by construction.
+        const scale = resolveEditScale({ scale: options.scale! }, pseudoPrev, rev.layerId);
         rev.scaleX = scale.scaleX;
         rev.scaleY = scale.scaleY;
         break;

@@ -4,6 +4,22 @@
 
 ### Added
 
+- Absolute scale setter (--scale, #231, spec #226 US-004, DEC-005/DEC-009,
+  ADR-0016): `layer edit` and `composition add` take `--scale <factor>` — an
+  ABSOLUTE setter that sets the Layer's canonical scale (uniform, both axes)
+  on image and text Layers, replacing any previous scale, so repeating the
+  command during iteration never compounds (unlike the relative `--resize`
+  factor). It writes the one canonical scale representation of ADR-0016 — no
+  second scale field — and never changes retained pixels. The option is
+  declared, parsed, and validated once in the shared option definition
+  (#228), so both surfaces accept it with identical refusals; it is mutually
+  exclusive with `--resize` and `--resize-to` (and with content replacement,
+  like the other resize forms) through the one extended resize-form rule in
+  `resolveEditScale`, refused before anything publishes. `--resize` stays
+  relative and unchanged; its help names `--scale` as the absolute
+  alternative. Shape Layers join automatically when #208 lands (the shared
+  definition covers them).
+
 - Stack position on add and import (#230, spec #226 US-002, DEC-004):
   `composition add` takes `--position` — `before:<use-name>`,
   `after:<use-name>`, `bottom`, or `top` — so a bar goes behind existing

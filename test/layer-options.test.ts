@@ -75,8 +75,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   it("the one-command post-content set and its application order come from the group fact (#229 DEC-002)", () => {
     // The table's transform and effect groups plus anchored placement —
     // no re-declared list.
-    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "rotate", "flip", "shadow", "outline"]);
+    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline"]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
+    expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
     expect(anyOneCommandOptionProvided({ opacity: "0.5" })).toBe(false);
     expect(anyOneCommandOptionProvided({})).toBe(false);
   });
@@ -87,6 +88,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // Text Layers have no intrinsic pixel size: --resize-to is image-only.
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize-to")!.appliesTo).toEqual(["image"]);
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize")!.appliesTo).toEqual(["image", "text"]);
+    expect(LAYER_OPTION_DEFS.find((def) => def.key === "scale")!.appliesTo).toEqual(["image", "text"]);
     expect(forKind("image")).toContain("image");
     expect(forKind("text")).toContain("text");
     for (const def of LAYER_OPTION_DEFS) {
@@ -98,7 +100,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(layerEditOptionKeys()).toEqual([
       "image", "from-generation", "from-matte", "text", "font", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
-      "resize", "resize-to", "rotate", "flip", "shadow", "outline",
+      "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline",
     ]);
   });
 
@@ -123,6 +125,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   it("the anchor conflict set is derived from the table", () => {
     expect(isAnchorConflicting({ anchor: "left", rotate: "5" })).toBe(true);
     expect(isAnchorConflicting({ anchor: "left", resize: "2" })).toBe(true);
+    expect(isAnchorConflicting({ anchor: "left", scale: "2" })).toBe(true);
     expect(isAnchorConflicting({ anchor: "left", text: "hi" })).toBe(true);
     // --opacity and the anchor's own axes combine freely.
     expect(isAnchorConflicting({ anchor: "left", opacity: "0.5", x: "1", y: "2" })).toBe(false);
@@ -245,6 +248,26 @@ describe("shared option validators: both surfaces' established texts", () => {
         '--resize-to takes "<W>x<H>" (both axes: deliberate aspect change) or "<W>x" / "x<H>" (one axis: aspect preserved), e.g. "800x600", "800x", "x600" — got "100".',
     });
     expect(parseResizeOptions(undefined, "800x")).toEqual({ ok: true, value: { resizeTo: { width: 800 } } });
+  });
+
+  it("resize/scale family: the extended exclusivity and --scale's text (#231)", () => {
+    expect(parseResizeOptions("2", undefined, "1.5")).toEqual({
+      ok: false,
+      error: "--resize and --scale are mutually exclusive: use one resize form per edit (--resize is relative, --scale sets the absolute scale).",
+    });
+    expect(parseResizeOptions(undefined, "800x", "1.5")).toEqual({
+      ok: false,
+      error: "--resize-to and --scale are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale sets the absolute scale).",
+    });
+    expect(parseResizeOptions(undefined, undefined, "0")).toEqual({
+      ok: false,
+      error: 'Scale (--scale) must be a finite number greater than 0 (got "0").',
+    });
+    expect(parseResizeOptions(undefined, undefined, "abc")).toEqual({
+      ok: false,
+      error: 'Scale (--scale) must be a finite number greater than 0 (got "abc").',
+    });
+    expect(parseResizeOptions(undefined, undefined, "2")).toEqual({ ok: true, value: { scale: 2 } });
   });
 
   it("rotate, flip, shadow, outline, anchor keep their texts", () => {

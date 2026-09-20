@@ -287,12 +287,17 @@ reported by 'measure' exactly as a multi-command Layer's are.
                         against the content+transform ink before the effects
                         apply; an unanchored axis keeps its --x/--y value.
   --resize <factor>     Scale the Layer by a RELATIVE factor (multiplies
-                        scale 1 at creation); aspect ratio preserved.
+                        scale 1 at creation); aspect ratio preserved. For an
+                        absolute setter use --scale instead.
   --resize-to <WxH>     Set the effective painted size in px (image Layers
                         only — text has no intrinsic pixel size; use
                         --resize). "800x600" changes the aspect ratio;
                         "800x" or "x600" preserves it. Mutually exclusive
                         with --resize.
+  --scale <factor>      Set the Layer's scale to an ABSOLUTE factor (uniform,
+                        both axes): the same command keeps the same scale,
+                        never compounding. Works on image and text Layers;
+                        mutually exclusive with --resize and --resize-to.
   --rotate <deg>        Rotate to an ABSOLUTE angle in degrees, clockwise
                         positive, about the Layer's (x, y) corner.
   --flip <mode>         Flip to an ABSOLUTE reflection state: horizontal,
@@ -600,7 +605,7 @@ async function run() {
       // transforms, then anchored placement, then effects) inside the
       // publication path, before anything is stored, so a refused option
       // publishes nothing.
-      const resize = parseResizeOptions(values.resize, values["resize-to"]);
+      const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
       if (!resize.ok) {
         output({ ok: false, error: resize.error }, isJson);
         process.exitCode = 2;
@@ -665,6 +670,7 @@ async function run() {
         ? {
             ...(resize.value.resizeFactor !== undefined ? { resizeFactor: resize.value.resizeFactor } : {}),
             ...(resize.value.resizeTo !== undefined ? { resizeTo: resize.value.resizeTo } : {}),
+            ...(resize.value.scale !== undefined ? { scale: resize.value.scale } : {}),
             ...(parsedRotation.value !== undefined ? { rotateDeg: parsedRotation.value } : {}),
             ...(parsedFlip.value !== undefined ? { flip: parsedFlip.value } : {}),
             ...(parsedShadow.value !== undefined ? { shadow: parsedShadow.value } : {}),
