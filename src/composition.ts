@@ -94,7 +94,12 @@ async function publishLayerUse(
   compFile: string,
   localName: string,
   makeRevision: (layerId: string, createdAt: string) => Promise<LayerRevision>,
+  position?: StackPosition,
 ): Promise<{ layerId: string; layer: ResolvedLayer }> {
+  // Stack position (#230): resolved BEFORE any content retention, revision
+  // staging, or identity staging — an unknown use name refuses here with
+  // the Composition's use names and nothing is published.
+  const insertIndex = position ? resolveStackPositionIndex(comp, position) : comp.layers.length;
   const layerId = generateLayerId();
   const createdAt = new Date().toISOString();
 
@@ -127,9 +132,11 @@ async function publishLayerUse(
     resolvedLayer = await readLayerInternal(resolvedRoot, layerId);
 
     // Live Commit Point in Composition
+    const updatedLayers = [...comp.layers];
+    updatedLayers.splice(insertIndex, 0, { name: localName, layerId });
     const updatedComp: Composition = {
       ...comp,
-      layers: [...comp.layers, { name: localName, layerId }],
+      layers: updatedLayers,
     };
 
     await atomicReplace(compFile, JSON.stringify(updatedComp, null, 2) + "\n");
@@ -228,10 +235,95 @@ export async function readMutableComposition(
   return { comp, compFile };
 }
 
+/**
+ * Stack position on add and import (#230, spec #226 US-002, DEC-004). Paint
+ * order stays owned by the Composition's ordered use list (ISC-6, ADR-0013):
+ * a position is a creation-time argument that selects an insertion point in
+ * that list — never a Layer revision fact, so no Layer revision stores one
+ * and the position is deliberately NOT a member of the shared Layer option
+ * table (`LAYER_OPTION_DEFS`, #228) and never appears on layer edit.
+ *
+ * - `top` — appended after every existing use (painted last, on top). This
+ *   is the default: absent, an add or import behaves exactly as before.
+ * - `bottom` — prepended before every existing use (painted first).
+ * - `before:<use-name>` / `after:<use-name>` — inserted immediately before
+ *   or after the named existing use in paint order.
+ */
+export type StackPosition =
+  | { kind: "top" }
+  | { kind: "bottom" }
+  | { kind: "before"; useName: string }
+  | { kind: "after"; useName: string };
+
+/**
+ * The ONE position reader (spec #226 US-002): grammar parsing shared by the
+ * `composition add` and `composition import` command boundaries — the flag
+ * spelling is a single spec string following the established `--anchor`
+ * convention (DEC-009). The use name reuses the one name rule
+ * (`sanitizeName`), so the existing use-name grammar applies unchanged.
+ * Grammar errors throw here (usage errors at the command boundary); the
+ * unknown-use refusal is semantic and runs in
+ * `resolveStackPositionIndex` inside the publication path, before anything
+ * is published.
+ */
+export function parseStackPosition(spec: string): StackPosition {
+  const trimmed = spec.trim();
+  if (trimmed === "top") return { kind: "top" };
+  if (trimmed === "bottom") return { kind: "bottom" };
+  const named = /^(before|after):(.+)$/.exec(trimmed);
+  if (named) {
+    const kind = named[1] as "before" | "after";
+    const useName = sanitizeName(named[2]!.trim());
+    return { kind, useName };
+  }
+  throw new Error(
+    `Invalid --position "${spec}": use "top", "bottom", "before:<use-name>", or "after:<use-name>" (an existing use of the target Composition).`,
+  );
+}
+
+/** Compact display form of a parsed position (compact text output, refusals). */
+export function stackPositionSpec(position: StackPosition): string {
+  return position.kind === "before" || position.kind === "after"
+    ? `${position.kind}:${position.useName}`
+    : position.kind;
+}
+
+/**
+ * The ONE position validation (spec #226 US-002): resolve a parsed position
+ * against a Composition's ordered use list to the insertion index. Runs
+ * inside the publication path BEFORE any content retention, revision
+ * staging, or use commit, so an unknown use name is refused with the
+ * Composition's use names listed and nothing is published — no Layer, no
+ * use, no content (#229's fail-closed ordering).
+ */
+export function resolveStackPositionIndex(comp: Composition, position: StackPosition): number {
+  if (position.kind === "top") return comp.layers.length;
+  if (position.kind === "bottom") return 0;
+  const index = comp.layers.findIndex((use) => use.name === position.useName);
+  if (index === -1) {
+    const uses =
+      comp.layers.length === 0
+        ? "the Composition has no uses"
+        : `the Composition's uses are: ${comp.layers.map((use) => `"${use.name}"`).join(", ")}`;
+    throw new Error(
+      `Unknown use "${position.useName}" for --position ${stackPositionSpec(position)}: ${uses}.`,
+    );
+  }
+  return position.kind === "before" ? index : index + 1;
+}
+
 export interface AddLayerOptions {
   x?: number;
   y?: number;
   opacity?: number;
+  /**
+   * Stack position (#230, spec #226 US-002, DEC-004): where the new use
+   * goes in the Composition's paint order. Parsed once at the command
+   * boundary through `parseStackPosition`; validated against the target
+   * Composition inside the publication path before anything is published.
+   * Absent keeps the established append-at-top behavior byte-identical.
+   */
+  position?: StackPosition;
   /**
    * One-command creation (#229, spec #226 US-001/DEC-002): the post-content
    * options — transforms, anchored placement, effects — applied to the
@@ -599,7 +691,7 @@ export async function addLayerToComposition(
       );
       await storeContentBlob(projectPath, ingested.contentHash, ingested.bytes);
       return revision;
-    }).then(({ layerId, layer }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer }));
+    }, options.position).then(({ layerId, layer }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer }));
   });
 }
 
@@ -707,7 +799,7 @@ export async function addTextLayerToComposition(
       );
       await storeContentBlob(projectPath, contentHash, bytes);
       return revision;
-    }).then(({ layerId, layer }) => ({
+    }, options.position).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
@@ -814,7 +906,7 @@ export async function addGeneratedLayerToComposition(
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
       return revision;
-    }).then(({ layerId, layer }) => ({
+    }, options.position).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
@@ -917,7 +1009,7 @@ export async function addMattedLayerToComposition(
         };
       }
       return revision;
-    }).then(({ layerId, layer }) => ({
+    }, options.position).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
@@ -1236,6 +1328,7 @@ async function copyCrossProject(
   srcRoot: string,
   targetName: string,
   sourceName: string,
+  position?: StackPosition,
 ): Promise<ImportCompositionResult> {
   // One consistent source snapshot through the canonical bytes-bearing reader
   // (`readCompositionInternalFull`): the document is parsed once and every
@@ -1247,6 +1340,11 @@ async function copyCrossProject(
   // each distinct source Layer to one destination identity.
   const sourceFull = await readCompositionInternalFull(srcRoot, sourceName);
   const { comp: targetComp, compFile: targetCompFile } = await readMutableComposition(destRoot, targetName);
+
+  // Stack position (#230): validated against the target's use list BEFORE
+  // any staging — an unknown use name refuses here, naming the target's
+  // uses, and nothing is published.
+  const insertIndex = position ? resolveStackPositionIndex(targetComp, position) : targetComp.layers.length;
 
   // Empty-source no-op: clean success with 0 imported uses, no storage churn.
   if (sourceFull.layers.length === 0) {
@@ -1321,9 +1419,13 @@ async function copyCrossProject(
     }));
 
     // Live Commit Point: one atomic replacement of the destination document.
+    // The imported set stays contiguous and in source order, inserted at the
+    // resolved stack position (#230).
+    const updatedLayers = [...targetComp.layers];
+    updatedLayers.splice(insertIndex, 0, ...importedUses);
     const updatedTarget: Composition = {
       ...targetComp,
-      layers: [...targetComp.layers, ...importedUses],
+      layers: updatedLayers,
     };
     await atomicReplace(targetCompFile, JSON.stringify(updatedTarget, null, 2) + "\n");
 
@@ -1359,6 +1461,7 @@ export async function importCompositionCrossProject(
   targetCompName: string,
   sourceCompName: string,
   sourceProjectPath: string,
+  position?: StackPosition,
 ): Promise<ImportCompositionResult> {
   const sanitizedTarget = sanitizeName(targetCompName);
   const sanitizedSource = sanitizeName(sourceCompName);
@@ -1391,7 +1494,7 @@ export async function importCompositionCrossProject(
     throw err;
   }
   try {
-    return await copyCrossProject(destRoot, srcRoot, sanitizedTarget, sanitizedSource);
+    return await copyCrossProject(destRoot, srcRoot, sanitizedTarget, sanitizedSource, position);
   } finally {
     await second.release();
     await first.release();
@@ -1406,6 +1509,7 @@ export async function importComposition(
   projectPath: string,
   targetCompName: string,
   sourceCompName: string,
+  position?: StackPosition,
 ): Promise<ImportCompositionResult> {
   const sanitizedTarget = sanitizeName(targetCompName);
   const sanitizedSource = sanitizeName(sourceCompName);
@@ -1417,6 +1521,12 @@ export async function importComposition(
   const resolvedRoot = await resolveProjectRoot(projectPath);
   return withProjectLock(resolvedRoot, async () => {
     const { comp: targetComp, compFile: targetCompFile } = await readMutableComposition(resolvedRoot, sanitizedTarget);
+
+    // Stack position (#230): validated against the target's use list before
+    // any commit — an unknown use name refuses here, naming the target's
+    // uses, and nothing is published.
+    const insertIndex = position ? resolveStackPositionIndex(targetComp, position) : targetComp.layers.length;
+
     const { comp: sourceComp } = await readMutableComposition(resolvedRoot, sanitizedSource);
 
     // Empty source import is a no-op with 0 imported uses
@@ -1445,7 +1555,10 @@ export async function importComposition(
       layerId: use.layerId,
     }));
 
-    const updatedLayers = [...targetComp.layers, ...importedUses];
+    // The imported set stays contiguous and in source order, inserted at the
+    // resolved stack position (#230).
+    const updatedLayers = [...targetComp.layers];
+    updatedLayers.splice(insertIndex, 0, ...importedUses);
     const updatedTargetComp: Composition = {
       ...targetComp,
       layers: updatedLayers,

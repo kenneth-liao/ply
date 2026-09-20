@@ -84,6 +84,18 @@ canvas, and the effects are then applied to the same single revision. On
 uses); the canvas dimension meaning of `--width` belongs to `composition
 create` alone.
 
+**Stack position (#230):** a new Layer lands on top by default; `--position`
+says where it goes in paint order instead — `--position bottom` (painted
+beneath everything), `--position before:<use-name>` / `--position
+after:<use-name>` (before or after an existing use), or `--position top`
+(explicit default). `composition import` takes the same `--position` for
+the imported set, which stays contiguous and in source order. Paint order
+stays owned by the Composition's ordered use list: the position is a
+creation-time argument, never a Layer revision fact, so no Layer revision
+stores one and `layer edit` has no position option. An unknown use name is
+refused before anything is published — no Layer, no use, no content —
+naming the Composition's use names.
+
 Layers are addressable by name wherever a Layer id is accepted (`layer edit`,
 `layer inspect`, `layer review`): a Composition-plus-use form
 `<composition>/<use>` — for example `poster/headline` — resolves to the
@@ -738,6 +750,8 @@ ply composition add poster utility --text "Hello" --font Archivo --tracking 0.16
 # edit' accepts applies in the documented order and publishes one revision:
 ply composition add poster headline --text "Hello" --font Anton --x 540 --y 160 \
   --anchor center,center --rotate -6 --shadow "0,6,12,#00000080" -p ~/projects/my-poster
+# Stack position (#230): put a bar behind existing text without a reorder:
+ply composition add poster bar --image bar.png --position before:headline -p ~/projects/my-poster
 ply composition render poster -p ~/projects/my-poster
 # Every successful render retains a manifest under the Project's renders/:
 ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster
