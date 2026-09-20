@@ -59,6 +59,7 @@ import {
   type LayerOptionArgs,
 } from "./layer-options.js";
 import { addShapeLayerToComposition } from "./composition.js";
+import { formatFill } from "./fill.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -86,14 +87,18 @@ composition — Composition authoring and inspection
       into the Project, so rendering never needs the original font files.
       Mutually exclusive with --image.
 
-  ply composition add <comp> <name> --shape rectangle|ellipse --size <W>x<H> --fill <color> [options]
+  ply composition add <comp> <name> --shape rectangle|ellipse --size <W>x<H> --fill <spec> [options]
       Add a shape Layer from parameters alone (#208): a filled rectangle
       (optional --corner-radius) or ellipse, sized in canvas px, painted
       with ONE fill — a solid color (#RGB/#RRGGBB/#RRGGBBAA, alpha
-      allowed). No image file is read and no image bytes are stored: the
+      allowed) or a gradient (#210): "linear:45deg,<stop>,<stop>" or
+      "radial:<stop>,<stop>"; a stop is "<color>" or "<color>:<position>"
+      (0–100 percent, the % optional; omitted positions are distributed
+      evenly). No image file is read and no image bytes are stored: the
       Layer's content IS its parameters. A full-canvas background is an
       ordinary shape Layer sized to the canvas. Non-positive size, a
-      negative or oversized radius, and a malformed color are refused
+      negative or oversized radius, and a malformed fill (a malformed
+      colour, fewer than two stops, an out-of-range position) are refused
       before anything is published. On 'layer edit' each shape parameter
       (--shape, --size, --corner-radius, --fill) is an absolute setter
       (#209). Mutually exclusive with --image, --text, --from-generation,
@@ -274,12 +279,18 @@ Options:
                         be silently clamped, so it is refused instead);
                         0 is the same look as absent and is never stored.
                         Not valid on an ellipse.
-  --fill <spec>         The shape's ONE fill (#208): a solid color — a hex
-                        color like #22c55e, #2c5, or #22c55e80 (alpha
-                        allowed), optionally with the explicit
-                        "solid:" discriminator prefix. The prefix is the
-                        one fill grammar gradient fills join later.
-                        Required with --shape.
+  --fill <spec>         The shape's ONE fill (#208, #210): a solid color — a
+                        hex color like #22c55e, #2c5, or #22c55e80 (alpha
+                        allowed), optionally with the explicit "solid:"
+                        discriminator prefix — or a gradient: a linear
+                        gradient "linear:<angle>deg,<stop>,<stop>" (angle in
+                        degrees clockwise from bottom-to-top) or a radial
+                        gradient "radial:<stop>,<stop>". A stop is "<color>"
+                        or "<color>:<position>" — position 0–100, the %
+                        suffix optional, omitted positions distributed
+                        evenly. Fewer than two stops, an out-of-range
+                        position, or a malformed colour is refused before
+                        anything is published. Required with --shape.
   --order <names>       Comma-separated permutation of use names (required for reorder)
   --position <spec>     Where the new use goes in paint order (add, or the
                         imported set for import; #230): "top" (default —
@@ -540,7 +551,7 @@ async function run() {
       const compName = positionals[1];
       const localName = positionals[2];
       if (!compName || !localName) {
-        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --text <str> --font-file <path> | --shape rectangle|ellipse --size <W>x<H> --fill <color> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
+        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --text <str> --font-file <path> | --shape rectangle|ellipse --size <W>x<H> --fill <spec> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -957,7 +968,7 @@ async function run() {
             return;
           }
           if (parsedFill.value === undefined) {
-            output({ ok: false, error: "Missing required option: --fill <color> (a solid fill, e.g. \"#22c55e\") is required with --shape" }, isJson);
+            output({ ok: false, error: 'Missing required option: --fill <spec> (a solid color like "#22c55e" or a gradient like "linear:45deg,#ff0000,#00ff00") is required with --shape' }, isJson);
             process.exitCode = 2;
             return;
           }
@@ -982,7 +993,7 @@ async function run() {
               const radius = rev.cornerRadius !== undefined ? `, corner radius ${rev.cornerRadius}px` : "";
               console.log(
                 `Added shape Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
-                  `[${rev.shape} ${rev.width}×${rev.height}${radius}, ${rev.fill.type} fill ${rev.fill.color}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
+                  `[${rev.shape} ${rev.width}×${rev.height}${radius}, ${formatFill(rev.fill)}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
               );
             },
           );
@@ -1134,7 +1145,7 @@ async function run() {
                 rev.kind === "text"
                   ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
                   : rev.kind === "shape"
-                    ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
+                    ? `${rev.shape} ${rev.width}×${rev.height} ${formatFill(rev.fill)}`
                     : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(
                 `  ${idx + 1}. "${layer.name}" [${layer.layerId}] (${rev.kind}, ${detail}) ` +
@@ -1173,6 +1184,11 @@ async function run() {
               if (layer.effects.outline) {
                 const o = layer.effects.outline;
                 facts.push(`outline ${o.width} ${o.color}`);
+              }
+              // The shape's ONE fill (#208/#210): the canonical fill facts
+              // painting applies, reported for auditability.
+              if (layer.fill) {
+                facts.push(`fill ${formatFill(layer.fill)}`);
               }
               if (layer.axes) {
                 facts.push(`weight ${layer.axes.weight}, width ${layer.axes.width}`);

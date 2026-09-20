@@ -4,6 +4,27 @@
 
 ### Added
 
+- Gradient fills for shape Layers (#210, spec #207 US-001 gradient part,
+  DEC-003/009/010): the ONE fill union gains `linear` and `radial` variants,
+  normalized at the SAME single ingestion point (`src/fill.ts`) `--fill` —
+  `composition add --shape` and `layer edit --fill` both take them through
+  the same parser. Grammar (DEC-009): `linear:<angle>deg,<stop>,<stop>` or
+  `radial:<stop>,<stop>`; a stop is `<color>` or `<color>:<position>`
+  (0–100 percent, the `%` suffix optional, omitted positions distributed
+  evenly); stop colours take the same hex forms as a solid (alpha allowed).
+  The representation is shape-agnostic (DEC-003) — a later gradient text
+  reuses it. Fewer than two stops, an out-of-range position, a decreasing
+  stop list (CSS would clamp it silently; the stored form must describe the
+  paint), or a malformed colour is refused before anything is published,
+  naming the fault; live state is unchanged. Angles canonicalize to 0–360
+  (`-45deg` ≡ `315deg`) and colours to the established canonical form, so
+  equivalent spellings hash to one content identity. `inspect`, `measure`,
+  and `layer review` report the gradient, and a Render with a gradient fill
+  replays byte-identically after later edits and relocation. The union is
+  extended additively (DEC-010): the solid fill's content-identity and
+  revision-id encodings are byte-identical to #208's, so existing
+  solid-fill revision ids do not move, and every #208 document validates
+  exactly as before.
 - Shape parameters are editable on `layer edit` (#209, spec #207 US-002,
   DEC-001/009/010): each shape parameter — geometry (`--shape`), size
   (`--size`), corner radius (`--corner-radius`), and fill (`--fill`) — is an

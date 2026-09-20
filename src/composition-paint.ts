@@ -36,6 +36,7 @@ import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
 import { createHash } from "node:crypto";
 import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerOutline, type ResolvedLayerRevision } from "./layer.js";
+import { fillCssBackground } from "./fill.js";
 
 const MIME: Record<"png" | "jpeg" | "webp", string> = {
   png: "image/png",
@@ -652,7 +653,9 @@ export function buildCompositionHtml(
       if (rev.kind === "shape") {
         // A shape Layer (#208) paints as a filled div: the geometry is the
         // element's box (width/height in canvas px), the fill is the
-        // validated hex color (alpha allowed), and the geometry variation is
+        // validated canonical fill (#210 gradients paint their CSS
+        // projection — `fillCssBackground`, the one paint projection of the
+        // one fill form), and the geometry variation is
         // pure CSS — a corner radius becomes border-radius in px; an ellipse
         // is the same box with a 50% border radius. No image bytes are
         // involved (DEC-001): the element paints from the revision's
@@ -667,7 +670,7 @@ export function buildCompositionHtml(
               : "";
         const style =
           `${base}${transformed}${effectsFilter}width:${rev.width}px;height:${rev.height}px;` +
-          `background:${rev.fill.color};${radiusCss}`;
+          `background:${fillCssBackground(rev.fill)};${radiusCss}`;
         return `<div style="${style}"></div>`;
       }
       return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;

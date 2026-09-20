@@ -49,6 +49,7 @@ import { withProjectLock, atomicCreate } from "./project-lock.js";
 import { atomicReplace } from "./reference-import.js";
 import { outsideDir } from "./paths.js";
 import { dataUrl, escapeHtml } from "./html.js";
+import { formatFill } from "./fill.js";
 
 /** One displayed Reference: verified bytes, or an explicit unavailable label. */
 export interface EvidenceReference {
@@ -361,7 +362,7 @@ export async function reviewRetainedLayer(
         ["kind", "shape"],
         ["geometry", `${rev.shape} (${rev.width}×${rev.height})`],
         ...(rev.cornerRadius !== undefined ? [["corner radius", `${rev.cornerRadius}px`] as [string, string]] : []),
-        ["fill", `${rev.fill.type} ${rev.fill.color}`],
+        ["fill", formatFill(rev.fill)],
         ["content identity", `${rev.contentHash} (derived from the canonical parameter form — no image bytes are stored for a shape)`],
       ];
       const sheet = renderEvidenceSheet({
