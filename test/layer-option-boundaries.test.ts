@@ -168,12 +168,12 @@ test("composition add: content-kind conflicts precede the trim checks (opposite 
   await expectRefusal(
     ["composition", "add", "demo", "t1", "--from-generation", "", "--image", "a.png", "--project", projDir],
     2,
-    "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer.",
+    "--from-generation and --image/--text/--shape options are mutually exclusive content kinds; use one per Layer.",
   );
   await expectRefusal(
     ["composition", "add", "demo", "t2", "--from-matte", "", "--text", "hi", "--project", projDir],
     2,
-    "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer.",
+    "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content kinds; use one per Layer.",
   );
   // Without a conflicting kind, the trim check still fires.
   await expectRefusal(

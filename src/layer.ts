@@ -307,7 +307,7 @@ export function validateShapeContent(
   for (const [label, value] of [["width", width], ["height", height]] as const) {
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION) {
       throw new Error(
-        `Invalid shape ${label} ${JSON.stringify(value)}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+        `Invalid shape ${label} ${JSON.stringify(value)}: must be a finite number greater than 0 and at most ${MAX_DIMENSION}.`,
       );
     }
   }

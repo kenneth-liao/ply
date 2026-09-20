@@ -675,3 +675,49 @@ test("the explicit solid: prefix and the #RGB shorthand are the SAME fill as the
   }
   expect(new Set(hashes).size).toBe(1);
 });
+
+test("the from-generation and from-matte content-kind conflicts name --shape", async () => {
+  // Add surface (exit 2, usage error): the conflict fires on arg presence
+  // alone, before any job or matte lookup.
+  const withGeneration = await invoke([
+    "composition", "add", "poster", "bad", "--from-generation", "j1",
+    "--shape", "rectangle", "--size", "10x10", "--fill", "#123456",
+    "--project", projDir, "--json",
+  ]);
+  expect(withGeneration.code).toBe(2);
+  const generationError = JSON.parse(withGeneration.stdout).error as string;
+  expect(generationError).toContain("--from-generation");
+  expect(generationError).toContain("--shape");
+
+  const withMatte = await invoke([
+    "composition", "add", "poster", "bad", "--from-matte", "m1",
+    "--shape", "rectangle", "--size", "10x10", "--fill", "#123456",
+    "--project", projDir, "--json",
+  ]);
+  expect(withMatte.code).toBe(2);
+  const matteError = JSON.parse(withMatte.stdout).error as string;
+  expect(matteError).toContain("--from-matte");
+  expect(matteError).toContain("--shape");
+
+  // Edit surface: the same one rule, the edit wording — needs a real Layer
+  // (target resolution precedes the conflict checks there).
+  const img = path.join(tempDir, "src.png");
+  const buf = Buffer.alloc(4 * 4 * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = 255; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 255;
+  }
+  await Bun.write(img, encodePngRgba(4, 4, buf));
+  const add = await invoke([
+    "composition", "add", "poster", "img", "--image", img, "--project", projDir, "--json",
+  ]);
+  expect(add.code).toBe(0);
+  const layerId = JSON.parse(add.stdout).use.layerId as string;
+  const editConflict = await invoke([
+    "layer", "edit", layerId, "--from-generation", "j1", "--shape", "rectangle",
+    "--size", "10x10", "--fill", "#123456", "--project", projDir, "--json",
+  ]);
+  expect(editConflict.code).toBe(2);
+  const editError = JSON.parse(editConflict.stdout).error as string;
+  expect(editError).toContain("--from-generation");
+  expect(editError).toContain("--shape");
+});

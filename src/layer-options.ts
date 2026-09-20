@@ -385,15 +385,15 @@ export function layerContentKindConflict(
     case "from-generation":
       if (generationSide && (args.image !== undefined || textSide || shapeSide)) {
         return surface === "edit"
-          ? "--from-generation and --image/--text options are mutually exclusive content options."
-          : "--from-generation and --image/--text options are mutually exclusive content kinds; use one per Layer.";
+          ? "--from-generation and --image/--text/--shape options are mutually exclusive content options."
+          : "--from-generation and --image/--text/--shape options are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
     case "from-matte":
       if (matteSide && (args.image !== undefined || textSide || shapeSide || generationSide)) {
         return surface === "edit"
-          ? "--from-matte and --image/--text/--from-generation options are mutually exclusive content options."
-          : "--from-matte and --image/--text/--from-generation options are mutually exclusive content kinds; use one per Layer.";
+          ? "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content options."
+          : "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
   }

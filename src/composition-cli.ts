@@ -754,9 +754,9 @@ async function run() {
               const detail =
                 rev.kind === "text"
                   ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
-                  : rev.kind === "shape"
-                    ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
-                    : `${rev.width}×${rev.height} ${rev.format}`;
+                  : rev.kind === "image"
+                    ? `${rev.width}×${rev.height} ${rev.format}`
+                    : ""; // unreachable: generation ingestion publishes image or text content only
               console.log(
                 `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
                   `[${detail}] from Generation Job ${res.generatedFrom.jobId} ` +
@@ -792,9 +792,9 @@ async function run() {
               const detail =
                 rev.kind === "text"
                   ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
-                  : rev.kind === "shape"
-                    ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
-                    : `${rev.width}×${rev.height} ${rev.format}`;
+                  : rev.kind === "image"
+                    ? `${rev.width}×${rev.height} ${rev.format}`
+                    : ""; // unreachable: matte ingestion publishes image or text content only
               const generated = res.generatedFrom
                 ? `; generation lineage from Generation Job ${res.generatedFrom.jobId} retained`
                 : "";
@@ -997,11 +997,9 @@ async function run() {
           () => {
             const rev = res.layer.currentRevision;
             const detail =
-              rev.kind === "text"
-                ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
-                : rev.kind === "shape"
-                  ? `${rev.shape} ${rev.width}×${rev.height} ${rev.fill.type} fill ${rev.fill.color}`
-                  : `${rev.width}×${rev.height} ${rev.format}`;
+              rev.kind === "image"
+                ? `${rev.width}×${rev.height} ${rev.format}`
+                : ""; // unreachable: the image branch publishes image content only
             console.log(
               `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" [${detail}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
             );
