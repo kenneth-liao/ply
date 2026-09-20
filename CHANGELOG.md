@@ -339,6 +339,21 @@
   decision recorded on #229). Not included: stack position, absolute scale,
   and caller fonts (sibling tickets).
 
+### Fixed
+
+- Gradient edge stops honour the CSS default position (#251, spec #207
+  US-001 fill bullet, DEC-011): in a mixed stop list, an omitted FIRST stop
+  position resolves to 0 and an omitted LAST to 100 — before, `resolveMissing`
+  spread an edge run with the interior-run formula, so `linear:0deg,#fff:0,#000`
+  stored the last stop at 50 (now 100) and `radial:#fff,#00f:100` stored the
+  first at 50 (now 0). A multi-stop edge run pins only its outermost stop and
+  spreads the rest evenly between the pin and the neighbouring explicit
+  position; all-omitted lists and interior runs are unchanged, no stored fill
+  or revision id moves (stored stops always carry explicit positions), and
+  the same edge-pinned spec re-edited stays one fill identity. CONTEXT.md's
+  Fill term now states the shipped union (solid, linear gradient, or radial
+  gradient) instead of "a gradient (later)".
+
 ### Changed
 
 - Internal refactor, no version-visible behavior change (#228, spec #226

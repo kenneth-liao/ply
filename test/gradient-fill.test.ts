@@ -23,6 +23,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { decodePng, encodePngRgba } from "../src/png.js";
+import { normalizeStoredFill } from "../src/fill.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -308,15 +309,84 @@ test("omitted positions interpolate between surrounding explicit positions (mixe
       { color: "#0000ff", position: 100 },
     ],
   });
-  // A leading run interpolates from the 0 bound, a trailing run towards 100.
+  // A leading run pins its first stop to 0 and a trailing run pins its last
+  // to 100 — the CSS edge defaults (#251); the rest of the run then spreads
+  // evenly from the pin towards the neighbouring explicit position.
   const runs = await addShape(
     "runs", "linear:90deg,#ff0000,#00ff00:40,#0000ff", "60x60", "120", "30",
   );
   expect(runs.layer.currentRevision.fill.stops).toEqual([
-    { color: "#ff0000", position: 20 },
+    { color: "#ff0000", position: 0 },
     { color: "#00ff00", position: 40 },
-    { color: "#0000ff", position: 70 },
+    { color: "#0000ff", position: 100 },
   ]);
+});
+
+test("an omitted first stop position resolves to 0 and an omitted last to 100 in mixed lists (#251)", async () => {
+  // The ticket's two reproductions: before the fix each edge stop spread as
+  // an interior run and stored 50 — the CSS default puts it on the edge.
+  const linear = await addShape(
+    "edge-last", "linear:0deg,#ffffff:0,#000000", "60x60", "20", "30",
+  );
+  expect(linear.layer.currentRevision.fill.stops).toEqual([
+    { color: "#ffffff", position: 0 },
+    { color: "#000000", position: 100 },
+  ]);
+  const radial = await addShape(
+    "edge-first", "radial:#ffffff,#0000ff:100", "60x60", "120", "30",
+  );
+  expect(radial.layer.currentRevision.fill.stops).toEqual([
+    { color: "#ffffff", position: 0 },
+    { color: "#0000ff", position: 100 },
+  ]);
+  // A multi-stop leading run pins only its first stop; the rest spreads
+  // evenly between the pin and the next explicit position. Same for a
+  // trailing run from its last explicit position towards the pinned 100.
+  const lead = await addShape(
+    "lead-run", "linear:90deg,#ff0000,#00ff00,#0000ff:50,#ffff00", "60x60", "20", "90",
+  );
+  expect(lead.layer.currentRevision.fill.stops).toEqual([
+    { color: "#ff0000", position: 0 },
+    { color: "#00ff00", position: 25 },
+    { color: "#0000ff", position: 50 },
+    { color: "#ffff00", position: 100 },
+  ]);
+  const trail = await addShape(
+    "trail-run", "linear:90deg,#ff0000:0,#00ff00:25,#0000ff,#ffff00,#ff00ff", "60x60", "120", "90",
+  );
+  expect(trail.layer.currentRevision.fill.stops).toEqual([
+    { color: "#ff0000", position: 0 },
+    { color: "#00ff00", position: 25 },
+    { color: "#0000ff", position: 50 },
+    { color: "#ffff00", position: 75 },
+    { color: "#ff00ff", position: 100 },
+  ]);
+  // Existing revision ids do not move: the same edge-pinned spec re-edited
+  // compares as the same fill identity and publishes no new revision.
+  const again = await invoke([
+    "layer", "edit", linear.use.layerId, "--fill", "linear:0deg,#ffffff:0,#000000",
+    "--project", projDir, "--json",
+  ]);
+  expect(again.code).toBe(0);
+  expect(JSON.parse(again.stdout).layer.currentRevisionId).toBe(
+    linear.layer.currentRevisionId,
+  );
+});
+
+test("a stored fill is normalized, never re-resolved: existing revision ids do not move (#251)", () => {
+  // resolveMissing runs only at ingestion; a stored document always carries
+  // explicit positions and is read back as stored. A fill stored under the
+  // old edge behaviour — an explicit last stop at 50 — therefore keeps its
+  // exact form and revision identity after the fix (criterion 2).
+  const stored = {
+    type: "linear" as const,
+    angleDeg: 0,
+    stops: [
+      { color: "#ffffff", position: 0 },
+      { color: "#000000", position: 50 },
+    ],
+  };
+  expect(normalizeStoredFill(stored)).toEqual(stored);
 });
 
 // ---------------------------------------------------------------------------

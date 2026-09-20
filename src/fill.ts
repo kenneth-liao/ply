@@ -257,40 +257,54 @@ export function parseFillSpec(spec: string): LayerFill {
   };
 }
 
-/** Resolve omitted stop positions by even interpolation: an all-omitted
- *  stop list distributes evenly across the full gradient line (first stop
- *  0, last stop 100 — the CSS default); a mixed list interpolates each
- *  omitted run evenly between its surrounding explicit positions (0 at
- *  the start, 100 at the end), so `#f00:90,#0f0,#00f:100` puts the middle
- *  stop at 95 — not 50, which would falsely read as decreasing. The form
- *  painted, so the stored stops always carry explicit positions. */
+/** Resolve omitted stop positions (DEC-009): an all-omitted stop list
+ *  distributes evenly across the full gradient line (first stop 0, last
+ *  stop 100 — the CSS default); in a mixed list an omitted FIRST position
+ *  pins to 0 and an omitted LAST to 100 — the CSS edge defaults (#251) —
+ *  and each remaining omitted run interpolates evenly between its
+ *  surrounding explicit positions, so `#f00:90,#0f0,#00f:100` puts the
+ *  middle stop at 95 — not 50, which would falsely read as decreasing. The
+ *  resolved form is the one painted, so the stored stops always carry
+ *  explicit positions. */
 function resolveMissing(
   stops: { color: string; position: number }[],
 ): LayerFillStop[] {
+  const n = stops.length;
   if (stops.every((s) => Number.isNaN(s.position))) {
-    const n = stops.length;
     return stops.map(
       (s, i) => ({ color: s.color, position: (i / (n - 1)) * 100 }),
     );
   }
+  // Pin the edges first (css-images-3), then interpolate what remains — a
+  // leading or trailing run is its edge pin plus an ordinary interior run,
+  // never a run stretched from an invented interior anchor.
+  const pinned = stops.slice();
+  if (Number.isNaN(pinned[0]!.position)) {
+    pinned[0] = { color: pinned[0]!.color, position: 0 };
+  }
+  if (Number.isNaN(pinned[n - 1]!.position)) {
+    pinned[n - 1] = { color: pinned[n - 1]!.color, position: 100 };
+  }
   const resolved: LayerFillStop[] = [];
   let left = 0;
   let i = 0;
-  while (i < stops.length) {
-    if (!Number.isNaN(stops[i]!.position)) {
-      left = stops[i]!.position;
-      resolved.push(stops[i]!);
+  while (i < n) {
+    if (!Number.isNaN(pinned[i]!.position)) {
+      left = pinned[i]!.position;
+      resolved.push(pinned[i]!);
       i++;
       continue;
     }
-    // One omitted run: stops[i..j) all carry the NaN sentinel.
+    // One interior omitted run: pinned[i..j) all carry the NaN sentinel.
+    // j < n always holds: the last stop is pinned, so a run can never
+    // reach the end of the pinned list.
     let j = i;
-    while (j < stops.length && Number.isNaN(stops[j]!.position)) j++;
-    const right = j < stops.length ? stops[j]!.position : 100;
+    while (j < n && Number.isNaN(pinned[j]!.position)) j++;
+    const right = pinned[j]!.position;
     const m = j - i;
     for (let k = i; k < j; k++) {
       resolved.push({
-        color: stops[k]!.color,
+        color: pinned[k]!.color,
         position: left + ((right - left) * (k - i + 1)) / (m + 1),
       });
     }
