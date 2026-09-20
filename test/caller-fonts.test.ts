@@ -12,7 +12,7 @@ import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
 import { mkdtemp, rm, readFile, readdir, writeFile, rename, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { decodePng } from "../src/png.js";
+import { decodePng, encodePngRgba } from "../src/png.js";
 import type { LayerTextRevision } from "../src/layer.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
@@ -110,6 +110,18 @@ function inkPixels(png: ReturnType<typeof decodePng>): number {
     if (png.rgba[i]! > 40) ink++;
   }
   return ink;
+}
+
+/** A solid test image, encoded by the renderer's own PNG encoder. */
+function solidPng(width: number, height: number, rgba: [number, number, number, number]): Buffer {
+  const buf = Buffer.alloc(width * height * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = rgba[0]!;
+    buf[i + 1] = rgba[1]!;
+    buf[i + 2] = rgba[2]!;
+    buf[i + 3] = rgba[3]!;
+  }
+  return encodePngRgba(width, height, buf);
 }
 
 async function compositionLayers(comp: string, project = projDir): Promise<unknown[]> {
@@ -238,6 +250,47 @@ test("a missing font file is refused naming the path", async () => {
   expect(res.code).toBe(1);
   expect(res.stdout).toContain("does not exist");
 });
+
+test("--font-file is refused on an image Layer, like every text option", async () => {
+  await makeComposition("poster");
+  const png = path.join(tempDir, "solid.png");
+  await writeFile(png, solidPng(8, 8, [255, 0, 0, 255]));
+  const added = await invoke([
+    "composition", "add", "poster", "img", "--image", png, "--project", projDir, "--json",
+  ]);
+  expect(added.code).toBe(0);
+  const layerId = await layerIdOf("poster", "img");
+  const res = await invoke(["layer", "edit", layerId, "--font-file", SILKSCREEN, "--project", projDir, "--json"]);
+  expect(res.code).toBe(1);
+  expect(res.stdout).toContain("Cannot edit text attributes on an image Layer");
+});
+
+test("a parseable font the rendering browser cannot resolve is refused before publication", async () => {
+  await makeComposition("poster");
+  // The sfnt facts parse (name/OS/2/fvar tables intact) but the glyph data
+  // is garbage, so the browser's font sanitizer rejects the face — the
+  // same family-resolution gate the render probe applies must refuse the
+  // file BEFORE anything publishes.
+  const bytes = Buffer.from(await readFile(HANDJET));
+  const numTables = bytes.readUInt16BE(4);
+  for (let i = 0; i < numTables; i++) {
+    const rec = 12 + i * 16;
+    if (bytes.toString("latin1", rec, rec + 4) === "glyf") {
+      const off = bytes.readUInt32BE(rec + 8);
+      const len = bytes.readUInt32BE(rec + 12);
+      bytes.fill(0xff, off + 100, off + Math.min(len, 5000));
+    }
+  }
+  const corrupt = path.join(tempDir, "corrupt-glyphs.ttf");
+  await writeFile(corrupt, bytes);
+  const contentBefore = await storedContentNames();
+
+  const res = await addCallerFont("poster", "bad-glyphs", corrupt);
+  expect(res.code).toBe(1);
+  expect(res.stdout).toContain("failed to load in the rendering browser");
+  expect(await compositionLayers("poster")).toHaveLength(0);
+  expect(await storedContentNames()).toEqual(contentBefore);
+}, 30000);
 
 test("a later edit without a font option keeps the retained caller font", async () => {
   await makeComposition("poster");

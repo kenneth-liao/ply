@@ -47,6 +47,68 @@ describe("parseCallerFont (#232)", () => {
     expect(() => parseCallerFont(Buffer.alloc(4))).toThrow(/not a usable font|too short/);
   });
 
+  it("skips an odd-length UTF-16 name record instead of throwing a raw decoder error", () => {
+    // Minimal sfnt: a name table whose first family record (name ID 1,
+    // platform 3) declares an odd byte length — malformed, must be skipped
+    // like any other malformed record, never a raw swap16 RangeError. A
+    // valid Mac-Roman (platform 1) record carries the family so the file
+    // still parses.
+    const odd = Buffer.alloc(5, 0x41);
+    const family = Buffer.from("OddRecord", "latin1");
+    const nameRecords = Buffer.alloc(2 * 12);
+    // Record 1: platform 3, name ID 1, odd length 5, string at offset 0.
+    nameRecords.writeUInt16BE(3, 0);
+    nameRecords.writeUInt16BE(1, 2);
+    nameRecords.writeUInt16BE(0x409, 4);
+    nameRecords.writeUInt16BE(1, 6);
+    nameRecords.writeUInt16BE(odd.length, 8);
+    nameRecords.writeUInt16BE(0, 10);
+    // Record 2: platform 1, name ID 1, the usable family name.
+    nameRecords.writeUInt16BE(1, 12);
+    nameRecords.writeUInt16BE(0, 14);
+    nameRecords.writeUInt16BE(0, 16);
+    nameRecords.writeUInt16BE(1, 18);
+    nameRecords.writeUInt16BE(family.length, 20);
+    nameRecords.writeUInt16BE(odd.length, 22);
+    const strings = Buffer.concat([odd, family]);
+    const nameTable = Buffer.concat([
+      (() => {
+        const head = Buffer.alloc(6);
+        head.writeUInt16BE(0, 0);
+        head.writeUInt16BE(2, 2);
+        head.writeUInt16BE(6 + 2 * 12, 4);
+        return head;
+      })(),
+      nameRecords,
+      strings,
+    ]);
+    // Stub tables for the parser's other requirements: OS/2 (the weight
+    // fact), glyph outlines, and a character map.
+    const os2 = Buffer.alloc(8);
+    os2.writeUInt16BE(4, 0);
+    os2.writeUInt16BE(400, 4);
+    const glyf = Buffer.alloc(8);
+    const cmap = Buffer.alloc(8);
+    const tables: Array<[string, Buffer]> = [
+      ["name", nameTable], ["OS/2", os2], ["glyf", glyf], ["cmap", cmap],
+    ];
+    const headerLength = 12 + tables.length * 16;
+    let offset = headerLength;
+    const header = Buffer.alloc(headerLength);
+    header.writeUInt32BE(0x00010000, 0);
+    header.writeUInt16BE(tables.length, 4);
+    for (const [tag, bytes] of tables) {
+      const rec = 12 + tables.findIndex(([t]) => t === tag) * 16;
+      header.write(tag, rec, "latin1");
+      header.writeUInt32BE(offset, rec + 8);
+      header.writeUInt32BE(bytes.length, rec + 12);
+      offset += bytes.length;
+    }
+    const full = Buffer.concat([header, nameTable, os2, glyf, cmap]);
+    const facts = parseCallerFont(full);
+    expect(facts.family).toBe("OddRecord");
+  });
+
   it("refuses WOFF, WOFF2, and TrueType collections", () => {
     const woff = Buffer.alloc(44);
     woff.write("wOFF", 0, "latin1");

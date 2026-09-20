@@ -106,6 +106,10 @@ function readNameRecords(bytes: Buffer, table: SfntTable): NameRecord[] {
     const offset = bytes.readUInt16BE(rec + 10);
     const start = stringOffset + offset;
     if (start + length > bytes.length) continue;
+    // UTF-16 records must decode in whole code units: an odd-length
+    // platform-0/3 record is malformed, skipped like any other malformed
+    // record (never a raw decoder error).
+    if ((platformId === 0 || platformId === 3) && length % 2 !== 0) continue;
     const raw = bytes.subarray(start, start + length);
     const text =
       platformId === 0 || platformId === 3

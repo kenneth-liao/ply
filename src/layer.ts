@@ -1994,6 +1994,7 @@ async function buildEditedRevision(
     if (
       options.text !== undefined ||
       options.font !== undefined ||
+      options.fontFile !== undefined ||
       options.fontSize !== undefined ||
       options.color !== undefined ||
       options.weight !== undefined ||
