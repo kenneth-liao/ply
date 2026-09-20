@@ -48,7 +48,7 @@
  * no rename and no alias.
  */
 import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
-import { parseShadowSpec, parseOutlineSpec, parseVisibleRegionSpec, resolveTextTypographyControls } from "./layer.js";
+import { parseShadowSpec, parseOutlineSpec, parseVisibleRegionSpec, parseVisibleRegionRadiusSpec, resolveTextTypographyControls } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { parseFillSpec, type LayerFill as LayerFillSpec } from "./fill.js";
 
@@ -113,7 +113,8 @@ export type LayerOptionKey =
   | "flip"
   | "shadow"
   | "outline"
-  | "visible-region";
+  | "visible-region"
+  | "visible-region-radius";
 
 /**
  * The one option table (DEC-001), in the order the edit surface's
@@ -160,6 +161,11 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // anchor resolves against the region-clipped visible ink, DEC-005) and
   // before the effects (which hug the region's edge, DEC-004).
   { key: "visible-region", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true },
+  // The visible region's corner radius (#212): the same revision fact's
+  // second axis — the same region group, because the radius rounds the
+  // region's corners (one-command add applies it right after the rectangle,
+  // still before the anchor and the effects).
+  { key: "visible-region-radius", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -194,6 +200,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   shadow: { type: "string" },
   outline: { type: "string" },
   "visible-region": { type: "string" },
+  "visible-region-radius": { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string" }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
@@ -826,6 +833,23 @@ export function parseLayerVisibleRegion(raw: string | undefined): OptionParse<st
   if (raw === undefined) return { ok: true, value: undefined };
   try {
     parseVisibleRegionSpec(raw);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
+ * --visible-region-radius: syntax and well-formedness through the SAME
+ * parser the edit path uses (#212, DEC-001), so the two boundaries never
+ * disagree. Returns the raw spec (the ingestion path re-resolves it against
+ * the region rectangle and live state; the range refusal — over half the
+ * rectangle's shorter side is refused, never clamped — is semantic).
+ */
+export function parseLayerVisibleRegionRadius(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    parseVisibleRegionRadiusSpec(raw);
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }

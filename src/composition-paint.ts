@@ -434,17 +434,27 @@ function outlineFilterDef(
  * element's user space for every kind. One clip per LAYER WITH A REGION,
  * not per distinct region: the id is a deterministic hash of the region
  * facts plus the Layer's snapshot index, so the same facts always emit the
- * same markup (the same recipe as the outline filter ids).
+ * same markup (the same recipe as the outline filter ids). A corner radius
+ * (#212) joins the facts the id hashes and the rect's `rx` attribute — the
+ * same rectangle, corners rounded.
  */
 function regionClipPathId(region: LayerVisibleRegion, layerIndex: number): string {
-  return `ply-r-${createHash("sha256").update(`${region.x}:${region.y}:${region.width}:${region.height}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+  // The radius rides the id's hash input (#212) — only when present, so
+  // pre-#212 region ids are byte-identical to their #211 form.
+  const radiusPart = region.cornerRadius !== undefined ? `:r${region.cornerRadius}` : "";
+  return `ply-r-${createHash("sha256").update(`${region.x}:${region.y}:${region.width}:${region.height}${radiusPart}:${layerIndex}`).digest("hex").slice(0, 16)}`;
 }
 
 function regionClipPathDef(region: LayerVisibleRegion, layerIndex: number): string {
   const id = regionClipPathId(region, layerIndex);
+  // The corner radius (#212) is the clip rect's rx: the same rect geometry
+  // (painted extents stay the rectangle's), with the corners rounded — the
+  // clip crops the content to the rounded shape BEFORE the Layer element's
+  // filter chain, so the outline and shadow hug the rounded edge too.
+  const radius = region.cornerRadius !== undefined ? ` rx="${region.cornerRadius}"` : "";
   return (
     `<clipPath id="${id}" clipPathUnits="userSpaceOnUse">` +
-    `<rect x="${region.x}" y="${region.y}" width="${region.width}" height="${region.height}"/>` +
+    `<rect x="${region.x}" y="${region.y}" width="${region.width}" height="${region.height}"${radius}/>` +
     `</clipPath>`
   );
 }

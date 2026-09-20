@@ -366,6 +366,9 @@ export async function reviewRetainedLayer(
         ...(rev.visibleRegion !== undefined
           ? [["visible region", `(${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})`] as [string, string]]
           : []),
+        ...(rev.visibleRegion?.cornerRadius !== undefined
+          ? [["region corner radius", `${rev.visibleRegion.cornerRadius}px`] as [string, string]]
+          : []),
         ["content identity", `${rev.contentHash} (derived from the canonical parameter form — no image bytes are stored for a shape)`],
       ];
       const sheet = renderEvidenceSheet({

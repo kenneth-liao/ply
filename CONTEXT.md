@@ -43,7 +43,8 @@ _Avoid_: baked backgrounds, drawn-in-advance helper images
 
 **Visible region**:
 The rectangular part of a Layer's own content that is ink, set and removed
-as a Layer revision fact without touching the retained file. Content outside
+as a Layer revision fact without touching the retained file, with an
+optional corner radius on the same fact. Content outside
 the region is not ink: painting, measurement, anchored placement, and the
 effects' edge all follow it, while the placement point and transform origin
 stay defined against the full content box.

@@ -117,6 +117,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "shadow": return ["2,3,4,#000000"];
     case "outline": return ["2,#00ff00"];
     case "visible-region": return ["10,10,20,20"];
+    case "visible-region-radius": return ["8"];
     default: throw new Error(`guard test: no value for option "${key}"`);
   }
 }
@@ -184,6 +185,12 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
     case "shadow": expect((rev.shadow as { dx: number } | undefined)?.dx).toBe(2); break;
     case "outline": expect((rev.outline as { width: number } | undefined)?.width).toBe(2); break;
     case "visible-region": expect(rev.visibleRegion).toEqual({ x: 10, y: 10, width: 20, height: 20 }); break;
+    case "visible-region-radius":
+      // The guard add supplies --visible-region "10,10,20,20" beside the
+      // radius (a fresh Layer has no region to round): the radius lands on
+      // the same fact.
+      expect(rev.visibleRegion).toEqual({ x: 10, y: 10, width: 20, height: 20, cornerRadius: 8 });
+      break;
     case "font-size": expect(rev.fontSize).toBe(64); break;
     case "color": expect(rev.color).toBe("#ffcc00"); break;
     case "weight": expect(rev.weight).toBe(800); break;
@@ -200,7 +207,11 @@ test("every edit option applicable to an image Layer is accepted and APPLIED on 
   let n = 0;
   for (const key of applicable) {
     if (["image", "from-generation", "from-matte", "output"].includes(key)) continue; // content/selector options: their own adds
-    const extra = key === "anchor" ? ["--x", "80", "--y", "60"] : [];
+    const extra = key === "anchor"
+      ? ["--x", "80", "--y", "60"]
+      : key === "visible-region-radius"
+        ? ["--visible-region", "10,10,20,20"]
+        : [];
     const { revision } = await addJson(`p${n++}`, [
       "--image", imagePath,
       `--${key}`, ...guardValue(key, imagePath), ...extra,
@@ -215,7 +226,11 @@ test("every edit option applicable to a text Layer is accepted and APPLIED on a 
   let n = 0;
   for (const key of applicable) {
     if (["image", "from-generation", "from-matte", "output", "text", "font", "font-file"].includes(key)) continue;
-    const extra = key === "anchor" ? ["--x", "80", "--y", "60"] : [];
+    const extra = key === "anchor"
+      ? ["--x", "80", "--y", "60"]
+      : key === "visible-region-radius"
+        ? ["--visible-region", "10,10,20,20"]
+        : [];
     const { revision } = await addJson(`t${n++}`, [
       "--text", "Groundline", "--font", "Archivo",
       `--${key}`, ...guardValue(key, imagePath), ...extra,
@@ -356,6 +371,6 @@ test("composition add: --anchor requires explicit targets for the anchored axes"
 
 test("the one-command application order comes from the option table (transform, anchor, effect)", () => {
   expect(
-    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", scale: "1", outline: "1", flip: "1", "visible-region": "1" }),
-  ).toEqual(["resize", "resize-to", "scale", "rotate", "flip", "visible-region", "anchor", "shadow", "outline"]);
+    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", scale: "1", outline: "1", flip: "1", "visible-region": "1", "visible-region-radius": "1" }),
+  ).toEqual(["resize", "resize-to", "scale", "rotate", "flip", "visible-region", "visible-region-radius", "anchor", "shadow", "outline"]);
 });

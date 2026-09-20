@@ -75,7 +75,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   it("the one-command post-content set and its application order come from the group fact (#229 DEC-002)", () => {
     // The table's transform and effect groups plus anchored placement —
     // no re-declared list.
-    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region"]);
+    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius"]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
     expect(anyOneCommandOptionProvided({ opacity: "0.5" })).toBe(false);
@@ -101,7 +101,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "image", "from-generation", "from-matte", "text", "shape", "size", "corner-radius", "fill",
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
-      "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region",
+      "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
     ]);
   });
 
@@ -123,8 +123,10 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     );
     // #208 adds the shape size and corner radius options (dash-numeric: a
     // negative value is legitimate input the ingestion validator refuses
-    // with its range); #211 adds --visible-region the same way.
-    expect(editFlags).toHaveLength(10);
+    // with its range); #211 adds --visible-region the same way; #212 adds
+    // --visible-region-radius (a negative radius is refused by the parser,
+    // but the boundary still accepts dash-leading values).
+    expect(editFlags).toHaveLength(11);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
   });
 
