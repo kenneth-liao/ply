@@ -70,15 +70,18 @@ values (`--rotate`, `--shadow`, `--outline`) accept both forms too.
 transform, effect, and text option `ply layer edit` accepts for that Layer
 kind, with identical spelling, validation, and refusal texts — so a Layer is
 created in its final state with one command. The options apply in the
-documented order — content, then transforms (`--resize`, `--scale`,
-`--rotate`, `--flip`), then anchored placement (`--anchor`), then effects
+documented order — content, then content-level paint (`--vector-color`),
+then transforms (`--resize`, `--scale`, `--rotate`, `--flip`), then the
+visible region, then anchored placement (`--anchor`), then effects
 (`--shadow`, `--outline`) — and publish exactly one Layer revision; any
 refused option publishes nothing (no Layer, no use, no content). The
 one-command Layer renders and measures identically to the same Layer built by
 the multi-command sequence, and its Render replays byte-identically. On
-`layer edit`, `--anchor` cannot combine with `--shadow`/`--outline` (the
+`layer edit`, `--anchor` cannot combine with `--shadow`/`--outline`,
+`--vector-color`, or `--visible-region` (the
 reference ink would be ambiguous); on `add` the combination is defined by the order —
-the anchor resolves the content+transform ink in the target Composition's
+the anchor resolves the content, colour, transform, and region ink in the
+target Composition's
 canvas, and the effects are then applied to the same single revision. On
 `add`, `--width` is the text width axis (the same spelling `layer edit`
 uses); the canvas dimension meaning of `--width` belongs to `composition
@@ -369,7 +372,9 @@ ply layer edit <layerId> --anchor center,top --x 100 --y 200
 - **Transform interaction:** resolution runs against the Layer's CURRENT
   scale/rotation/reflection (the rotated ink box is what gets anchored),
   and anchored placement is its own edit — it cannot be combined with
-  `--resize`, `--scale`, `--rotate`, `--flip`, `--shadow`, or content
+  `--resize`, `--scale`, `--rotate`, `--flip`, shape parameters
+  (`--shape`, `--size`, `--corner-radius`, `--fill`), `--vector-color`,
+  `--visible-region`, `--shadow`, or content
   replacement in one edit, because the reference ink would be ambiguous. `--opacity`
   combines freely. A later transform or content edit keeps the resolved
   x/y literally; re-anchor explicitly after changing the geometry.
@@ -530,8 +535,9 @@ ply layer edit <layerId> --visible-region-radius none # remove the radius (0 wor
   the hash only when present, so pre-#211 revisions keep their exact ids
   and pinned Render history replays byte-identically (DEC-010).
 - One-command `composition add` accepts `--visible-region` in the
-  documented order — content, transforms, region, anchored placement,
-  effects — so `--anchor` resolves the region-clipped ink on add (the
+  documented order — content, content-level paint, transforms, region,
+  anchored placement, effects — so `--anchor` resolves the region-clipped
+  ink on add (the
   framing use case: add, crop, and center in one command). On `layer
   edit`, `--anchor` and `--visible-region` cannot combine in one edit —
   make the region edit first, then anchor — and the region cannot combine
@@ -698,7 +704,8 @@ explicit `solid:` prefix — or a gradient:
   the CSS convention; `-45deg` and `315deg` are the same fill).
 - `radial:<stop>,<stop>[,...]` — a radial gradient radiating from the box's
   centre, a circle whose radius reaches the box's farthest side (the last
-  stop's colour lands exactly on the box's farthest edge midpoints).
+  stop's colour lands exactly on the box's farthest edge midpoints — only
+  those on the farthest side).
 
 A stop is `<color>` or `<color>:<position>` — position 0–100 percent (the
 `%` suffix is optional); omitted positions interpolate evenly between the
@@ -829,7 +836,10 @@ refused on a raster image Layer (a raster's colours are its retained
 pixels), on a text Layer (which takes its colour through `--color`), and on
 a shape Layer (whose colour is its fill, through `--fill`), before anything
 is published; when the same edit replaces content, the refusal reads the
-new content's format. Paint order within the Layer (ADR-0023): the colour
+new content's format. On `layer edit`, `--vector-color` cannot combine
+with `--anchor` — anchor first, then set the colour (the anchor resolves
+the ink the edit publishes, and a colour's alpha can change it).
+Paint order within the Layer (ADR-0023): the colour
 IS content paint — the visible region crops it, and the outline and shadow
 hug the cropped, coloured edge. `inspect`, `measure`, and `layer review`
 report the colour; a Render with a recoloured vector replays
