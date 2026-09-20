@@ -14,8 +14,11 @@ import {
   reorderCompositionLayers,
   inspectComposition,
   listCompositions,
+  parseStackPosition,
+  stackPositionSpec,
   type ResolvedComposition,
   type ResolvedCompositionLayer,
+  type StackPosition,
 } from "./composition.js";
 import { renderComposition, replayRender } from "./composition-render.js";
 import {
@@ -65,7 +68,9 @@ composition — Composition authoring and inspection
       command: every placement, transform, effect, and text option 'layer
       edit' accepts for the Layer kind (see the one-command option notes
       below), applied in the documented order and published as exactly one
-      Layer revision — or nothing, if any option is refused.
+      Layer revision — or nothing, if any option is refused. The new use
+      lands on top by default; --position places it before or after a
+      named use, or at the bottom or top of the paint order.
 
   ply composition add <comp> <name> --text <str> --font <family> [options]
       Add a locally rendered text Layer. The bundled font family's bytes are
@@ -74,7 +79,10 @@ composition — Composition authoring and inspection
 
   ply composition import <target> <source> [options]
       Import a Composition's Layer references into another Composition
-      within the same Project as individually editable uses
+      within the same Project as individually editable uses. The imported
+      set stays contiguous and in source order; --position places it
+      before or after a named use of the target, or at the bottom or top
+      of the paint order (default: top)
 
   ply composition import <target> <source> --from-project <dir>
       Copy a Composition's Layers from another Project into the target
@@ -226,6 +234,17 @@ Options:
                         accept only their implicit width 100
   --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
   --order <names>       Comma-separated permutation of use names (required for reorder)
+  --position <spec>     Where the new use goes in paint order (add, or the
+                        imported set for import; #230): "top" (default —
+                        appended last, painted on top), "bottom" (painted
+                        beneath everything), "before:<use-name>", or
+                        "after:<use-name>" naming an existing use of the
+                        target Composition. Paint order stays owned by the
+                        Composition's ordered use list — the position is a
+                        creation-time argument, never a Layer revision
+                        fact. An unknown use name is refused before
+                        anything is published, listing the Composition's
+                        use names.
   --out <path>          Export path for a render or replay; fresh in-Project
                         paths with an existing parent (except reserved storage)
                         or any path outside the Project (existing Project
@@ -349,6 +368,12 @@ function oneCommandFacts(
   return facts.length > 0 ? `; ${facts.join(", ")}` : "";
 }
 
+/** Stack position note (#230, US-002): present only when --position was
+ *  supplied, so existing invocations' output is unchanged. */
+function stackPositionNote(position?: StackPosition): string {
+  return position ? ` (position: ${stackPositionSpec(position)})` : "";
+}
+
 // Dash-numeric join (#128): the Layer options this surface accepts (the
 // shared definition's dash-numeric subset, DEC-001 — now the full option
 // table's keys, #229) plus --supersample (#184).
@@ -365,6 +390,7 @@ let values: LayerOptionArgs & {
   "from-project"?: string;
   supersample?: string;
   regions?: string;
+  position?: string;
   json?: boolean;
   help?: boolean;
 };
@@ -382,6 +408,11 @@ try {
       "from-project": { type: "string" },
       supersample: { type: "string" },
       regions: { type: "string" },
+      // Stack position (#230, US-002, DEC-004): a Composition-level
+      // creation-time argument, NOT a Layer option — deliberately outside
+      // the shared Layer option table (DEC-001). One grammar reader shared
+      // by add and import (composition.parseStackPosition).
+      position: { type: "string" },
       // The one declaration of the add surface's Layer options (DEC-001):
       // every Layer option this surface accepts, derived from the shared
       // option table (#229) — the same parseArgs entries layer edit spreads
@@ -520,6 +551,22 @@ async function run() {
         return;
       }
 
+      // Stack position (#230, spec #226 US-002, DEC-004): grammar is parsed
+      // once here through the ONE shared reader; a malformed spec is a usage
+      // error (exit 2). The unknown-use refusal is semantic and runs inside
+      // the publication path (resolveStackPositionIndex) before anything is
+      // published — no Layer, no use, no content.
+      let stackPosition: StackPosition | undefined;
+      if (values.position !== undefined) {
+        try {
+          stackPosition = parseStackPosition(values.position);
+        } catch (err) {
+          output({ ok: false, error: (err as Error).message }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+      }
+
       // Placement shape validation through the shared validators (DEC-001);
       // this surface's established defaults apply when absent.
       const placementX = parseLayerCoordinate("x", values.x, "add");
@@ -631,7 +678,7 @@ async function run() {
           const res = await addGeneratedLayerToComposition(
             targetProj, compName, localName,
             { jobRoot: path.resolve("out", "generation"), jobId: generationJobId.value!, output: values.output },
-            { x, y, opacity, oneCommand },
+            { x, y, opacity, oneCommand, position: stackPosition },
           );
           mutationCommitted = true;
           output(
@@ -646,7 +693,7 @@ async function run() {
               console.log(
                 `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
                   `[${detail}] from Generation Job ${res.generatedFrom.jobId} ` +
-                  `(${res.generatedFrom.contentHash.slice(0, 12)}; provenance retained)${oneCommandFacts(rev, values.anchor)}`,
+                  `(${res.generatedFrom.contentHash.slice(0, 12)}; provenance retained)${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
               );
             },
           );
@@ -660,7 +707,7 @@ async function run() {
               matteId: matteId.value!,
               generationRoot: path.resolve("out", "generation"),
             },
-            { x, y, opacity, oneCommand },
+            { x, y, opacity, oneCommand, position: stackPosition },
           );
           mutationCommitted = true;
           output(
@@ -685,7 +732,7 @@ async function run() {
               console.log(
                 `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
                   `[${detail}] from matte ${res.mattedFrom.matteId} ` +
-                  `(engine ${res.mattedFrom.engine}, ${res.mattedFrom.contentHash.slice(0, 12)}; provenance retained${generated})${oneCommandFacts(rev, values.anchor)}`,
+                  `(engine ${res.mattedFrom.engine}, ${res.mattedFrom.contentHash.slice(0, 12)}; provenance retained${generated})${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
               );
             },
           );
@@ -759,7 +806,7 @@ async function run() {
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
             { text: values.text, font: values.font, color: values.color, weight, width, tracking, lineHeight },
-            { x, y, opacity, fontSize, oneCommand },
+            { x, y, opacity, fontSize, oneCommand, position: stackPosition },
           );
           mutationCommitted = true;
           output(
@@ -770,14 +817,14 @@ async function run() {
               if (rev.kind !== "text") return; // unreachable: text ingestion returns a text revision
               console.log(
                 `Added text Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
-                  `[${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}]${oneCommandFacts(rev, values.anchor)}`,
+                  `[${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
               );
             },
           );
           return;
         }
 
-        const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity, oneCommand });
+        const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity, oneCommand, position: stackPosition });
         mutationCommitted = true;
         output(
           { ok: true, composition: res.composition, use: res.use, layer: res.layer },
@@ -789,7 +836,7 @@ async function run() {
                 ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
                 : `${rev.width}×${rev.height} ${rev.format}`;
             console.log(
-              `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" [${detail}]${oneCommandFacts(rev, values.anchor)}`,
+              `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" [${detail}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
             );
           },
         );
@@ -807,11 +854,24 @@ async function run() {
       }
 
       try {
+        // Stack position (#230, spec #226 US-002, DEC-004): the same ONE
+        // grammar reader the add boundary runs; the unknown-use refusal is
+        // semantic, inside the import path before anything is published.
+        let stackPosition: StackPosition | undefined;
+        if (values.position !== undefined) {
+          try {
+            stackPosition = parseStackPosition(values.position);
+          } catch (err) {
+            output({ ok: false, error: (err as Error).message }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+        }
         const fromProject = values["from-project"];
         const res =
           fromProject !== undefined
-            ? await importCompositionCrossProject(targetProj, targetComp, sourceComp, fromProject)
-            : await importComposition(targetProj, targetComp, sourceComp);
+            ? await importCompositionCrossProject(targetProj, targetComp, sourceComp, fromProject, stackPosition)
+            : await importComposition(targetProj, targetComp, sourceComp, stackPosition);
         mutationCommitted = true;
         output(
           {
@@ -826,7 +886,7 @@ async function run() {
             const count = res.importedUses.length;
             const noun = count === 1 ? "Layer" : "Layers";
             console.log(
-              `Imported ${count} ${noun} from "${res.sourceComposition}" into Composition "${res.composition}" (total: ${res.layers.length} layers)`,
+              `Imported ${count} ${noun} from "${res.sourceComposition}" into Composition "${res.composition}" (total: ${res.layers.length} layers)${stackPositionNote(stackPosition)}`,
             );
           },
         );

@@ -4,6 +4,23 @@
 
 ### Added
 
+- Stack position on add and import (#230, spec #226 US-002, DEC-004):
+  `composition add` takes `--position` — `before:<use-name>`,
+  `after:<use-name>`, `bottom`, or `top` — so a bar goes behind existing
+  text without a full `reorder`. The default stays top, and existing `add`
+  invocations keep their meaning and output. `composition import` takes
+  the same `--position` for the imported set, which stays contiguous and
+  in source order (both same-Project and cross-Project import). Paint
+  order stays owned by the Composition's ordered use list: the position
+  is a creation-time argument, never a Layer revision fact — no Layer
+  revision stores one, the flag is deliberately outside the shared Layer
+  option table (#228), and `layer edit` has no position option. The
+  position grammar is parsed and validated once (`parseStackPosition` in
+  `src/composition.ts`), shared by add and import; an unknown use name is
+  refused before publication — no Layer, no use, no content — listing the
+  Composition's use names. `composition inspect` shows the resulting
+  order.
+
 - One-command Layers (#229, spec #226 US-001, DEC-001/DEC-002):
   `composition add` now accepts every placement, transform, effect, and text
   option `ply layer edit` accepts for that Layer kind — `--anchor`,
