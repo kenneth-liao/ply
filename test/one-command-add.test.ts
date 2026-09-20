@@ -131,7 +131,7 @@ test("the guard table: every edit option is an accepted add option (TEST-003)", 
   const oneCommand = oneCommandAddOptionKeys();
   const established = [
     "image", "from-generation", "from-matte", "output", "text", "x", "y", "opacity",
-    "font", "font-size", "color", "weight", "width", "tracking", "line-height",
+    "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height",
   ];
   for (const key of editOptions) {
     expect(oneCommand.includes(key) || established.includes(key)).toBe(true);
@@ -211,7 +211,7 @@ test("every edit option applicable to a text Layer is accepted and APPLIED on a 
   expect(applicable).not.toContain("resize-to");
   let n = 0;
   for (const key of applicable) {
-    if (["image", "from-generation", "from-matte", "output", "text", "font"].includes(key)) continue;
+    if (["image", "from-generation", "from-matte", "output", "text", "font", "font-file"].includes(key)) continue;
     const extra = key === "anchor" ? ["--x", "80", "--y", "60"] : [];
     const { revision } = await addJson(`t${n++}`, [
       "--text", "Groundline", "--font", "Archivo",

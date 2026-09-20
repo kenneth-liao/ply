@@ -89,7 +89,7 @@ test("layer edit: content-kind exclusivity precedes shape errors", async () => {
   await expectRefusal(
     ["layer", "edit", layerId, "--image", "a.png", "--text", "hi", "--opacity", "abc", "--project", projDir],
     2,
-    "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
+    "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
   );
 });
 
@@ -97,7 +97,7 @@ test("layer edit: the edit surface reads --image presence exactly (blank --image
   await expectRefusal(
     ["layer", "edit", layerId, "--image", "", "--text", "hi", "--project", projDir],
     2,
-    "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
+    "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
   );
 });
 
@@ -125,7 +125,7 @@ test("layer edit: the generation/output block precedes the numeric parses", asyn
   await expectRefusal(
     ["layer", "edit", layerId, "--output", "2", "--project", projDir],
     2,
-    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
+    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --x, --y, --opacity, --anchor, --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, or --fork.",
   );
   // With a real edit option supplied, the output-selector check precedes it.
   await expectRefusal(
@@ -192,7 +192,7 @@ test("composition add: exclusivity and require-text precede the shape errors", a
   await expectRefusal(
     ["composition", "add", "demo", "t5", "--tracking", "5", "--project", projDir],
     2,
-    "--font, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>.",
+    "--font, --font-file, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>.",
   );
 });
 
@@ -204,12 +204,12 @@ test("composition add: the blank --image falls past the exclusivity refusal (INT
   await expectRefusal(
     ["composition", "add", "demo", "t5", "--image", "", "--text", "hi", "--project", projDir],
     2,
-    "Missing required option: --font <family> (required with --text)",
+    "Missing required option: a font — --font <family> (bundled) or --font-file <path> (caller-supplied) — is required with --text",
   );
   await expectRefusal(
     ["composition", "add", "demo", "t5b", "--image", "", "--project", projDir],
     2,
-    "Missing required content: --image <path>, --text <str> (with --font <family>), --from-generation <jobId>, or --from-matte <matteId>",
+    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --from-generation <jobId>, or --from-matte <matteId>",
   );
 });
 
@@ -276,5 +276,36 @@ test("composition add: the one-command transform block precedes the anchor's sha
     ["composition", "add", "demo", "t13", "--image", "a.png", "--anchor", "center", "--shadow", "1,2,3", "--project", projDir],
     2,
     'Invalid shadow "1,2,3": --shadow takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".',
+  );
+});
+test("caller font files (#232): the blank --font-file shape error is a usage error on edit; the add surface's truthiness falls through to its established refusals", async () => {
+  // The edit surface reads presence exactly: a blank --font-file IS a
+  // supplied font source, so the shape refusal fires (exit 2).
+  await expectRefusal(
+    ["layer", "edit", layerId, "--font-file", "", "--project", projDir],
+    2,
+    "--font-file takes a path to a local TrueType or OpenType font file.",
+  );
+  // The add surface reads truthiness (the established blank --image hunk):
+  // a blank --font-file is not a supplied font, so the missing-font refusal
+  // fires first — and with a bundled family also named, the one-font-source
+  // exclusivity refusal fires.
+  await expectRefusal(
+    ["composition", "add", "demo", "f1", "--text", "hi", "--font-file", "", "--project", projDir],
+    2,
+    "Missing required option: a font — --font <family> (bundled) or --font-file <path> (caller-supplied) — is required with --text",
+  );
+  await expectRefusal(
+    ["composition", "add", "demo", "f1b", "--text", "hi", "--font", "Archivo", "--font-file", "", "--project", projDir],
+    2,
+    "--font and --font-file name one font per edit",
+  );
+});
+
+test("caller font files (#232): --font-file on an image add rides the content-kind exclusivity refusal", async () => {
+  await expectRefusal(
+    ["composition", "add", "demo", "f2", "--image", "a.png", "--font-file", "face.ttf", "--project", projDir],
+    2,
+    "--image and --text are mutually exclusive content kinds; use one per Layer.",
   );
 });

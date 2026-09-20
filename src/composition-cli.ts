@@ -33,6 +33,7 @@ import {
   parseLayerAnchor,
   parseLayerCoordinate,
   parseLayerFontSize,
+  parseLayerFontFile,
   parseLayerFlip,
   parseLayerLineHeight,
   parseLayerOpacity,
@@ -47,6 +48,7 @@ import {
   parseResizeOptions,
   someLayerOptionProvided,
   validateTextFaceAxes,
+  validateTextFontSource,
   validateTextTypographyControls,
   TEXT_CONTENT_KEYS,
   type LayerOptionArgs,
@@ -72,10 +74,11 @@ composition — Composition authoring and inspection
       lands on top by default; --position places it before or after a
       named use, or at the bottom or top of the paint order.
 
-  ply composition add <comp> <name> --text <str> --font <family> [options]
-      Add a locally rendered text Layer. The bundled font family's bytes are
-      retained into the Project, so rendering never needs the original font
-      files. Mutually exclusive with --image.
+  ply composition add <comp> <name> --text <str> (--font <family> | --font-file <path>) [options]
+      Add a locally rendered text Layer. The font's bytes — a bundled
+      family's, or a caller-supplied local font file's (#232) — are retained
+      into the Project, so rendering never needs the original font files.
+      Mutually exclusive with --image.
 
   ply composition import <target> <source> [options]
       Import a Composition's Layer references into another Composition
@@ -214,9 +217,17 @@ Options:
   --output <n|sha256>   Which output of the --from-generation job to ingest:
                         a 1-based index or the full sha-256 content identity.
   --text <str>          Text content for a text Layer (mutually exclusive
-                        with --image; requires --font)
-  --font <family>       Bundled font family name (required with --text;
+                        with --image; requires a font — see --font/--font-file)
+  --font <family>       Bundled font family name (one font source with --text;
                         e.g. Anton, "Source Sans 3", "Archivo Black")
+  --font-file <path>    Path to a local TrueType/OpenType font file for the
+                        text Layer (#232): the file's bytes are retained and
+                        its own facts (family name, real axis ranges) are
+                        stored with the revision, so rendering, measure,
+                        replay, and cross-Project import never need the
+                        original file. Mutually exclusive with --font. A
+                        non-font or unresolvable file is refused before
+                        anything publishes.
   --font-size <num>     Font size in px for text Layers (default: 48)
   --tracking <num>      Letter spacing in em for a text Layer (#187,
                         ADR-0021): -0.5 to 1 (0 is stored as absent — the
@@ -225,13 +236,15 @@ Options:
                         Line height as a unitless multiplier of the font
                         size (#187, ADR-0021): 0.5 to 3; "normal" (or
                         omission) uses the font's own line height
-  --weight <num>        Text weight for a text Layer (#179): validated
-                        against the bundled font's real weight axis —
-                        Archivo 100-900 (default 400); static faces accept
-                        only their own weight
-  --width <num>         Text width for a text Layer (#179/#196): variable
-                        fonts — Archivo 62-125 (default 100); static faces
-                        accept only their implicit width 100
+  --weight <num>        Text weight for a text Layer (#179, #232):
+                        validated against the font's real weight axis —
+                        bundled Archivo 100-900 (default 400); static faces
+                        accept only their own weight; a caller font file
+                        validates against the file's own fvar ranges
+  --width <num>         Text width for a text Layer (#179/#196, #232):
+                        variable fonts — bundled Archivo 62-125 (default
+                        100); static faces and files without a wdth axis
+                        accept only the implicit width 100
   --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
   --order <names>       Comma-separated permutation of use names (required for reorder)
   --position <spec>     Where the new use goes in paint order (add, or the
@@ -493,7 +506,7 @@ async function run() {
       const compName = positionals[1];
       const localName = positionals[2];
       if (!compName || !localName) {
-        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
+        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --text <str> --font-file <path> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -546,12 +559,12 @@ async function run() {
       // The text style options (and the canvas --width value this surface's
       // established checks read as the text width axis) require --text.
       if (values.text === undefined && someLayerOptionProvided(values, TEXT_CONTENT_KEYS.filter((key) => key !== "text"))) {
-        output({ ok: false, error: "--font, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>." }, isJson);
+        output({ ok: false, error: "--font, --font-file, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>." }, isJson);
         process.exitCode = 2;
         return;
       }
       if (!values.image && values.text === undefined && values["from-generation"] === undefined && values["from-matte"] === undefined) {
-        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family>), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
+        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -745,10 +758,29 @@ async function run() {
           return;
         }
         if (values.text !== undefined) {
-          if (!values.font) {
-            output({ ok: false, error: "Missing required option: --font <family> (required with --text)" }, isJson);
+          if (!values.font && !values["font-file"]) {
+            output({ ok: false, error: "Missing required option: a font — --font <family> (bundled) or --font-file <path> (caller-supplied) — is required with --text" }, isJson);
             process.exitCode = 2;
             return;
+          }
+          // One font source per Layer (#232): --font and --font-file are
+          // mutually exclusive — a usage error (exit 2) at the boundary.
+          const fontSourceError = validateTextFontSource(values.font, values["font-file"]);
+          if (fontSourceError !== undefined) {
+            output({ ok: false, error: fontSourceError }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          if (values["font-file"] !== undefined) {
+            // A font file's existence and validity are semantic (the
+            // ingestion path reads the bytes once and parses them —
+            // DEC-006); only the blank-path shape is a usage error here.
+            const parsedFontFile = parseLayerFontFile(values["font-file"]);
+            if (!parsedFontFile.ok) {
+              output({ ok: false, error: parsedFontFile.error }, isJson);
+              process.exitCode = 2;
+              return;
+            }
           }
           // Font size, text axes (#179, ADR-0021), and text typography
           // (#187, ADR-0021): shape and range at the command boundary as a
@@ -782,8 +814,13 @@ async function run() {
           const width = parsedWidth.value;
           // An unknown family keeps its established semantic refusal (exit
           // 1, from the add path's resolveFace); only weight/width range
-          // errors are usage errors here (exit 2).
-          const axesError = validateTextFaceAxes(values.font!, weight, width);
+          // errors are usage errors here (exit 2). A caller font file
+          // (--font-file, #232) validates its axes semantically in the
+          // ingestion path — the file's real axes are only known there.
+          const axesError =
+            values.font !== undefined
+              ? validateTextFaceAxes(values.font!, weight, width)
+              : undefined;
           if (axesError !== undefined) {
             output({ ok: false, error: axesError }, isJson);
             process.exitCode = 2;
@@ -811,7 +848,12 @@ async function run() {
           }
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
-            { text: values.text, font: values.font, color: values.color, weight, width, tracking, lineHeight },
+            {
+              text: values.text,
+              ...(values.font !== undefined ? { font: values.font } : {}),
+              ...(values["font-file"] !== undefined ? { fontFile: values["font-file"] } : {}),
+              color: values.color, weight, width, tracking, lineHeight,
+            },
             { x, y, opacity, fontSize, oneCommand, position: stackPosition },
           );
           mutationCommitted = true;
@@ -1015,6 +1057,11 @@ async function run() {
               }
               if (layer.axes) {
                 facts.push(`weight ${layer.axes.weight}, width ${layer.axes.width}`);
+              }
+              // Caller font (#232): the font's own family name and that it
+              // is caller-supplied — the same facts `layer inspect` reports.
+              if (layer.font) {
+                facts.push(`font "${layer.font.family}" (caller-supplied)`);
               }
               // Stored text typography (#187, ADR-0021), reported only when
               // set — the facts painting applies.

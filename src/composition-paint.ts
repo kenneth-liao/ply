@@ -29,7 +29,8 @@
  * pass and before any output is published.
  */
 import { withRenderPage } from "./browser.js";
-import { familyResolved } from "./fonts.js";
+import { familyResolved, internalFontFamily, callerFontFaceCss } from "./fonts.js";
+import type { CallerFontFacts } from "./fonts.js";
 import { decodePng, encodePngRgba } from "./png.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
@@ -319,21 +320,6 @@ export async function paintCompositionHtml(
 }
 
 /**
- * Internal @font-face family name for a retained font blob (#81). Derived
- * from the content hash — the retained bytes are the only font identity, so
- * the renderer never needs the bundled registry or the original family name.
- *
- * Deliberately module-private: family names are minted only inside this
- * builder (the one font/geometry authority, DEC-004), never by callers that
- * only consume the builder's markup. If painted-bounds work (#137) ever
- * needs the family outside this module, that ticket re-exports it with its
- * own consuming evidence — no speculative surface now.
- */
-function internalFontFamily(contentHash: string): string {
-  return `ply-face-${contentHash.slice(0, 16)}`;
-}
-
-/**
  * Verify each text layer's font actually loaded and resolved in the page via
  * the shared family-resolution probe. Garbage bytes, undecodable faces, or a
  * failed load fall through to a fallback font — detected here and rejected
@@ -341,7 +327,9 @@ function internalFontFamily(contentHash: string): string {
  *
  * Shared with layout measurement (#136, DEC-004): measurement applies the
  * exact same retained-font resolution gate as painting, so an unresolved
- * face can never yield measured numbers.
+ * face can never yield measured numbers. Caller fonts additionally run the
+ * same gate at ingestion, before anything publishes (#232,
+ * `verifyCallerFontResolves` in src/fonts.ts).
  */
 export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[]): Promise<void> {
   const byFamily = new Map<string, string[]>();
@@ -552,17 +540,26 @@ export function buildCompositionHtml(
   if (!Number.isInteger(supersample) || supersample < 1) {
     throw new Error(`Invalid supersample factor ${supersample}: must be an integer of at least 1.`);
   }
-  const faces = new Map<string, Buffer>();
+  const faces = new Map<string, { bytes: Buffer; caller?: CallerFontFacts }>();
   for (const l of layers) {
     if (l.revision.kind === "text" && !faces.has(l.revision.contentHash)) {
-      faces.set(l.revision.contentHash, l.contentBytes);
+      faces.set(l.revision.contentHash, {
+        bytes: l.contentBytes,
+        ...(l.revision.callerFont !== undefined ? { caller: l.revision.callerFont } : {}),
+      });
     }
   }
   const fontCss = [...faces]
-    .map(
-      ([hash, bytes]) =>
-        `@font-face { font-family: "${internalFontFamily(hash)}"; ` +
-        `src: url(data:font/ttf;base64,${bytes.toString("base64")}) format("truetype"); }`,
+    .map(([hash, face]) =>
+      // Caller fonts (#232, DEC-006) declare their real weight/stretch and
+      // their own glyph format — the same facts the ingestion probe declared
+      // — so the browser never synthesizes a weight or width. Bundled and
+      // legacy faces keep the exact pre-#232 rule, so pinned history paints
+      // byte-identically.
+      face.caller !== undefined
+        ? callerFontFaceCss(internalFontFamily(hash), face.bytes, face.caller)
+        : `@font-face { font-family: "${internalFontFamily(hash)}"; ` +
+          `src: url(data:font/ttf;base64,${face.bytes.toString("base64")}) format("truetype"); }`,
     )
     .join("\n");
   const els = layers
@@ -640,9 +637,16 @@ export function buildCompositionHtml(
         const typographyCss =
           (typography.tracking !== undefined ? `letter-spacing:${typography.tracking}em;` : "") +
           (typography.lineHeight !== undefined ? `line-height:${typography.lineHeight};` : "");
+        // Caller fonts (#232, ADR-0021): font-synthesis is disabled on the
+        // element so the browser can never faux-bold or faux-extend a look
+        // the file's bytes do not contain (the @font-face rule already
+        // declares the face's real weight/stretch). Emitted only for caller
+        // fonts — bundled and legacy text elements keep their exact markup,
+        // so pinned history paints byte-identically.
+        const synthesisCss = rev.callerFont !== undefined ? "font-synthesis:none;" : "";
         const style =
           `${base}${transformed}${effectsFilter}font-family:'${internalFontFamily(rev.contentHash)}';` +
-          `font-size:${rev.fontSize}px;color:${rev.color};${axesCss}${typographyCss}white-space:pre-wrap;`;
+          `font-size:${rev.fontSize}px;color:${rev.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
         return `<div style="${style}">${escapeHtml(rev.text)}</div>`;
       }
       return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;

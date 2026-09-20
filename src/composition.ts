@@ -23,7 +23,8 @@ import {
   readLayerInternalFull,
   resolveTextTypographyControls,
 } from "./layer.js";
-import { resolveFace, resolveTextAxes, fontAssetBytes } from "./fonts.js";
+import { resolveFace, resolveTextAxes, fontAssetBytes, callerFontFace, verifyCallerFontResolves, type CallerFontFacts } from "./fonts.js";
+import { readCallerFontFile } from "./font-file.js";
 import {
   parseShadowSpec,
   parseOutlineSpec,
@@ -710,12 +711,16 @@ export async function addLayerToComposition(
 }
 
 /**
- * Add a locally rendered text Layer (#81) through the exact image publication
- * protocol: same identity/revision/use staging, same lock, same rollback.
- * The bundled face is resolved once here; its raw bytes are retained into the
- * Project content store and become the revision's content identity. The
- * family/weight facts live only in the bundled-face registry — the stored
- * revision pins the bytes, text, size, and color.
+ * Add a locally rendered text Layer (#81, #232) through the exact image
+ * publication protocol: same identity/revision/use staging, same lock, same
+ * rollback. The font is resolved once here — a bundled family from the
+ * registry, or a caller-supplied file whose bytes are read and whose facts
+ * are parsed ONCE from the file's own tables (#232, DEC-006) — and its raw
+ * bytes are retained into the Project content store as the revision's
+ * content identity. A caller font's own facts are stored with the revision;
+ * bundled family/weight facts live only in the bundled-face registry — the
+ * stored revision pins the bytes, text, size, color, axes, and (for a
+ * caller font) the file's facts.
  */
 export async function addTextLayerToComposition(
   projectPath: string,
@@ -724,8 +729,20 @@ export async function addTextLayerToComposition(
   input: {
     /** Rendered string content (nonempty, ≤ MAX_TEXT_LENGTH). */
     text: string;
-    /** A bundled font family name — resolved once at add, never re-consulted. */
-    font: string;
+    /**
+     * A bundled font family name — resolved once at add, never re-consulted.
+     * Mutually exclusive with `fontFile`: one font source per Layer (#232).
+     */
+    font?: string;
+    /**
+     * A caller-supplied font file (#232, spec #226 US-005, DEC-006): a path
+     * to a local TrueType/OpenType font. The bytes are read and their facts
+     * parsed ONCE here, the file is retained by content identity through the
+     * same path bundled faces use, and the revision stores the file's own
+     * facts — so rendering, measure, replay, relocation, and cross-Project
+     * import never need the original file. Mutually exclusive with `font`.
+     */
+    fontFile?: string;
     /** Strict hex color (#RGB / #RRGGBB); default #ffffff. */
     color?: string;
     /**
@@ -750,6 +767,15 @@ export async function addTextLayerToComposition(
   const sanitizedComp = sanitizeName(compName);
   const sanitizedLocalName = sanitizeName(localName);
 
+  // One font source per Layer (#232): a bundled family (--font) and a caller
+  // font file (--font-file) are mutually exclusive — the same exclusivity
+  // rule the command boundary enforces, re-checked at the domain boundary.
+  if (input.font !== undefined && input.fontFile !== undefined) {
+    throw new Error(
+      "--font and --font-file name one font per edit — pass a bundled family (--font) or a local font file (--font-file), not both.",
+    );
+  }
+
   const { x, y, opacity } = parsePlacement(options);
   const fontSize = options.fontSize ?? 48;
   const color = input.color ?? "#ffffff";
@@ -762,12 +788,26 @@ export async function addTextLayerToComposition(
     const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
 
     return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
-      // Resolve the bundled face once and retain its exact bytes as the
-      // revision's content identity. Unknown families, missing bundled
-      // bytes, and out-of-range/unsupported weight or width controls fail
-      // loudly here — before anything is published — naming the bundled
-      // families or the face's allowed values.
-      const face = resolveFace(input.font);
+      // Resolve the face once and retain its exact bytes as the revision's
+      // content identity (#179/#232). For a bundled face the facts come from
+      // the registry; for a caller font file (#232, DEC-006) they are read
+      // ONCE from the file's own tables and the bytes go through the SAME
+      // retention path. Unknown families, unreadable or non-font files,
+      // missing bundled bytes, out-of-range/unsupported weight or width
+      // controls, and faces the rendering browser cannot resolve all fail
+      // loudly here — before anything is published.
+      let face: ReturnType<typeof resolveFace>;
+      let callerFont: CallerFontFacts | undefined;
+      let bytes: Buffer;
+      if (input.fontFile !== undefined) {
+        const ingested = await readCallerFontFile(input.fontFile);
+        bytes = ingested.bytes;
+        callerFont = ingested.facts;
+        face = callerFontFace(callerFont);
+      } else {
+        face = resolveFace(input.font!);
+        bytes = fontAssetBytes(face);
+      }
       // Axes resolve BEFORE any retention, so a refused control publishes
       // nothing — not even a stray content blob (#179, ADR-0021).
       const axes = resolveTextAxes(face, { weight: input.weight, width: input.width });
@@ -778,8 +818,13 @@ export async function addTextLayerToComposition(
         tracking: input.tracking,
         lineHeight: input.lineHeight,
       });
-      const bytes = fontAssetBytes(face);
       const contentHash = createHash("sha256").update(bytes).digest("hex");
+      if (callerFont !== undefined) {
+        // The render probe's family-resolution gate applies to caller fonts
+        // BEFORE publication (#232): a file the browser cannot resolve
+        // refuses with no Layer, no use, and no stray content blob.
+        await verifyCallerFontResolves(contentHash, bytes, callerFont);
+      }
       // One-command application (DEC-002) runs BEFORE any retention: a
       // refused option publishes nothing — no Layer, no use, no content.
       const revision = await applyOneCommandOptions(
@@ -795,6 +840,7 @@ export async function addTextLayerToComposition(
           ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
           ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
           ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
+          ...(callerFont !== undefined ? { callerFont } : {}),
           x,
           y,
           opacity,
@@ -1271,17 +1317,19 @@ export interface ImportCompositionResult {
 }
 
 /**
- * Build a destination revision document for a cross-Project copy (#86, US-005).
- * The canonical revision construction for copies: immutable source facts are
- * preserved verbatim (kind, contentHash, placement, opacity, transform scale,
- * and text fields), bound to the new destination identity with a fresh
- * createdAt, and text fields are re-validated through the one shared text
- * validator used at ingestion. The retained content bytes are copied
- * separately — no bundled face resolution and no re-reading of `assets/fonts/`
- * happens during a copy. The source snapshot comes from the canonical Layer
- * resolver, so its transform scale is already normalized (#133, ADR-0016):
- * resize metadata survives cross-Project import instead of being dropped by
- * revision reconstruction.
+ * Build a destination revision document for a cross-Project copy (#86, US-005,
+ * #232). The canonical revision construction for copies: immutable source
+ * facts are preserved verbatim (kind, contentHash, placement, opacity,
+ * transform scale, the text fields, the resolved text axes and typography,
+ * and a caller font's stored facts), bound to the new destination identity
+ * with a fresh createdAt, and text fields are re-validated through the one
+ * shared text validator used at ingestion. The retained content bytes are
+ * copied separately — no bundled face resolution and no re-reading of
+ * `assets/fonts/` happens during a copy, and a caller font's original file
+ * is never needed (#232, DEC-006): the retained bytes ARE the font. The
+ * source snapshot comes from the canonical Layer resolver, so its transform
+ * scale is already normalized (#133, ADR-0016): resize metadata survives
+ * cross-Project import instead of being dropped by revision reconstruction.
  */
 function buildCopiedRevision(newLayerId: string, createdAt: string, source: ResolvedLayerRevision): LayerRevision {
   if (source.kind === "text") {
@@ -1295,6 +1343,10 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       text: source.text,
       fontSize: source.fontSize,
       color: source.color,
+      ...(source.weight !== undefined ? { weight: source.weight, width: source.width } : {}),
+      ...(source.tracking !== undefined ? { tracking: source.tracking } : {}),
+      ...(source.lineHeight !== undefined ? { lineHeight: source.lineHeight } : {}),
+      ...(source.callerFont !== undefined ? { callerFont: source.callerFont } : {}),
       x: source.x,
       y: source.y,
       opacity: source.opacity,

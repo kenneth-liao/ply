@@ -90,6 +90,7 @@ export type LayerOptionKey =
   | "output"
   | "text"
   | "font"
+  | "font-file"
   | "font-size"
   | "color"
   | "weight"
@@ -122,6 +123,7 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "text", group: "content", contentKind: "text", appliesTo: ["text"], editOption: true },
   // Text style options: only meaningful with a text content kind.
   { key: "font", group: "text", appliesTo: ["text"], editOption: true },
+  { key: "font-file", group: "text", appliesTo: ["text"], editOption: true },
   { key: "font-size", group: "text", appliesTo: ["text"], editOption: true },
   { key: "color", group: "text", appliesTo: ["text"], editOption: true },
   { key: "weight", group: "text", appliesTo: ["text"], editOption: true },
@@ -151,6 +153,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   output: { type: "string" },
   text: { type: "string" },
   font: { type: "string" },
+  "font-file": { type: "string" },
   "font-size": { type: "string" },
   color: { type: "string" },
   weight: { type: "string" },
@@ -178,7 +181,7 @@ export type LayerOptionArgs = { [K in LayerOptionKey]?: string };
 /** The `--text` content marker plus the text style options: the option set
  *  the content-kind exclusivity rules treat as "the text content kind". */
 export const TEXT_CONTENT_KEYS: readonly LayerOptionKey[] = [
-  "text", "font", "font-size", "color", "weight", "width", "tracking", "line-height",
+  "text", "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height",
 ];
 
 /** The keys of every option that qualifies as an `layer edit` edit option,
@@ -338,7 +341,7 @@ export function layerContentKindConflict(
       const imageTrigger = surface === "edit" ? args.image !== undefined : !!args.image;
       if (imageTrigger && textSide) {
         return surface === "edit"
-          ? "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive."
+          ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive."
           : "--image and --text are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
@@ -501,6 +504,33 @@ export function validateTextFaceAxes(
   } catch (err) {
     return (err as Error).message;
   }
+}
+
+/** --font-file takes a path to a local font file; blank is invalid. The
+ *  path's existence and font validity are semantic (the ingestion path
+ *  reads the bytes once and parses them), never boundary shape. */
+export function parseLayerFontFile(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (!raw.trim()) {
+    return { ok: false, error: "--font-file takes a path to a local TrueType or OpenType font file." };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
+ * The one font-source exclusivity rule (#232): a text Layer names ONE font
+ * per edit — a bundled family (--font) or a local font file (--font-file).
+ * Shared by both surfaces (DEC-001). Returns the refusal text, or undefined
+ * when at most one source is named.
+ */
+export function validateTextFontSource(
+  font: string | undefined,
+  fontFile: string | undefined,
+): string | undefined {
+  if (font !== undefined && fontFile !== undefined) {
+    return "--font and --font-file name one font per edit — pass a bundled family (--font) or a local font file (--font-file), not both.";
+  }
+  return undefined;
 }
 
 /** --from-generation takes a Generation Job id; blank is invalid. Returns

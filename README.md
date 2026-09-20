@@ -308,7 +308,8 @@ ply composition measure poster --json                # machine-readable
   transformed rectangle's **corners**. A variable-font text Layer's report
   includes its stored weight and width (the `axes` facts #179) — the same
   values painting applies — and its stored tracking and line height when
-  set (the `typography` facts #187).
+  set (the `typography` facts #187). A caller font's report names the
+  font's own family and marks it caller-supplied (the `font` fact #232).
 - It also reports the **painted extents**: the visible-ink (alpha > 0)
   bounding box in the same coordinates — image transparent padding is
   excluded from painted but kept in content, and text painted bounds are
@@ -510,13 +511,54 @@ ply layer edit <layerId> --weight 600 --width 100 --in-place
   are in [Limits and render quality](docs/guide/limits.md). When the
   current revision stores no axes, the new font's defaults apply.
 - **Editing `weight`/`width` without `--font`** validates against the
-  Layer's retained font, resolved by its content hash; if the retained bytes
-  match no bundled face, the edit requires `--font`.
+  Layer's retained font: a caller font by its revision's stored facts, a
+  bundled face by its content hash; if the retained bytes match no bundled
+  face and no caller font is recorded, the edit requires `--font`.
 - The stored axes are revision facts: they participate in the revision hash
   only when present, so pre-#179 revisions keep their exact ids and pinned
   Render history replays byte-identically. Paint and measurement both read
   the stored axes from the revision alone, and `composition measure` and
   `layer inspect` report them.
+
+## Caller-supplied fonts
+
+A text Layer can use any local TrueType or OpenType font file in place of a
+bundled family, at add and at edit (#232): pass `--font-file <path>` where
+`--font <family>` would go, on both `composition add` and `layer edit`.
+The two are mutually exclusive — one font source per edit.
+
+```bash
+ply composition add poster wordmark --text "Groundline" \
+  --font-file ~/fonts/PixelDisplay.ttf --weight 700 -p ~/projects/my-poster
+ply layer edit <layerId> --font-file ~/fonts/OtherFace.otf --weight 400
+```
+
+- **Same retention path as bundled faces.** The file's bytes are retained
+  in the Project by content identity exactly like a bundled face's, and
+  the file's own facts — the family name its tables declare and its real
+  weight/width ranges — are read once at ingestion and stored with the
+  revision. Rendering, `measure`, replay, relocation, and cross-Project
+  import never need the original file; the import carries the font bytes.
+- **No synthesis, ever.** Weight and width validate against the axes the
+  file really contains — a variable font's real fvar ranges, or a static
+  face's own weight (and the implicit width 100 when the file has no
+  `wdth` axis). Out-of-range values are refused naming the file's allowed
+  range. The emitted CSS declares the face's real weight/stretch and
+  disables font synthesis, so the browser can never paint a look the bytes
+  do not contain.
+- **Refused before publication.** A file that is not a usable font, and a
+  file the rendering browser cannot resolve, are refused before anything
+  is published — no Layer, no use, no content. The same family-resolution
+  probe that guards every render re-verifies caller fonts at render time.
+- **Later edits keep it.** An edit without a font option keeps the
+  retained caller font; switching to a bundled family (`--font`) or to
+  another file (`--font-file`) follows the existing carry-or-refuse rules
+  for weight and width.
+- **Reported honestly.** `layer inspect` and `composition measure` report
+  the font's own family name and that it is caller-supplied. Licensing of
+  a caller's font is the caller's concern; Ply records no opinion.
+- Out of scope: font discovery, system fonts, remote fetching, subsetting,
+  and a font library — callers pass a local file.
 
 ## Text tracking and line height (new surface)
 
@@ -759,6 +801,9 @@ ply composition add poster utility --text "Hello" --font Archivo --tracking 0.16
 # edit' accepts applies in the documented order and publishes one revision:
 ply composition add poster headline --text "Hello" --font Anton --x 540 --y 160 \
   --anchor center,center --rotate -6 --shadow "0,6,12,#00000080" -p ~/projects/my-poster
+# Caller fonts (#232): any local TrueType/OpenType file works like a bundled
+# family — its bytes are retained with the Layer, its own facts stored:
+ply composition add poster wordmark --text "Hello" --font-file ~/fonts/PixelDisplay.ttf -p ~/projects/my-poster
 # Stack position (#230): put a bar behind existing text without a reorder:
 ply composition add poster bar --image bar.png --position before:headline -p ~/projects/my-poster
 ply composition render poster -p ~/projects/my-poster

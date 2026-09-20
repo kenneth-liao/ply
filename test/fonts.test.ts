@@ -157,7 +157,7 @@ describe("Groundline faces (#179, ADR-0021)", () => {
     // explicitly, and the Scene surface maps font-weight 400 onto the axis.
     expect(axes.wght.default).toBe(600);
     expect(archivo.axes.wght.default).toBe(400);
-    expect(archivo.axes.wdth.default).toBe(axes.wdth.default);
+    expect(archivo.axes.wdth!.default).toBe(axes.wdth!.default);
     // A static face has no fvar table to declare.
     expect(() => fvarAxes(readFileSync(fontAssetPath(resolveFace("IBM Plex Mono"))))).toThrow(/no fvar/);
   });

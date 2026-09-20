@@ -37,6 +37,19 @@ referenced Layer's id once, at the command boundary; unknown names are
 refused listing what exists. Layer ids remain valid everywhere.
 _Avoid_: storing Layer ids in side files, addressing across Projects
 
+**Caller font**:
+A local TrueType/OpenType font file a caller passes (`--font-file`) in
+place of a bundled family (#232). Its bytes are retained in the Project by
+content identity through the same path bundled faces use, and its own
+facts — the family name its tables declare and its real weight/width
+ranges — are read once at ingestion and stored with the text revision, so
+rendering, measure, replay, relocation, and cross-Project import never
+need the original file. Ply validates controls against the file's real
+axes and never synthesizes a weight or width; licensing of a caller's
+font is the caller's concern.
+_Avoid_: font discovery, system fonts, remote fetching, subsetting, a
+font library
+
 **Render**:
 The image produced locally from a resolved Composition. Its manifest preserves
 exact Layer revisions and required content so later edits do not change it.
@@ -80,9 +93,9 @@ request.
   reproducible after its source Layers change (ADR-0013).
 - Final composition is local and deterministic. Generation is the only network
   operation; unresolved content and font fallback fail loudly.
-- A text Layer's look is its bundled font plus the weight and width it
-  selects. Ply renders only weights and widths the font contains; it never
-  synthesizes one.
+- A text Layer's look is its font — a bundled family or a caller-supplied
+  file — plus the weight and width it selects. Ply renders only weights and
+  widths the font contains; it never synthesizes one.
 - The caller decides what content to generate and where text pixels come from.
   Ply does not infer subject policy or impose likeness approval (ADR-0014).
 - Generation References come from the caller. Their identities are derived at
