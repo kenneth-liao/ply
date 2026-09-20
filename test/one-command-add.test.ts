@@ -6,10 +6,11 @@
  *
  * - TEST-003: a guard test enumerates `layer edit`'s options — from the
  *   shared option definition's table — and proves `composition add` accepts
- *   each option applicable to the Layer kind it is exercised on, by really
- *   adding with it (offline options) or proving it parses and routes to its
- *   established semantic refusal (the generation/matte/output selectors,
- *   which need external fixtures).
+ *   each option applicable to the Layer kind it is exercised on AND APPLIES
+ *   it: each add reads the option's applied fact back from the published
+ *   revision (exit 0 alone would prove parsing, not application), or proves
+ *   it parses and routes to its established semantic refusal (the
+ *   generation/matte/output selectors, which need external fixtures).
  * - A refused option publishes nothing: no Layer, no use, no content — the
  *   one-command resolutions (scale bounds, the text-Layer --resize-to
  *   refusal, anchored-placement ink resolution) all run before any content
@@ -107,7 +108,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "line-height": return ["1.4"];
     case "x": case "y": return ["40"];
     case "opacity": return ["0.8"];
-    case "anchor": return ["left"];
+    case "anchor": return ["right"];
     case "resize": return ["1.25"];
     case "resize-to": return ["96x"];
     case "rotate": return ["12"];
@@ -136,35 +137,81 @@ test("the guard table: every edit option is an accepted add option (TEST-003)", 
   }
 });
 
-test("every edit option applicable to an image Layer is accepted on an image add (TEST-003)", async () => {
+/** The applied revision fact each guard option must leave on the published
+ *  revision — read back per kind (review INT-plumb-1: an exit-0-only guard
+ *  proves parsing, and a future option could parse and be silently dropped
+ *  while the guard stayed green; with the apply switch's `default: throw`
+ *  in `src/composition.ts` plus these read-backs, a dropped option fails
+ *  loudly). The placement/transform/effect facts are kind-shared; the text
+ *  style facts are text-only (`appliesTo` keeps `--resize-to` out of the
+ *  text loop and the content/selector options out of both). */
+function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): void {
+  switch (key) {
+    case "x": expect(rev.x).toBe(40); break;
+    case "y": expect(rev.y).toBe(40); break;
+    case "opacity": expect(rev.opacity).toBe(0.8); break;
+    case "anchor":
+      // "right": the ink's right edge lands at the --x target (80), so the
+      // placement must sit strictly LEFT of the plain placement (80) — a
+      // silently dropped --anchor would leave x at exactly 80, so this
+      // read-back discriminates application from parsing.
+      expect(rev.x).toBeLessThan(80);
+      // The unanchored vertical axis keeps the supplied plain placement.
+      expect(rev.y).toBe(60);
+      break;
+    case "resize":
+      expect(rev.scaleX).toBe(1.25);
+      expect(rev.scaleY).toBe(1.25);
+      break;
+    case "resize-to":
+      // "96x" on a 64px-wide image: aspect preserved.
+      expect(rev.scaleX).toBe(1.5);
+      expect(rev.scaleY).toBe(1.5);
+      break;
+    case "rotate": expect(rev.rotationDeg).toBe(12); break;
+    case "flip":
+      expect(rev.flipX).toBe(true);
+      expect(rev.flipY).toBe(false);
+      break;
+    case "shadow": expect((rev.shadow as { dx: number } | undefined)?.dx).toBe(2); break;
+    case "outline": expect((rev.outline as { width: number } | undefined)?.width).toBe(2); break;
+    case "font-size": expect(rev.fontSize).toBe(64); break;
+    case "color": expect(rev.color).toBe("#ffcc00"); break;
+    case "weight": expect(rev.weight).toBe(800); break;
+    case "width": expect(rev.width).toBe(122); break;
+    case "tracking": expect(rev.tracking).toBe(0.1); break;
+    case "line-height": expect(rev.lineHeight).toBe(1.4); break;
+    default: throw new Error(`guard test: no applied-fact read-back for option "${key}"`);
+  }
+}
+
+test("every edit option applicable to an image Layer is accepted and APPLIED on an image add (TEST-003)", async () => {
   const applicable = layerOptionsApplicableTo("image");
   expect(applicable).toContain("resize-to");
   let n = 0;
   for (const key of applicable) {
     if (["image", "from-generation", "from-matte", "output"].includes(key)) continue; // content/selector options: their own adds
     const extra = key === "anchor" ? ["--x", "80", "--y", "60"] : [];
-    const res = await spawn([
-      "composition", "add", "poster", `p${n++}`, "--image", imagePath,
+    const { revision } = await addJson(`p${n++}`, [
+      "--image", imagePath,
       `--${key}`, ...guardValue(key, imagePath), ...extra,
-      "--project", projDir,
     ]);
-    expect({ key, stderr: res.stderr, code: res.code }).toMatchObject({ code: 0 });
+    expectAppliedFact(key, revision);
   }
 });
 
-test("every edit option applicable to a text Layer is accepted on a text add (TEST-003)", async () => {
+test("every edit option applicable to a text Layer is accepted and APPLIED on a text add (TEST-003)", async () => {
   const applicable = layerOptionsApplicableTo("text");
   expect(applicable).not.toContain("resize-to");
   let n = 0;
   for (const key of applicable) {
     if (["image", "from-generation", "from-matte", "output", "text", "font"].includes(key)) continue;
     const extra = key === "anchor" ? ["--x", "80", "--y", "60"] : [];
-    const res = await spawn([
-      "composition", "add", "poster", `t${n++}`, "--text", "Groundline", "--font", "Archivo",
+    const { revision } = await addJson(`t${n++}`, [
+      "--text", "Groundline", "--font", "Archivo",
       `--${key}`, ...guardValue(key, imagePath), ...extra,
-      "--project", projDir,
     ]);
-    expect({ key, stderr: res.stderr, code: res.code }).toMatchObject({ code: 0 });
+    expectAppliedFact(key, revision);
   }
 });
 

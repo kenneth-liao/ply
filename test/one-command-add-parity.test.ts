@@ -36,15 +36,6 @@ async function spawn(args: string[]): Promise<Result> {
   return { stdout, stderr, code };
 }
 
-function solidPng(width: number, height: number, rgba: [number, number, number, number]): Buffer {
-  const buf = Buffer.alloc(width * height * 4);
-  for (let i = 0; i < buf.length; i += 4) {
-    const [r, g, b, a] = rgba;
-    buf[i] = r; buf[i + 1] = g; buf[i + 2] = b; buf[i + 3] = a;
-  }
-  return encodePngRgba(width, height, buf);
-}
-
 /** A solid image whose visible (alpha > 0) pixels occupy only `region` — transparent padding elsewhere, so --anchor exercises the ink box, not the layout box. */
 function regionPng(width: number, height: number, rgba: [number, number, number, number], region: { x: number; y: number; width: number; height: number }): Buffer {
   const buf = Buffer.alloc(width * height * 4);

@@ -419,10 +419,18 @@ async function applyOneCommandOptions(
         if (outline !== undefined) rev.outline = outline;
         break;
       }
-      // No default: oneCommandApplicationOrder derives from the option
-      // table's post-content groups, and the table's keys are the cases
-      // above — a new post-content option must be added here to be
-      // applied (the guard test pins the two sets agree).
+      default: {
+        // Fail fast (review INT-plumb-1): an option that parses at the
+        // command boundary but has no application case here would otherwise
+        // be silently dropped while the guard test stays green — exactly
+        // the parse-but-drop gap. One-command add must never publish a
+        // revision that quietly lacks a supplied option, so throw instead
+        // (this runs BEFORE any retention or staging, so the refusal stays
+        // fail-closed), and the guard test (TEST-003) reads the applied
+        // facts back from the published revision per kind, so a future
+        // table key without a case fails the build, not a Project.
+        throw new Error(`One-command add: no application case for the "--${key}" option.`);
+      }
     }
   }
   return rev;

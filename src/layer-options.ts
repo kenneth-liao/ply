@@ -35,7 +35,11 @@
  * One-command `composition add` (#229, DEC-002) consumes this table
  * directly: its accepted keys are the table's keys, and its post-content
  * application order (transforms, then anchored placement, then effects)
- * is derived from the table's group fact. The canvas `--width` note from
+ * is derived from the table's group fact. Per-kind applicability is NOT a
+ * second enforcement surface here: the two surfaces' kind parity rests on
+ * the shared domain validators (the content-kind exclusivity rule above
+ * the resize path's text-Layer refusal), each with its established
+ * wording — see `layerOptionsApplicableTo`. The canvas `--width` note from
  * #237 is resolved by decision on #229: on the add surface `--width` IS
  * the text width axis — the same spelling `layer edit` uses, validated
  * through the same shared validator (`parseLayerWidth`) and range check
@@ -66,8 +70,9 @@ export interface LayerOptionDef {
   group: LayerOptionGroup;
   /** For content options: which content kind the option belongs to. */
   contentKind?: "image" | "text";
-  /** The Layer kinds the option applies to (an enumerable fact consumers
-   *  such as one-command `composition add` need). */
+  /** The Layer kinds the option applies to. Read by the guard test's
+   *  per-kind enumeration (TEST-003); production per-kind refusals stay
+   *  with the domain validators (see `layerOptionsApplicableTo`). */
   appliesTo: readonly LayerOptionKind[];
   /** Whether the option alone qualifies as an `layer edit` edit option.
    *  `--output` is an output selector for --from-generation, not an edit
@@ -185,22 +190,28 @@ export function layerEditOptionKeys(): LayerOptionKey[] {
  *  and effect — derived from the table, never re-declared (DEC-001). A
  *  future option joins one-command add and `layer edit` with one table
  *  entry (the guard test pins the two surfaces' key sets agree), and the
- *  add path's group/appliesTo readers below drive its application order
- *  and per-kind applicability. On this surface `--width` IS the text width
- *  axis — the same spelling `layer edit` uses, validated through the same
- *  shared validator — and the canvas dimension meaning belongs to
- *  `composition create` alone (the decision recorded on #229). */
+ *  add path's group reader below drives its application order. Per-kind
+ *  applicability is deliberately NOT enforced from `appliesTo` here: the
+ *  shared domain validators refuse every current asymmetry with their
+ *  established wording (see `layerOptionsApplicableTo`). On this surface
+ *  `--width` IS the text width axis — the same spelling `layer edit` uses,
+ *  validated through the same shared validator — and the canvas dimension
+ *  meaning belongs to `composition create` alone (the decision recorded on
+ *  #229). */
 export const COMPOSITION_ADD_OPTION_KEYS: readonly LayerOptionKey[] =
   LAYER_OPTION_DEFS.map((def) => def.key);
 
-/** The parseArgs entries for the add surface's accepted Layer options,
- *  referencing the one declaration per option — derived from the shared
- *  table, so the add surface and the edit surface can never disagree about
- *  how an option is parsed (DEC-001). */
-export const COMPOSITION_ADD_OPTION_PARSE_ARGS: Record<LayerOptionKey, { type: "string" }> =
-  Object.fromEntries(
-    COMPOSITION_ADD_OPTION_KEYS.map((key) => [key, LAYER_OPTION_PARSE_ARGS[key]]),
-  ) as Record<LayerOptionKey, { type: "string" }>;
+/** The parseArgs entries for the add surface's accepted Layer options: a
+ *  static spread of the ONE parseArgs declaration per option — never a
+ *  re-declaration (DEC-001). The exhaustiveness stays a compile-time fact
+ *  (review INT-plumb-3): a `LayerOptionKey` without a
+ *  `LAYER_OPTION_PARSE_ARGS` entry is a compile error at that declaration's
+ *  `satisfies` — never a silently unparsed add flag — and the key-set tests
+ *  pin the table's keys to this declaration's, so the spread is exactly
+ *  the add surface's options. */
+export const COMPOSITION_ADD_OPTION_PARSE_ARGS: Record<LayerOptionKey, { type: "string" }> = {
+  ...LAYER_OPTION_PARSE_ARGS,
+};
 
 /** The post-content option keys of one-command `composition add` (#229,
  *  DEC-002): the table's transform and effect groups plus anchored
@@ -233,9 +244,22 @@ export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOpti
     ["anchor" as LayerOptionKey, 1],
     ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 2] as const),
   ]);
+  // Fail fast (review INT-plumb-3): a supplied key with no stage would
+  // otherwise sort as NaN — an unpredictable order — instead of naming
+  // the missing mapping here.
+  const stageOf = (key: LayerOptionKey): number => {
+    const s = stage.get(key);
+    if (s === undefined) {
+      throw new Error(
+        `One-command add: option "${key}" has no application stage — ` +
+          "the option table's post-content groups (transform, effect, anchor) moved?",
+      );
+    }
+    return s;
+  };
   return oneCommandAddOptionKeys()
     .filter((key) => args[key] !== undefined)
-    .sort((a, b) => stage.get(a)! - stage.get(b)!);
+    .sort((a, b) => stageOf(a) - stageOf(b));
 }
 
 /** The presence shape of the option surface: every key is either supplied
@@ -252,14 +276,19 @@ export function layerDashNumericFlags(keys: readonly LayerOptionKey[]): string[]
   return keys.filter((key) => dashNumeric.has(key)).map((key) => `--${key}`);
 }
 
-/** The supplied Layer options the option table does not apply to `kind` —
- *  the one-command add surface's per-kind applicability fact, read from the
- *  table's `appliesTo` metadata (US-001: add accepts every option `layer
- *  edit` accepts *for that Layer kind*). The per-option refusals that need
- *  domain wording stay in the domain validators (for example the resize
- *  path's text-Layer refusal); this enumeration is the one table-driven
- *  fact the boundary and the guard test (TEST-003) read to know which
- *  options are applicable to which kind. */
+/** The Layer options of the option table that apply to `kind` — the
+ *  table's `appliesTo` enumeration (US-001: add accepts every option
+ *  `layer edit` accepts *for that Layer kind*). Read by the guard test
+ *  (TEST-003) to exercise each kind's options; production kind parity is
+ *  deliberately NOT enforced from this enumeration: every current
+ *  `appliesTo` asymmetry is already refused with its established wording
+ *  by the shared domain validators — the content-kind options by
+ *  `layerContentKindConflict` at the boundary, `--resize-to` on text
+ *  Layers by the shared scale resolution in the publication path
+ *  (`resolveEditScale`, identical wording on both surfaces) — so a
+ *  table-driven applicability refusal on the add path would only shadow
+ *  those established texts as a second wording home (review INT-plumb-2;
+ *  the comments, not the refusal behavior, carry this fact). */
 export function layerOptionsApplicableTo(
   kind: "image" | "text",
   keys: readonly LayerOptionKey[] = layerEditOptionKeys(),
