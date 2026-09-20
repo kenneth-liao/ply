@@ -823,3 +823,21 @@ export function isAnchorConflicting(args: LayerOptionArgs): boolean {
     (def) => def.editOption && !anchorFree.has(def.key) && args[def.key] !== undefined,
   );
 }
+
+/** The option-name segment of the edit surface's `--anchor` exclusivity
+ *  refusal, derived from the SAME table and grouping `isAnchorConflicting`
+ *  derives the conflict rule from (review INT-3): the transform, effect, and
+ *  text groups spelled as flags, and the shape content group named as the
+ *  "shape parameters" family. A newly added option in one of these groups
+ *  joins both the rule and the refusal text automatically; the anchor-free
+ *  axes (--x, --y, --opacity) stay outside, and the plain content kinds
+ *  (--image, --from-generation, --from-matte, --text) are named as
+ *  "content replacement" in the refusal's prose, not as a flag list. */
+export function anchorConflictOptionList(): string {
+  const editKeysOfGroup = (group: LayerOptionDef["group"]): LayerOptionKey[] =>
+    LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === group).map((def) => def.key);
+  const flags = (keys: readonly LayerOptionKey[]): string => keys.map((key) => `--${key}`).join(", ");
+  const shape = `shape parameters (${SHAPE_CONTENT_KEYS.map((key) => `--${key}`).join(", ")})`;
+  return [flags(editKeysOfGroup("transform")), flags(editKeysOfGroup("effect")), shape, flags(editKeysOfGroup("text"))]
+    .join(", ");
+}

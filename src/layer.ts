@@ -1721,6 +1721,11 @@ export interface EditLayerResult {
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
   mattedFrom?: { matteId: string; engine: string; contentHash: string };
+  /** Present only when a shape edit dropped a carried corner radius: a
+   * geometry switch to ellipse has no place for the rectangle fact, so the
+   * edit reports exactly what it dropped for operator visibility (#209,
+   * review PROD-5). */
+  shapeEdited?: { droppedCornerRadius: number };
 }
 
 /**
@@ -2216,6 +2221,10 @@ async function buildEditedRevision(
   mattedFrom?: EditLayerResult["mattedFrom"];
   /** Present when the ingested matte's source was a retained generation output (#108). */
   retainedGeneration: RetainedGenerationProvenance | null;
+  /** Present only when a shape edit dropped a carried corner radius
+   * (review PROD-5): the geometry switch to ellipse has no place for the
+   * carried rectangle fact. */
+  shapeEdited?: EditLayerResult["shapeEdited"];
 }> {
   const { x, y, opacity } = placement;
 
@@ -2406,6 +2415,13 @@ async function buildEditedRevision(
           ? undefined
           : prevRev.cornerRadius;
     const mergedFill = options.fill ?? { ...prevRev.fill };
+    // A carried radius that the geometry switch makes meaningless is dropped
+    // and REPORTED (review PROD-5): the operator sees exactly what the
+    // absolute geometry setter removed.
+    const droppedCornerRadius =
+      mergedGeometry === "ellipse" && options.cornerRadius === undefined && prevRev.cornerRadius !== undefined
+        ? prevRev.cornerRadius
+        : undefined;
     const shapeContent = validateShapeContent(
       mergedGeometry,
       mergedSize.width,
@@ -2456,7 +2472,15 @@ async function buildEditedRevision(
       flip.flipY === prevRev.flipY &&
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline);
-    return { revision, unchanged, retainedGeneration: null };
+    // The fill comparison covers the solid fill's whole identity today; the
+    // gradient ticket (#210) must extend it per gradient stop or gradient
+    // edits would false-idempotent (review INT-4).
+    return {
+      revision,
+      unchanged,
+      retainedGeneration: null,
+      ...(droppedCornerRadius !== undefined ? { shapeEdited: { droppedCornerRadius } } : {}),
+    };
   }
 
   if (prevRev.kind === "text") {
@@ -2821,7 +2845,7 @@ export async function editLayerInternal(
     // New identity + edited revision through the shared canonical builder.
     const newLayerId = generateLayerId();
     const createdAt = new Date().toISOString();
-    const { revision, mattedFrom, retainedGeneration } = await buildEditedRevision(
+    const { revision, mattedFrom, retainedGeneration, shapeEdited } = await buildEditedRevision(
       resolvedRoot,
       prevRev,
       newLayerId,
@@ -2846,21 +2870,22 @@ export async function editLayerInternal(
     const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
+    const withShape = shapeEdited ? { ...withOutline, shapeEdited } : withOutline;
     return options.fromGeneration !== undefined
-      ? { ...withOutline, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
         ? {
-            ...withOutline,
+            ...withShape,
             mattedFrom,
             ...(retainedGeneration
               ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
               : {}),
           }
-        : withOutline;
+        : withShape;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
-  const { revision, unchanged, mattedFrom, retainedGeneration } = await buildEditedRevision(
+  const { revision, unchanged, mattedFrom, retainedGeneration, shapeEdited } = await buildEditedRevision(
     resolvedRoot,
     prevRev,
     layerId,
@@ -2886,6 +2911,7 @@ export async function editLayerInternal(
       ...(flippedReport ? { flipped: flippedReport } : {}),
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(hasOutline ? { outlined: outlinedReport } : {}),
+      ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -2939,6 +2965,7 @@ export async function editLayerInternal(
     ...(flippedReport ? { flipped: flippedReport } : {}),
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(hasOutline ? { outlined: outlinedReport } : {}),
+    ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),

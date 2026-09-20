@@ -28,7 +28,12 @@
   render and `measure` like on image and text Layers; the intrinsic-pixel
   size restriction (`--resize-to` resolves against a shape's `--size`
   geometry, stays refused on text) is unchanged and stated in help. Help,
-  README, and the shape section document the setters.
+  README, and the shape section document the setters. A geometry switch to
+  ellipse that drops a carried corner radius reports the dropped radius in
+  the result (`shapeEdited.droppedCornerRadius`, named in the compact text
+  line) for operator visibility; the `--anchor` exclusivity refusal's option
+  list is derived from the shared option table (review INT-3/PROD-5 on
+  #243).
 
 - Shape Layers with a solid fill (--shape/--size/--corner-radius/--fill,
   #208, spec #207 US-001 bullets 1/3/5 and the solid part of bullets 2/4,

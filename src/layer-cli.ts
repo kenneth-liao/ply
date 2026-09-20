@@ -8,6 +8,7 @@ import {
   LAYER_OPTION_PARSE_ARGS,
   anyLayerEditOptionProvided,
   isAnchorConflicting,
+  anchorConflictOptionList,
   layerContentKindConflict,
   layerDashNumericFlags,
   layerEditOptionKeys,
@@ -799,7 +800,8 @@ async function run() {
             {
               ok: false,
               error:
-                "--anchor is its own edit: it cannot be combined with --resize, --resize-to, --scale, --rotate, --flip, --shadow, --outline, shape parameters (--shape, --size, --corner-radius, --fill), --weight, --width, --tracking, --line-height, or content replacement in one edit, because the reference ink would be ambiguous. Make the transform, content, or effect edit first, then anchor.",
+                `--anchor is its own edit: it cannot be combined with ${anchorConflictOptionList()}, or content replacement in one edit, because the reference ink would be ambiguous. ` +
+                "Make the transform, content, or effect edit first, then anchor.",
             },
             isJson,
           );
@@ -938,6 +940,9 @@ async function run() {
         if (res.outlined) {
           resultBody.outlined = res.outlined;
         }
+        if (res.shapeEdited) {
+          resultBody.shapeEdited = res.shapeEdited;
+        }
         if (anchored) {
           resultBody.anchored = anchored;
         }
@@ -973,16 +978,19 @@ async function run() {
                 ? `; outline ${res.outlined.outline.width} ${res.outlined.outline.color}`
                 : "; outline none"
               : "";
+            const shapeEdited = res.shapeEdited
+              ? `; dropped carried corner radius ${res.shapeEdited.droppedCornerRadius}px (an ellipse has no corners)`
+              : "";
             const anchorSummary = anchored
               ? `; anchored ${formatAnchorSpec(anchored.anchor)}${formatAnchorTarget(anchored)} -> placement (${anchored.placement.x}, ${anchored.placement.y})`
               : "";
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${shapeEdited}${anchorSummary}`);
             }
           },
         );

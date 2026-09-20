@@ -519,6 +519,48 @@ test("shadow and outline paint on a shape and show in measure's painted extents"
   expect(mo.painted).toEqual({ x: 45, y: 20, width: 110, height: 60 });
 });
 
+test("--corner-radius 0 removes a stored radius (never stored, squared paint)", async () => {
+  const layerId = await addBar(); // rectangle 100x50, radius 8
+  const edit = await invoke(["layer", "edit", layerId, "--corner-radius", "0", "--project", projDir, "--json"]);
+  expect(edit.code).toBe(0);
+  const rev = JSON.parse(edit.stdout).layer.currentRevision;
+  // The same look as absent: the stored revision carries no radius field.
+  expect("cornerRadius" in rev).toBe(false);
+  // The paint squares: the corner pixels of the box are filled now.
+  const png = await renderPng();
+  expectPixel(png, 50, 25, [0x1d, 0x4e, 0xd8, 255]);
+  expectPixel(png, 149, 74, [0x1d, 0x4e, 0xd8, 255]);
+  // Re-setting the removal is idempotent (the radius is already absent).
+  const again = await invoke(["layer", "edit", layerId, "--corner-radius", "0", "--project", projDir, "--json"]);
+  expect(again.code).toBe(0);
+  const revisions = await readdir(path.join(projDir, "layers", `${layerId}.revisions`));
+  expect(revisions).toHaveLength(2); // creation + the one removal edit
+});
+
+test("switching the geometry to ellipse reports the dropped carried radius", async () => {
+  const layerId = await addBar(); // rectangle 100x50, radius 8
+  const edit = await invoke(["layer", "edit", layerId, "--shape", "ellipse", "--project", projDir, "--json"]);
+  expect(edit.code).toBe(0);
+  const json = JSON.parse(edit.stdout);
+  // Operator visibility (review PROD-5): the edit reports exactly what it
+  // dropped — a merely carried radius with no ellipse meaning.
+  expect(json.shapeEdited).toEqual({ droppedCornerRadius: 8 });
+  expect(json.layer.currentRevision.cornerRadius).toBeUndefined();
+  // Compact text names the drop too.
+  const textEdit = await invoke(["layer", "edit", json.layer.id, "--shape", "rectangle", "--corner-radius", "4", "--project", projDir, "--json"]);
+  expect(textEdit.code).toBe(0);
+  expect(JSON.parse(textEdit.stdout).shapeEdited).toBeUndefined();
+  const next = await invoke(["layer", "edit", json.layer.id, "--shape", "ellipse", "--project", projDir, "--json"]);
+  expect(next.code).toBe(0);
+  expect(JSON.parse(next.stdout).shapeEdited).toEqual({ droppedCornerRadius: 4 });
+  // Compact text names the drop too.
+  const textSwitch = await invoke(["layer", "edit", json.layer.id, "--shape", "rectangle", "--corner-radius", "6", "--project", projDir]);
+  expect(textSwitch.code).toBe(0);
+  const final = await invoke(["layer", "edit", json.layer.id, "--shape", "ellipse", "--project", projDir]);
+  expect(final.code).toBe(0);
+  expect(final.stdout).toContain("dropped carried corner radius 6px");
+});
+
 // ---------------------------------------------------------------------------
 // Intrinsic-pixel-size restriction (US-002 bullet 5)
 // ---------------------------------------------------------------------------
