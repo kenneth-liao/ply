@@ -20,8 +20,9 @@ preserves the current revision's region. A region outside the content box,
 or one with zero area, is refused before publication naming the fault and
 the content box; a text Layer's box is its measured line-box extent (the
 unwrapped standalone line, measured through the one measurement authority —
-the edit path resolves it from the snapshot it already holds, never a second
-Project read). The bounds are a set-time gate, not a stored-document
+both boundaries resolve it the same way, the edit path from the snapshot it
+already holds and the add path from its provisional snapshot, never a
+second Project read). The bounds are a set-time gate, not a stored-document
 invariant: the stored normalizer checks the numbers' self-consistency only,
 so a region kept across a later content edit keeps clipping
 deterministically (the intersection) instead of turning a valid Project

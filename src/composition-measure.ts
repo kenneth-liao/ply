@@ -468,8 +468,9 @@ async function measureSnapshot(
         if (w > MAX_INK_VIEWPORT_PX || h > MAX_INK_VIEWPORT_PX || w * h > MAX_PIXELS) {
           const reach = reaches[i]!;
           const wb = windowBoxes[i]!;
+          const boxKind = layers[i]!.revision.visibleRegion !== undefined ? "visible (region-clipped) box" : "layout box";
           throw new Error(
-            `Layer "${layers[i]!.name}" has a layout box ${Math.ceil(wb.width)}×${Math.ceil(wb.height)}px` +
+            `Layer "${layers[i]!.name}" has a ${boxKind} ${Math.ceil(wb.width)}×${Math.ceil(wb.height)}px` +
               (reach > 0 ? ` plus up to ${reach}px of effect extent` : "") +
               `, beyond the painted-extent capture window (max ${MAX_INK_VIEWPORT_PX}px per axis, ` +
               `${MAX_PIXELS.toLocaleString("en-US")}px total). Painted extents are refused ` +

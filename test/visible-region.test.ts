@@ -386,7 +386,7 @@ test("a wide padded source refused uncropped at scale measures once region-cropp
       const o = (y * 4096 + x) * 4;
       const subject = x < 200;
       wide[o] = 255;
-      wide[o + 1] = subject ? 0 : 0;
+      wide[o + 1] = 0;
       wide[o + 2] = 0;
       wide[o + 3] = subject ? 255 : 0;
     }
@@ -531,4 +531,97 @@ test("region edit exclusivity, hash conditionality, and fork propagation", async
   expect(forkRes.code).toBe(0);
   const forked = JSON.parse(forkRes.stdout).layer.currentRevision.visibleRegion;
   expect(forked).toEqual({ x: 20, y: 10, width: 80, height: 40 });
+}, 30000);
+
+/** Review follow-ups (CRAFT-1/CRAFT-2, SPEC-1): the text content-bounds
+ * refusal (against the measured line-box extent, the SAME convention on
+ * both surfaces), text/shape removal byte-identity, the region box under a
+ * rotated transform, `clipped` following the region, and shape/text regions
+ * on one-command add. */
+test("text region refusal, text/shape removal identity, rotated region measure, clipped, and add for text/shape", async () => {
+  await makeComp("poster", 400, 300);
+
+  // Text: a region taller than the measured line box is refused (exit 1,
+  // live state unchanged) — the measured-extent path, not just the image's
+  // intrinsic-facts path.
+  const addText = JSON.parse(
+    (await invoke(["composition", "add", "poster", "head", "--text", "Groundline", "--font", "Anton", "--font-size", "60", "--x", "20", "--y", "40", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  );
+  const textId = addText.use.layerId as string;
+  const textMeasure = JSON.parse(
+    (await invoke(["composition", "measure", "poster", "head", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  ).layers[0];
+  const boxH = Math.ceil(textMeasure.content.height);
+  const refusedText = await invoke(["layer", "edit", textId, "--visible-region", `0,0,40,${boxH + 50}`, "--project", projDir, "--json"]);
+  expect(refusedText.code).toBe(1);
+  expect(JSON.parse(refusedText.stdout).error).toMatch(/must lie inside the Layer's .* content box/);
+  const textInspect = JSON.parse((await invoke(["layer", "inspect", textId, "--project", projDir, "--json"])).stdout);
+  expect(textInspect.layer.currentRevision.visibleRegion).toBeUndefined();
+
+  // Text removal: set, remove, render — identical to never-set.
+  const neverSet = await render("poster", path.join(tempDir, "text-never-set.png"));
+  expect((await invoke(["layer", "edit", textId, "--visible-region", "10,5,120,40", "--project", projDir])).code).toBe(0);
+  const textRemove = await invoke(["layer", "edit", textId, "--visible-region", "none", "--project", projDir, "--json"]);
+  expect(textRemove.code).toBe(0);
+  expect(JSON.parse(textRemove.stdout).regionSet).toEqual({ visibleRegion: null });
+  expect((await render("poster", path.join(tempDir, "text-after-remove.png"))).equals(neverSet)).toBe(true);
+
+  // Shape add + removal: the shape branch on `composition add` applies the
+  // region, and removal restores the never-set render byte-for-byte.
+  const shapeAdd = JSON.parse(
+    (await invoke(["composition", "add", "poster", "bar", "--shape", "rectangle", "--size", "200x100", "--fill", "#22c55e", "--x", "100", "--y", "150", "--visible-region", "0,0,50,50", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  );
+  expect(shapeAdd.layer.currentRevision.visibleRegion).toEqual({ x: 0, y: 0, width: 50, height: 50 });
+  const shapeId = shapeAdd.use.layerId as string;
+  const shapeRemove = await invoke(["layer", "edit", shapeId, "--visible-region", "none", "--project", projDir, "--json"]);
+  expect(shapeRemove.code).toBe(0);
+  expect(JSON.parse(shapeRemove.stdout).regionSet).toEqual({ visibleRegion: null });
+
+  // Text on add validates against the SAME measured extent the edit surface
+  // uses (the unwrapped standalone line) — a region outside it refuses and
+  // publishes nothing.
+  const refusedTextAdd = await invoke(["composition", "add", "poster", "bad", "--text", "Groundline", "--font", "Anton", "--visible-region", "0,0,40,4000", "--project", projDir, "--json"]);
+  expect(refusedTextAdd.code).toBe(1);
+  expect(JSON.parse(refusedTextAdd.stdout).error).toMatch(/must lie inside the Layer's .* content box/);
+  const names = JSON.parse(
+    (await invoke(["composition", "inspect", "poster", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  ).composition.layers.map((l: { name: string }) => l.name);
+  expect(names).not.toContain("bad");
+}, 30000);
+
+test("rotated region measures its rotated box and clipped follows the region", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(200, 100, RED));
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 100, y: 100 });
+  const layerId = addRes.use.layerId as string;
+  expect((await invoke(["layer", "edit", layerId, "--visible-region", "20,10,80,40", "--rotate", "90", "--project", projDir])).code).toBe(0);
+
+  // Rotated 90° clockwise about the placement point (100,100): the region's
+  // local rect (20..100, 10..50) maps to canvas x 50..90, y 120..200.
+  const measured = JSON.parse(
+    (await invoke(["composition", "measure", "poster", "hero", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  ).layers[0];
+  expect(measured.painted).toEqual({ x: 50, y: 120, width: 40, height: 80 });
+  // The layout box stays the full rotated content box (DEC-005).
+  expect(measured.box).toEqual({ x: 0, y: 100, width: 100, height: 200 });
+
+  // `clipped` follows the region: the full content box extends past the
+  // canvas edge, but the region's ink stays inside — not clipped.
+  await makeComp("edge", 400, 300);
+  const edgeAdd = await addImageLayer("edge", "hero", redImg, { x: 350, y: 0 });
+  const edgeId = edgeAdd.use.layerId as string;
+  expect((await invoke(["layer", "edit", edgeId, "--visible-region", "0,0,40,50", "--project", projDir])).code).toBe(0);
+  const edge = JSON.parse(
+    (await invoke(["composition", "measure", "edge", "hero", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  ).layers[0];
+  expect(edge.box.width).toBe(200); // the layout box runs past the canvas
+  expect(edge.painted).toEqual({ x: 350, y: 0, width: 40, height: 50 });
+  expect(edge.clipped).toBe(false);
+  // Removing the region restores the clipped verdict of the full ink.
+  expect((await invoke(["layer", "edit", edgeId, "--visible-region", "none", "--project", projDir])).code).toBe(0);
+  const unclipped = JSON.parse(
+    (await invoke(["composition", "measure", "edge", "hero", "--project", projDir, "--json"]).then(r => { expect(r.code).toBe(0); return r.stdout; })),
+  ).layers[0];
+  expect(unclipped.clipped).toBe(true);
 }, 30000);
