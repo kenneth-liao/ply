@@ -30,13 +30,18 @@
  * like --fork/--in-place, add's defaults and required-content rules), and
  * the help text (each surface's manual describes its own contract). Adding
  * an option means adding it here — to the table, the parseArgs entries,
- * and one validator — and both surfaces inherit it. The one exception is
- * the text width axis on the add surface: `--width` names the canvas
- * dimension there, and the add path's established checks read that value
- * as the text axis, so widening the add key list cannot add the text width
- * axis — disambiguating canvas `--width` from the text width axis is #229
- * work (one-command creation gains the transform and effect options by
- * widening the list).
+ * and one validator — and both surfaces inherit it.
+ *
+ * One-command `composition add` (#229, DEC-002) consumes this table
+ * directly: its accepted keys are the table's keys, and its post-content
+ * application order (transforms, then anchored placement, then effects)
+ * is derived from the table's group fact. The canvas `--width` note from
+ * #237 is resolved by decision on #229: on the add surface `--width` IS
+ * the text width axis — the same spelling `layer edit` uses, validated
+ * through the same shared validator (`parseLayerWidth`) and range check
+ * (`validateTextFaceAxes`); the canvas dimension meaning belongs to
+ * `composition create` alone. The two subcommands share one parsed flag;
+ * no rename and no alias.
  */
 import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
 import { parseShadowSpec, parseOutlineSpec, resolveTextTypographyControls } from "./layer.js";
@@ -175,45 +180,92 @@ export function layerEditOptionKeys(): LayerOptionKey[] {
   return LAYER_OPTION_DEFS.filter((def) => def.editOption).map((def) => def.key);
 }
 
-/** The Layer options `composition add` accepts today: content, text style,
- *  and placement. One-command creation (#229) widens this list to the edit
- *  surface's transform and effect options, which then reach add without
- *  per-option work. The text width axis is absent by name and NOT
- *  reachable by widening this list: on this surface `--width` names the
- *  canvas dimension, and the add path's established checks read that value
- *  where the edit surface reads the text axis — disambiguating canvas
- *  `--width` from the text width axis (a rename/alias and the conflation's
- *  tests) is #229 work, not a widening of this list. */
-export const COMPOSITION_ADD_OPTION_KEYS = [
-  "image", "from-generation", "from-matte", "output", "text", "font", "font-size",
-  "color", "weight", "tracking", "line-height", "x", "y", "opacity",
-] as const;
+/** The Layer options one-command `composition add` accepts (#229): EVERY
+ *  option the table declares — content, text style, placement, transform,
+ *  and effect — derived from the table, never re-declared (DEC-001). A
+ *  future option joins one-command add and `layer edit` with one table
+ *  entry (the guard test pins the two surfaces' key sets agree), and the
+ *  add path's group/appliesTo readers below drive its application order
+ *  and per-kind applicability. On this surface `--width` IS the text width
+ *  axis — the same spelling `layer edit` uses, validated through the same
+ *  shared validator — and the canvas dimension meaning belongs to
+ *  `composition create` alone (the decision recorded on #229). */
+export const COMPOSITION_ADD_OPTION_KEYS: readonly LayerOptionKey[] =
+  LAYER_OPTION_DEFS.map((def) => def.key);
 
 /** The parseArgs entries for the add surface's accepted Layer options,
- *  referencing the one declaration per option; `satisfies` keeps the
- *  subset exhaustive against COMPOSITION_ADD_OPTION_KEYS. */
-export const COMPOSITION_ADD_OPTION_PARSE_ARGS = {
-  image: LAYER_OPTION_PARSE_ARGS.image,
-  "from-generation": LAYER_OPTION_PARSE_ARGS["from-generation"],
-  "from-matte": LAYER_OPTION_PARSE_ARGS["from-matte"],
-  output: LAYER_OPTION_PARSE_ARGS.output,
-  text: LAYER_OPTION_PARSE_ARGS.text,
-  font: LAYER_OPTION_PARSE_ARGS.font,
-  "font-size": LAYER_OPTION_PARSE_ARGS["font-size"],
-  color: LAYER_OPTION_PARSE_ARGS.color,
-  weight: LAYER_OPTION_PARSE_ARGS.weight,
-  tracking: LAYER_OPTION_PARSE_ARGS.tracking,
-  "line-height": LAYER_OPTION_PARSE_ARGS["line-height"],
-  x: LAYER_OPTION_PARSE_ARGS.x,
-  y: LAYER_OPTION_PARSE_ARGS.y,
-  opacity: LAYER_OPTION_PARSE_ARGS.opacity,
-} as const satisfies Record<(typeof COMPOSITION_ADD_OPTION_KEYS)[number], { type: "string" }>;
+ *  referencing the one declaration per option — derived from the shared
+ *  table, so the add surface and the edit surface can never disagree about
+ *  how an option is parsed (DEC-001). */
+export const COMPOSITION_ADD_OPTION_PARSE_ARGS: Record<LayerOptionKey, { type: "string" }> =
+  Object.fromEntries(
+    COMPOSITION_ADD_OPTION_KEYS.map((key) => [key, LAYER_OPTION_PARSE_ARGS[key]]),
+  ) as Record<LayerOptionKey, { type: "string" }>;
+
+/** The post-content option keys of one-command `composition add` (#229,
+ *  DEC-002): the table's transform and effect groups plus anchored
+ *  placement, derived from the group fact — a new option added to one of
+ *  these groups joins one-command add (and the documented application
+ *  order) automatically, and the guard test (TEST-003) pins that every
+ *  edit option is accepted here. */
+export function oneCommandAddOptionKeys(): LayerOptionKey[] {
+  return LAYER_OPTION_DEFS
+    .filter((def) => def.group === "transform" || def.group === "effect" || def.key === "anchor")
+    .map((def) => def.key);
+}
+
+/** Whether any post-content one-command option is supplied in `args`. */
+export function anyOneCommandOptionProvided(args: LayerOptionPresence): boolean {
+  return oneCommandAddOptionKeys().some((key) => args[key] !== undefined);
+}
+
+/** The supplied one-command options in the documented application order
+ *  (spec #226 DEC-002): the table's transform group first, then anchored
+ *  placement, then the effect group — the stages derived from the group
+ *  fact, in table order within a stage. Content and plain placement
+ *  (--x/--y/--opacity) are applied by the ingestion itself before this
+ *  order runs. One-command add's publication path consumes this order, so
+ *  the documented sequence lives in the shared table, not in a second
+ *  hardcoded list. */
+export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOptionKey[] {
+  const stage = new Map<LayerOptionKey, number>([
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "transform").map((def) => [def.key, 0] as const),
+    ["anchor" as LayerOptionKey, 1],
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 2] as const),
+  ]);
+  return oneCommandAddOptionKeys()
+    .filter((key) => args[key] !== undefined)
+    .sort((a, b) => stage.get(a)! - stage.get(b)!);
+}
+
+/** The presence shape of the option surface: every key is either supplied
+ *  or not. The table-driven readers (anyOneCommandOptionProvided,
+ *  oneCommandApplicationOrder, anyLayerEditOptionProvided) only test
+ *  presence, so the CLI values shape and any structured options object
+ *  satisfy it. */
+export type LayerOptionPresence = { [K in LayerOptionKey]?: unknown };
 
 /** The `--<key>` spellings of `keys` that take dash-leading numeric values,
  *  for the shared dash-join at each command boundary (cli-present.ts). */
 export function layerDashNumericFlags(keys: readonly LayerOptionKey[]): string[] {
   const dashNumeric = new Set(LAYER_OPTION_DEFS.filter((def) => def.dashNumeric).map((def) => def.key));
   return keys.filter((key) => dashNumeric.has(key)).map((key) => `--${key}`);
+}
+
+/** The supplied Layer options the option table does not apply to `kind` —
+ *  the one-command add surface's per-kind applicability fact, read from the
+ *  table's `appliesTo` metadata (US-001: add accepts every option `layer
+ *  edit` accepts *for that Layer kind*). The per-option refusals that need
+ *  domain wording stay in the domain validators (for example the resize
+ *  path's text-Layer refusal); this enumeration is the one table-driven
+ *  fact the boundary and the guard test (TEST-003) read to know which
+ *  options are applicable to which kind. */
+export function layerOptionsApplicableTo(
+  kind: "image" | "text",
+  keys: readonly LayerOptionKey[] = layerEditOptionKeys(),
+): LayerOptionKey[] {
+  const kindDefs = LAYER_OPTION_DEFS.filter((def) => def.editOption && def.appliesTo.includes(kind));
+  return keys.filter((key) => kindDefs.some((def) => def.key === key));
 }
 
 /** Whether any option in `keys` is supplied in `args`. */
@@ -223,7 +275,7 @@ export function someLayerOptionProvided(args: LayerOptionArgs, keys: readonly La
 
 /** Whether any option that alone qualifies as an `layer edit` edit option
  *  is supplied. */
-export function anyLayerEditOptionProvided(args: LayerOptionArgs): boolean {
+export function anyLayerEditOptionProvided(args: LayerOptionPresence): boolean {
   return LAYER_OPTION_DEFS.some((def) => def.editOption && args[def.key] !== undefined);
 }
 

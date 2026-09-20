@@ -572,3 +572,40 @@ export async function measureStandaloneLayer(
     },
   };
 }
+
+/**
+ * Measure a PROVISIONAL revision — a Layer that does not exist yet
+ * (one-command `composition add`, #229, DEC-002): its would-be revision
+ * and verified content bytes are supplied directly, so no Project state is
+ * consulted and nothing is written. The same paint-identical authority as
+ * every other measurement: the paint path's exact markup for the supplied
+ * revision in `canvas` (the Composition the Layer is about to join, so a
+ * text Layer's wrapping is the wrapping it will obey), the same decode and
+ * font gates, and the same per-Layer bounded ink-capture contract.
+ *
+ * One-command add's anchored placement resolves against this measurement:
+ * the provisional revision carries the transforms (the documented order
+ * applies transforms BEFORE the anchor resolves) and NO effects yet
+ * (effects are applied after the anchor, so the resolved placement anchors
+ * the content+transform ink — exactly the ink the multi-command sequence's
+ * anchor edit would resolve too).
+ */
+export async function measureProvisionalLayer(
+  canvas: { width: number; height: number },
+  provisional: SnapshotLayer,
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number } }> {
+  const [measured] = await measureSnapshot(canvas, [provisional]);
+  if (!measured) {
+    throw new Error(`Provisional measurement of Layer "${provisional.layerId}" produced no geometry.`);
+  }
+  return {
+    painted: measured.painted ? roundBox(measured.painted) : null,
+    box: {
+      x: round2(measured.box.x),
+      y: round2(measured.box.y),
+      width: round2(measured.box.width),
+      height: round2(measured.box.height),
+    },
+    content: { width: round2(measured.content.width), height: round2(measured.content.height) },
+  };
+}

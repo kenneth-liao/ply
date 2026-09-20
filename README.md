@@ -66,6 +66,24 @@ written either way (`--x -40` or `--x=-40`, `--y -.5` or `--y=-.5`); a
 following option is never consumed as a number, and Layer effects' numeric
 values (`--rotate`, `--shadow`, `--outline`) accept both forms too.
 
+**One-command Layers (#229):** `composition add` accepts every placement,
+transform, effect, and text option `ply layer edit` accepts for that Layer
+kind, with identical spelling, validation, and refusal texts — so a Layer is
+created in its final state with one command. The options apply in the
+documented order — content, then transforms (`--resize`, `--rotate`,
+`--flip`), then anchored placement (`--anchor`), then effects (`--shadow`,
+`--outline`) — and publish exactly one Layer revision; any refused option
+publishes nothing (no Layer, no use, no content). The one-command Layer
+renders and measures identically to the same Layer built by the
+multi-command sequence, and its Render replays byte-identically. On `layer
+edit`, `--anchor` cannot combine with `--shadow`/`--outline` (the reference
+ink would be ambiguous); on `add` the combination is defined by the order —
+the anchor resolves the content+transform ink in the target Composition's
+canvas, and the effects are then applied to the same single revision. On
+`add`, `--width` is the text width axis (the same spelling `layer edit`
+uses); the canvas dimension meaning of `--width` belongs to `composition
+create` alone.
+
 Layers are addressable by name wherever a Layer id is accepted (`layer edit`,
 `layer inspect`, `layer review`): a Composition-plus-use form
 `<composition>/<use>` — for example `poster/headline` — resolves to the
@@ -716,6 +734,10 @@ ply composition add poster display --text "Groundline" --font Archivo --weight 8
 # Typography is font-independent (ADR-0021); omitted means normal spacing
 # and the font's own line height:
 ply composition add poster utility --text "Hello" --font Archivo --tracking 0.16 -p ~/projects/my-poster
+# One-command Layers (#229): every placement/transform/effect option 'layer
+# edit' accepts applies in the documented order and publishes one revision:
+ply composition add poster headline --text "Hello" --font Anton --x 540 --y 160 \
+  --anchor center,center --rotate -6 --shadow "0,6,12,#00000080" -p ~/projects/my-poster
 ply composition render poster -p ~/projects/my-poster
 # Every successful render retains a manifest under the Project's renders/:
 ply composition replay <project>/renders/<render-id>.manifest.json -p ~/projects/my-poster

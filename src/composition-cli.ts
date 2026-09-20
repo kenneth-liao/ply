@@ -21,20 +21,27 @@ import { renderComposition, replayRender } from "./composition-render.js";
 import {
   COMPOSITION_ADD_OPTION_KEYS,
   COMPOSITION_ADD_OPTION_PARSE_ARGS,
+  anyOneCommandOptionProvided,
   layerContentKindConflict,
   layerDashNumericFlags,
   parseGenerationJobId,
   parseGenerationOutputSelector,
   parseGenerationOutputValue,
+  parseLayerAnchor,
   parseLayerCoordinate,
   parseLayerFontSize,
+  parseLayerFlip,
   parseLayerLineHeight,
   parseLayerOpacity,
+  parseLayerOutline,
+  parseLayerRotation,
+  parseLayerShadow,
   parseLayerTracking,
   parseLayerWeight,
   parseLayerWidth,
   parseMatteId,
   parseNumericArgument,
+  parseResizeOptions,
   someLayerOptionProvided,
   validateTextFaceAxes,
   validateTextTypographyControls,
@@ -54,7 +61,11 @@ composition — Composition authoring and inspection
       Create a new Composition with explicit canvas dimensions
 
   ply composition add <comp> <name> --image <path> [options]
-      Add a local image Layer to a Composition with optional placement
+      Add a local image Layer to a Composition in its final state with one
+      command: every placement, transform, effect, and text option 'layer
+      edit' accepts for the Layer kind (see the one-command option notes
+      below), applied in the documented order and published as exactly one
+      Layer revision — or nothing, if any option is refused.
 
   ply composition add <comp> <name> --text <str> --font <family> [options]
       Add a locally rendered text Layer. The bundled font family's bytes are
@@ -231,6 +242,52 @@ Options:
   --x <num>             X position on canvas (default: 0)
   --y <num>             Y position on canvas (default: 0)
   --opacity <num>       Layer opacity between 0 and 1 (default: 1)
+
+One-command creation (#229, US-001): 'composition add' accepts every
+placement, transform, effect, and text option 'layer edit' accepts for that
+Layer kind, with identical spelling, validation, and refusal texts. The
+options apply in the documented order — content, then transforms, then
+anchored placement, then effects — and publish exactly one Layer revision;
+any refused option publishes nothing (no Layer, no use, no content). On
+'layer edit', --anchor cannot combine with --shadow/--outline; on 'add' the
+combination is defined by that order: the anchor resolves the content+transform
+ink in the target Composition's canvas, and the effects are then applied to
+the same single revision. --anchor on add still requires explicit --x/--y
+targets for the anchored axes, exactly as on 'edit'. The transform and
+effect facts are revision facts like on edit: shared, forked, replayed, and
+reported by 'measure' exactly as a multi-command Layer's are.
+
+  --anchor <h>[,<v>]    Anchored placement (one-command add): resolve the
+                        Layer's visible painted ink against the target
+                        position — horizontal left|center|right (anchors
+                        --x), vertical top|center|bottom (anchors --y), a
+                        pair like "center,center"; a bare "center" is
+                        refused. The anchor box is the painted ink box
+                        (alpha > 0 / tight glyph ink), never the layout box;
+                        a Layer with no visible ink refuses. Resolved
+                        against the content+transform ink before the effects
+                        apply; an unanchored axis keeps its --x/--y value.
+  --resize <factor>     Scale the Layer by a RELATIVE factor (multiplies
+                        scale 1 at creation); aspect ratio preserved.
+  --resize-to <WxH>     Set the effective painted size in px (image Layers
+                        only — text has no intrinsic pixel size; use
+                        --resize). "800x600" changes the aspect ratio;
+                        "800x" or "x600" preserves it. Mutually exclusive
+                        with --resize.
+  --rotate <deg>        Rotate to an ABSOLUTE angle in degrees, clockwise
+                        positive, about the Layer's (x, y) corner.
+  --flip <mode>         Flip to an ABSOLUTE reflection state: horizontal,
+                        vertical, both, or none.
+  --shadow <spec>       Apply a shadow to the Layer's content: an absolute
+                        setter "<dx>,<dy>,<blur>,<color>" (e.g.
+                        "10,10,4,#000000") or "none". Offsets and blur are
+                        px; negative offsets are valid. Paints in the
+                        Layer's LOCAL space, mapped by the transform and
+                        faded by opacity.
+  --outline <spec>      Apply an outline to the Layer's content: an absolute
+                        setter "<width>,<color>" (e.g. "4,#000000") or
+                        "none". Width is px (0..256). Painted before the
+                        shadow, which is cast from the outlined composite.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -255,17 +312,53 @@ function output(
   }
 }
 
-// Dash-numeric join (#128): the Layer options this surface accepts so far
-// (the shared definition's dash-numeric subset, DEC-001) plus --supersample
-// (#184).
+/**
+ * Compact one-command facts segment (#229, US-004): the applied transform
+ * and effect facts of a one-command add, reported in the same words the
+ * edit surface reports them, followed by the resolved anchored placement
+ * when an --anchor was supplied. Empty for a plain add, so existing
+ * invocations' output is unchanged.
+ */
+function oneCommandFacts(
+  rev: {
+    x: number;
+    y: number;
+    scaleX: number;
+    scaleY: number;
+    rotationDeg: number;
+    flipX: boolean;
+    flipY: boolean;
+    shadow?: { dx: number; dy: number; blur: number; color: string };
+    outline?: { width: number; color: string };
+  },
+  anchorSpec?: string,
+): string {
+  const facts: string[] = [];
+  if (rev.scaleX !== 1 || rev.scaleY !== 1) {
+    facts.push(`scale ${rev.scaleX === rev.scaleY ? `${rev.scaleX}×` : `${rev.scaleX}×/${rev.scaleY}×`}`);
+  }
+  if (rev.rotationDeg !== 0) facts.push(`rotation ${rev.rotationDeg}°`);
+  if (rev.flipX || rev.flipY) {
+    facts.push(`flip ${rev.flipX && rev.flipY ? "both" : rev.flipX ? "horizontal" : "vertical"}`);
+  }
+  if (rev.shadow) facts.push(`shadow ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`);
+  if (rev.outline) facts.push(`outline ${rev.outline.width} ${rev.outline.color}`);
+  if (anchorSpec !== undefined) {
+    facts.push(`anchored ${anchorSpec} -> placement (${rev.x}, ${rev.y})`);
+  }
+  return facts.length > 0 ? `; ${facts.join(", ")}` : "";
+}
+
+// Dash-numeric join (#128): the Layer options this surface accepts (the
+// shared definition's dash-numeric subset, DEC-001 — now the full option
+// table's keys, #229) plus --supersample (#184).
 const rawArgs = joinDashLeadingNumericValues(
   process.argv.slice(2),
   [...layerDashNumericFlags(COMPOSITION_ADD_OPTION_KEYS), "--supersample"],
 );
 const isJson = rawArgs.includes("--json");
-let values: Pick<LayerOptionArgs, (typeof COMPOSITION_ADD_OPTION_KEYS)[number]> & {
+let values: LayerOptionArgs & {
   project?: string;
-  width?: string;
   height?: string;
   order?: string;
   out?: string;
@@ -283,7 +376,6 @@ try {
     allowPositionals: true,
     options: {
       project: { type: "string", short: "p" },
-      width: { type: "string" },
       height: { type: "string" },
       order: { type: "string" },
       out: { type: "string" },
@@ -291,7 +383,13 @@ try {
       supersample: { type: "string" },
       regions: { type: "string" },
       // The one declaration of the add surface's Layer options (DEC-001):
-      // the same parseArgs entries layer edit spreads for these keys.
+      // every Layer option this surface accepts, derived from the shared
+      // option table (#229) — the same parseArgs entries layer edit spreads
+      // for these keys. --width is parsed once for the whole module: on
+      // create it is the canvas dimension, on add it is the text width
+      // axis (the same spelling layer edit uses, DEC-001) — the shared
+      // declaration covers both subcommands, and that is the documented
+      // conflation resolved on #229 (no rename, no alias).
       ...COMPOSITION_ADD_OPTION_PARSE_ARGS,
       json: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -446,12 +544,94 @@ async function run() {
       }
       const opacity = parsedOpacity.value ?? 1.0;
 
+      // Transform and effect options (one-command creation, spec #226
+      // US-001/DEC-002): shape-validated at this boundary through the SAME
+      // shared validators layer edit runs (DEC-001). The semantic
+      // resolutions — scale bounds and aspect rules, the text-Layer
+      // --resize-to refusal, anchored-placement ink resolution, effect
+      // canonicalization — apply in the documented order (content, then
+      // transforms, then anchored placement, then effects) inside the
+      // publication path, before anything is stored, so a refused option
+      // publishes nothing.
+      const resize = parseResizeOptions(values.resize, values["resize-to"]);
+      if (!resize.ok) {
+        output({ ok: false, error: resize.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedRotation = parseLayerRotation(values.rotate);
+      if (!parsedRotation.ok) {
+        output({ ok: false, error: parsedRotation.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedFlip = parseLayerFlip(values.flip);
+      if (!parsedFlip.ok) {
+        output({ ok: false, error: parsedFlip.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedShadow = parseLayerShadow(values.shadow);
+      if (!parsedShadow.ok) {
+        output({ ok: false, error: parsedShadow.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedOutline = parseLayerOutline(values.outline);
+      if (!parsedOutline.ok) {
+        output({ ok: false, error: parsedOutline.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
+      // command boundary (exit 2), like on the edit surface. Anchored
+      // placement on add is defined by the documented order (it combines
+      // with transforms and effects), and needs EXPLICIT targets for the
+      // anchored axes, exactly as layer edit requires — add's placement
+      // defaults are plain placement, never an implicit anchor target.
+      const parsedAnchorResult = parseLayerAnchor(values.anchor);
+      if (!parsedAnchorResult.ok) {
+        output({ ok: false, error: parsedAnchorResult.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedAnchor = parsedAnchorResult.value;
+      if (parsedAnchor !== undefined) {
+        if (parsedAnchor.horizontal !== undefined && values.x === undefined) {
+          output(
+            { ok: false, error: `--x <target> is required to anchor horizontally: the ${parsedAnchor.horizontal} ink edge/center lands at the requested x.` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+        if (parsedAnchor.vertical !== undefined && values.y === undefined) {
+          output(
+            { ok: false, error: `--y <target> is required to anchor vertically: the ${parsedAnchor.vertical} ink edge/center lands at the requested y.` },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
+        }
+      }
+      const oneCommand = anyOneCommandOptionProvided(values)
+        ? {
+            ...(resize.value.resizeFactor !== undefined ? { resizeFactor: resize.value.resizeFactor } : {}),
+            ...(resize.value.resizeTo !== undefined ? { resizeTo: resize.value.resizeTo } : {}),
+            ...(parsedRotation.value !== undefined ? { rotateDeg: parsedRotation.value } : {}),
+            ...(parsedFlip.value !== undefined ? { flip: parsedFlip.value } : {}),
+            ...(parsedShadow.value !== undefined ? { shadow: parsedShadow.value } : {}),
+            ...(parsedOutline.value !== undefined ? { outline: parsedOutline.value } : {}),
+            ...(parsedAnchor !== undefined ? { anchor: parsedAnchor } : {}),
+          }
+        : undefined;
+
       try {
         if (values["from-generation"] !== undefined) {
           const res = await addGeneratedLayerToComposition(
             targetProj, compName, localName,
             { jobRoot: path.resolve("out", "generation"), jobId: generationJobId.value!, output: values.output },
-            { x, y, opacity },
+            { x, y, opacity, oneCommand },
           );
           mutationCommitted = true;
           output(
@@ -466,7 +646,7 @@ async function run() {
               console.log(
                 `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
                   `[${detail}] from Generation Job ${res.generatedFrom.jobId} ` +
-                  `(${res.generatedFrom.contentHash.slice(0, 12)}; provenance retained)`,
+                  `(${res.generatedFrom.contentHash.slice(0, 12)}; provenance retained)${oneCommandFacts(rev, values.anchor)}`,
               );
             },
           );
@@ -480,7 +660,7 @@ async function run() {
               matteId: matteId.value!,
               generationRoot: path.resolve("out", "generation"),
             },
-            { x, y, opacity },
+            { x, y, opacity, oneCommand },
           );
           mutationCommitted = true;
           output(
@@ -505,7 +685,7 @@ async function run() {
               console.log(
                 `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
                   `[${detail}] from matte ${res.mattedFrom.matteId} ` +
-                  `(engine ${res.mattedFrom.engine}, ${res.mattedFrom.contentHash.slice(0, 12)}; provenance retained${generated})`,
+                  `(engine ${res.mattedFrom.engine}, ${res.mattedFrom.contentHash.slice(0, 12)}; provenance retained${generated})${oneCommandFacts(rev, values.anchor)}`,
               );
             },
           );
@@ -579,7 +759,7 @@ async function run() {
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
             { text: values.text, font: values.font, color: values.color, weight, width, tracking, lineHeight },
-            { x, y, opacity, fontSize },
+            { x, y, opacity, fontSize, oneCommand },
           );
           mutationCommitted = true;
           output(
@@ -590,14 +770,14 @@ async function run() {
               if (rev.kind !== "text") return; // unreachable: text ingestion returns a text revision
               console.log(
                 `Added text Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
-                  `[${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}]`,
+                  `[${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}]${oneCommandFacts(rev, values.anchor)}`,
               );
             },
           );
           return;
         }
 
-        const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity });
+        const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity, oneCommand });
         mutationCommitted = true;
         output(
           { ok: true, composition: res.composition, use: res.use, layer: res.layer },
@@ -609,7 +789,7 @@ async function run() {
                 ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
                 : `${rev.width}×${rev.height} ${rev.format}`;
             console.log(
-              `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" [${detail}]`,
+              `Added Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" [${detail}]${oneCommandFacts(rev, values.anchor)}`,
             );
           },
         );

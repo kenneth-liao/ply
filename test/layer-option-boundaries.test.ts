@@ -250,3 +250,31 @@ test("composition add: the canvas --width value is validated as the text axis (t
     "Width (--width) must be a finite number.",
   );
 });
+
+// One-command creation (#229): the transform/effect/anchor block sits
+// between the placement block and the text-branch validators, and the
+// anchor's shape check comes last in that block — the same
+// placement-before-transform, transform-before-anchor spine as the edit
+// surface. The refused-option parity tests live in
+// test/one-command-add.test.ts.
+
+test("composition add: the placement block precedes the one-command transform block (#229)", async () => {
+  await expectRefusal(
+    ["composition", "add", "demo", "t11", "--image", "a.png", "--opacity", "abc", "--resize", "abc", "--project", projDir],
+    2,
+    "Opacity (--opacity) must be a finite number between 0 and 1.",
+  );
+});
+
+test("composition add: the one-command transform block precedes the anchor's shape check (#229)", async () => {
+  await expectRefusal(
+    ["composition", "add", "demo", "t12", "--image", "a.png", "--anchor", "center", "--flip", "sideways", "--project", projDir],
+    2,
+    'Flip (--flip) takes horizontal, vertical, both, or none (got "sideways").',
+  );
+  await expectRefusal(
+    ["composition", "add", "demo", "t13", "--image", "a.png", "--anchor", "center", "--shadow", "1,2,3", "--project", projDir],
+    2,
+    'Invalid shadow "1,2,3": --shadow takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".',
+  );
+});
