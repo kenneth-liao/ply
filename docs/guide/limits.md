@@ -166,6 +166,12 @@ as bundled faces, against the file's own facts:
   rendering browser cannot resolve, are refused before anything is
   published — no Layer, no use, no content. The render-time
   family-resolution probe re-verifies every caller font.
+- **Exit codes.** An axis error against a caller file is semantic (exit 1):
+  the file's real ranges are only known where its bytes are read, like the
+  other retained-state refusals. Axis errors against a bundled family
+  named with `--font` are usage errors (exit 2), validated at the command
+  boundary — the split is deliberate; a refused command never mutates live
+  state on either path.
 - **No synthesis.** The emitted `@font-face` declares the face's real
   weight/stretch and the text element disables font synthesis, so the
   browser never paints a look the bytes do not contain.

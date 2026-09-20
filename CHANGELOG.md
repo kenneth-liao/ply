@@ -28,9 +28,13 @@
   bundled family (`--font`) or another file (`--font-file`) follows the
   existing carry-or-refuse rules for weight and width — the two font
   sources are mutually exclusive. Rendering, measure, replay, relocation,
-  and cross-Project import never need the original file (the import now
-  also carries the stored text axes, typography, and caller font facts it
-  previously dropped). `layer inspect` and `composition measure` report
+  and cross-Project import never need the original file. Cross-Project
+  import also now PRESERVES the stored text facts it previously dropped —
+  the resolved text axes (`weight`/`width`, #179), typography
+  (`tracking`/`lineHeight`, #187), and caller font facts — a preserve-only
+  change that also fixes bundled variable-face imports, which until now
+  arrived at the default instance and could not replay their source look
+  (INT-retention-1). `layer inspect` and `composition measure` report
   the font's own family name and that it is caller-supplied; licensing of
   a caller's font is the caller's concern. New term "caller font" in
   `CONTEXT.md`. Offline, no font discovery, no system fonts, no remote

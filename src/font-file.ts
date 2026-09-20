@@ -174,13 +174,24 @@ function readFvarAxes(
   if (axisSize < 20) {
     throw unusable("its fvar table declares an invalid axis record size");
   }
+  // Axis records live INSIDE the fvar table and at its declared stride, so
+  // the whole array must fit the table — a hostile axesArrayOffset cannot
+  // dress other tables' bytes up as axis data (#232 review INT-parser-2).
+  // With the stride ≥ record size and the array confined, consecutive
+  // records cannot overlap; duplicates of the same tag are still refused
+  // explicitly below.
+  if (axesArrayOffset + axisCount * axisSize > table.length) {
+    throw unusable("its fvar axis records extend past the fvar table");
+  }
   const axes: { wght?: FontAxis; wdth?: FontAxis } = {};
+  const seenTags = new Set<string>();
   for (let i = 0; i < axisCount; i++) {
     const rec = table.offset + axesArrayOffset + i * axisSize;
-    if (rec + 20 > bytes.length) {
-      throw unusable("its fvar axis records are truncated");
-    }
     const tag = bytes.toString("latin1", rec, rec + 4);
+    if (seenTags.has(tag)) {
+      throw unusable(`its fvar table declares duplicate "${tag}" axes`);
+    }
+    seenTags.add(tag);
     if (tag !== "wght" && tag !== "wdth") continue;
     const axis = {
       min: fixed16(bytes, rec + 4),

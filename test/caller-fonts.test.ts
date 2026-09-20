@@ -18,6 +18,7 @@ import type { LayerTextRevision } from "../src/layer.js";
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/fonts");
 const SILKSCREEN = path.join(FIXTURES, "Silkscreen-Regular.ttf");
+const SILKSCREEN_OTF = path.join(FIXTURES, "Silkscreen-Regular.otf");
 const HANDJET = path.join(FIXTURES, "Handjet.ttf");
 
 async function invoke(args: string[], project?: string) {
@@ -159,6 +160,26 @@ test("a caller font renders the file's glyphs — measured ink differs from the 
     layers: { content: { width: number } }[];
   };
   expect(m1.layers[0]!.content.width).not.toBe(m2.layers[0]!.content.width);
+}, 30000);
+
+test("a CFF OpenType (.otf) caller font parses and renders the file's glyphs (INT-parser-1)", async () => {
+  await makeComposition("poster");
+  const added = await addCallerFont("poster", "otf", SILKSCREEN_OTF);
+  expect(added.code).toBe(0);
+
+  // The revision records the file's own facts, including its glyph format.
+  const revision = await readStoredTextRevision(await layerIdOf("poster", "otf"));
+  expect(revision.callerFont?.family).toBe("Silkscreen");
+  expect(revision.callerFont?.format).toBe("opentype");
+
+  // The browser paints the file's glyphs: ink exists, and the same text
+  // with the bundled Archivo face renders differently.
+  const otfPng = decodePng(await renderPng("poster", path.join(tempDir, "otf.png")));
+  expect(inkPixels(otfPng)).toBeGreaterThan(0);
+  await makeComposition("solo-otf");
+  await addBundled("solo-otf", "face", "Archivo");
+  const bundledPng = decodePng(await renderPng("solo-otf", path.join(tempDir, "otf-bundled.png")));
+  expect(otfPng.rgba.equals(bundledPng.rgba)).toBe(false);
 }, 30000);
 
 test("a --font-file edit re-fonts the Layer and renders the file's glyphs", async () => {
@@ -454,10 +475,12 @@ test("cross-Project import carries the font bytes", async () => {
 test("the fixture fonts are committed with their licences and stay small", async () => {
   const files = await readdir(FIXTURES);
   expect(files).toContain("Silkscreen-Regular.ttf");
+  expect(files).toContain("Silkscreen-Regular.otf");
   expect(files).toContain("Handjet.ttf");
   expect(files).toContain("Silkscreen-OFL.txt");
+  expect(files).toContain("Silkscreen-Otf-OFL.txt");
   expect(files).toContain("Handjet-OFL.txt");
-  for (const f of files.filter((f) => f.endsWith(".ttf"))) {
+  for (const f of files.filter((f) => f.endsWith(".ttf") || f.endsWith(".otf"))) {
     const bytes = await readFile(path.join(FIXTURES, f));
     expect(bytes.length).toBeLessThan(400 * 1024);
   }
