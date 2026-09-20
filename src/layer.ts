@@ -1604,12 +1604,14 @@ export interface EditLayerOptions {
    */
   flip?: "horizontal" | "vertical" | "both" | "none";
   /**
-   * Shape content options (#208): parsed at the command boundary, refused on
-   * EVERY layer kind by the edit path in #208 — shape parameters are not
-   * editable yet (the sibling edit-setters ticket owns them). They exist in
-   * the option table so `composition add` accepts them for shape content and
-   * the guard tests can enumerate the full surface; the edit path's refusal
-   * is the established kind-stability wording.
+   * Shape content options (#208, #209): parsed at the command boundary, and
+   * on `layer edit` ABSOLUTE setters on a shape Layer (#209, spec #207
+   * US-002) — each supplied option replaces that parameter, an omitted
+   * parameter keeps its value, and the merged form validates through the
+   * ONE shape-content validator. On image and text Layers every shape
+   * option is refused naming kind stability. They exist in the option table
+   * so `composition add` accepts them for shape content and the guard tests
+   * can enumerate the full surface.
    */
   shape?: "rectangle" | "ellipse";
   size?: { width: number; height: number };
@@ -1719,6 +1721,11 @@ export interface EditLayerResult {
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
   mattedFrom?: { matteId: string; engine: string; contentHash: string };
+  /** Present only when a shape edit dropped a carried corner radius: a
+   * geometry switch to ellipse has no place for the rectangle fact, so the
+   * edit reports exactly what it dropped for operator visibility (#209,
+   * review PROD-5). */
+  shapeEdited?: { droppedCornerRadius: number };
 }
 
 /**
@@ -2214,22 +2221,31 @@ async function buildEditedRevision(
   mattedFrom?: EditLayerResult["mattedFrom"];
   /** Present when the ingested matte's source was a retained generation output (#108). */
   retainedGeneration: RetainedGenerationProvenance | null;
+  /** Present only when a shape edit dropped a carried corner radius
+   * (review PROD-5): the geometry switch to ellipse has no place for the
+   * carried rectangle fact. */
+  shapeEdited?: EditLayerResult["shapeEdited"];
 }> {
   const { x, y, opacity } = placement;
 
-  // Shape content options (#208): shape parameters are not editable on this
-  // surface yet — the edit-setters ticket owns the absolute setters. The
-  // refusal runs before any kind branch, before anything is staged, naming
-  // the parameters and their surface.
+  // Shape content options (#209, spec #207 US-002): each parameter is an
+  // ABSOLUTE setter on a shape Layer; on image and text Layers every shape
+  // option is refused naming kind stability — a Layer's kind is stable
+  // across edits (US-002 bullet 2), so a shape cannot become image or text
+  // and the reverse. The refusal runs before any kind branch, before
+  // anything is staged.
   if (
     options.shape !== undefined ||
     options.size !== undefined ||
     options.cornerRadius !== undefined ||
     options.fill !== undefined
   ) {
-    throw new Error(
-      "Shape parameters (--shape, --size, --corner-radius, --fill) are not editable on layer edit yet.",
-    );
+    if (prevRev.kind !== "shape") {
+      const kindPhrase = prevRev.kind === "image" ? "an image Layer" : "a text Layer";
+      throw new Error(
+        `Cannot edit shape parameters on ${kindPhrase}. Layer "${layerId}" is ${kindPhrase} — a Layer's kind is stable across edits; add a shape Layer instead.`,
+      );
+    }
   }
 
   if (prevRev.kind === "image") {
@@ -2341,13 +2357,11 @@ async function buildEditedRevision(
   }
 
   if (prevRev.kind === "shape") {
-    // Kind stability (#208, US-002 direction preserved): a shape Layer
-    // cannot become an image or text Layer by edit, and its parameters are
-    // not editable on this surface yet (the refusal above fires first when
-    // they are supplied). Everything kind-shared — placement, opacity, the
-    // canonical transform, the effects — resolves exactly as for the other
-    // kinds and carries into the new revision; the shape's parameters carry
-    // verbatim (validated once at ingestion, immutable here).
+    // Kind stability (#208, US-002): a shape Layer cannot become an image or
+    // text Layer by edit, and image/text Layers cannot become a shape (the
+    // refusal above fires first when shape options are supplied). Everything
+    // kind-shared — placement, opacity, the canonical transform, the effects
+    // — resolves exactly as for the other kinds.
     if (options.fromGeneration !== undefined) {
       throw new Error(
         `Cannot replace content from a Generation Job on a shape Layer. Layer "${layerId}" is a shape Layer.`,
@@ -2375,17 +2389,61 @@ async function buildEditedRevision(
       throw new Error(`Cannot edit text attributes on a shape Layer. Layer "${layerId}" is a shape Layer.`);
     }
 
+    // Shape parameters as ABSOLUTE setters (#209, spec #207 US-002 bullet 1;
+    // DEC-009): each supplied option replaces that parameter, every omitted
+    // parameter keeps its current value, and the merged form validates
+    // through the ONE shape-content validator — the same one ingestion and
+    // the stored-revision reader use (no second parser), so a refused value
+    // never advances live state.
+    if (
+      options.size !== undefined &&
+      (options.resizeFactor !== undefined || options.resizeTo !== undefined || options.scale !== undefined)
+    ) {
+      throw new Error(
+        `--size and the resize forms (--resize, --resize-to, --scale) are separate edits: Layer "${layerId}" cannot set the geometry's intrinsic size and resize in one edit, because the effective-size cap and the resize reference read the geometry's intrinsic size.`,
+      );
+    }
+    const mergedGeometry = options.shape ?? prevRev.shape;
+    const mergedSize = options.size ?? { width: prevRev.width, height: prevRev.height };
+    // An explicitly supplied radius always validates (an ellipse refuses it,
+    // naming the parameter); a radius merely CARRIED into a geometry switch
+    // to ellipse is dropped — a rectangle fact with no ellipse meaning.
+    const mergedRadius =
+      options.cornerRadius !== undefined
+        ? options.cornerRadius
+        : mergedGeometry === "ellipse"
+          ? undefined
+          : prevRev.cornerRadius;
+    const mergedFill = options.fill ?? { ...prevRev.fill };
+    // A carried radius that the geometry switch makes meaningless is dropped
+    // and REPORTED (review PROD-5): the operator sees exactly what the
+    // absolute geometry setter removed.
+    const droppedCornerRadius =
+      mergedGeometry === "ellipse" && options.cornerRadius === undefined && prevRev.cornerRadius !== undefined
+        ? prevRev.cornerRadius
+        : undefined;
+    const shapeContent = validateShapeContent(
+      mergedGeometry,
+      mergedSize.width,
+      mergedSize.height,
+      mergedRadius,
+      mergedFill,
+    );
+    // The content identity IS the canonical parameter form (DEC-001): hashed
+    // from the merged parameters exactly as creation hashes them.
+    const contentHash = createHash("sha256").update(shapeContentIdentity(shapeContent)).digest("hex");
+
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
       createdAt,
       kind: "shape",
-      contentHash: prevRev.contentHash,
-      shape: prevRev.shape,
-      width: prevRev.width,
-      height: prevRev.height,
-      ...(prevRev.cornerRadius !== undefined ? { cornerRadius: prevRev.cornerRadius } : {}),
-      fill: { ...prevRev.fill },
+      contentHash,
+      shape: shapeContent.shape,
+      width: shapeContent.width,
+      height: shapeContent.height,
+      ...(shapeContent.cornerRadius !== undefined ? { cornerRadius: shapeContent.cornerRadius } : {}),
+      fill: shapeContent.fill,
       x,
       y,
       opacity,
@@ -2398,6 +2456,12 @@ async function buildEditedRevision(
       ...(outline !== undefined ? { outline } : {}),
     };
     const unchanged =
+      shapeContent.shape === prevRev.shape &&
+      shapeContent.width === prevRev.width &&
+      shapeContent.height === prevRev.height &&
+      shapeContent.cornerRadius === prevRev.cornerRadius &&
+      shapeContent.fill.type === prevRev.fill.type &&
+      shapeContent.fill.color === prevRev.fill.color &&
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity &&
@@ -2408,7 +2472,15 @@ async function buildEditedRevision(
       flip.flipY === prevRev.flipY &&
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline);
-    return { revision, unchanged, retainedGeneration: null };
+    // The fill comparison covers the solid fill's whole identity today; the
+    // gradient ticket (#210) must extend it per gradient stop or gradient
+    // edits would false-idempotent (review INT-4).
+    return {
+      revision,
+      unchanged,
+      retainedGeneration: null,
+      ...(droppedCornerRadius !== undefined ? { shapeEdited: { droppedCornerRadius } } : {}),
+    };
   }
 
   if (prevRev.kind === "text") {
@@ -2773,7 +2845,7 @@ export async function editLayerInternal(
     // New identity + edited revision through the shared canonical builder.
     const newLayerId = generateLayerId();
     const createdAt = new Date().toISOString();
-    const { revision, mattedFrom, retainedGeneration } = await buildEditedRevision(
+    const { revision, mattedFrom, retainedGeneration, shapeEdited } = await buildEditedRevision(
       resolvedRoot,
       prevRev,
       newLayerId,
@@ -2798,21 +2870,22 @@ export async function editLayerInternal(
     const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
+    const withShape = shapeEdited ? { ...withOutline, shapeEdited } : withOutline;
     return options.fromGeneration !== undefined
-      ? { ...withOutline, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : mattedFrom !== undefined
         ? {
-            ...withOutline,
+            ...withShape,
             mattedFrom,
             ...(retainedGeneration
               ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
               : {}),
           }
-        : withOutline;
+        : withShape;
   }
 
   // 4. Shared canonical edited-revision construction (in-place)
-  const { revision, unchanged, mattedFrom, retainedGeneration } = await buildEditedRevision(
+  const { revision, unchanged, mattedFrom, retainedGeneration, shapeEdited } = await buildEditedRevision(
     resolvedRoot,
     prevRev,
     layerId,
@@ -2838,6 +2911,7 @@ export async function editLayerInternal(
       ...(flippedReport ? { flipped: flippedReport } : {}),
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(hasOutline ? { outlined: outlinedReport } : {}),
+      ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
         ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
         : {}),
@@ -2891,6 +2965,7 @@ export async function editLayerInternal(
     ...(flippedReport ? { flipped: flippedReport } : {}),
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(hasOutline ? { outlined: outlinedReport } : {}),
+    ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined
       ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
       : {}),

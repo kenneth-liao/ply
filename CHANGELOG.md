@@ -4,6 +4,37 @@
 
 ### Added
 
+- Shape parameters are editable on `layer edit` (#209, spec #207 US-002,
+  DEC-001/009/010): each shape parameter — geometry (`--shape`), size
+  (`--size`), corner radius (`--corner-radius`), and fill (`--fill`) — is an
+  ABSOLUTE setter on a shape Layer, reusing the SAME shared option
+  definitions and the SAME single fill/shape validators as creation (no
+  second parser). An omitted parameter keeps its value; an invalid value is
+  refused through the one shape-content validator before anything is
+  published, leaving live state unchanged (including a carried corner radius
+  that would exceed a newly set size's range — the fix is one edit naming
+  both). Switching the geometry to ellipse drops a merely carried corner
+  radius (a rectangle fact with no ellipse meaning); an explicitly supplied
+  radius on an ellipse stays refused. `--corner-radius 0` removes the
+  radius. `--size` is mutually exclusive with the resize forms in one edit
+  (the effective-size cap and the resize reference read the geometry's
+  intrinsic size — the content-replacement precedent). Kind stability holds
+  both ways: a shape Layer cannot become image or text by edit, and image or
+  text Layers cannot gain shape parameters; the refusal names kind
+  stability. Shared shape Layers refuse a bare edit and obey `--in-place`
+  (propagates across all referring Compositions) / `--fork` (retargets one
+  use) as for any other kind. Position, opacity, scale, rotation, flip,
+  anchored placement, shadow, and outline are verified on a shape Layer by
+  render and `measure` like on image and text Layers; the intrinsic-pixel
+  size restriction (`--resize-to` resolves against a shape's `--size`
+  geometry, stays refused on text) is unchanged and stated in help. Help,
+  README, and the shape section document the setters. A geometry switch to
+  ellipse that drops a carried corner radius reports the dropped radius in
+  the result (`shapeEdited.droppedCornerRadius`, named in the compact text
+  line) for operator visibility; the `--anchor` exclusivity refusal's option
+  list is derived from the shared option table (review INT-3/PROD-5 on
+  #243).
+
 - Shape Layers with a solid fill (--shape/--size/--corner-radius/--fill,
   #208, spec #207 US-001 bullets 1/3/5 and the solid part of bullets 2/4,
   US-007 bullet 2, DEC-001/002/003/009/010/011): a third Layer revision
