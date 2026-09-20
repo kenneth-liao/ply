@@ -90,6 +90,62 @@ never rewritten; only the render rasterizes.
 a Ply setting — a refused import publishes nothing, so fixing the file and
 retrying is safe.
 
+### External references (inertness)
+
+An imported vector is a trust boundary (#214, spec #207 US-006): the same
+ingestion point scans the file for references to anything outside itself
+and refuses the import, naming each reference and its line —
+
+```
+Error: "logo.svg" references resources outside itself — import refused. Found:
+  - href on <image> "https://cdn.example/pic.png" (line 3)
+  - stylesheet @import "theme.css" (line 7)
+The fix: embed each referenced resource as a data URI inside the SVG file,
+then import again.
+```
+
+The message lists the first 20 distinct references and reports how many
+more were found; a pathological file whose distinct references pass the
+scan's collection bound reports that bound instead of an unbounded message.
+The fix is the same for every reference: embed it as a data URI. One named
+target is shown up to 200 characters, long enough to identify the resource.
+
+What is refused, and where it hides:
+
+- **Images** — `href` and `xlink:href` (either spelling, any case, any
+  whitespace around `=`, XML-decoded so `&#104;ttps://…` cannot slip past),
+  including local paths (`photo.png`, `/etc/motd`, `file://…`) and
+  foreignObject HTML (`<img src>`, `<iframe src>`, `<object data>`).
+- **Fonts** — `url(…)` inside an `@font-face` block.
+- **Stylesheets** — `<?xml-stylesheet … href=…?>`, `<link … href=…>`,
+  `@import`, and any CSS `url()` in a `<style>` body or a `style` attribute.
+- **`use` targets outside the file** — `<use href="icons.svg#dot">`; a
+  same-document fragment (`#dot`) is fine.
+- **External entity declarations** — `<!ENTITY … SYSTEM/PUBLIC …>`.
+
+Accepted: embedded `data:` URIs (the fix), same-document `#id` fragments,
+and the DOCTYPE's own DTD identifier (the boilerplate design tools emit —
+not a rendered resource, never fetched in the browser's image path). A
+script — a `<script>` element, an `on*` handler, a `javascript:` href —
+never blocks import and never runs: the vector paints through the image
+path, where scripts are disabled by construction. Inertness is proven at
+every operation: render, measure, review, and replay of a script-only SVG
+issue zero network requests, observed through the render page's request
+log.
+
+The scan refuses on doubt: any reference value that is not a fragment,
+`data:`, or `javascript:` (mailto, unknown schemes, protocol-relative) is
+refused, and a custom entity used in a reference-bearing value (`&logo;`)
+is refused because its replacement text is unknowable without the DOCTYPE
+that declares it.
+
+**Fix:** the refusal is an edit to the SVG file — embed each named resource
+as a data URI inside the SVG — never a Ply setting. A refused import
+publishes nothing (no Layer, no retained bytes), so fixing the file and
+retrying is safe. The gate runs at import only: retained SVG bytes from
+before the gate stay in the Project unchanged and remain inert through the
+same browser image path.
+
 ## Outlines
 
 `--outline "<width>,<color>"` sets an absolute outline (`--outline none`

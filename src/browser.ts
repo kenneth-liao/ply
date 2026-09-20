@@ -107,6 +107,12 @@ async function acquireRenderPage(): Promise<Page> {
   const browser = await getBrowser(); // relaunches if the browser itself died
   if (!renderCtx || renderCtx.isClosed()) {
     renderCtx = await browser.newContext({ deviceScaleFactor: 1 });
+    // The render page's request log (#214, TEST-005): every request the
+    // shared render context issues is recorded — the observation instrument
+    // that proves an imported vector is inert (zero network requests at
+    // render, measure, review, and replay). Attached at context creation so
+    // every page this context ever has is covered, never just the first.
+    renderCtx.on("request", recordRenderRequest);
     renderPage = await renderCtx.newPage();
   }
   // A lost page never costs the (healthy) browser or context: only the page
@@ -115,6 +121,41 @@ async function acquireRenderPage(): Promise<Page> {
     renderPage = await renderCtx.newPage();
   }
   return renderPage;
+}
+
+/**
+ * The render page's request log (#214, TEST-005): one bounded record per
+ * request the shared render context issues, including failed ones (the
+ * request event fires before any failure). Data-URL decodes may or may not
+ * surface here depending on the browser's loader — the inertness evidence is
+ * the absence of any non-data request, which this log makes observable.
+ */
+export interface RenderPageRequest {
+  url: string;
+  method: string;
+  resourceType: string;
+}
+
+const MAX_RENDER_REQUEST_LOG = 1000;
+const renderRequestLog: RenderPageRequest[] = [];
+
+function recordRenderRequest(request: { url(): string; method(): string; resourceType(): string }): void {
+  renderRequestLog.push({
+    url: request.url(),
+    method: request.method(),
+    resourceType: request.resourceType(),
+  });
+  if (renderRequestLog.length > MAX_RENDER_REQUEST_LOG) renderRequestLog.shift();
+}
+
+/** The requests the shared render page has issued so far (a copy). */
+export function renderPageRequests(): readonly RenderPageRequest[] {
+  return [...renderRequestLog];
+}
+
+/** Drop the request log — the boundary between observed operations. */
+export function clearRenderPageRequests(): void {
+  renderRequestLog.length = 0;
 }
 
 /**

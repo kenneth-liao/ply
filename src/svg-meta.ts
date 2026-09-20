@@ -152,7 +152,7 @@ function findRootStartTag(bytes: Buffer): RootStartTag | undefined {
  * bounds-checked; a malformed, truncated, or non-SVG file is a refusal with
  * an actionable message, never an exception past the caller. The parse reads
  * exactly three attributes; nothing else in the file is interpreted (the
- * external-reference gate is a sibling ticket's concern).
+ * external-reference gate is src/svg-inertness.ts, #214).
  */
 export function readSvgMeta(bytes: Buffer, file: string): SvgMeta | string {
   const root = findRootStartTag(bytes);

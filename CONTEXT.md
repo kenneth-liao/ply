@@ -57,7 +57,11 @@ file's own width/height or viewBox at the one image ingestion point; its
 bytes are retained unchanged and never rewritten; and it renders crisply at
 any size because the browser rasterizes the vector at the painted size and
 supersample factor, through the image path that disables scripts and
-external loads by construction.
+external loads by construction. The vector is inert (#214): import refuses
+a file referencing anything outside itself (images, fonts, stylesheets,
+out-of-file use targets), naming each reference (the message lists the
+first 20 and reports any beyond that bound) and the fix (embed as a data
+URI); a script never blocks import and never runs.
 _Avoid_: a fourth Layer kind, baked rasterization, a fixed-size bitmap
 
 **Layer revision**:

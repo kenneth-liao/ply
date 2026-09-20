@@ -800,9 +800,34 @@ for a raster image Layer; a Render containing a vector replays
 byte-identically from the retained bytes. A file that declares neither
 usable width/height nor a viewBox is refused naming the fix, and malformed
 or non-SVG bytes with an `.svg` name are refused at the ingestion point.
-The external-reference refusal (a file naming a remote or local resource is
-refused) and the colour parameter for single-colour vectors are separate
-tickets (#214, #215) — nothing here fetches or executes anything.
+The colour parameter for single-colour vectors is a separate ticket (#215).
+
+## Imported vectors are inert
+
+An imported vector can never break offline operation or reproducible replay
+(#214, spec #207 US-006). The same ingestion point refuses a file that
+references anything outside itself — a remote or local image (either `href`
+spelling, across case, whitespace, and entity encodings), a font
+(`@font-face src: url(…)`), a stylesheet (`<?xml-stylesheet?>`, `<link>`,
+`@import`, or CSS `url()` in a `<style>` body or a `style` attribute), an
+out-of-file `use` target, an external entity declaration, or a resource
+reference inside `foreignObject` — naming each reference (with its kind and
+line; the message lists the first 20 and reports any beyond that bound) and
+the fix: embed the resource as a data URI. Same-document fragment
+references (`#id`) and embedded data URIs are accepted.
+
+A script in the file — a `<script>` element, an `on*` handler, a
+`javascript:` href — does not block import and is never executed: the vector
+paints through the browser's image path, where scripts are disabled by
+construction. Inertness is proven, not assumed: rendering, measuring,
+reviewing, and replaying a script-only SVG issue zero network requests,
+observed through the render page's request log.
+
+The refusal applies at import (add, edit, and every byte-ingestion path); a
+refused import publishes nothing. Retained SVG bytes from before this gate
+stay inert through the same browser image path. The DOCTYPE's own DTD
+identifier — the boilerplate design tools emit — is not a reference and
+does not block import; an external entity declaration does.
 
 ## Region checking (new surface)
 
