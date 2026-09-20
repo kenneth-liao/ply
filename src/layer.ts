@@ -1,5 +1,5 @@
 import { isStoredTimestamp } from "./stored-schema.js";
-import { parseFillSpec, normalizeStoredFill, fillsEqual, fillIdentityString, FILL_TYPES, type LayerFill } from "./fill.js";
+import { parseFillSpec, parseFillColorSpec, normalizeStoredFill, fillsEqual, fillIdentityString, FILL_TYPES, FILL_COLOR_PATTERN, type LayerFill } from "./fill.js";
 /**
  * Layer identity, immutable revisions, and content-addressed image/text
  * ingestion (ADR-0013, ADR-0014, DEC-001–006, #81).
@@ -213,6 +213,20 @@ export interface LayerVisibleRegion {
 export interface LayerImageRevision extends LayerRevisionBase {
   kind: "image";
   contentHash: string;
+  /**
+   * The vector colour (#215, spec #207 US-005, DEC-008/010): one paint-time
+   * colour that replaces the content's colours over its own alpha — the
+   * retained bytes are the silhouette (the mask), never rewritten. Defined
+   * for vector (format "svg") image Layers: the setter refuses on raster
+   * image, text, and shape Layers before publication, naming each kind's
+   * own colour control. An ABSOLUTE setter: an omitted option preserves the
+   * current value, and the documented value "none" removes it — absence IS
+   * the canonical no-colour form (no second representation), and the
+   * authored colours paint byte-identically to never-set. The revision hash
+   * appends the field only when present, so revisions written before #215
+   * keep their exact ids (DEC-010).
+   */
+  vectorColor?: string;
 }
 
 export interface LayerTextRevision extends LayerRevisionBase {
@@ -722,6 +736,36 @@ export function normalizeStoredVisibleRegion(revision: { visibleRegion?: unknown
   return { x, y, width, height, ...(cornerRadius !== undefined ? { cornerRadius } : {}) } as LayerVisibleRegion;
 }
 
+/**
+ * Canonical stored vector-colour validation and normalization (#215, spec
+ * #207 US-005, DEC-008/010). The one normalization boundary for the vector
+ * colour fact: documents written before #215 lack the field, and absence IS
+ * the canonical no-colour form — every downstream reader projects through
+ * this function and never re-derives a default. A present field must be a
+ * hex colour (#RGB/#RRGGBB/#RRGGBBAA) — anything else is a malformed
+ * document, refused loudly before the revision hash is consulted. The
+ * canonical colour form (lowercase, #RGB expanded — the ONE fill-colour
+ * grammar's recipe, through parseFillColorSpec) is enforced here too, so a
+ * stored shorthand and a freshly ingested equivalent colour project to ONE
+ * form. The kind/format gates (vector content only) are publication-time
+ * refusals; this boundary validates the colour's own form.
+ */
+export function normalizeStoredVectorColor(revision: { vectorColor?: unknown }): string | undefined {
+  const value = revision.vectorColor;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !FILL_COLOR_PATTERN.test(value)) {
+    throw new Error(
+      `Malformed revision document: vectorColor must be a hex color like #22c55e, #2c5, or #22c55e80 when present (got ${JSON.stringify(value)}).`,
+    );
+  }
+  // The ONE colour ingestion point canonicalizes (lowercase, #RGB expanded),
+  // so a stored shorthand and a freshly ingested equivalent colour project
+  // to ONE form — the same form the setter stores.
+  return parseFillColorSpec(value, "stored vector colour");
+}
+
 export type ResolvedLayerRevision =
   | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
   | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
@@ -1205,7 +1249,9 @@ export function normalizeStoredCallerFont(revision: { callerFont?: unknown }): C
  * fields are appended only when present, so revisions written before #187
  * keep their exact ids (#187, ADR-0021). The caller font facts are
  * appended only when present, so revisions written before #232 — bundled
- * faces and legacy blobs — keep their exact ids (#232). */
+ * faces and legacy blobs — keep their exact ids (#232). The vector colour
+ * is appended only when present (image revisions only), so revisions
+ * written before #215 keep their exact ids (#215, DEC-010). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
@@ -1246,6 +1292,12 @@ export function computeRevisionHash(rev: LayerRevision): string {
               : "") +
             ")")
       : "";
+  // The vector colour (#215, DEC-010): appended only when present on an
+  // image revision, in its canonical form (the ONE colour grammar's recipe
+  // — the same form the stored normalizer projects), so revisions written
+  // before #215 keep their exact ids.
+  const vectorColor = rev.kind === "image" ? normalizeStoredVectorColor(rev) : undefined;
+  const vectorColorFields = vectorColor !== undefined ? `:vectorcolor(${vectorColor})` : "";
   // The shape revision's kind-specific facts (#208): the stored geometry,
   // size, and radius are hash-covered revision fields, and the fill's
   // canonical form rides along. Appended only for shape revisions, so image
@@ -1260,7 +1312,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
         (shapeFields.cornerRadius !== undefined ? `,r${shapeFields.cornerRadius}` : "") +
         `,fill(${fillIdentityString(shapeFields.fill)}))`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${shapeFieldsFields}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1508,6 +1560,10 @@ export async function readRevisionInternalFull(
   // loudly before the revision hash is consulted. Absence IS the
   // bundled-or-legacy form.
   const callerFont = revision.kind === "text" ? normalizeStoredCallerFont(revision) : undefined;
+  // Canonical vector colour (#215, DEC-008/010): validated and normalized at
+  // this same one boundary — a malformed stored colour is refused loudly
+  // before the revision hash is consulted. Absence IS the no-colour form.
+  const vectorColor = revision.kind === "image" ? normalizeStoredVectorColor(revision) : undefined;
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -1596,6 +1652,7 @@ export async function readRevisionInternalFull(
             ...(shadow !== undefined ? { shadow } : {}),
             ...(outline !== undefined ? { outline } : {}),
             ...(visibleRegion !== undefined ? { visibleRegion } : {}),
+            ...(vectorColor !== undefined ? { vectorColor } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -1868,6 +1925,21 @@ export interface EditLayerOptions {
    */
   visibleRegionRadius?: string;
   /**
+   * Paint a vector image Layer's shape in one colour (#215, spec #207 US-005,
+   * DEC-008): an ABSOLUTE setter that replaces any previous colour — the
+   * same command twice keeps the same colour — and "none" removes it,
+   * restoring the authored colours byte-identically (absence IS the
+   * no-colour form). The colour takes the ONE fill-colour grammar
+   * (parseFillColorSpec — #RGB/#RRGGBB/#RRGGBBAA, alpha allowed). Defined
+   * for vector (format svg) image Layers only: refused on raster image,
+   * text, and shape Layers before anything is staged, naming each kind's
+   * own colour control (--color / --fill). When the same edit replaces
+   * content (--image/--from-generation/--from-matte), the refusal reads the
+   * NEW content's format. Combines freely with the transform, effect, and
+   * region options; the retained bytes never change.
+   */
+  vectorColor?: string;
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -1953,6 +2025,9 @@ export interface EditLayerResult {
    * stderr note reports it, and a region that no longer fits is refused
    * before publication instead. */
   regionCarried?: { visibleRegion: LayerVisibleRegion };
+  /** Present when the edit set or removed the vector colour (#215): the
+   * absolute colour state now recorded on the revision (null when removed). */
+  vectorColorSet?: { vectorColor: string | null };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -2178,6 +2253,54 @@ export function parseOutlineSpec(spec: string): LayerOutline | undefined {
   return { width, color: canonicalizeEffectColor(color) };
 }
 
+/**
+ * Canonical vector-colour normalization (#215, spec #207 US-005, DEC-008/009):
+ * `--vector-color` sets an ABSOLUTE colour, replacing any previous one;
+ * `"none"` removes it. Omitted option preserves the current revision's
+ * colour. The colour grammar is the ONE fill-colour ingestion point
+ * (`parseFillColorSpec` over `parseFillSpec` in src/fill.ts — #RGB/#RRGGBB/
+ * #RRGGBBAA, alpha first-class, canonicalized once); no second colour
+ * parser exists. Exported for the CLI boundary: the command classifies
+ * malformed specs as usage errors (exit 2) with this same parser, so the
+ * two never disagree. The kind/format refusals (raster image, text, shape)
+ * are semantic — they read live state — and live in
+ * `resolveEditVectorColor` / the one-command application path.
+ */
+export function parseVectorColorSpec(spec: string): string | undefined {
+  const raw = spec.trim();
+  if (raw.toLowerCase() === "none") {
+    return undefined;
+  }
+  return parseFillColorSpec(raw, "vector colour");
+}
+
+/**
+ * The one kind/format refusal wording for the vector colour (#215): the
+ * setter is refused on every non-vector Layer, naming the kind's own colour
+ * control — text Layers take their colour through `--color`, shape Layers
+ * through `--fill`, and a raster image Layer's colours are its retained
+ * pixels (the vector colour paints a vector's shape over its alpha).
+ * Shared by the edit path and the one-command add path, so the two surfaces
+ * can never disagree.
+ */
+export function vectorColorKindRefusal(
+  kind: "text" | "shape" | "raster",
+  layerId: string,
+  format?: string,
+): string {
+  if (kind === "text") {
+    return `Cannot set a vector colour on a text Layer. Layer "${layerId}" is a text Layer — text takes its colour through --color.`;
+  }
+  if (kind === "shape") {
+    return `Cannot set a vector colour on a shape Layer. Layer "${layerId}" is a shape Layer — a shape's colour is its fill, set through --fill.`;
+  }
+  return (
+    `Cannot set a vector colour on a raster image Layer. Layer "${layerId}" is a raster image Layer` +
+    (format !== undefined ? ` (format ${format})` : "") +
+    ` — a vector colour paints a vector (format svg) over its alpha; a raster's colours are its retained pixels.`
+  );
+}
+
 /** Field-wise shadow equality for the no-op check (#139): the flip
  * precedent — re-issuing an identical shadow is a detected no-op, never a
  * redundant revision. */
@@ -2393,6 +2516,74 @@ const REGION_CONFLICTING_OPTION_PRESENT = (options: EditLayerOptions): boolean =
   options.size !== undefined ||
   options.cornerRadius !== undefined ||
   options.fill !== undefined;
+
+/**
+ * Canonical vector-colour edit resolution (#215, spec #207 US-005, DEC-008):
+ * an omitted option preserves the current revision's colour; a spec sets or
+ * removes it absolutely. The removal form ("none") is the established
+ * idempotent no-op on EVERY kind (the same removal precedents --shadow none
+ * and --flip none have: removing nothing needs no kind gate), so the kind
+ * and raster refusals fire only for a SET — before anything is staged,
+ * before any content ingestion. The raster gate reads the format of the
+ * content the edit would publish: the live revision's when no content is
+ * replaced, the ingested replacement's otherwise (checked in
+ * buildEditedRevision, still before anything is stored).
+ */
+function resolveEditVectorColor(
+  options: EditLayerOptions,
+  prevRev: ResolvedLayerRevision,
+  layerId: string,
+): { given: boolean; value: string | undefined } {
+  if (options.vectorColor === undefined) {
+    return { given: false, value: prevRev.kind === "image" ? prevRev.vectorColor : undefined };
+  }
+  const value = parseVectorColorSpec(options.vectorColor);
+  // The removal form is the idempotent no-op every other absolute setter's
+  // "none" is: it removes nothing on a Layer without the fact and never
+  // hits a kind gate — the parameter's refusals are about SETTING a colour.
+  if (value === undefined) {
+    return { given: true, value: undefined };
+  }
+  if (prevRev.kind === "text") {
+    throw new Error(vectorColorKindRefusal("text", layerId));
+  }
+  if (prevRev.kind === "shape") {
+    throw new Error(vectorColorKindRefusal("shape", layerId));
+  }
+  const contentReplaced =
+    options.image !== undefined || options.fromGeneration !== undefined || options.fromMatte !== undefined;
+  if (!contentReplaced && prevRev.format !== "svg") {
+    throw new Error(vectorColorKindRefusal("raster", layerId, prevRev.format));
+  }
+  return { given: true, value };
+}
+
+/**
+ * The one vector-colour raster gate for a content replacement (#215): the
+ * published content's format decides. A colour SET alongside the
+ * replacement refuses naming the raster contract; a colour CARRIED across
+ * a replacement to raster content refuses naming the fix (remove it first,
+ * or keep the vector) — the fact has no meaning on raster pixels, and
+ * silently painting the replacement solid would defeat the setter's own
+ * refusal. The removal form (value undefined) passes everywhere.
+ */
+function vectorColorRasterGate(
+  vectorColor: { given: boolean; value: string | undefined },
+  format: "png" | "jpeg" | "webp" | "svg",
+  layerId: string,
+): void {
+  if (format === "svg" || vectorColor.value === undefined) {
+    return;
+  }
+  if (vectorColor.given) {
+    throw new Error(vectorColorKindRefusal("raster", layerId, format));
+  }
+  throw new Error(
+    `Cannot replace the content of Layer "${layerId}" with raster pixels (format ${format}) while it carries ` +
+      `a vector colour (${vectorColor.value}): the vector colour paints a vector (format svg) over its alpha. ` +
+      `Remove the colour first (--vector-color none), or keep the content a vector file.`,
+  );
+}
 
 /**
  * Canonical visible-region edit resolution (#211, ADR-0023; #212 radius):
@@ -2701,6 +2892,12 @@ async function buildEditedRevision(
   shadow: LayerShadow | undefined,
   outline: LayerOutline | undefined,
   visibleRegion: LayerVisibleRegion | undefined,
+  /** The vector-colour resolution (#215): { given, value } — `given` drives
+   * the edit report, `value` is the canonical colour to store (undefined
+   * when absent or removed). The kind gates already ran in
+   * resolveEditVectorColor; the raster gate for a same-edit content
+   * replacement runs here against the ingested format, before any store. */
+  vectorColor: { given: boolean; value: string | undefined },
   /** The previous revision's verified content bytes (#211 review PROD-1):
    * the text branch measures the resulting revision's standalone line box
    * with the bytes the NEW revision pins (the previous bytes when no font
@@ -2793,6 +2990,10 @@ async function buildEditedRevision(
         `Generation Job "${selected.job.jobId}" output "${selected.output.file}"`,
       );
       keptRegionCheck({ width: validated.width, height: validated.height });
+      // The vector colour's raster gate (#215): a SET alongside the
+      // replacement refuses, a CARRIED colour refuses naming the fix — both
+      // before any retention; the removal form passes.
+      vectorColorRasterGate(vectorColor, validated.format, layerId);
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
       contentHash = validated.contentHash;
@@ -2818,6 +3019,10 @@ async function buildEditedRevision(
         selected.matte.request.source.contentHash,
       );
       keptRegionCheck({ width: validated.width, height: validated.height });
+      // The vector colour's raster gate (#215): the matte output is raster
+      // pixels — a set or carried colour refuses before any retention; the
+      // removal form passes.
+      vectorColorRasterGate(vectorColor, validated.format, layerId);
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainMattingRecord(resolvedRoot, selected.matte.matteId, selected.recordBytes);
       if (selected.sourceBytes) {
@@ -2838,6 +3043,10 @@ async function buildEditedRevision(
     } else if (options.image !== undefined) {
       const ingested = await validateAndIngestImage(options.image);
       keptRegionCheck({ width: ingested.width, height: ingested.height });
+      // The vector colour's raster gate (#215): a SET alongside the
+      // replacement refuses, a CARRIED colour refuses naming the fix — both
+      // before the content is stored; the removal form passes.
+      vectorColorRasterGate(vectorColor, ingested.format, layerId);
       await storeContentBlob(resolvedRoot, ingested.contentHash, ingested.bytes);
       contentHash = ingested.contentHash;
     }
@@ -2859,6 +3068,7 @@ async function buildEditedRevision(
       ...(shadow !== undefined ? { shadow } : {}),
       ...(outline !== undefined ? { outline } : {}),
       ...(visibleRegion !== undefined ? { visibleRegion } : {}),
+      ...(vectorColor.value !== undefined ? { vectorColor: vectorColor.value } : {}),
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
@@ -2867,7 +3077,8 @@ async function buildEditedRevision(
       flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY &&
       shadowEq(shadow, prevRev.shadow) &&
       outlineEq(outline, prevRev.outline) &&
-      visibleRegionEq(visibleRegion, prevRev.visibleRegion);
+      visibleRegionEq(visibleRegion, prevRev.visibleRegion) &&
+      vectorColor.value === prevRev.vectorColor;
     return { revision, unchanged, mattedFrom, retainedGeneration, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
 
@@ -3393,6 +3604,13 @@ export async function editLayerInternal(
   const visibleRegion = await resolveEditVisibleRegion(resolvedRoot, options, prevRev, current.contentBytes, layerId);
   const hasRegion = options.visibleRegion !== undefined || options.visibleRegionRadius !== undefined;
   const regionSetReport = { visibleRegion: visibleRegion ?? null };
+  // Vector colour (#215, spec #207 US-005, DEC-008): absolute setter, refusal
+  // before staging — the kind gates run here, before any content ingestion,
+  // and the raster gate reads the live revision's format (a same-edit
+  // content replacement defers the gate to the ingested format, still
+  // before anything is stored).
+  const vectorColor = resolveEditVectorColor(options, prevRev, layerId);
+  const vectorColorSetReport = { vectorColor: vectorColor.value ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -3433,6 +3651,7 @@ export async function editLayerInternal(
       shadow,
       outline,
       visibleRegion,
+      vectorColor,
       current.contentBytes,
     );
     // An explicit fork always publishes the new identity, even when the
@@ -3448,7 +3667,8 @@ export async function editLayerInternal(
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
     const withRegion = hasRegion ? { ...withOutline, regionSet: regionSetReport } : withOutline;
-    const withCarried = regionCarried ? { ...withRegion, regionCarried } : withRegion;
+    const withColour = vectorColor.given ? { ...withRegion, vectorColorSet: vectorColorSetReport } : withRegion;
+    const withCarried = regionCarried ? { ...withColour, regionCarried } : withColour;
     const withShape = shapeEdited ? { ...withCarried, shapeEdited } : withCarried;
     return options.fromGeneration !== undefined
       ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
@@ -3477,6 +3697,7 @@ export async function editLayerInternal(
     shadow,
     outline,
     visibleRegion,
+    vectorColor,
     current.contentBytes,
   );
 
@@ -3493,6 +3714,7 @@ export async function editLayerInternal(
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(hasOutline ? { outlined: outlinedReport } : {}),
       ...(hasRegion ? { regionSet: regionSetReport } : {}),
+      ...(vectorColor.given ? { vectorColorSet: vectorColorSetReport } : {}),
       ...(regionCarried ? { regionCarried } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
@@ -3549,6 +3771,7 @@ export async function editLayerInternal(
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(hasOutline ? { outlined: outlinedReport } : {}),
     ...(hasRegion ? { regionSet: regionSetReport } : {}),
+    ...(vectorColor.given ? { vectorColorSet: vectorColorSetReport } : {}),
     ...(regionCarried ? { regionCarried } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined

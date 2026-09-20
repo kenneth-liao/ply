@@ -27,6 +27,7 @@ import {
   parseLayerRotation,
   parseLayerShadow,
   parseLayerTracking,
+  parseLayerVectorColor,
   parseLayerWeight,
   parseLayerWidth,
   parseMatteId,
@@ -310,6 +311,39 @@ Options:
                         pixels. Combines with --resize/--rotate/--flip and
                         content replacement; cannot combine with --anchor
                         (anchor first, then add the outline).
+  --vector-color <hex|none>
+                        Paint a vector image Layer's shape in one colour
+                        (#215, spec #207 US-005): an ABSOLUTE setter taking
+                        a hex color like #22c55e, #2c5, or #22c55e80 (alpha
+                        allowed) — the same grammar --fill's solid arm and
+                        the effects take — that replaces any previous
+                        colour, and "none" removes it, restoring the
+                        authored colours byte-identically (the same command
+                        twice keeps the same colour). The colour is applied
+                        at paint time over the vector's own alpha: every
+                        pixel the vector covers with alpha renders exactly
+                        the requested colour — a multi-colour vector
+                        becomes a single-colour silhouette — and alpha
+                        edges are preserved. Defined for vector (format
+                        svg) image Layers only: refused on a raster image
+                        Layer (a raster's colours are its retained pixels),
+                        on a text Layer (which takes its colour through
+                        --color), and on a shape Layer (whose colour is its
+                        fill, through --fill), before anything is published.
+                        When the same edit replaces content, the refusal
+                        reads the NEW content's format, and a colour carried
+                        across a replacement to raster content is refused
+                        naming the fix. The retained bytes
+                        are never rewritten — the colour is a revision
+                        fact: sharing propagates it, forks isolate it, and
+                        removal is its own edit. Paint order within the
+                        Layer: the colour is content paint, then the visible
+                        region, outline, and shadow follow (ADR-0023).
+                        Combines with --resize/--rotate/--flip and content
+                        replacement; cannot combine with --anchor (anchor
+                        first, then the colour — the anchor resolves the
+                        ink the edit publishes, and a colour's alpha can
+                        change it).
   --visible-region <spec>
                         Show only a rectangular part of the Layer's content
                         (#211), on image, text, and shape Layers alike: an
@@ -865,6 +899,20 @@ async function run() {
       }
       const regionRadiusSpec = parsedRegionRadius.value;
 
+      // Vector-colour flag (#215, DEC-008/009): syntax and well-formedness at
+      // the command boundary as a usage error (exit 2) through the SAME
+      // parser the edit path uses (the ONE fill-colour grammar); the
+      // kind/format refusals (raster image, text, shape — naming each kind's
+      // own colour control) are semantic, enforced by the edit path before
+      // anything is staged.
+      const parsedVectorColor = parseLayerVectorColor(values["vector-color"]);
+      if (!parsedVectorColor.ok) {
+        output({ ok: false, error: parsedVectorColor.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const vectorColorSpec = parsedVectorColor.value;
+
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2); semantic refusals (no visible ink,
       // divergent multi-Composition geometry) happen in the read-only
@@ -996,6 +1044,7 @@ async function run() {
           outline: outlineSpec,
           visibleRegion: regionSpec,
           visibleRegionRadius: regionRadiusSpec,
+          vectorColor: vectorColorSpec,
           shape: parsedEditShape.value,
           size: parsedEditSize.value,
           cornerRadius: parsedEditRadius.value,
@@ -1091,6 +1140,11 @@ async function run() {
                     : "")
                 : "; visible region none"
               : "";
+            const vectorColorSet = res.vectorColorSet
+              ? res.vectorColorSet.vectorColor !== null
+                ? `; vector colour ${res.vectorColorSet.vectorColor}`
+                : "; vector colour removed"
+              : "";
             const shapeEdited = res.shapeEdited
               ? `; dropped carried corner radius ${res.shapeEdited.droppedCornerRadius}px (an ellipse has no corners)`
               : "";
@@ -1100,10 +1154,10 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${shapeEdited}${anchorSummary}`);
             }
           },
         );
@@ -1180,6 +1234,12 @@ async function run() {
               console.log(`  Fill: ${formatFill(rev.fill)}`);
             } else {
               console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
+              // The vector colour (#215): reported only when set — absence IS
+              // the no-colour form. A raster Layer can never carry the fact
+              // (the setter refuses), so the line names the vector contract.
+              if (rev.vectorColor !== undefined) {
+                console.log(`  Vector colour: ${rev.vectorColor}`);
+              }
             }
             console.log(`  Content hash: ${rev.contentHash}`);
             const scalePart =

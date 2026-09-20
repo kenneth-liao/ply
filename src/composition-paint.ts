@@ -23,6 +23,12 @@
  * the clip lives on an inner content element under the Layer's wrapper
  * element, so `#canvas` keeps exactly one child per Layer and Layers
  * without a region paint exactly the pre-#211 markup.
+ * A revision's vector colour (#215, DEC-008) is content paint: a recoloured
+ * Layer paints as ONE solid-colour element masked by the retained bytes
+ * themselves (ADR-0012's machinery, through the browser image path), placed
+ * in the content stage of that same order — the region crops it, the
+ * effects hug it; Layers without the colour paint exactly the pre-#215
+ * markup.
  * Areas no Layer covers stay transparent. Text Layers (#81) paint as DOM text
  * with their retained font bytes declared under an internal @font-face
  * family (never re-consulting assets/fonts/), and every text layer's family
@@ -474,6 +480,14 @@ function regionClipPathDef(region: LayerVisibleRegion, layerIndex: number): stri
   );
 }
 
+/** One mask-* declaration, standard then -webkit- — Chromium supports both,
+ *  and the code then says what the help and README say (`mask-image`). The
+ *  same recipe scene-render's tint (ADR-0012) emits, so the two paint
+ *  paths share one mask spelling. */
+function maskCss(prop: string, value: string): string {
+  return `${prop}:${value};-webkit-${prop}:${value};`;
+}
+
 /** Minimal HTML escaping for caller-owned text (#81; shared with every
  * module that interpolates caller strings into the page — the guideline
  * overlay's region id/label/reason use this exact recipe, #174). */
@@ -768,6 +782,51 @@ export function buildCompositionHtml(
         return (
           `<div style="${base}${transformed}${effectsFilter}">` +
           `<div style="${shapeStyle}${regionClip}"></div></div>`
+        );
+      }
+      // The vector colour (#215, spec #207 US-005, DEC-008): a recoloured
+      // Layer paints as ONE solid-colour element masked by the retained
+      // bytes themselves (ADR-0012's tint machinery — mask-image +
+      // mask-size 100% 100%, the mask IS the content, pixel-for-pixel), so
+      // every pixel the vector covers with alpha renders exactly the
+      // requested colour (out = colour × alpha — full replacement, no
+      // luminance carry-over: a multi-colour vector becomes a single-colour
+      // silhouette) and every transparent pixel stays untouched — alpha
+      // edges preserved. The retained bytes ride to the browser unchanged
+      // as a data URL through the browser image path, which disables
+      // scripts and external loads by construction — the same inertness the
+      // <img> path has (the vector is never inlined into the page DOM), and
+      // the bytes are never rewritten. The element's box is the intrinsic
+      // size (the same box the <img> form paints), so measure and inspect
+      // read the same numbers. Standard mask-* first, -webkit- alongside —
+      // the scene-render maskCss recipe. Emitted only when the colour is
+      // set, so pre-#215 revisions and their pinned Render history paint
+      // exactly as before.
+      const vectorColorCss =
+        rev.vectorColor !== undefined
+          ? `width:${rev.width}px;height:${rev.height}px;background:${rev.vectorColor};` +
+            maskCss("mask-image", `url('data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}')`) +
+            maskCss("mask-size", "100% 100%") +
+            maskCss("mask-position", "center") +
+            maskCss("mask-repeat", "no-repeat") +
+            `display:block;`
+          : "";
+      if (rev.vectorColor !== undefined) {
+        // ONE two-element structure for every recoloured Layer, region or
+        // not (INT-1): the effect chain lives on the OUTER element and the
+        // mask (and the region clip, when set) on the INNER one. CSS applies
+        // an element's own mask AFTER its filters — a single element carrying
+        // both would clip the outline ring and the shadow to the silhouette,
+        // exactly the same-element failure that moved the region clip onto
+        // the inner element in #211. The DEC-004 paint order falls out of
+        // the markup shape: the colour IS content paint — the masked element
+        // is the inner content element, the region clip crops it, and the
+        // wrapper's effect chain hugs the cropped, coloured edge. Layers
+        // without a region emit the same wrapper shape the region path
+        // already used, with an empty clip.
+        return (
+          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${vectorColorCss}${regionClip}"></div></div>`
         );
       }
       if (rev.visibleRegion !== undefined) {

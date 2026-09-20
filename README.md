@@ -800,7 +800,40 @@ for a raster image Layer; a Render containing a vector replays
 byte-identically from the retained bytes. A file that declares neither
 usable width/height nor a viewBox is refused naming the fix, and malformed
 or non-SVG bytes with an `.svg` name are refused at the ingestion point.
-The colour parameter for single-colour vectors is a separate ticket (#215).
+
+### Vector colour
+
+One single-colour logo file serves dark, light, and brand-coloured uses
+(#215, spec #207 US-005): `--vector-color` paints the vector's shape in one
+colour at paint time, over the vector's own alpha. The colour is a Layer
+revision fact — an absolute setter on add and `layer edit`, and `none`
+removes it, restoring the authored colours byte-identically. The retained
+SVG bytes are never rewritten: the render draws the colour through the
+vector's own alpha (a solid-colour element masked by the retained bytes —
+the same machinery the legacy uniform tint uses), so every pixel the vector
+covers with alpha renders exactly the requested colour, a multi-colour
+vector becomes a single-colour silhouette, alpha edges are preserved, and
+the `<img>`-path inertness (no scripts, no external loads) is untouched.
+The colour takes the ONE fill-colour grammar (#22c55e, #2c5, #22c55e80 —
+alpha allowed); a gradient is refused naming `--fill`.
+
+```bash
+# The mark in brand colours — one file, three Layers, three revisions:
+ply composition add poster logo-dark --image ~/brand/logo.svg --vector-color "#101828" -p ~/projects/my-poster
+ply composition add poster logo-brand --image ~/brand/logo.svg --vector-color "#e11d48" -p ~/projects/my-poster
+ply layer edit <layerId> --vector-color none -p ~/projects/my-poster   # back to the authored colours
+```
+
+The parameter is defined for vector (format svg) image Layers only: it is
+refused on a raster image Layer (a raster's colours are its retained
+pixels), on a text Layer (which takes its colour through `--color`), and on
+a shape Layer (whose colour is its fill, through `--fill`), before anything
+is published; when the same edit replaces content, the refusal reads the
+new content's format. Paint order within the Layer (ADR-0023): the colour
+IS content paint — the visible region crops it, and the outline and shadow
+hug the cropped, coloured edge. `inspect`, `measure`, and `layer review`
+report the colour; a Render with a recoloured vector replays
+byte-identically from the pinned revision.
 
 ## Imported vectors are inert
 

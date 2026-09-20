@@ -61,8 +61,13 @@ external loads by construction. The vector is inert (#214): import refuses
 a file referencing anything outside itself (images, fonts, stylesheets,
 out-of-file use targets), naming each reference (the message lists the
 first 20 and reports any beyond that bound) and the fix (embed as a data
-URI); a script never blocks import and never runs.
-_Avoid_: a fourth Layer kind, baked rasterization, a fixed-size bitmap
+URI); a script never blocks import and never runs. A vector's colour is a
+Layer revision fact (#215): one paint-time colour over the vector's own
+alpha — an absolute setter, `none` restores the authored colours
+byte-identically, and a multi-colour vector becomes a single-colour
+silhouette.
+_Avoid_: a fourth Layer kind, baked rasterization, a fixed-size bitmap,
+rewriting the file to recolour it
 
 **Layer revision**:
 An immutable version of a Layer. Editing in place advances the same Layer's

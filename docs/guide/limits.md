@@ -86,6 +86,17 @@ factor (never from a fixed bitmap), so one file is crisp at 60 px and at
 painted device area, like any Layer at that scale. The retained bytes are
 never rewritten; only the render rasterizes.
 
+The vector colour (`--vector-color`, #215) is a paint-time property, not a
+file edit: every pixel the vector covers with alpha renders exactly the
+requested colour (out = colour × alpha — full replacement, so a
+multi-colour vector becomes a single-colour silhouette), and alpha edges
+are preserved. The setter refuses on a raster image Layer, a text Layer
+(which takes its colour through `--color`), and a shape Layer (whose colour
+is its fill, through `--fill`), before anything is published; when the same
+edit replaces content, the refusal reads the new content's format. The
+colour grammar is the ONE fill-colour grammar (hex `#RGB`/`#RRGGBB`/
+`#RRGGBBAA`, alpha allowed) — a gradient is refused naming `--fill`.
+
 **Fix:** a size refusal is an edit to the SVG file (add the attributes), not
 a Ply setting — a refused import publishes nothing, so fixing the file and
 retrying is safe.

@@ -48,7 +48,7 @@
  * no rename and no alias.
  */
 import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
-import { parseShadowSpec, parseOutlineSpec, parseVisibleRegionSpec, parseVisibleRegionRadiusSpec, resolveTextTypographyControls } from "./layer.js";
+import { parseShadowSpec, parseOutlineSpec, parseVisibleRegionSpec, parseVisibleRegionRadiusSpec, parseVectorColorSpec, resolveTextTypographyControls } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { parseFillSpec, type LayerFill as LayerFillSpec } from "./fill.js";
 
@@ -63,7 +63,7 @@ export type LayerOptionSurface = "edit" | "add";
 /** The Layer kinds an option can apply to. */
 export type LayerOptionKind = "image" | "text" | "shape";
 
-export type LayerOptionGroup = "content" | "text" | "placement" | "transform" | "region" | "effect";
+export type LayerOptionGroup = "content" | "paint" | "text" | "placement" | "transform" | "region" | "effect";
 
 export interface LayerOptionDef {
   /** parseArgs key: the flag is `--<key>`. */
@@ -113,6 +113,7 @@ export type LayerOptionKey =
   | "flip"
   | "shadow"
   | "outline"
+  | "vector-color"
   | "visible-region"
   | "visible-region-radius";
 
@@ -133,6 +134,16 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "size", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true },
   { key: "corner-radius", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true },
   { key: "fill", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true },
+  // The vector colour (#215, spec #207 US-005, DEC-008/009): ONE paint-time
+  // colour over a vector image Layer's alpha. Its own group BEFORE the
+  // transform group — the colour is content-level paint (it replaces the
+  // content's colours; ADR-0023's order paints it with the content, before
+  // the region, outline, and shadow) — so one-command add applies it right
+  // after the content, before everything post-content. Defined for vector
+  // (format svg) image Layers only: the kind/format refusals live with the
+  // domain paths (the raster gate reads the would-be content's format, which
+  // only ingestion knows).
+  { key: "vector-color", group: "paint", appliesTo: ["image"], editOption: true },
   // Text style options: only meaningful with a text content kind.
   { key: "font", group: "text", appliesTo: ["text"], editOption: true },
   { key: "font-file", group: "text", appliesTo: ["text"], editOption: true },
@@ -199,6 +210,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   flip: { type: "string" },
   shadow: { type: "string" },
   outline: { type: "string" },
+  "vector-color": { type: "string" },
   "visible-region": { type: "string" },
   "visible-region-radius": { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string" }>;
@@ -258,15 +270,16 @@ export const COMPOSITION_ADD_OPTION_PARSE_ARGS: Record<LayerOptionKey, { type: "
 };
 
 /** The post-content option keys of one-command `composition add` (#229,
- *  DEC-002): the table's transform, region, and effect groups plus anchored
- *  placement, derived from the group fact — a new option added to one of
- *  these groups joins one-command add (and the documented application
- *  order) automatically, and the guard test (TEST-003) pins that every
- *  edit option is accepted here. */
+ *  DEC-002, #215 paint): the table's paint, transform, region, and effect
+ *  groups plus anchored placement, derived from the group fact — a new
+ *  option added to one of these groups joins one-command add (and the
+ *  documented application order) automatically, and the guard test
+ *  (TEST-003) pins that every edit option is accepted here. */
 export function oneCommandAddOptionKeys(): LayerOptionKey[] {
   return LAYER_OPTION_DEFS
     .filter(
       (def) =>
+        def.group === "paint" ||
         def.group === "transform" ||
         def.group === "region" ||
         def.group === "effect" ||
@@ -281,8 +294,9 @@ export function anyOneCommandOptionProvided(args: LayerOptionPresence): boolean 
 }
 
 /** The supplied one-command options in the documented application order
- *  (spec #226 DEC-002, extended by #211): the table's transform group
- *  first, then the visible region (whose clipped ink the anchor and the
+ *  (spec #226 DEC-002, extended by #211 and #215): the table's paint group
+ *  first (the vector colour — content-level paint), then the transform
+ *  group, then the visible region (whose clipped ink the anchor and the
  *  effects must both see), then anchored placement, then the effect group
  *  — the stages derived from the group fact, in table order within a
  *  stage. Content and plain placement
@@ -292,10 +306,11 @@ export function anyOneCommandOptionProvided(args: LayerOptionPresence): boolean 
  *  hardcoded list. */
 export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOptionKey[] {
   const stage = new Map<LayerOptionKey, number>([
-    ...LAYER_OPTION_DEFS.filter((def) => def.group === "transform").map((def) => [def.key, 0] as const),
-    ...LAYER_OPTION_DEFS.filter((def) => def.group === "region").map((def) => [def.key, 1] as const),
-    ["anchor" as LayerOptionKey, 2],
-    ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 3] as const),
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "paint").map((def) => [def.key, 0] as const),
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "transform").map((def) => [def.key, 1] as const),
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "region").map((def) => [def.key, 2] as const),
+    ["anchor" as LayerOptionKey, 3],
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 4] as const),
   ]);
   // Fail fast (review INT-plumb-3): a supplied key with no stage would
   // otherwise sort as NaN — an unpredictable order — instead of naming
@@ -305,7 +320,7 @@ export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOpti
     if (s === undefined) {
       throw new Error(
         `One-command add: option "${key}" has no application stage — ` +
-          "the option table's post-content groups (transform, effect, anchor) moved?",
+          "the option table's post-content groups (paint, transform, region, effect, anchor) moved?",
       );
     }
     return s;
@@ -857,6 +872,25 @@ export function parseLayerVisibleRegionRadius(raw: string | undefined): OptionPa
 }
 
 /**
+ * --vector-color (#215, spec #207 US-005, DEC-009): syntax and well-formedness
+ * through the SAME parser the edit path uses — the ONE fill-colour grammar
+ * (parseFillColorSpec over parseFillSpec), so the two boundaries never
+ * disagree and no second colour parser exists. Returns the raw spec (the
+ * ingestion path re-resolves it against live state: the kind gates and the
+ * raster gate read the Layer's — or a same-edit content replacement's —
+ * format).
+ */
+export function parseLayerVectorColor(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    parseVectorColorSpec(raw);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
  * --anchor: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Semantic refusals (no
  * visible ink, divergent multi-Composition geometry) happen in the
@@ -896,6 +930,6 @@ export function anchorConflictOptionList(): string {
     LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === group).map((def) => def.key);
   const flags = (keys: readonly LayerOptionKey[]): string => keys.map((key) => `--${key}`).join(", ");
   const shape = `shape parameters (${SHAPE_CONTENT_KEYS.map((key) => `--${key}`).join(", ")})`;
-  return [flags(editKeysOfGroup("transform")), flags(editKeysOfGroup("region")), flags(editKeysOfGroup("effect")), shape, flags(editKeysOfGroup("text"))]
+  return [flags(editKeysOfGroup("paint")), flags(editKeysOfGroup("transform")), flags(editKeysOfGroup("region")), flags(editKeysOfGroup("effect")), shape, flags(editKeysOfGroup("text"))]
     .join(", ");
 }

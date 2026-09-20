@@ -98,6 +98,26 @@ function parseGradientStop(token: string, label: string): { color: string; posit
   return { color: canonicalizeFillColor(colorPart), position: Number(withUnit) };
 }
 
+/**
+ * The ONE single-colour ingestion point (the fill grammar's solid arm): a
+ * vector colour (#215, spec #207 US-005, DEC-008) takes one hex color — the
+ * same grammar a fill's solid arm and a gradient stop take (#RGB/#RRGGBB/
+ * #RRGGBBAA, alpha first-class, canonicalized at this one boundary). Reusing
+ * `parseFillSpec` keeps ONE colour parser: a gradient spec is refused here
+ * naming the control gradients belong to (a shape's `--fill`), so the vector
+ * colour can never grow a second colour grammar.
+ */
+export function parseFillColorSpec(spec: string, what: string): string {
+  const fill = parseFillSpec(spec);
+  if (fill.type !== "solid") {
+    throw new Error(
+      `Invalid ${what} "${spec.trim()}": a vector colour takes one hex color like #22c55e, #2c5, or #22c55e80 (alpha allowed) — ` +
+        `a gradient paints a shape Layer's --fill, not a vector colour.`,
+    );
+  }
+  return fill.color;
+}
+
 /** Canonicalize a stop list for storage: ≥2 stops, every position present,
  *  non-decreasing. Shared by the command-boundary parser and the stored-fill
  *  normalizer. */
