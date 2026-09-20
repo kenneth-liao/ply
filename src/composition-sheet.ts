@@ -338,10 +338,15 @@ export async function renderComparisonSheet(
   // Cheap before expensive: every input is classified and resolved before any
   // browser pass, and every refusal names its input. Composition snapshots
   // and manifest history resolve under the Project lock (the render path's
-  // own resolvers); the paints run outside it.
+  // own resolvers); the paints run outside it. The paints are recorded as
+  // THUNKS, not started promises: they run one at a time after all inputs
+  // resolve, so even a caller-owned page (the tests' offline seam) never has
+  // two cell paints racing its viewport and document at once (review INT-1,
+  // PR #255) — the shared render page serializes anyway, so sequencing costs
+  // nothing there.
   interface PendingPaint {
     cellIndex: number;
-    png: Promise<Buffer>;
+    paint: () => Promise<Buffer>;
   }
   const cells: { src: string; label: string }[] = [];
   const pendingPaints: PendingPaint[] = [];
@@ -370,7 +375,8 @@ export async function renderComparisonSheet(
       assertSupersampledPaintSize(snapshot.canvas, 2, snapshot.name);
       pendingPaints.push({
         cellIndex,
-        png: paintComposition(snapshot.canvas, snapshot.layers, { page: options.page, supersample: 2 }).then((r) => r.png),
+        paint: () =>
+          paintComposition(snapshot.canvas, snapshot.layers, { page: options.page, supersample: 2 }).then((r) => r.png),
       });
       sourceFacts[cellIndex] = { index: cellIndex + 1, kind: "composition", label: input, source: input };
       cells[cellIndex] = { src: "", label: input };
@@ -388,6 +394,15 @@ export async function renderComparisonSheet(
     const bytes = await readFile(target).catch((err: Error) => {
       throw new Error(`Sheet input "${input}" cannot be read: ${err.message}`);
     });
+    // The cap is re-checked on the bytes actually read: a file swapped for a
+    // larger one between the size check and the read cannot slip the cap
+    // (review PROD-1, PR #255).
+    if (bytes.length > MAX_ENCODED_BYTES) {
+      throw new Error(
+        `Sheet input "${input}" is ${(bytes.length / (1024 * 1024)).toFixed(1)} MB — over the ` +
+          `${(MAX_ENCODED_BYTES / (1024 * 1024))} MB input cap.`,
+      );
+    }
     const raster = sniffRasterFormat(bytes);
     if (raster) {
       const meta = readRasterMeta(bytes, input);
@@ -436,24 +451,27 @@ export async function renderComparisonSheet(
       // Manifest history paints exactly as replay repaints it — same canvas,
       // same recorded factor — then the same environment gate applies, named
       // for the input that failed it.
-      png: paintComposition(manifest.canvas, layers, { page: options.page, supersample: manifest.supersample }).then(
-        ({ png: painted, environment }) => {
-          try {
-            verifyEnvironmentMatch(manifest.environment, environment);
-          } catch (err) {
-            throw new Error(`Sheet input "${input}": ${(err as Error).message}`);
-          }
-          return painted;
-        },
-      ),
+      paint: () =>
+        paintComposition(manifest.canvas, layers, { page: options.page, supersample: manifest.supersample }).then(
+          ({ png: painted, environment }) => {
+            try {
+              verifyEnvironmentMatch(manifest.environment, environment);
+            } catch (err) {
+              throw new Error(`Sheet input "${input}": ${(err as Error).message}`);
+            }
+            return painted;
+          },
+        ),
     });
     sourceFacts[cellIndex] = { index: cellIndex + 1, kind: "manifest", label: manifest.composition, source: input };
     cells[cellIndex] = { src: "", label: manifest.composition };
   }
 
-  // All inputs resolved: paint the composition/manifest cells, then embed.
+  // All inputs resolved: paint the composition/manifest cells ONE AT A TIME
+  // (review INT-1, PR #255 — a caller-owned page must never run two cell
+  // paints at once), then embed.
   for (const pending of pendingPaints) {
-    cells[pending.cellIndex]!.src = `data:image/png;base64,${(await pending.png).toString("base64")}`;
+    cells[pending.cellIndex]!.src = `data:image/png;base64,${(await pending.paint()).toString("base64")}`;
   }
   for (const [i, entry] of cells.entries()) {
     const overridden = overrides.get(i + 1);

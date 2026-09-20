@@ -1501,6 +1501,21 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      // Pairing's input-count contract is shaped here too (review INT-2/
+      // PROD-2, PR #255): both --pair refusals are caller-shape errors and
+      // exit 2 at the CLI; the module keeps the same check as its API
+      // fail-fast.
+      if (values.pair && inputs.length % 2 !== 0) {
+        output(
+          {
+            ok: false,
+            error: `Pairing mode needs an even number of inputs laid as reference-beside-result rows, but ${inputs.length} inputs were given. Reorder the list so each reference is immediately followed by its result, and drop or add one input.`,
+          },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
       try {
         const sheet = await renderComparisonSheet(targetProj, inputs, {
           out: values.out,

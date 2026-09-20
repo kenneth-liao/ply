@@ -288,7 +288,9 @@ test("pairing mode lays reference-beside-result rows; an odd count and --columns
   expect(PIXEL_AT(png, sheetCellRect(g, 1).x + 50, sheetCellRect(g, 1).y + 50, g.width)).toEqual([0, 0, 255, 255]);
 
   const odd = await invoke(["composition", "sheet", refFile, "result", "ref.png", "--pair", "--cell", "100", "--project", projDir, "--json"]);
-  expect(odd.code).toBe(1);
+  // A caller-shape error, like its sibling --pair/--columns refusal (review
+  // INT-2/PROD-2, PR #255): usage exit 2.
+  expect(odd.code).toBe(2);
   expect(JSON.parse(odd.stdout).error).toMatch(/pairing|even/);
 
   const conflict = await invoke(["composition", "sheet", refFile, "result", "--pair", "--columns", "3", "--project", projDir, "--json"]);
@@ -467,6 +469,58 @@ test("the sheet completes with every browser network route aborted (offline evid
     const png = await readFile(result.output);
     const g = sheetGeometry(2, 100, 2);
     expect(decodePng(png).width).toBe(g.width);
+  } finally {
+    await ctx.close();
+    await closeBrowser();
+  }
+});
+test("two painted cells on one caller-owned page never race — cell paints run one at a time (review INT-1, PR #255)", async () => {
+  await makeSolidComposition("first", "#ff0000");
+  await makeSolidComposition("second", "#0000ff");
+  const file = path.join(tempDir, "plain.png");
+  await writeFile(file, solidPng(64, 64, GREEN));
+
+  const browser = await getBrowser();
+  const ctx = await browser.newContext({ deviceScaleFactor: 1 });
+  const page = await ctx.newPage();
+  // A caller-owned page (the offline-evidence seam) has no serialization of
+  // its own, so the sheet must sequence its cell paints. The wrapper counts
+  // in-flight setContent calls — the heart of every paintComposition pass —
+  // and records any overlap.
+  let inFlight = 0;
+  let raced = false;
+  const tracked = new Proxy(page, {
+    get(target, prop, receiver) {
+      if (prop === "setContent") {
+        return async (...args: unknown[]) => {
+          inFlight++;
+          if (inFlight > 1) raced = true;
+          try {
+            return await (target.setContent as (...a: unknown[]) => Promise<void>)(...args);
+          } finally {
+            inFlight--;
+          }
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  try {
+    const result = await renderComparisonSheet(projDir, ["first", "second", file], {
+      page: tracked as typeof page,
+      out: path.join(tempDir, "sequenced.png"),
+      cell: 100,
+      columns: 2,
+    });
+    expect(raced).toBe(false);
+    // Both painted cells still carry their own pixels (a race would
+    // contaminate at least one cell's viewport/content).
+    const g = sheetGeometry(2, 100, 3);
+    const png = await readFile(result.output);
+    expect(PIXEL_AT(png, sheetCellRect(g, 0).x + 50, sheetCellRect(g, 0).y + 50, g.width)).toEqual([255, 0, 0, 255]);
+    expect(PIXEL_AT(png, sheetCellRect(g, 1).x + 50, sheetCellRect(g, 1).y + 50, g.width)).toEqual([0, 0, 255, 255]);
+    expect(PIXEL_AT(png, sheetCellRect(g, 2).x + 50, sheetCellRect(g, 2).y + 50, g.width)).toEqual(GREEN);
   } finally {
     await ctx.close();
     await closeBrowser();

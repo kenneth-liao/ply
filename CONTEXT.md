@@ -100,7 +100,7 @@ exact Layer revisions and required content so later edits do not change it.
 A Render is always delivered at the canvas size; its supersample factor is
 render quality, never Composition geometry (ADR-0022).
 
-**Comparison sheet**:
+**Comparison sheet** (DEC-010):
 One labelled PNG grid laid out from an ordered list of inputs — Composition
 names (rendered current through the existing render path), retained Render
 manifests (painted from their pinned historical inputs exactly as replay
