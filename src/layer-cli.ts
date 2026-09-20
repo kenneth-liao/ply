@@ -105,7 +105,11 @@ Options:
                         identity, even when no edit option changes content.
   --composition <name>  Target Composition for --fork (required with --fork)
   --use <local-name>    Target use local name for --fork (required with --fork)
-  --image <path>        New source image file for an image Layer
+  --image <path>        New source image file for an image Layer: a regular
+                        local PNG, JPEG, WebP, or SVG file. An SVG keeps its
+                        vector format — the intrinsic size comes from the
+                        file's own width/height or viewBox, and the bytes
+                        are retained unchanged (#213).
   --from-generation <jobId>
                         Replace an image Layer's content with the selected
                         output of a published Generation Job (see ply

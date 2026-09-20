@@ -53,6 +53,43 @@ a PNG over 8192 px per axis or 16,777,216 px is refused with the budget
 named, and an encoded file over 64 MB (`MAX_ENCODED_BYTES`) is never
 parsed.
 
+## Vector images (SVG)
+
+An `.svg` source (`--image`, #213) is image-kind content with a vector
+format, and obeys the same resource bounds as a raster: the file itself is
+capped at 64 MB (`MAX_ENCODED_BYTES`), and its **intrinsic size** — parsed
+from the file's own `width`/`height` attributes, or its `viewBox` when those
+are missing or percent-based — is subject to the same 8192 px per-axis and
+16,777,216 px budgets. A `viewBox` of a million units is refused like an
+oversized PNG header.
+
+The intrinsic size is a **refusal, never a guess**: a file that declares
+neither usable `width`/`height` nor a `viewBox` is refused before anything
+is published, naming the fix —
+
+```
+Error: "logo.svg" declares no usable intrinsic size — add width and height
+attributes in px to the root <svg> element (or a viewBox) so Ply can place
+it, and import again.
+```
+
+So are malformed or non-SVG bytes with an `.svg` name (not an SVG document,
+or a file the browser's image decode refuses as malformed XML). The parse
+mirrors the browser's own intrinsic-size computation exactly — both declared
+sizes win; one declared size borrows the missing axis from the viewBox's
+aspect ratio; neither falls back to the viewBox — so what `inspect`,
+`measure`, and the render agree on is one set of numbers.
+
+Rendering rasterizes the vector at the painted size and the supersample
+factor (never from a fixed bitmap), so one file is crisp at 60 px and at
+600 px; painting it at a large scale costs paint time proportional to the
+painted device area, like any Layer at that scale. The retained bytes are
+never rewritten; only the render rasterizes.
+
+**Fix:** a size refusal is an edit to the SVG file (add the attributes), not
+a Ply setting — a refused import publishes nothing, so fixing the file and
+retrying is safe.
+
 ## Outlines
 
 `--outline "<width>,<color>"` sets an absolute outline (`--outline none`

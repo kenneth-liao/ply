@@ -422,7 +422,7 @@ async function applyOneCommandOptions(
     /** The verified content bytes (the measurement's paint input). */
     contentBytes: Buffer;
     /** The image content's format fact, for the provisional paint markup. */
-    format?: "png" | "jpeg" | "webp";
+    format?: "png" | "jpeg" | "webp" | "svg";
     /** The image content's intrinsic size, for the scale resolution. */
     intrinsic?: { width: number; height: number };
   },

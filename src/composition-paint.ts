@@ -44,11 +44,26 @@ import { createHash } from "node:crypto";
 import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerOutline, type LayerVisibleRegion, type ResolvedLayerRevision } from "./layer.js";
 import { fillCssBackground } from "./fill.js";
 
-const MIME: Record<"png" | "jpeg" | "webp", string> = {
+const MIME: Record<"png" | "jpeg" | "webp" | "svg", string> = {
   png: "image/png",
   jpeg: "image/jpeg",
   webp: "image/webp",
+  svg: "image/svg+xml",
 };
+
+/**
+ * Explicit intrinsic sizing for a vector image element (#213, DEC-007): an
+ * SVG `<img>` paints at the parsed intrinsic size as an inline style, so the
+ * painted box is exactly the width/height or viewBox facts the ingestion
+ * parse recorded — measure and inspect read the same numbers — and the
+ * browser rasterizes the vector at that painted size and the supersample
+ * factor (never from a fixed bitmap). Raster images keep their exact
+ * pre-#213 markup — the intrinsic box is the decode's natural size — so
+ * pinned history paints byte-identically.
+ */
+function imageSize(rev: { format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number }): string {
+  return rev.format === "svg" ? ` width="${rev.width}" height="${rev.height}"` : "";
+}
 
 /**
  * A resolved snapshot layer: the exact verified bytes plus discriminated
@@ -758,11 +773,11 @@ export function buildCompositionHtml(
       if (rev.visibleRegion !== undefined) {
         return (
           `<div style="${base}${transformed}${effectsFilter}">` +
-          `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="display:block;${regionClip}">` +
+          `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="display:block;${regionClip}">` +
           `</div>`
         );
       }
-      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}" style="${base}${transformed}${effectsFilter}">`;
+      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="${base}${transformed}${effectsFilter}">`;
     })
     .join("");
   return (

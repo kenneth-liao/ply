@@ -768,6 +768,42 @@ ply layer edit <layerId> --anchor center,center --x 640 --y 360 -p ~/projects/my
 ply layer edit <layerId> --shadow "0,4,8,#00000066" -p ~/projects/my-poster
 ```
 
+## Vector images (new surface)
+
+`--image` accepts a local SVG file (#213, spec #207 US-004) at add and at
+edit. An SVG is image-kind content with a recorded vector format — not a
+fourth Layer kind: `inspect` and `measure` report it like any other image
+Layer, with `format: "svg"` and the intrinsic size parsed from the file's
+own `width`/`height` attributes (or, when those are missing or percent-based,
+its `viewBox`). The file's bytes are retained in the Project unchanged —
+never rewritten, never rasterized into stored pixels.
+
+Rendering paints the vector through the browser's image path (an `<img>`
+data URL, which disables scripts and external loads by construction — the
+vector is never inlined into the page DOM) and rasterizes it at the painted
+size and supersample factor, so the same file is crisp at 60 px and at 600
+px — one import serves every size, with no `rsvg-convert` step.
+
+```bash
+# The official mark, crisp at any size — no rasterizing step first:
+ply composition add poster logo --image ~/brand/logo.svg --x 60 --y 300 -p ~/projects/my-poster
+# Scale it up; the render re-rasterizes the vector at the painted size:
+ply layer edit <layerId> --scale 4 -p ~/projects/my-poster
+# An SVG replaces a raster by edit and vice versa — the content option is
+# --image either way; the format fact follows the new bytes:
+ply layer edit <layerId> --image ~/brand/logo.svg -p ~/projects/my-poster
+```
+
+Transforms, anchored placement, shadow, outline, the visible region,
+`measure`, replay, relocation, and cross-Project import all work exactly as
+for a raster image Layer; a Render containing a vector replays
+byte-identically from the retained bytes. A file that declares neither
+usable width/height nor a viewBox is refused naming the fix, and malformed
+or non-SVG bytes with an `.svg` name are refused at the ingestion point.
+The external-reference refusal (a file naming a remote or local resource is
+refused) and the colour parameter for single-colour vectors are separate
+tickets (#214, #215) — nothing here fetches or executes anything.
+
 ## Region checking (new surface)
 
 `ply composition check <comp> --regions <file>` tests a Composition's painted

@@ -10,6 +10,7 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { MAX_DIMENSION, MAX_ENCODED_BYTES, MAX_PIXELS, decodePng } from "./png.js";
 import { readRasterMeta, type RasterMeta } from "./raster-meta.js";
+import { readSvgMeta, type SvgMeta } from "./svg-meta.js";
 import { escapesDirReal, outsideDir } from "./paths.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
@@ -721,7 +722,7 @@ export function normalizeStoredVisibleRegion(revision: { visibleRegion?: unknown
 }
 
 export type ResolvedLayerRevision =
-  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
+  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
   | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
   | (LayerShapeRevision & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean });
 
@@ -732,9 +733,12 @@ export interface ResolvedLayer {
   currentRevision: ResolvedLayerRevision;
 }
 
-/** Decode image in headless browser to verify full payload integrity for general formats. */
-async function decodeInBrowser(bytes: Buffer, format: string): Promise<{ width: number; height: number }> {
-  const mime = format === "jpeg" ? "image/jpeg" : format === "webp" ? "image/webp" : "image/png";
+/** Decode image in headless browser to verify full payload integrity. The
+ *  browser's own decode is the gate: malformed or truncated bytes — including
+ *  an SVG's XML (via the same `<img>` data-URL path painting uses, which
+ *  disables scripts and external loads by construction) — fail here and are
+ *  refused at ingestion, never discovered at render time. */
+async function decodeInBrowser(bytes: Buffer, mime: string): Promise<{ width: number; height: number }> {
   const dataUrl = `data:${mime};base64,${bytes.toString("base64")}`;
   return withRenderPage(async (page) => {
     return page.evaluate((src) => {
@@ -765,7 +769,7 @@ async function decodeInBrowser(bytes: Buffer, format: string): Promise<{ width: 
 export async function validateImageBytes(
   bytes: Buffer,
   sourceName: string,
-): Promise<{ bytes: Buffer; contentHash: string; format: "png" | "jpeg" | "webp"; width: number; height: number }> {
+): Promise<{ bytes: Buffer; contentHash: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number }> {
   if (bytes.length === 0) {
     throw new Error(`"${sourceName}" is empty (0 bytes)`);
   }
@@ -775,11 +779,18 @@ export async function validateImageBytes(
     );
   }
 
-  const rasterMeta = readRasterMeta(bytes, sourceName);
-  if (typeof rasterMeta === "string") {
-    throw new Error(rasterMeta);
+  // The ONE meta reader with one new branch (#213, DEC-007): a `.svg` name
+  // parses the vector's intrinsic size from the file's own width/height or
+  // viewBox — malformed or non-SVG bytes are refused right here — while every
+  // other name takes the established raster-sniff path. The format fact rides
+  // the same projection either way: an SVG is image-kind content with a
+  // vector format, not a fourth kind.
+  const meta: RasterMeta | SvgMeta | string = /\.svg$/i.test(sourceName)
+    ? readSvgMeta(bytes, sourceName)
+    : readRasterMeta(bytes, sourceName);
+  if (typeof meta === "string") {
+    throw new Error(meta);
   }
-  const meta: RasterMeta = rasterMeta;
 
   if (meta.width > MAX_DIMENSION || meta.height > MAX_DIMENSION) {
     throw new Error(
@@ -792,11 +803,28 @@ export async function validateImageBytes(
     );
   }
 
-  // Full image decompression / decoding verification
+  // Full image decompression / decoding verification — every format through
+  // the browser's own decode, the same `<img>` path painting uses. For an SVG
+  // this is the XML well-formedness gate: the vector is never inlined into
+  // the page DOM, so malformed markup can only fail as an image decode, and
+  // it fails here at ingestion rather than at render time.
   let decodedWidth = meta.width;
   let decodedHeight = meta.height;
 
-  if (meta.format === "png") {
+  if (meta.format === "svg") {
+    // The parse named the intrinsic size — the browser decode is only the
+    // well-formedness gate, so its natural box (which can differ by a unit
+    // conversion's rounding) never overrides the parsed facts the revision,
+    // inspect, and measure all read.
+    try {
+      await decodeInBrowser(bytes, "image/svg+xml");
+    } catch {
+      throw new Error(
+        `Malformed SVG file "${sourceName}": the browser's image decode refused the bytes ` +
+          `(the XML is likely malformed or truncated).`,
+      );
+    }
+  } else if (meta.format === "png") {
     try {
       const decoded = decodePng(bytes);
       decodedWidth = decoded.width;
@@ -806,7 +834,7 @@ export async function validateImageBytes(
       if (errMsg.includes("not supported")) {
         // Unsupported feature in simple parser (e.g. palette, interlaced) -> verify with browser
         try {
-          const browserDecoded = await decodeInBrowser(bytes, "png");
+          const browserDecoded = await decodeInBrowser(bytes, "image/png");
           decodedWidth = browserDecoded.width;
           decodedHeight = browserDecoded.height;
         } catch {
@@ -819,7 +847,10 @@ export async function validateImageBytes(
     }
   } else {
     try {
-      const browserDecoded = await decodeInBrowser(bytes, meta.format);
+      const browserDecoded = await decodeInBrowser(
+        bytes,
+        meta.format === "jpeg" ? "image/jpeg" : "image/webp",
+      );
       decodedWidth = browserDecoded.width;
       decodedHeight = browserDecoded.height;
     } catch (browserErr) {
@@ -843,7 +874,7 @@ export async function validateImageBytes(
  */
 export async function validateAndIngestImage(
   imagePath: string,
-): Promise<{ bytes: Buffer; contentHash: string; format: "png" | "jpeg" | "webp"; width: number; height: number }> {
+): Promise<{ bytes: Buffer; contentHash: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number }> {
   const resolvedPath = path.resolve(imagePath);
 
   let fh: FileHandle;
@@ -856,7 +887,7 @@ export async function validateAndIngestImage(
   try {
     const st = await fh.stat();
     if (!st.isFile()) {
-      throw new Error(`"${imagePath}" is not a regular file — supported input is a regular local PNG, JPEG, or WebP file`);
+      throw new Error(`"${imagePath}" is not a regular file — supported input is a regular local PNG, JPEG, WebP, or SVG file`);
     }
     if (st.size > MAX_ENCODED_BYTES) {
       throw new Error(
@@ -1521,7 +1552,17 @@ export async function readRevisionInternalFull(
   const resolved: ResolvedLayerRevision =
     revision.kind === "image"
       ? (() => {
-          const meta = readRasterMeta(contentBytes!, contentBlob);
+          // The same one-branch dispatch ingestion uses (#213, DEC-007): a
+          // raster sniff first, the SVG parse for a text-shaped blob the
+          // sniff refuses — the retained bytes decide the format fact, so a
+          // vector revision needs no schema change (DEC-010). A binary blob
+          // that is neither reports the raster sniff's message; a text-shaped
+          // one reports the SVG parse's.
+          const rasterMeta = readRasterMeta(contentBytes!, contentBlob);
+          const meta =
+            typeof rasterMeta === "string" && !contentBytes!.subarray(0, 512).includes(0)
+              ? readSvgMeta(contentBytes!, contentBlob)
+              : rasterMeta;
           if (typeof meta === "string") {
             throw new Error(`Invalid content blob "${revision.contentHash}" for layer "${layerId}": ${meta}`);
           }

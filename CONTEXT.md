@@ -50,6 +50,16 @@ effects' edge all follow it, while the placement point and transform origin
 stay defined against the full content box.
 _Avoid_: cropping the file, baking the crop
 
+**Vector**:
+An SVG file imported as image-kind content with a recorded vector format
+(DEC-007) — not a fourth Layer kind. Its intrinsic size is parsed from the
+file's own width/height or viewBox at the one image ingestion point; its
+bytes are retained unchanged and never rewritten; and it renders crisply at
+any size because the browser rasterizes the vector at the painted size and
+supersample factor, through the image path that disables scripts and
+external loads by construction.
+_Avoid_: a fourth Layer kind, baked rasterization, a fixed-size bitmap
+
 **Layer revision**:
 An immutable version of a Layer. Editing in place advances the same Layer's
 current revision; a fork creates a new Layer identity for the forking Composition.
