@@ -2,7 +2,8 @@
 
 - Status: Accepted — the visible-region command and its revision fact ship
   in [spec #207](https://github.com/kenneth-liao/ply/issues/207) ticket #211
-  (US-003, DEC-004/005/006/009/010).
+  (US-003, DEC-004/005/006/009/010); the fact's optional corner radius ships
+  in ticket #212 (US-003, DEC-009) on the same revision fact.
 
 ## Decision
 
@@ -40,6 +41,35 @@ only when present, so revisions written before #211 keep their exact ids
 and paint meaning (the #133–#140 compat pattern), and the representation
 gains an optional corner radius additively (#212) without reshaping the
 rectangle facts.
+
+**The optional corner radius (#212).** The fact's second axis is an optional
+`cornerRadius` in px on the SAME `visibleRegion` object, stored only when
+set and > 0 — a radius of 0 is the same look as absent, so it is never
+stored (the shape `cornerRadius` rule). It obeys the ONE corner-radius range
+rule the shape Layer's `--corner-radius` ships (`validateRectangleCornerRadius`,
+shared — one rule, one wording): over half the REGION rectangle's shorter
+side is REFUSED, never clamped, because the paint would silently clamp it
+and the stored parameters would not describe the paint; a negative radius is
+refused at the command boundary. The command
+`ply layer edit --visible-region-radius <px>` is an absolute setter that
+edits and removes INDEPENDENTLY of the rectangle (`none` or `0` removes the
+radius; an omitted option preserves it, even when the rectangle is re-set —
+a preserved radius that no longer fits the new rectangle is refused, the
+same refusal a re-issued radius would get); a positive radius needs a
+region — a positive radius on a Layer without one, or combined with the
+region's removal, is refused before publication (the removal forms are
+idempotent) — and removing the region removes its radius (one
+fact, one removal). One-command `composition add` accepts the radius in the
+documented order, applied right after the rectangle, still before the anchor
+resolves. The paint is the clip rect's `rx`: the same rectangle (painted
+extents stay the rectangle's — the rounded corners never shrink the ink's
+bounding box), with the corners rounded — and because the clip crops the
+content BEFORE the effect chain, the outline and shadow hug the rounded edge
+with no second mechanism. The revision hash appends `,r<r>` inside the
+`:region(...)` field only when the radius is present, so revisions written
+before #212 — and region-carrying revisions without a radius — keep their
+exact ids, and the stored normalizer re-validates a stored radius through
+the same range rule (fail-closed, review INT-4).
 
 ## Paint order — the region crops before the effects
 
@@ -103,7 +133,9 @@ Composition treatment of a refused Layer is untouched (#206, OOS-008).
   parser (`parseVisibleRegionSpec`) at both boundaries, so the CLI's
   usage-error classification (exit 2) and the edit path's pre-staging
   refusal can never disagree; content-bounds refusals are semantic
-  (exit 1).
+  (exit 1). The radius (#212) follows the same conventions: one px value or
+  `none`, validated by one parser (`parseVisibleRegionRadiusSpec`) at both
+  boundaries; the range refusal is semantic (exit 1).
 - **Rollback to a pre-#211 binary:** as with #140 (ADR-0019), an older
   binary re-derives the revision hash without the `visibleRegion` field, so
   a region-carrying revision fails its pinned-hash check — fail-closed,
@@ -116,8 +148,8 @@ Composition treatment of a refused Layer is untouched (#206, OOS-008).
   and recover by re-upgrading — downgrade is lossy for history visibility,
   not just pinned renders (review PROD-3): the old binary cannot display
   any region-carrying revision, current or historical, until re-upgraded.
-- **Forward compatibility (#212):** the region's optional corner radius
-  must extend the stored normalizer AND the revision hash together, the
+- **Forward compatibility (#212, realized):** the region's optional corner
+  radius extended the stored normalizer AND the revision hash together, the
   same way this field joined the shadow/outline pattern — a normalizer
   that silently strips a future field would break the hash check the same
   way a missing field does (review INT-4).

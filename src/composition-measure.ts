@@ -135,11 +135,14 @@ export interface MeasuredLayerBounds {
    * none of that effect) — the same facts painting applies, reported for
    * auditability. */
   effects: { shadow: LayerShadow | null; outline: LayerOutline | null };
-  /** The revision's rectangular visible region (#211, ADR-0023): the stored
+  /** The revision's visible region (#211, ADR-0023): the stored
    * region facts painting clips to (or null when the Layer has none —
-   * absence IS the no-region form). Content outside the region is not ink:
-   * `painted`, `paintedOnCanvas`, and `clipped` already follow it. */
-  visibleRegion: { x: number; y: number; width: number; height: number } | null;
+   * absence IS the no-region form), including the optional corner radius
+   * (#212) when set. Content outside the region is not ink:
+   * `painted`, `paintedOnCanvas`, and `clipped` already follow it (the
+   * painted extents stay the rectangle's — the rounded corners never
+   * shrink the ink's bounding box). */
+  visibleRegion: { x: number; y: number; width: number; height: number; cornerRadius?: number } | null;
   /** The revision's ONE fill (DEC-003), for shape Layers (#208/#210): the
    * canonical fill object painting applies — a solid colour, or a linear or
    * radial gradient with its stops. Other kinds report null. */

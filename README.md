@@ -491,6 +491,14 @@ ply layer edit <layerId> --visible-region "0,0,200,100"      # replaces any prev
 ply layer edit <layerId> --visible-region none               # remove (its own edit)
 ```
 
+The region's corners take an optional radius (`--visible-region-radius`,
+#212) — a screenshot gets rounded corners inside Ply:
+
+```bash
+ply layer edit <layerId> --visible-region-radius 12   # round the region's corners
+ply layer edit <layerId> --visible-region-radius none # remove the radius (0 works too)
+```
+
 - The spec is an ABSOLUTE setter `"<x>,<y>,<width>,<height>"` in the
   Layer's OWN content pixels, relative to the content box's top-left, that
   replaces any previous region (the same command twice keeps the same
@@ -536,9 +544,26 @@ ply layer edit <layerId> --visible-region none               # remove (its own e
   is published — a region that no longer lies inside is refused naming the
   fix (adjust or remove it first); one that still fits publishes with a
   stderr note that the kept region now frames the replaced content. The
-  region is left-anchored and additive by design: an optional corner
-  radius joins the same fact later (#212) without reshaping stored
+  region is left-anchored and additive by design: the optional corner
+  radius joins the same fact (#212) without reshaping stored
   revisions.
+- **Corner radius (`--visible-region-radius`, #212):** an absolute setter in
+  px that edits and removes INDEPENDENTLY of the rectangle — `none` or `0`
+  removes it, an omitted option preserves it (even when the rectangle is
+  re-set, provided it still fits: a preserved radius that no longer fits
+  the new rectangle is refused, never clamped). It obeys the SAME rule as a
+  shape Layer's `--corner-radius` — a radius over half the region
+  rectangle's shorter side is refused, never clamped, through the same
+  validator — and a negative radius is refused at the command boundary. It
+  needs a visible region (a positive radius without one, or combined with
+  the region's removal, is refused; the removal forms are idempotent), and
+  removing the region removes its
+  radius. Corner pixels outside the radius are transparent, the outline and
+  shadow follow the rounded edge, and painted extents stay the rectangle's.
+  The radius rides the same revision hash field when present, so pre-#212
+  revision ids do not move, and a Render with a rounded region replays
+  byte-identically. One-command `composition add` accepts the radius beside
+  `--visible-region`.
 
 ## Text weight and width (new surface)
 

@@ -33,6 +33,8 @@ import {
   parseShadowSpec,
   parseOutlineSpec,
   parseVisibleRegionSpec,
+  parseVisibleRegionRadiusSpec,
+  validateRectangleCornerRadius,
   validateVisibleRegionAgainstContent,
   resolveEditScale,
   resolveEditRotation,
@@ -374,6 +376,13 @@ export interface OneCommandOptions {
    *  bounds check, applied BEFORE the anchor resolves (the anchor
    *  resolves against the region-clipped visible ink, DEC-005). */
   visibleRegion?: string;
+  /** The raw --visible-region-radius spec (#212): the optional corner
+   *  radius on the visible region fact, applied right after the rectangle
+   *  (the same region stage) — it needs the rectangle (--visible-region in
+   *  the same add, or a region already applied), and the ONE corner-radius
+   *  range rule (over half the rectangle's shorter side is refused, never
+   *  clamped) validates against it before anything is retained. */
+  visibleRegionRadius?: string;
   /** The parsed --anchor axes; resolved against the content+transform ink
    *  in the target Composition's canvas before the effects apply. */
   anchor?: ParsedAnchor;
@@ -428,6 +437,7 @@ async function applyOneCommandOptions(
       options.shadow !== undefined ||
       options.outline !== undefined ||
       options.visibleRegion !== undefined ||
+      options.visibleRegionRadius !== undefined ||
       options.anchor !== undefined);
   if (!hasOptions) {
     return revision;
@@ -443,6 +453,7 @@ async function applyOneCommandOptions(
     ...(options.shadow !== undefined ? { shadow: options.shadow } : {}),
     ...(options.outline !== undefined ? { outline: options.outline } : {}),
     ...(options.visibleRegion !== undefined ? { "visible-region": options.visibleRegion } : {}),
+    ...(options.visibleRegionRadius !== undefined ? { "visible-region-radius": options.visibleRegionRadius } : {}),
     ...(options.anchor !== undefined ? { anchor: options.anchor } : {}),
   });
   const rev = { ...revision } as LayerRevision & {
@@ -575,6 +586,29 @@ async function applyOneCommandOptions(
             );
           }
           rev.visibleRegion = region;
+        }
+        break;
+      }
+      case "visible-region-radius": {
+        // The region's corner radius (#212): the rectangle's stage ran first
+        // (the table's region order), so the rect is whatever this add has.
+        // A positive radius without a region is refused before anything is
+        // retained; `none` and 0 — the removal forms — remove nothing, the
+        // same idempotent no-op the edit surface gives them. The range rule
+        // is the ONE shared corner-radius validator (refuse, never clamp)
+        // against the region rectangle; a radius of 0 stores nothing (the
+        // same look as absent).
+        const radius = parseVisibleRegionRadiusSpec(options.visibleRegionRadius!);
+        if (radius !== undefined && radius > 0) {
+          const region = rev.visibleRegion;
+          if (region === undefined) {
+            throw new Error(
+              `--visible-region-radius needs a visible region: Layer "${rev.layerId}" is fresh and has none. ` +
+                `Pass --visible-region "<x>,<y>,<width>,<height>" in the same add, then round its corners.`,
+            );
+          }
+          validateRectangleCornerRadius(radius, region.width, region.height);
+          rev.visibleRegion = { ...region, cornerRadius: radius };
         }
         break;
       }

@@ -183,6 +183,14 @@ export interface LayerVisibleRegion {
   y: number;
   width: number;
   height: number;
+  /** Corner radius in px (#212): present ONLY when set and > 0 — a radius
+   * of 0 is the same look as absent, so it is never stored (the
+   * store-only-when-it-differs rule, like the shape's cornerRadius).
+   * Validated against 0..min(width,height)/2 of the REGION rectangle — the
+   * shape Layer's one corner-radius rule, through the same validator — and
+   * the revision hash appends it only when present, so revisions written
+   * before #212 keep their exact ids. */
+  cornerRadius?: number;
 }
 
 /**
@@ -298,6 +306,29 @@ export const SHAPE_GEOMETRIES = ["rectangle", "ellipse"] as const;
 export type LayerShapeGeometry = (typeof SHAPE_GEOMETRIES)[number];
 
 /**
+ * The ONE corner-radius range rule (#208 shapes, #212 visible regions): a
+ * corner radius is a finite number of px between 0 and half the rectangle's
+ * SHORTER side — a larger radius would be silently clamped by the paint, so
+ * it is refused instead of pinned with parameters the paint would not obey.
+ * One rule, one wording: the shape Layer's ingestion validator and the
+ * visible region's radius gate both call this, so the two surfaces can never
+ * disagree (US-003/#212: refuse, never clamp).
+ */
+export function validateRectangleCornerRadius(radius: number, width: number, height: number): void {
+  if (!Number.isFinite(radius) || radius < 0) {
+    throw new Error(
+      `Invalid corner radius ${JSON.stringify(radius)}: must be a finite number between 0 and ${Math.min(width, height) / 2}.`,
+    );
+  }
+  const max = Math.min(width, height) / 2;
+  if (radius > max) {
+    throw new Error(
+      `Invalid corner radius ${radius}: must be a finite number between 0 and ${max} for a ${width}×${height} rectangle (a larger radius would be silently clamped, so the stored parameters would not describe the paint).`,
+    );
+  }
+}
+
+/**
  * The canonical shape-content identity (DEC-001): the shape's parameters in
  * their canonical form, hashed. The one string every shape revision's
  * `contentHash` derives from — the stored parameters are hash-covered by the
@@ -347,7 +378,7 @@ export function validateShapeContent(
   }
   let resolvedRadius: number | undefined;
   if (cornerRadius !== undefined) {
-    if (typeof cornerRadius !== "number" || !Number.isFinite(cornerRadius) || cornerRadius < 0) {
+    if (typeof cornerRadius !== "number") {
       throw new Error(
         `Invalid corner radius ${JSON.stringify(cornerRadius)}: must be a finite number between 0 and ${Math.min(width as number, height as number) / 2}.`,
       );
@@ -357,12 +388,9 @@ export function validateShapeContent(
         `Invalid corner radius ${cornerRadius}: a corner radius is a rectangle fact — an ellipse has no straight corners. Remove --corner-radius.`,
       );
     }
-    const max = Math.min(width as number, height as number) / 2;
-    if (cornerRadius > max) {
-      throw new Error(
-        `Invalid corner radius ${cornerRadius}: must be a finite number between 0 and ${max} for a ${width}×${height} rectangle (a larger radius would be silently clamped, so the stored parameters would not describe the paint).`,
-      );
-    }
+    // The one corner-radius range rule (#208), shared with the visible
+    // region's radius gate (#212): refuse, never clamp.
+    validateRectangleCornerRadius(cornerRadius, width as number, height as number);
     resolvedRadius = cornerRadius;
   }
   let resolvedFill: LayerFill;
@@ -638,9 +666,13 @@ export function normalizeStoredOutline(revision: { outline?: unknown }): LayerOu
  * written before #211 lack the field, and absence IS the canonical
  * no-region form — every downstream reader projects through this function
  * and never re-derives a default. A present field must be a valid region
- * object: finite `x`/`y` ≥ 0 and finite positive `width`/`height` —
- * anything else is a malformed document, refused loudly before the revision
- * hash is consulted. Content-bounds conformance is deliberately NOT
+ * object: finite `x`/`y` ≥ 0 and finite positive `width`/`height` — anything
+ * else is a malformed document, refused loudly before the revision
+ * hash is consulted. The optional `cornerRadius` (#212), when present, must
+ * be a finite number of px > 0 within the ONE corner-radius range rule
+ * (0..min(width,height)/2 of the region rectangle — the shape Layer's rule,
+ * through the same validator): a stored radius of 0 or out of range is a
+ * malformed document. Content-bounds conformance is deliberately NOT
  * re-verified here: the set-time validation gates it against the content
  * box of the revision it was set on, and the region keeps clipping
  * deterministically whatever the current content box is (a region kept
@@ -672,7 +704,20 @@ export function normalizeStoredVisibleRegion(revision: { visibleRegion?: unknown
       );
     }
   }
-  return { x, y, width, height } as LayerVisibleRegion;
+  // The optional corner radius (#212): present only when set and > 0, and
+  // subject to the ONE corner-radius range rule shared with the shape
+  // Layer's validator — a stored radius outside 0..min(w,h)/2 is a malformed
+  // document (the stored form must describe the paint).
+  const { cornerRadius } = raw as Record<string, unknown>;
+  if (cornerRadius !== undefined) {
+    if (typeof cornerRadius !== "number" || !Number.isFinite(cornerRadius) || cornerRadius <= 0) {
+      throw new Error(
+        `Malformed revision document: visibleRegion.cornerRadius must be a finite number of px greater than 0 when present (got ${JSON.stringify(cornerRadius)}).`,
+      );
+    }
+    validateRectangleCornerRadius(cornerRadius, width as number, height as number);
+  }
+  return { x, y, width, height, ...(cornerRadius !== undefined ? { cornerRadius } : {}) } as LayerVisibleRegion;
 }
 
 export type ResolvedLayerRevision =
@@ -1107,7 +1152,10 @@ export function normalizeStoredCallerFont(revision: { callerFont?: unknown }): C
  * keep their exact ids (#135). The shadow and outline fields are appended
  * only when present, so revisions written before #139/#140 keep their exact
  * ids (#139, #140). The visible-region field is appended only when present,
- * so revisions written before #211 keep their exact ids (#211). The text
+ * so revisions written before #211 keep their exact ids (#211). The region's
+ * corner radius is appended only when present, so revisions written before
+ * #212 — and region-carrying revisions without a radius — keep their exact
+ * ids (#212). The text
  * weight/width fields are appended only when
  * present (as one resolved pair), so revisions written before #179 keep
  * their exact ids (#179, ADR-0021). The text tracking and line-height
@@ -1131,7 +1179,9 @@ export function computeRevisionHash(rev: LayerRevision): string {
     rev.outline !== undefined ? `:outline(${rev.outline.width},${rev.outline.color})` : "";
   const regionField =
     rev.visibleRegion !== undefined
-      ? `:region(${rev.visibleRegion.x},${rev.visibleRegion.y},${rev.visibleRegion.width},${rev.visibleRegion.height})`
+      ? `:region(${rev.visibleRegion.x},${rev.visibleRegion.y},${rev.visibleRegion.width},${rev.visibleRegion.height}` +
+        (rev.visibleRegion.cornerRadius !== undefined ? `,r${rev.visibleRegion.cornerRadius}` : "") +
+        `)`
       : "";
   const textAxes = rev.kind === "text" ? normalizeStoredTextAxes(rev) : undefined;
   const textAxesFields = textAxes !== undefined ? `:textaxes(${textAxes.weight},${textAxes.width})` : "";
@@ -1751,6 +1801,20 @@ export interface EditLayerOptions {
    */
   visibleRegion?: string;
   /**
+   * Round the visible region's corners (#212, spec #207 US-003, ADR-0023):
+   * an ABSOLUTE setter in px that edits and removes INDEPENDENTLY of the
+   * rectangle — a positive value sets the radius, `0` or "none" removes it,
+   * and an omitted option preserves the current radius (even when the
+   * rectangle is re-set in the same edit). The radius rounds the region
+   * rectangle it is set on: it obeys the ONE corner-radius rule the shape
+   * Layer's --corner-radius ships (`validateRectangleCornerRadius`) — over
+   * half the region rectangle's shorter side is REFUSED, never clamped — and
+   * it needs a visible region: a radius on a Layer without one, or combined
+   * with the region's removal, is refused before anything is staged.
+   * Removing the region removes its radius with it (one revision fact).
+   */
+  visibleRegionRadius?: string;
+  /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
    * provenance with the Project. Mutually exclusive with `image`; only valid
@@ -2163,12 +2227,45 @@ export function parseVisibleRegionSpec(spec: string): LayerVisibleRegion | undef
   return { x, y, width, height };
 }
 
+/**
+ * The one visible-region corner-radius spec parser (#212, spec #207 US-003,
+ * ADR-0023): the spec's own shape only — "none" resolves to undefined (the
+ * removal value, the #211 region convention), 0 is the no-rounding form that
+ * stores nothing, and anything else must be a finite number of px >= 0 (a
+ * negative radius is refused here, before publication). Range conformance —
+ * a radius over half the region rectangle's shorter side is REFUSED, never
+ * clamped (the shape Layer's one rule) — is the edit path's job, against the
+ * region rectangle the radius rounds. Exported for the CLI boundary: the
+ * command classifies malformed specs as usage errors (exit 2) with this same
+ * parser, so the two never disagree.
+ */
+export function parseVisibleRegionRadiusSpec(spec: string): number | undefined {
+  const raw = spec.trim();
+  if (raw.toLowerCase() === "none") {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (raw === "" || !Number.isFinite(value)) {
+    throw new Error(
+      `Invalid visible-region corner radius "${raw}": --visible-region-radius takes a radius in px (e.g. "12"), 0 to remove, or "none" — ` +
+        `the radius rounds the visible region's corners.`,
+    );
+  }
+  if (value < 0) {
+    throw new Error(
+      `Invalid visible-region corner radius ${raw}: must be a finite number of px >= 0 — a negative radius has no meaning.`,
+    );
+  }
+  return value;
+}
+
 /** Field-wise visible-region equality for the no-op check (#211): the flip
  * precedent — re-issuing an identical region is a detected no-op, never a
  * redundant revision. */
 function visibleRegionEq(a: LayerVisibleRegion | undefined, b: LayerVisibleRegion | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height &&
+    a.cornerRadius === b.cornerRadius;
 }
 
 /**
@@ -2245,14 +2342,18 @@ const REGION_CONFLICTING_OPTION_PRESENT = (options: EditLayerOptions): boolean =
   options.fill !== undefined;
 
 /**
- * Canonical visible-region edit resolution (#211, ADR-0023): an omitted
- * option preserves the current revision's region; a spec sets or removes it
- * absolutely. A set region validates against the content box of the Layer
- * it is set on — the revision's intrinsic facts for image and shape, and
- * the measured line-box extent for text (the unwrapped standalone line,
- * measured from the in-memory snapshot — never a second Project read).
- * Every refusal runs before any staging, so an invalid region never
- * advances live state.
+ * Canonical visible-region edit resolution (#211, ADR-0023; #212 radius):
+ * an omitted option preserves the current revision's region; a spec sets or
+ * removes it absolutely. A set region validates against the content box of
+ * the Layer it is set on — the revision's intrinsic facts for image and
+ * shape, and the measured line-box extent for text (the unwrapped standalone
+ * line, measured from the in-memory snapshot — never a second Project read).
+ * The optional corner radius (#212) resolves on the SAME fact, independently
+ * of the rectangle: a radius-only edit keeps the rectangle and re-validates
+ * the radius against it; a rectangle re-set keeps the current radius (an
+ * omitted radius option preserves it, re-validated against the NEW
+ * rectangle); `none`/`0` remove the radius. Every refusal runs before any
+ * staging, so an invalid region or radius never advances live state.
  */
 async function resolveEditVisibleRegion(
   resolvedRoot: string,
@@ -2261,25 +2362,67 @@ async function resolveEditVisibleRegion(
   contentBytes: Buffer,
   layerId: string,
 ): Promise<LayerVisibleRegion | undefined> {
-  if (options.visibleRegion === undefined) {
+  const rectGiven = options.visibleRegion !== undefined;
+  const radiusGiven = options.visibleRegionRadius !== undefined;
+  if (!rectGiven && !radiusGiven) {
     return prevRev.visibleRegion;
   }
-  const region = parseVisibleRegionSpec(options.visibleRegion);
-  if (region === undefined) {
+  const radius = radiusGiven ? parseVisibleRegionRadiusSpec(options.visibleRegionRadius!) : undefined;
+  const rect = rectGiven ? parseVisibleRegionSpec(options.visibleRegion!) : prevRev.visibleRegion;
+  // A radius needs a region to round: a positive radius on a Layer without
+  // one, or combined with the region's removal, is refused before anything
+  // is staged. `none` — and 0, the no-rounding form — remove nothing: the
+  // same idempotent removal the rectangle's `none` has, so the two removal
+  // spellings agree even without a region.
+  if (rect === undefined) {
+    if (radius !== undefined && radius > 0) {
+      throw new Error(
+        rectGiven
+          ? `Invalid visible-region corner radius ${options.visibleRegionRadius}: Layer "${layerId}" cannot set a corner radius while removing the visible region — a radius rounds a region's corners, so it needs a visible region. Remove the radius (--visible-region-radius none) or keep the region.`
+          : `Invalid visible-region corner radius ${options.visibleRegionRadius}: Layer "${layerId}" has no visible region to round — set one first (--visible-region "<x>,<y>,<width>,<height>"), then round its corners.`,
+      );
+    }
     return undefined;
   }
-  if (prevRev.kind === "text") {
-    // A text Layer has no stored intrinsic size: its content box is the
-    // DOM line-box extent of the retained face at this revision's settings,
-    // measured through the one measurement authority (DEC-006) on the
-    // already-resolved snapshot — the edit path holds the Project lock, so
-    // the lock-free snapshot variant is the only safe way to measure here.
-    const standalone = await measureStandaloneSnapshot({ ...prevRev, x: 0, y: 0 }, contentBytes);
-    validateVisibleRegionAgainstContent(region, standalone.content, layerId);
-  } else {
-    validateVisibleRegionAgainstContent(region, { width: prevRev.width, height: prevRev.height }, layerId);
+  // The rectangle's content-bounds check runs only when the rectangle is
+  // explicitly (re-)set, against the content box of the SAME content the
+  // edit would publish — content edits are refused in one edit with the
+  // region, so that is always the live revision's box; a text Layer's box is
+  // its measured line-box extent (the unwrapped standalone line, the same
+  // measurement authority anchored placement resolves an unreferenced Layer
+  // against).
+  if (rectGiven) {
+    if (prevRev.kind === "text") {
+      // A text Layer has no stored intrinsic size: its content box is the
+      // DOM line-box extent of the retained face at this revision's settings,
+      // measured through the one measurement authority (DEC-006) on the
+      // already-resolved snapshot — the edit path holds the Project lock, so
+      // the lock-free snapshot variant is the only safe way to measure here.
+      const standalone = await measureStandaloneSnapshot({ ...prevRev, x: 0, y: 0 }, contentBytes);
+      validateVisibleRegionAgainstContent(rect, standalone.content, layerId);
+    } else {
+      validateVisibleRegionAgainstContent(rect, { width: prevRev.width, height: prevRev.height }, layerId);
+    }
   }
-  return region;
+  // The radius (#212): an explicit value sets or removes it; an omitted
+  // radius option preserves the current one — and a PRESERVED radius must
+  // still fit the (possibly new) rectangle, the same refusal a re-issued
+  // radius would get. 0 stores nothing (the same look as absent).
+  const effectiveRadius = radiusGiven
+    ? radius
+    : rectGiven
+      ? prevRev.visibleRegion?.cornerRadius
+      : rect.cornerRadius;
+  if (effectiveRadius !== undefined && effectiveRadius > 0) {
+    validateRectangleCornerRadius(effectiveRadius, rect.width, rect.height);
+  }
+  return {
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    ...(effectiveRadius !== undefined && effectiveRadius > 0 ? { cornerRadius: effectiveRadius } : {}),
+  };
 }
 
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
@@ -3188,14 +3331,14 @@ export async function editLayerInternal(
   // a text Layer's box is its measured line-box extent (the unwrapped
   // standalone line, the same measurement authority anchored placement
   // resolves an unreferenced Layer against).
-  if (options.visibleRegion !== undefined && REGION_CONFLICTING_OPTION_PRESENT(options)) {
+  if ((options.visibleRegion !== undefined || options.visibleRegionRadius !== undefined) && REGION_CONFLICTING_OPTION_PRESENT(options)) {
     throw new Error(
-      `Visible region and content edits are separate edits: Layer "${layerId}" cannot set --visible-region and replace or reshape its content in one edit, because the region is validated against the content box. ` +
-        `Set --visible-region in its own edit.`,
+      `Visible region and content edits are separate edits: Layer "${layerId}" cannot set --visible-region/--visible-region-radius and replace or reshape its content in one edit, because the region is validated against the content box. ` +
+        `Set the region in its own edit.`,
     );
   }
   const visibleRegion = await resolveEditVisibleRegion(resolvedRoot, options, prevRev, current.contentBytes, layerId);
-  const hasRegion = options.visibleRegion !== undefined;
+  const hasRegion = options.visibleRegion !== undefined || options.visibleRegionRadius !== undefined;
   const regionSetReport = { visibleRegion: visibleRegion ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size

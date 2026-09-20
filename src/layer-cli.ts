@@ -23,6 +23,7 @@ import {
   parseLayerOpacity,
   parseLayerOutline,
   parseLayerVisibleRegion,
+  parseLayerVisibleRegionRadius,
   parseLayerRotation,
   parseLayerShadow,
   parseLayerTracking,
@@ -328,6 +329,30 @@ Options:
                         content edit is re-validated against the new
                         content box: outside is refused, fitting publishes
                         with a note.
+  --visible-region-radius <px>
+                        Round the visible region's corners (#212): an
+                        ABSOLUTE setter in px — e.g. "12" rounds the corners
+                        of the region rectangle, "0" or "none" removes the
+                        radius — that edits and removes INDEPENDENTLY of the
+                        rectangle (an omitted option preserves the current
+                        radius, even when the rectangle is re-set). The
+                        radius obeys the SAME rule as a shape Layer's
+                        --corner-radius: a radius larger than half the
+                        region rectangle's shorter side is REFUSED, never
+                        clamped (the paint would silently clamp it, so the
+                        stored parameters would not describe the paint),
+                        through the same validator; a negative radius is
+                        refused. Needs a visible region — a positive radius
+                        on a Layer without one, or combined with the
+                        region's removal, is refused (0 and none remove
+                        nothing). Removing the region removes its
+                        radius. Corner pixels outside the radius are
+                        transparent, the outline and shadow follow the
+                        rounded edge, and painted extents stay the
+                        rectangle's. Never changes retained pixels. Combines
+                        with --visible-region (rectangle and radius in one
+                        edit); a radius kept across a rectangle re-set must
+                        still fit the new rectangle.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -819,6 +844,20 @@ async function run() {
       }
       const regionSpec = parsedRegion.value;
 
+      // Visible-region corner radius (#212): syntax and well-formedness at
+      // the command boundary as a usage error (exit 2) through the SAME
+      // parser the edit path uses; the range rule (over half the region
+      // rectangle's shorter side is refused, never clamped) and the
+      // needs-a-region rule are semantic, enforced by the edit path before
+      // any staging.
+      const parsedRegionRadius = parseLayerVisibleRegionRadius(values["visible-region-radius"]);
+      if (!parsedRegionRadius.ok) {
+        output({ ok: false, error: parsedRegionRadius.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const regionRadiusSpec = parsedRegionRadius.value;
+
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2); semantic refusals (no visible ink,
       // divergent multi-Composition geometry) happen in the read-only
@@ -949,6 +988,7 @@ async function run() {
           shadow: shadowSpec,
           outline: outlineSpec,
           visibleRegion: regionSpec,
+          visibleRegionRadius: regionRadiusSpec,
           shape: parsedEditShape.value,
           size: parsedEditSize.value,
           cornerRadius: parsedEditRadius.value,
@@ -1038,7 +1078,10 @@ async function run() {
               : "";
             const regionSet = res.regionSet
               ? res.regionSet.visibleRegion
-                ? `; visible region (${res.regionSet.visibleRegion.x}, ${res.regionSet.visibleRegion.y}, ${res.regionSet.visibleRegion.width}, ${res.regionSet.visibleRegion.height})`
+                ? `; visible region (${res.regionSet.visibleRegion.x}, ${res.regionSet.visibleRegion.y}, ${res.regionSet.visibleRegion.width}, ${res.regionSet.visibleRegion.height})` +
+                  (res.regionSet.visibleRegion.cornerRadius !== undefined
+                    ? `, corner radius ${res.regionSet.visibleRegion.cornerRadius}px`
+                    : "")
                 : "; visible region none"
               : "";
             const shapeEdited = res.shapeEdited
@@ -1159,7 +1202,10 @@ async function run() {
             const region =
               rev.visibleRegion === undefined
                 ? ""
-                : `, Visible region: (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})`;
+                : `, Visible region: (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})` +
+                  (rev.visibleRegion.cornerRadius !== undefined
+                    ? `, corner radius ${rev.visibleRegion.cornerRadius}px`
+                    : "");
             console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}`);
           },
         );

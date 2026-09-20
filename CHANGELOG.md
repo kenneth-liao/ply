@@ -4,6 +4,25 @@
 
 ### Added
 
+- Optional corner radius on the visible region (#212, spec #207 US-003,
+  DEC-009, ADR-0023): `ply layer edit --visible-region-radius <px>` rounds
+  the region rectangle's corners — corner pixels outside the radius are
+  transparent, the outline and shadow follow the rounded edge, and painted
+  extents stay the rectangle's — as an ABSOLUTE setter on the SAME revision
+  fact that edits and removes INDEPENDENTLY of the rectangle (`none` or `0`
+  removes it; an omitted option preserves it, re-validated against a re-set
+  rectangle). One rule with the shape Layer's `--corner-radius`: a radius
+  over half the region rectangle's shorter side is REFUSED, never clamped,
+  through the same validator (`validateRectangleCornerRadius`), and a
+  negative radius is refused at the command boundary (exit 2). A positive
+  radius needs a visible region (refused otherwise, before publication;
+  the removal forms are idempotent); removing
+  the region removes its radius. One-command `composition add` accepts the
+  radius beside `--visible-region`. The radius is stored only when set and
+  > 0 and joins the revision hash only when present, so pre-#212 revision
+  ids do not move; set-then-remove renders byte-identically (ISC-38) and a
+  Render with a rounded region replays byte-identically. ADR-0023 documents
+  the radius on the same fact; help and README record the spelling.
 - The rectangular visible region on any Layer (#211, spec #207 US-003,
   DEC-004/005/006/009/010, ADR-0023): `ply layer edit --visible-region
   "<x>,<y>,<width>,<height>"` frames a rectangular part of a Layer's own

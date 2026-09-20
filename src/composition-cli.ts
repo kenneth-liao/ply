@@ -40,6 +40,7 @@ import {
   parseLayerOpacity,
   parseLayerOutline,
   parseLayerVisibleRegion,
+  parseLayerVisibleRegionRadius,
   parseLayerRotation,
   parseLayerShadow,
   parseLayerTracking,
@@ -385,6 +386,19 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         zero area is refused. Never changes retained
                         pixels. Applied before the anchor resolves, so
                         --anchor centers the region-clipped ink.
+  --visible-region-radius <px>
+                        Round the visible region's corners (#212): an
+                        absolute setter in px — "12" rounds, "0" or "none"
+                        removes — obeying the SAME rule as a shape Layer's
+                        --corner-radius: over half the region rectangle's
+                        shorter side is REFUSED, never clamped, through the
+                        same validator; a negative radius is refused. Needs
+                        --visible-region in the same add (a fresh Layer has
+                        no region to round; 0 and none remove nothing).
+                        Corner pixels outside the
+                        radius are transparent, and the outline and shadow
+                        follow the rounded edge. Applied right after the
+                        rectangle, before the anchor resolves.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -427,7 +441,7 @@ function oneCommandFacts(
     flipY: boolean;
     shadow?: { dx: number; dy: number; blur: number; color: string };
     outline?: { width: number; color: string };
-    visibleRegion?: { x: number; y: number; width: number; height: number };
+    visibleRegion?: { x: number; y: number; width: number; height: number; cornerRadius?: number };
   },
   anchorSpec?: string,
 ): string {
@@ -442,7 +456,10 @@ function oneCommandFacts(
   if (rev.shadow) facts.push(`shadow ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`);
   if (rev.outline) facts.push(`outline ${rev.outline.width} ${rev.outline.color}`);
   if (rev.visibleRegion) {
-    facts.push(`visible region (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})`);
+    facts.push(
+      `visible region (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})` +
+        (rev.visibleRegion.cornerRadius !== undefined ? ` with corner radius ${rev.visibleRegion.cornerRadius}px` : ""),
+    );
   }
   if (anchorSpec !== undefined) {
     facts.push(`anchored ${anchorSpec} -> placement (${rev.x}, ${rev.y})`);
@@ -734,6 +751,18 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      // Visible-region corner radius (#212): syntax and well-formedness at
+      // the command boundary through the SAME parser the edit path uses;
+      // the needs-a-region rule and the ONE range rule (over half the
+      // rectangle's shorter side is refused, never clamped) run in the
+      // publication path against the region rectangle, before anything is
+      // stored.
+      const parsedRegionRadius = parseLayerVisibleRegionRadius(values["visible-region-radius"]);
+      if (!parsedRegionRadius.ok) {
+        output({ ok: false, error: parsedRegionRadius.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2), like on the edit surface. Anchored
       // placement on add is defined by the documented order (it combines
@@ -775,6 +804,7 @@ async function run() {
             ...(parsedShadow.value !== undefined ? { shadow: parsedShadow.value } : {}),
             ...(parsedOutline.value !== undefined ? { outline: parsedOutline.value } : {}),
             ...(parsedRegion.value !== undefined ? { visibleRegion: parsedRegion.value } : {}),
+            ...(parsedRegionRadius.value !== undefined ? { visibleRegionRadius: parsedRegionRadius.value } : {}),
             ...(parsedAnchor !== undefined ? { anchor: parsedAnchor } : {}),
           }
         : undefined;
