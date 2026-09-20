@@ -143,6 +143,12 @@ export interface MeasuredLayerBounds {
    * painted extents stay the rectangle's — the rounded corners never
    * shrink the ink's bounding box). */
   visibleRegion: { x: number; y: number; width: number; height: number; cornerRadius?: number } | null;
+  /** The revision's vector colour (#215, spec #207 US-005, DEC-008): the
+   * stored canonical hex colour painting replaces the vector's colours
+   * with (or null — absence IS the no-colour form). Image Layers only: the
+   * setter refuses the fact on every other kind, so other kinds report
+   * null. */
+  vectorColor: string | null;
   /** The revision's ONE fill (DEC-003), for shape Layers (#208/#210): the
    * canonical fill object painting applies — a solid colour, or a linear or
    * radial gradient with its stops. Other kinds report null. */
@@ -598,6 +604,10 @@ export async function measureCompositionLayers(
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
         visibleRegion: rev.visibleRegion ?? null,
+        // The vector colour (#215): the stored canonical hex (or null —
+        // absence IS the no-colour form), reported like the effects and
+        // the fill for auditability.
+        vectorColor: rev.kind === "image" ? rev.vectorColor ?? null : null,
         // The revision's ONE fill (DEC-003), reported for shape Layers
         // (#208/#210): the canonical fill object — solid, linear, or radial —
         // the same facts painting applies, reported for auditability. Other

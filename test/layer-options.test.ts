@@ -72,12 +72,14 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     );
   });
 
-  it("the one-command post-content set and its application order come from the group fact (#229 DEC-002)", () => {
-    // The table's transform and effect groups plus anchored placement —
-    // no re-declared list.
-    expect(oneCommandAddOptionKeys()).toEqual(["anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius"]);
+  it("the one-command post-content set and its application order come from the group fact (#229 DEC-002, #215 paint)", () => {
+    // The table's paint, transform, region, and effect groups plus anchored
+    // placement — no re-declared list. The paint group (the vector colour,
+    // #215) applies first: content-level paint, before the transforms.
+    expect(oneCommandAddOptionKeys()).toEqual(["vector-color", "anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius"]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
+    expect(anyOneCommandOptionProvided({ "vector-color": "#22c55e" })).toBe(true);
     expect(anyOneCommandOptionProvided({ opacity: "0.5" })).toBe(false);
     expect(anyOneCommandOptionProvided({})).toBe(false);
   });
@@ -99,6 +101,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   it("the edit-option enumeration matches the established refusal list order", () => {
     expect(layerEditOptionKeys()).toEqual([
       "image", "from-generation", "from-matte", "text", "shape", "size", "corner-radius", "fill",
+      "vector-color",
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",

@@ -44,6 +44,7 @@ import {
   parseLayerRotation,
   parseLayerShadow,
   parseLayerTracking,
+  parseLayerVectorColor,
   parseLayerWeight,
   parseLayerWidth,
   parseMatteId,
@@ -338,10 +339,10 @@ Options:
 One-command creation (#229, US-001): 'composition add' accepts every
 placement, transform, region, effect, and text option 'layer edit' accepts
 for that Layer kind, with identical spelling, validation, and refusal
-texts. The options apply in the documented order — content, then
-transforms, then the visible region, then anchored placement, then effects
-— and publish exactly one Layer revision; any refused option publishes
-nothing (no Layer, no use, no content). On 'layer edit', --anchor cannot
+texts. The options apply in the documented order — content (and its vector
+colour), then transforms, then the visible region, then anchored placement,
+then effects — and publish exactly one Layer revision; any refused option
+publishes nothing (no Layer, no use, no content). On 'layer edit', --anchor cannot
 combine with --shadow/--outline/--visible-region; on 'add' the combination
 is defined by that order: the anchor resolves the content+transform+region
 ink in the target Composition's canvas, and the effects are then applied to
@@ -386,6 +387,21 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         setter "<width>,<color>" (e.g. "4,#000000") or
                         "none". Width is px (0..256). Painted before the
                         shadow, which is cast from the outlined composite.
+  --vector-color <hex|none>
+                        Paint a vector image Layer's shape in one colour
+                        (#215, spec #207 US-005): an absolute setter taking
+                        a hex color like #22c55e, #2c5, or #22c55e80 (alpha
+                        allowed), or "none". Applied at paint time over the
+                        vector's own alpha — every pixel the vector covers
+                        with alpha renders exactly the requested colour (a
+                        multi-colour vector becomes a single-colour
+                        silhouette); alpha edges are preserved and the
+                        retained bytes are never rewritten. Defined for
+                        vector (format svg) image content only: refused on
+                        raster image, text (--color), and shape (--fill)
+                        content before anything is published. Applied FIRST
+                        in the documented order — content-level paint, before
+                        the transforms, the region, and the effects.
   --visible-region <spec>
                         Show only a rectangular part of the Layer's content
                         (#211): an absolute setter "<x>,<y>,<width>,<height>"
@@ -452,6 +468,7 @@ function oneCommandFacts(
     flipY: boolean;
     shadow?: { dx: number; dy: number; blur: number; color: string };
     outline?: { width: number; color: string };
+    vectorColor?: string;
     visibleRegion?: { x: number; y: number; width: number; height: number; cornerRadius?: number };
   },
   anchorSpec?: string,
@@ -466,6 +483,7 @@ function oneCommandFacts(
   }
   if (rev.shadow) facts.push(`shadow ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`);
   if (rev.outline) facts.push(`outline ${rev.outline.width} ${rev.outline.color}`);
+  if (rev.vectorColor) facts.push(`vector colour ${rev.vectorColor}`);
   if (rev.visibleRegion) {
     facts.push(
       `visible region (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})` +
@@ -774,6 +792,17 @@ async function run() {
         process.exitCode = 2;
         return;
       }
+      // Vector-colour flag (#215, DEC-008/009): syntax and well-formedness at
+      // the command boundary through the SAME parser the edit path uses (the
+      // ONE fill-colour grammar); the kind/format refusals (raster image
+      // content, text, shape — naming each kind's own colour control) run in
+      // the publication path, before anything is stored.
+      const parsedVectorColor = parseLayerVectorColor(values["vector-color"]);
+      if (!parsedVectorColor.ok) {
+        output({ ok: false, error: parsedVectorColor.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
       // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
       // command boundary (exit 2), like on the edit surface. Anchored
       // placement on add is defined by the documented order (it combines
@@ -814,6 +843,7 @@ async function run() {
             ...(parsedFlip.value !== undefined ? { flip: parsedFlip.value } : {}),
             ...(parsedShadow.value !== undefined ? { shadow: parsedShadow.value } : {}),
             ...(parsedOutline.value !== undefined ? { outline: parsedOutline.value } : {}),
+            ...(parsedVectorColor.value !== undefined ? { vectorColor: parsedVectorColor.value } : {}),
             ...(parsedRegion.value !== undefined ? { visibleRegion: parsedRegion.value } : {}),
             ...(parsedRegionRadius.value !== undefined ? { visibleRegionRadius: parsedRegionRadius.value } : {}),
             ...(parsedAnchor !== undefined ? { anchor: parsedAnchor } : {}),

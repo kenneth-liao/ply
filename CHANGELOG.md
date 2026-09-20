@@ -4,6 +4,41 @@
 
 ### Added
 
+- A vector colour parameter for vector image Layers (#215, spec #207 US-005,
+  DEC-008/009/010, TEST-004): `--vector-color` paints a vector image Layer's
+  shape in one colour at paint time, over the vector's own alpha — one
+  single-colour logo file serves dark, light, and brand-coloured uses. The
+  colour is a Layer revision fact, an ABSOLUTE setter on add and `layer edit`
+  through the shared option definition (a new "paint" option group applied
+  FIRST in one-command add's documented order — it is content-level paint,
+  before the transforms, the region, and the effects), and the documented
+  removal value `none` restores the authored colours byte-identically
+  (absence IS the no-colour form; the revision hash appends the field only
+  when present, so existing revision ids do not move — DEC-010). The paint
+  never rewrites or inlines the retained SVG: it draws a solid-colour
+  element masked by the retained bytes themselves (ADR-0012's tint machinery
+  through the browser image path, which keeps the #214 inertness — no
+  scripts, no external loads), so an interior pixel renders exactly the
+  requested colour, alpha edges are preserved, and a multi-colour vector
+  becomes a single-colour silhouette (DEC-008: no single-colour detection,
+  whole-Layer only — help and README say so). The colour takes the ONE
+  fill-colour grammar (#RGB/#RRGGBB/#RRGGBBAA, alpha allowed) through a
+  solid-only gate over `parseFillSpec` — no second colour parser; a gradient
+  is refused naming `--fill`. The setter is refused on raster image Layers
+  (a raster's colours are its retained pixels), on text Layers (naming
+  `--color`), and on shape Layers (naming `--fill`) before anything is
+  published; when the same edit replaces content, the refusal reads the NEW
+  content's format. Paint order follows ADR-0023: the colour is content
+  paint — the visible region crops it and the outline and shadow hug the
+  cropped, coloured edge. `inspect`, `measure`, and `layer review` report
+  it; a Render with a recoloured vector replays byte-identically from the
+  pinned revision, and a manifest captured before a colour edit replays
+  unchanged after it. Help, README (a vector-colour section), the limits
+  guide, and CONTEXT.md's vector term record the contract. No new ADR: the
+  image content contract is unchanged (DEC-007's bar) — the bytes, the
+  inertness path, and the kind contract are untouched; the colour is a
+  paint-time revision fact like the region and the effects.
+
 - Imported vectors are inert (#214, spec #207 US-006, DEC-007, TEST-005): the
   one SVG ingestion branch now refuses a file that references anything
   outside itself, naming each reference with its kind and line (the message

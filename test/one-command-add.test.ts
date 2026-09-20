@@ -68,6 +68,19 @@ const RED: [number, number, number, number] = [255, 0, 0, 255];
 let tempDir: string;
 let projDir: string;
 let imagePath: string;
+let svgPath: string;
+
+/** A minimal two-rect SVG with a declared intrinsic size: the vector
+ *  content the vector-colour guard leg needs (the colour refuses on the
+ *  raster fixture). */
+function markSvg(): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48" viewBox="0 0 64 48">` +
+    `<rect width="64" height="48" fill="#ff0000"/>` +
+    `<rect x="16" y="12" width="32" height="24" fill="#0000ff"/>` +
+    `</svg>`
+  );
+}
 
 beforeEach(async () => {
   tempDir = await mkdtemp(path.join(tmpdir(), "ply-one-command-add-"));
@@ -76,6 +89,8 @@ beforeEach(async () => {
   await spawn(["composition", "create", "poster", "--width", "400", "--height", "300", "--project", projDir]);
   imagePath = path.join(tempDir, "red.png");
   await writeFile(imagePath, solidPng(64, 48, RED));
+  svgPath = path.join(tempDir, "mark.svg");
+  await writeFile(svgPath, markSvg());
 });
 
 afterEach(async () => {
@@ -118,6 +133,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "outline": return ["2,#00ff00"];
     case "visible-region": return ["10,10,20,20"];
     case "visible-region-radius": return ["8"];
+    case "vector-color": return ["#22c55e"];
     default: throw new Error(`guard test: no value for option "${key}"`);
   }
 }
@@ -191,6 +207,13 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
       // the same fact.
       expect(rev.visibleRegion).toEqual({ x: 10, y: 10, width: 20, height: 20, cornerRadius: 8 });
       break;
+    case "vector-color":
+      // The guard add for the vector colour uses an SVG image (the colour
+      // refuses on raster content): the canonical colour lands on the
+      // revision.
+      expect(rev.format).toBe("svg");
+      expect(rev.vectorColor).toBe("#22c55e");
+      break;
     case "font-size": expect(rev.fontSize).toBe(64); break;
     case "color": expect(rev.color).toBe("#ffcc00"); break;
     case "weight": expect(rev.weight).toBe(800); break;
@@ -207,13 +230,16 @@ test("every edit option applicable to an image Layer is accepted and APPLIED on 
   let n = 0;
   for (const key of applicable) {
     if (["image", "from-generation", "from-matte", "output"].includes(key)) continue; // content/selector options: their own adds
+    // The vector colour is defined for vector content only (the raster
+    // refusal names it): the guard add uses an SVG image for that option.
+    const useImage = key === "vector-color" ? svgPath : imagePath;
     const extra = key === "anchor"
       ? ["--x", "80", "--y", "60"]
       : key === "visible-region-radius"
         ? ["--visible-region", "10,10,20,20"]
         : [];
     const { revision } = await addJson(`p${n++}`, [
-      "--image", imagePath,
+      "--image", useImage,
       `--${key}`, ...guardValue(key, imagePath), ...extra,
     ]);
     expectAppliedFact(key, revision);

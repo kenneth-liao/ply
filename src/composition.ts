@@ -34,6 +34,8 @@ import {
   parseOutlineSpec,
   parseVisibleRegionSpec,
   parseVisibleRegionRadiusSpec,
+  parseVectorColorSpec,
+  vectorColorKindRefusal,
   validateRectangleCornerRadius,
   validateVisibleRegionAgainstContent,
   resolveEditScale,
@@ -383,6 +385,15 @@ export interface OneCommandOptions {
    *  range rule (over half the rectangle's shorter side is refused, never
    *  clamped) validates against it before anything is retained. */
   visibleRegionRadius?: string;
+  /** The raw --vector-color spec (#215, spec #207 US-005, DEC-008): ONE
+   *  paint-time colour over a vector image Layer's alpha, applied FIRST in
+   *  the documented order — it is content-level paint (ADR-0023 paints it
+   *  with the content, before the region, outline, and shadow). "none"
+   *  removes nothing on a fresh Layer (absence IS the no-colour form). The
+   *  kind/format refusals run here, before any content retention: text
+   *  Layers are refused naming --color, shape Layers naming --fill, and a
+   *  raster image content naming the raster refusal. */
+  vectorColor?: string;
   /** The parsed --anchor axes; resolved against the content+transform ink
    *  in the target Composition's canvas before the effects apply. */
   anchor?: ParsedAnchor;
@@ -436,6 +447,7 @@ async function applyOneCommandOptions(
       options.flip !== undefined ||
       options.shadow !== undefined ||
       options.outline !== undefined ||
+      options.vectorColor !== undefined ||
       options.visibleRegion !== undefined ||
       options.visibleRegionRadius !== undefined ||
       options.anchor !== undefined);
@@ -452,6 +464,7 @@ async function applyOneCommandOptions(
     ...(options.flip !== undefined ? { flip: options.flip } : {}),
     ...(options.shadow !== undefined ? { shadow: options.shadow } : {}),
     ...(options.outline !== undefined ? { outline: options.outline } : {}),
+    ...(options.vectorColor !== undefined ? { "vector-color": options.vectorColor } : {}),
     ...(options.visibleRegion !== undefined ? { "visible-region": options.visibleRegion } : {}),
     ...(options.visibleRegionRadius !== undefined ? { "visible-region-radius": options.visibleRegionRadius } : {}),
     ...(options.anchor !== undefined ? { anchor: options.anchor } : {}),
@@ -484,6 +497,29 @@ async function applyOneCommandOptions(
 
   for (const key of supplied) {
     switch (key) {
+      case "vector-color": {
+        // The vector colour (#215, spec #207 US-005, DEC-008): the FIRST
+        // stage — content-level paint, before the transforms, the region,
+        // and the effects (ADR-0023's order). "none" removes nothing on a
+        // fresh Layer (absence IS the no-colour form). The kind/format
+        // refusals run here, before any content retention: the colour is
+        // defined for vector (format svg) image content only, and the
+        // refusal names each kind's own colour control.
+        const colour = parseVectorColorSpec(options.vectorColor!);
+        if (colour !== undefined) {
+          if (rev.kind === "text") {
+            throw new Error(vectorColorKindRefusal("text", rev.layerId));
+          }
+          if (rev.kind === "shape") {
+            throw new Error(vectorColorKindRefusal("shape", rev.layerId));
+          }
+          if (context.format !== "svg") {
+            throw new Error(vectorColorKindRefusal("raster", rev.layerId, context.format));
+          }
+          rev.vectorColor = colour;
+        }
+        break;
+      }
       case "resize": {
         const scale = resolveEditScale({ resizeFactor: options.resizeFactor! }, pseudoPrev, rev.layerId);
         rev.scaleX = scale.scaleX;
@@ -1585,6 +1621,11 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
     ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
     ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
+    // The vector colour (#215, DEC-002 — a revision fact shared as a whole):
+    // copied verbatim with the Layer. A source revision cannot carry the
+    // fact on raster content (the setter's raster gate), so no format gate
+    // is needed here — the copy re-validates through the revision reader.
+    ...(source.vectorColor !== undefined ? { vectorColor: source.vectorColor } : {}),
   };
 }
 
