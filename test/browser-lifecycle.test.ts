@@ -52,12 +52,19 @@ const badFont = (): SceneLayer => ({
 
 function chromiumProcessAlive(): boolean {
   const execPath = chromium.executablePath();
-  const ps = execFileSync("ps", ["-A", "-o", "command="], { encoding: "utf8" });
+  const self = String(process.pid);
+  // Two -o flags, not "ppid=,command=": procps reads the latter as one
+  // column with a header, BSD ps as two. This form is the same on both.
+  const ps = execFileSync("ps", ["-A", "-o", "ppid=", "-o", "command="], { encoding: "utf8" });
   // Headless launches are chrome-headless-shell, not executablePath()'s
   // Chromium app — match either, scoped to the playwright cache so we never
-  // see the user's real browser.
+  // see the user's real browser. Only children of this process count: the
+  // browser under test is launched by it, and a Chromium launched by anything
+  // else on the machine says nothing about this lifecycle (#253). Direct
+  // children only, on purpose: Chromium's helpers exit with their browser.
   return ps
     .split("\n")
+    .filter((l) => l.trim().split(/\s+/, 1)[0] === self)
     .some((l) => l.includes(execPath) || (l.includes("chrome-headless-shell") && l.includes("ms-playwright")));
 }
 
