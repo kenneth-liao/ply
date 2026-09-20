@@ -111,6 +111,22 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     }
     expect(layerContentKindConflict({ image: "a.png", tracking: "1" }, "image", "edit")).toBeDefined();
   });
+
+  it("the blank --image truthiness hunk is pinned on both surfaces (INT-1)", () => {
+    // The add surface's established check reads truthiness: a blank --image
+    // is not a supplied content kind, so the exclusivity rule does not fire
+    // and the command falls past it to the add path's later refusals
+    // (missing content without content, the text branch with --text).
+    expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "add")).toBeUndefined();
+    // The edit surface reads presence exactly: the exclusivity refusal fires.
+    expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "edit")).toBe(
+      "--image and text options (--text, --font, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
+    );
+    // The other content kinds keep strict presence on both surfaces: a
+    // blank --image still conflicts with --from-generation/--from-matte.
+    expect(layerContentKindConflict({ image: "", "from-generation": "j1" }, "from-generation", "add")).toBeDefined();
+    expect(layerContentKindConflict({ image: "", "from-matte": "m1" }, "from-matte", "edit")).toBeDefined();
+  });
 });
 
 describe("shared option validators: both surfaces' established texts", () => {

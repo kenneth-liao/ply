@@ -30,7 +30,13 @@
  * like --fork/--in-place, add's defaults and required-content rules), and
  * the help text (each surface's manual describes its own contract). Adding
  * an option means adding it here — to the table, the parseArgs entries,
- * and one validator — and both surfaces inherit it.
+ * and one validator — and both surfaces inherit it. The one exception is
+ * the text width axis on the add surface: `--width` names the canvas
+ * dimension there, and the add path's established checks read that value
+ * as the text axis, so widening the add key list cannot add the text width
+ * axis — disambiguating canvas `--width` from the text width axis is #229
+ * work (one-command creation gains the transform and effect options by
+ * widening the list).
  */
 import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
 import { parseShadowSpec, parseOutlineSpec, resolveTextTypographyControls } from "./layer.js";
@@ -170,11 +176,14 @@ export function layerEditOptionKeys(): LayerOptionKey[] {
 }
 
 /** The Layer options `composition add` accepts today: content, text style,
- *  and placement (one-command creation, #229, widens this to the edit
- *  surface's transform and effect options by widening this list). The text
- *  width axis is absent by name: on this surface `--width` names the canvas
- *  dimension, and the add path's established checks read that value where
- *  the edit surface reads the text axis. */
+ *  and placement. One-command creation (#229) widens this list to the edit
+ *  surface's transform and effect options, which then reach add without
+ *  per-option work. The text width axis is absent by name and NOT
+ *  reachable by widening this list: on this surface `--width` names the
+ *  canvas dimension, and the add path's established checks read that value
+ *  where the edit surface reads the text axis — disambiguating canvas
+ *  `--width` from the text width axis (a rename/alias and the conflation's
+ *  tests) is #229 work, not a widening of this list. */
 export const COMPOSITION_ADD_OPTION_KEYS = [
   "image", "from-generation", "from-matte", "output", "text", "font", "font-size",
   "color", "weight", "tracking", "line-height", "x", "y", "opacity",
@@ -239,8 +248,9 @@ export function layerContentKindConflict(
   switch (kind) {
     case "image": {
       // Presence, except for the add surface's established check, which
-      // reads truthiness: a blank --image falls through to that surface's
-      // missing-content refusal instead of the exclusivity refusal.
+      // reads truthiness: a blank --image is not a supplied content kind
+      // there, so the command falls past this refusal to the add path's
+      // later refusals (missing content, or the text branch).
       const imageTrigger = surface === "edit" ? args.image !== undefined : !!args.image;
       if (imageTrigger && textSide) {
         return surface === "edit"
