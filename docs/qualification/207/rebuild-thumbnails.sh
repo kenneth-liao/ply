@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Rebuild the "Claude Skills" (t1) and "Master Opencode" (t7) reference
-# thumbnails from the first-run workspace (spec #207 US-007, ticket #216).
+# Rebuild the "Claude Skills" (t2), "Skills That LEARN" (t1, kept as an
+# extra), and "Master Opencode" (t7) reference thumbnails from the first-run
+# workspace (spec #207 US-007, ticket #216).
 #
 # Qualification contract: every bar, background, the card, and the logo is
 # built INSIDE ply — shape Layers for the bars/backgrounds/card (no baked
@@ -37,7 +38,9 @@ else
 fi
 
 for f in src/wm-cc.png src/k-skeptical-shrug-1580.png \
-         src/k-teeth-smile-point-side-1559.png; do
+         src/k-teeth-smile-point-side-1559.png src/bg-grid.png \
+         src/k-teeth-smile-frontal-1511.png \
+         out/matting/m-claude/outputs/f184305ce0999863e8e105e6484691fc7dcccffa31eebabfa0d6a1019599e567.png; do
   [ -f "$WS/$f" ] || { echo "missing workspace input: $WS/$f" >&2; exit 1; }
 done
 LOGO="${PLY_QUAL_LOGO:-$HOME/projects/business/theailaunchpad/ai-launchpad-content/assets/logos/opencode/opencode.svg}"
@@ -66,7 +69,43 @@ t() { # t <comp> <use> <text> <text-args...>
   add "$c" "$n" --text "$s" "$@"
 }
 
-# --- t1 — "Claude Skills" ----------------------------------------------------
+# --- t2 — "Claude Skills" (the qualified reference) ----------------------------
+# Background: the first run's bg-grid.png is a PERSPECTIVE grid — its lines
+# sit at uneven, radiating spacings (x = 80 and 1200 on one row, y = 40 and
+# 680 on one column), which ply's two shapes-plus-parameters vocabulary
+# cannot draw (no drawing language, spec #207 OOS-005/DEC-002). Uniform thin
+# shape lines would paint a different background, so the baked grid is
+# imported as-is and the gap is recorded in this directory's README. The
+# bars, the cutout framing, and the wordmark's frame are the ply-only parts.
+# The pixel-CLAUDE wordmark is the first run's own generated+matted asset
+# (out/matting/m-claude), reused unmodified — a raster with true alpha, so
+# --vector-color has no t2 element (it is defined for SVG Layers only).
+$PLY composition create t2 --width 1280 --height 720 -p "$P" >/dev/null
+add t2 bg --image "$WS/src/bg-grid.png"
+add t2 kenny --image "$WS/src/k-teeth-smile-frontal-1511.png"
+# Cutout framing in ply: frame away the transparent margin (1 px left,
+# 8 px top) without touching the file.
+ed t2 kenny --visible-region "1,8,965,1233"
+ed t2 kenny --resize-to x1000
+ed t2 kenny --x 510 --y -100
+add t2 wm --image "$WS/out/matting/m-claude/outputs/f184305ce0999863e8e105e6484691fc7dcccffa31eebabfa0d6a1019599e567.png"
+# The matte carries huge transparent margins around the wordmark's ink
+# (67,237,1253,295 of 1376x768) — the visible region frames it to the mark.
+ed t2 wm --visible-region "67,237,1253,295"
+ed t2 wm --resize-to 640x
+ed t2 wm --x 50 --y -49
+add t2 barS --shape rectangle --size 344x130 --fill "#d97757"
+ed t2 barS --x 90 --y 250
+t t2 skills "Skills" --font Archivo --weight 700 --font-size 120 --color '#ffffff'
+ed t2 skills --x 105 --y 253
+add t2 barY --shape rectangle --size 542x130 --fill "#fff200"
+ed t2 barY --x 80 --y 420
+t t2 insane "Is Insane" --font Archivo --weight 700 --font-size 120 --color '#000000'
+ed t2 insane --x 92 --y 418
+$PLY composition render t2 -p "$P" --out "$OUT/renders/t2.png" >/dev/null
+$PLY composition measure t2 -p "$P" > "$OUT/measure/t2.txt"
+
+# --- t1 — "Skills That LEARN" (kept as an extra) -----------------------------
 # Background: was bg-teal.png (ImageMagick radial gradient); now a shape
 # Layer whose fill IS the gradient — centre #2a6e69 out to #123b3a at the
 # farthest side. Bar: was r-cream.png; now a shape Layer filled #ffe27a.
@@ -132,5 +171,5 @@ ed t7 kenny --anchor right,bottom --x 1270 --y 730
 $PLY composition render t7 -p "$P" --out "$OUT/renders/t7.png" >/dev/null
 $PLY composition measure t7 -p "$P" > "$OUT/measure/t7.txt"
 
-echo "wrote $OUT/renders/t1.png, $OUT/renders/t7.png"
-echo "measure: $OUT/measure/t1.txt, $OUT/measure/t7.txt"
+echo "wrote $OUT/renders/t1.png, $OUT/renders/t2.png, $OUT/renders/t7.png"
+echo "measure: $OUT/measure/t1.txt, $OUT/measure/t2.txt, $OUT/measure/t7.txt"
