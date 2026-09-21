@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "composition": "hero",
+  "canvas": {
+    "width": 320,
+    "height": 240
+  },
+  "supersample": 2,
+  "environment": {
+    "tool": {
+      "name": "ply",
+      "version": "4.23.0"
+    },
+    "runtime": "bun 1.4.0",
+    "browser": "chromium 151.0.7922.34",
+    "platform": "darwin-arm64"
+  },
+  "output": "renders/hero-mubtt4wv-af1f94e2.png",
+  "createdAt": "2026-09-21T22:37:56.781Z",
+  "layers": [
+    {
+      "name": "backdrop",
+      "layerId": "layer_mubtt3hf_ernx9v",
+      "revisionId": "rev_9b7962f49c309cc0"
+    },
+    {
+      "name": "tagline",
+      "layerId": "layer_mubtt3l6_rip7p7",
+      "revisionId": "rev_2377f09d1fc788b0"
+    }
+  ]
+}
