@@ -2177,8 +2177,8 @@ export function parseOutlineSpec(spec: string): LayerOutline | undefined {
  * parser exists. Exported for the CLI boundary: the command classifies
  * malformed specs as usage errors (exit 2) with this same parser, so the
  * two never disagree. The kind/format refusals (raster image, text, shape)
- * are semantic — they read live state — and live in
- * `resolveEditVectorColor` / the one-command application path.
+ * are semantic — they read the revision the option resolves against — and
+ * live in the shared application case (`applyVectorColor`).
  */
 export function parseVectorColorSpec(spec: string): string | undefined {
   const raw = spec.trim();

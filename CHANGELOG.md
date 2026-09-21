@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- One registration of a Layer option serves both `layer edit` and
+  `composition add` (#263, spec #226 DEC-001, finding A226-002 residual
+  after #258): the option table's entries carry each post-content option's
+  ONE boundary parse and ONE application case, and both surfaces dispatch
+  through them over their established check and application orders — no
+  per-option parse block or application call remains on either surface, no
+  add-only registry remains, and a table option with no registration fails
+  loudly at runtime on both surfaces instead of being silently dropped.
+  Behaviour-preserving: refusal text, exit statuses, check order, and
+  rendered bytes are unchanged (the refusal-parity, one-command parity,
+  plumbing-probe, layer-edit, and layer-options suites pin it).
+
 ### Added
 
 - The comparison sheet command (`ply composition sheet <input...>`, #233,

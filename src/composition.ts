@@ -355,17 +355,18 @@ export interface AddLayerOptions {
  * so existing `add` invocations keep their meaning and their exact stored
  * revision bytes.
  *
- * There is NO per-option application code here (DEC-001, A226-002): each
- * supplied key dispatches through its ONE shared application case
- * (`ONE_COMMAND_OPTION_APPLY` in one-command.ts — the edit-path resolvers,
- * spec parsers, and anchored-placement authority live there with it), and
- * a key without a case fails loudly (review INT-plumb-1): an option that
- * parses at the command boundary but has no application case would
- * otherwise be silently dropped while the guard test stays green — exactly
- * the parse-but-drop gap. The guard test (TEST-003) reads the applied
- * facts back from the published revision per kind, and the probe test
- * registers a new option through the shared definition alone, so a future
- * table key without a case fails the build, not a Project.
+ * There is NO per-option application code here (DEC-001, A226-002, #263):
+ * each supplied key dispatches through its ONE shared application case,
+ * carried on the shared option table itself (the case takes the context it
+ * resolves against — the stored revision under lock on edit, the
+ * provisional fresh revision here), and a key without a case fails loudly
+ * (review INT-plumb-1): an option that parses at the command boundary but
+ * has no application case would otherwise be silently dropped while the
+ * guard test stays green — exactly the parse-but-drop gap. The guard test
+ * (TEST-003) reads the applied facts back from the published revision per
+ * kind, and the probe test registers a new option through the shared
+ * definition alone, so a future table key without a case fails the build,
+ * not a Project.
  */
 async function applyOneCommandOptions(
   revision: LayerRevision,

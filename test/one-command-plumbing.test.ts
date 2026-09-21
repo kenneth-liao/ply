@@ -190,6 +190,41 @@ test("the same probe registration parses, validates, and applies on layer edit w
   expect(stored.probeStamp).toBe("good");
 });
 
+test("a table option with no registration throws at runtime on both surfaces (the #262 review gap, never silently absent)", () => {
+  const UNREGISTERED_KEY = "unregistered-stamp" as LayerOptionKey;
+  (LAYER_OPTION_DEFS as LayerOptionDef[]).push({
+    key: UNREGISTERED_KEY,
+    group: "effect",
+    appliesTo: ["image", "text", "shape"],
+    editOption: true,
+  });
+  (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[UNREGISTERED_KEY] = { type: "string" };
+  try {
+    // Add: the boundary parse throws loudly — the flag can never be
+    // silently dropped from a published revision.
+    let addThrew: unknown;
+    try {
+      parseOneCommandOptionValues({ [UNREGISTERED_KEY]: "good" } as Record<string, string>);
+    } catch (err) {
+      addThrew = err;
+    }
+    expect((addThrew as Error).message).toContain(`"--${UNREGISTERED_KEY}"`);
+
+    // Edit: the same table key without a registration throws at the check
+    // phase — loud on both surfaces.
+    let editThrew: unknown;
+    try {
+      checkEditLayerOptions({ [UNREGISTERED_KEY]: "good" } as Record<string, string>);
+    } catch (err) {
+      editThrew = err;
+    }
+    expect((editThrew as Error).message).toContain(`"--${UNREGISTERED_KEY}"`);
+  } finally {
+    (LAYER_OPTION_DEFS as LayerOptionDef[]).pop();
+    delete (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[UNREGISTERED_KEY];
+  }
+});
+
 test("the shared parse and apply registries cover every post-content option (the poka-yoke the switch default carried)", () => {
   // The post-content set is DERIVED from the table (oneCommandAddOptionKeys)
   // — no local re-enumeration to decay: every key it yields must have an

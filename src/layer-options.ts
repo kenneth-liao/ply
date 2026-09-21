@@ -26,21 +26,22 @@
  *   one place, selected by surface — they are content-kind combination
  *   rules, not shared-option value validation.
  *
- * What deliberately stays per-command: check *sequencing* (each surface
- * keeps its established check order), command-level policy (edit intents
- * like --fork/--in-place, add's defaults and required-content rules), and
- * the help text (each surface's manual describes its own contract). Adding
- * an option means adding it here — to the table, the parseArgs entries,
- * and one validator — and both surfaces inherit it.
+ * What deliberately stays per-command: each surface's established check
+ * and application *orders* (held as order lists, not per-option code),
+ * command-level policy (edit intents like --fork/--in-place, add's
+ * defaults and required-content rules), and the help text (each surface's
+ * manual describes its own contract). Adding a post-content option means
+ * adding it here — to the table with its parse and apply, the parseArgs
+ * entry, and the order-list membership — and both surfaces inherit it.
  *
- * One-command `composition add` (#229, DEC-002; #258, A226-002) consumes
- * this table directly: its accepted keys are the table's keys, its ONE
- * boundary parse and ONE application case per option are the shared
- * registries of `one-command.ts` (`parseOneCommandOptionValues`,
- * `ONE_COMMAND_OPTION_APPLY`), and its post-content application order
- * (transforms, then anchored placement, then effects) is derived from the
- * table's group fact — no add-side parse block, options member, presence
- * check, name mapping, or application case names an option. Per-kind
+ * Both command surfaces consume this table directly (#263): the option's
+ * ONE boundary parse and ONE application case are carried on the table
+ * itself (`parse` / `apply`), and both surfaces dispatch through them over
+ * their established check and application orders (`EDIT_CHECK_ORDER`,
+ * `EDIT_APPLICATION_ORDER`, `ADD_PARSE_ORDER`,
+ * `oneCommandApplicationOrder`) — no per-option parse block, options
+ * member, presence check, name mapping, or application case names an
+ * option on either surface. Per-kind
  * applicability is NOT a second enforcement surface here: the two
  * surfaces' kind parity rests on the shared domain validators (the
  * content-kind exclusivity rule above the resize path's text-Layer
