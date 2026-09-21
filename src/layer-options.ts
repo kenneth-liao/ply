@@ -19,11 +19,12 @@
  *   (`parseShadowSpec`, `parseOutlineSpec`, `resolveTextAxes`,
  *   `resolveTextTypographyControls`, `resolveFace`), so the CLI boundary
  *   and the publish path can never disagree. Both command boundaries call
- *   these functions; the refusal wording lives here too — where the two
- *   surfaces' established wording differs (coordinates, font size, the
- *   content-kind exclusivity refusals), both wordings live in this one
- *   place, selected by surface, so today's texts survive byte-identically
- *   and no option is ever worded in two files.
+ *   these functions; the refusal wording lives here too. The coordinate and
+ *   font-size refusals carry ONE wording on every surface (the `layer edit`
+ *   wording is canonical — the decision recorded on #226); the content-kind
+ *   exclusivity refusals keep each surface's established wording, in this
+ *   one place, selected by surface — they are content-kind combination
+ *   rules, not shared-option value validation.
  *
  * What deliberately stays per-command: check *sequencing* (each surface
  * keeps its established check order), command-level policy (edit intents
@@ -451,25 +452,20 @@ export function layerContentKindConflict(
 export type OptionParse<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /**
- * Placement coordinate (--x / --y): the ONE shape validation. Blank and
- * non-finite values are refused; the two surfaces' established wording
- * differs (edit names the single axis, add names the pair), so both wordings
- * live here, selected by surface.
+ * Placement coordinate (--x / --y): the ONE shape validation, ONE wording
+ * on every surface (#257): blank and non-finite values are refused; the
+ * refusal names the single axis.
  */
 export function parseLayerCoordinate(
   key: "x" | "y",
   raw: string | undefined,
-  surface: LayerOptionSurface,
 ): OptionParse<number | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
   const value = parseNumericArgument(raw);
   if (!Number.isFinite(value)) {
     return {
       ok: false,
-      error:
-        surface === "edit"
-          ? `Placement coordinate (--${key}) must be a finite number.`
-          : "Placement coordinates (--x, --y) must be finite numbers.",
+      error: `Placement coordinate (--${key}) must be a finite number.`,
     };
   }
   return { ok: true, value };
@@ -486,23 +482,19 @@ export function parseLayerOpacity(raw: string | undefined): OptionParse<number |
 }
 
 /**
- * Font size (--font-size): the ONE shape validation. The edit surface's
- * established wording and range are stricter (positive finite); the add
- * surface's are looser (finite; semantic range enforcement stays in the
- * ingestion path). Both wordings live here, selected by surface.
+ * Font size (--font-size): the ONE shape-and-range validation, ONE wording
+ * on every surface (#257): a positive finite number. The ingestion paths'
+ * range validator (`validateTextContent`) keeps its role for callers that
+ * reach it without this boundary parse; the canonical refusal for the
+ * option at both command boundaries is this one.
  */
 export function parseLayerFontSize(
   raw: string | undefined,
-  surface: LayerOptionSurface,
 ): OptionParse<number | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
   const value = parseNumericArgument(raw);
-  if (surface === "edit") {
-    if (!Number.isFinite(value) || value <= 0) {
-      return { ok: false, error: "Font size (--font-size) must be a positive finite number." };
-    }
-  } else if (!Number.isFinite(value)) {
-    return { ok: false, error: "Font size (--font-size) must be a finite number." };
+  if (!Number.isFinite(value) || value <= 0) {
+    return { ok: false, error: "Font size (--font-size) must be a positive finite number." };
   }
   return { ok: true, value };
 }

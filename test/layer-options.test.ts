@@ -168,17 +168,17 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
 });
 
 describe("shared option validators: both surfaces' established texts", () => {
-  it("coordinates: edit names the axis, add names the pair", () => {
-    expect(parseLayerCoordinate("x", "abc", "edit")).toEqual({
+  it("coordinates: one wording on every surface (#257), the refusal names the axis", () => {
+    expect(parseLayerCoordinate("x", "abc")).toEqual({
       ok: false,
       error: "Placement coordinate (--x) must be a finite number.",
     });
-    expect(parseLayerCoordinate("y", "abc", "add")).toEqual({
+    expect(parseLayerCoordinate("y", "abc")).toEqual({
       ok: false,
-      error: "Placement coordinates (--x, --y) must be finite numbers.",
+      error: "Placement coordinate (--y) must be a finite number.",
     });
-    expect(parseLayerCoordinate("x", "-5", "add")).toEqual({ ok: true, value: -5 });
-    expect(parseLayerCoordinate("y", "", "edit")).toMatchObject({ ok: false });
+    expect(parseLayerCoordinate("x", "-5")).toEqual({ ok: true, value: -5 });
+    expect(parseLayerCoordinate("y", "")).toMatchObject({ ok: false });
   });
 
   it("opacity: one text for both surfaces, 0..1", () => {
@@ -189,16 +189,17 @@ describe("shared option validators: both surfaces' established texts", () => {
     expect(parseLayerOpacity("0.5")).toEqual({ ok: true, value: 0.5 });
   });
 
-  it("font size: edit is positive-finite, add finite-only", () => {
-    expect(parseLayerFontSize("0", "edit")).toEqual({
+  it("font size: one positive-finite wording and range on every surface (#257)", () => {
+    expect(parseLayerFontSize("0")).toEqual({
       ok: false,
       error: "Font size (--font-size) must be a positive finite number.",
     });
-    expect(parseLayerFontSize("0", "add")).toEqual({ ok: true, value: 0 });
-    expect(parseLayerFontSize("abc", "add")).toEqual({
+    expect(parseLayerFontSize("-4")).toMatchObject({ ok: false });
+    expect(parseLayerFontSize("abc")).toEqual({
       ok: false,
-      error: "Font size (--font-size) must be a finite number.",
+      error: "Font size (--font-size) must be a positive finite number.",
     });
+    expect(parseLayerFontSize("64")).toEqual({ ok: true, value: 64 });
   });
 
   it("weight, width, tracking: one finite-number text everywhere", () => {
