@@ -7,46 +7,15 @@ import { resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } fr
 import {
   LAYER_OPTION_PARSE_ARGS,
   anyLayerEditOptionProvided,
-  isAnchorConflicting,
-  anchorConflictOptionList,
-  layerContentKindConflict,
+  checkEditLayerOptions,
   layerDashNumericFlags,
   layerEditOptionKeys,
-  parseGenerationJobId,
-  parseGenerationOutputSelector,
-  parseGenerationOutputValue,
-  parseLayerAnchor,
-  parseLayerCoordinate,
-  parseLayerFlip,
-  parseLayerFontSize,
-  parseLayerLineHeight,
-  parseLayerOpacity,
-  parseLayerOutline,
-  parseLayerVisibleRegion,
-  parseLayerVisibleRegionRadius,
-  parseLayerRotation,
-  parseLayerShadow,
-  parseLayerTracking,
-  parseLayerVectorColor,
-  parseLayerWeight,
-  parseLayerWidth,
-  parseMatteId,
-  parseResizeOptions,
-  validateTextFaceAxes,
-  validateTextFontSource,
-  parseLayerFontFile,
-  parseLayerFill,
-  parseShapeCornerRadius,
-  parseShapeGeometry,
-  parseShapeSize,
-  validateTextTypographyControls,
   type LayerOptionArgs,
-  type OptionParse,
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
 } from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
-import { formatFill } from "./fill.js";
+import { formatFill, type LayerFill } from "./fill.js";
 import { parseLayerAddress, resolveLayerToken, LayerAddressSyntaxError, type ResolvedLayerToken } from "./layer-address.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
@@ -617,367 +586,23 @@ async function run() {
         return;
       }
 
-      // Content-kind exclusivity (#107, #108): one rule from the shared
-      // option table (DEC-001) — --image, --from-generation, --from-matte,
-      // --text, and the text style options are mutually exclusive kinds.
-      const imageConflict = layerContentKindConflict(values, "image", "edit");
-      if (imageConflict) {
-        output({ ok: false, error: imageConflict }, isJson);
-        process.exitCode = 2;
+      // Content-kind exclusivity, each option's boundary parse, and the
+      // cross-option policy rules are ONE check-order list
+      // (EDIT_CHECK_ORDER) dispatched through the shared option table's
+      // parse registrations (DEC-001, #263): every option's boundary parse
+      // is the table's own validator — the same function composition add
+      // runs, so the two boundaries can never disagree — and the policy
+      // steps are this surface's cross-option rules at their established
+      // positions (#257). Byte-identical refusals and exit statuses; no
+      // per-option parse block remains on the edit surface.
+      const checked = checkEditLayerOptions(values);
+      if (!checked.ok) {
+        output({ ok: false, error: checked.error }, isJson);
+        process.exitCode = checked.exitCode;
         return;
       }
-
-      // Generated-content ingestion (#107): --from-generation is an image
-      // content option, mutually exclusive with --image and the text options;
-      // --output selects one output of the job and is meaningless without it.
-      const generationJobId = parseGenerationJobId(values["from-generation"]);
-      if (!generationJobId.ok) {
-        output({ ok: false, error: generationJobId.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const generationConflict = layerContentKindConflict(values, "from-generation", "edit");
-      if (generationConflict) {
-        output({ ok: false, error: generationConflict }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      // Matting-content ingestion (#108): --from-matte is an image content
-      // option, mutually exclusive with --image, --from-generation, and the
-      // text options.
-      const matteId = parseMatteId(values["from-matte"]);
-      if (!matteId.ok) {
-        output({ ok: false, error: matteId.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const matteConflict = layerContentKindConflict(values, "from-matte", "edit");
-      if (matteConflict) {
-        output({ ok: false, error: matteConflict }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const outputSelector = parseGenerationOutputSelector(values.output, values["from-generation"] !== undefined);
-      if (!outputSelector.ok) {
-        output({ ok: false, error: outputSelector.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      if (values.output !== undefined) {
-        const outputValue = parseGenerationOutputValue(values.output);
-        if (!outputValue.ok) {
-          output({ ok: false, error: outputValue.error }, isJson);
-          process.exitCode = 2;
-          return;
-        }
-      }
-
-      // Each option's shape validation below is the shared validator from
-      // the option definition (DEC-001) — the same function composition add
-      // runs, so the two boundaries can never disagree.
-      const placementX = parseLayerCoordinate("x", values.x);
-      if (!placementX.ok) {
-        output({ ok: false, error: placementX.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const x = placementX.value;
-      const placementY = parseLayerCoordinate("y", values.y);
-      if (!placementY.ok) {
-        output({ ok: false, error: placementY.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const y = placementY.value;
-      const parsedOpacity = parseLayerOpacity(values.opacity);
-      if (!parsedOpacity.ok) {
-        output({ ok: false, error: parsedOpacity.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const opacity = parsedOpacity.value;
-      const parsedFontSize = parseLayerFontSize(values["font-size"]);
-      if (!parsedFontSize.ok) {
-        output({ ok: false, error: parsedFontSize.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const fontSize = parsedFontSize.value;
-      // Text axes (#179, ADR-0021): shape at the command boundary (exit 2),
-      // and range when --font names the face — the SAME validator the edit
-      // path uses, so the boundaries never disagree. Without --font the
-      // face is the Layer's retained font, so the range refusal is semantic
-      // (exit 1) inside the edit path, like the other retained-state refusals.
-      const parsedWeight = parseLayerWeight(values.weight);
-      if (!parsedWeight.ok) {
-        output({ ok: false, error: parsedWeight.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const weight = parsedWeight.value;
-      const parsedWidth = parseLayerWidth(values.width);
-      if (!parsedWidth.ok) {
-        output({ ok: false, error: parsedWidth.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const width = parsedWidth.value;
-      // Text typography (#187, ADR-0021): font-independent, so shape and
-      // range are usage errors (exit 2) here unconditionally, through the
-      // SAME validator the edit path uses — the edit path re-resolves before
-      // anything publishes. `--tracking 0` and `--line-height normal` are
-      // the clear syntaxes; the resolver normalizes both to absent (one
-      // stored form per look).
-      const parsedTracking = parseLayerTracking(values.tracking);
-      if (!parsedTracking.ok) {
-        output({ ok: false, error: parsedTracking.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const tracking = parsedTracking.value;
-      const parsedLineHeight = parseLayerLineHeight(values["line-height"]);
-      if (!parsedLineHeight.ok) {
-        output({ ok: false, error: parsedLineHeight.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const lineHeight = parsedLineHeight.value;
-      const typographyError = validateTextTypographyControls(tracking, lineHeight);
-      if (typographyError !== undefined) {
-        output({ ok: false, error: typographyError }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      if (values.font !== undefined || values["font-file"] !== undefined) {
-        // One font source per edit (#232): --font and --font-file are
-        // mutually exclusive — a usage error (exit 2) at the boundary.
-        const fontSourceError = validateTextFontSource(values.font, values["font-file"]);
-        if (fontSourceError !== undefined) {
-          output({ ok: false, error: fontSourceError }, isJson);
-          process.exitCode = 2;
-          return;
-        }
-      }
-      if (values["font-file"] !== undefined) {
-        // A font file's existence and validity are semantic (the ingestion
-        // path reads the bytes once and parses them — DEC-006), so its
-        // refusals stay exit-1 like the other retained-state refusals; only
-        // the blank-path shape is a usage error here.
-        const parsedFontFile = parseLayerFontFile(values["font-file"]);
-        if (!parsedFontFile.ok) {
-          output({ ok: false, error: parsedFontFile.error }, isJson);
-          process.exitCode = 2;
-          return;
-        }
-      }
-      if (values.font !== undefined) {
-        // An unknown family keeps its established semantic refusal (exit 1,
-        // resolveFace's throw), reported through the same refusal envelope
-        // the add surface reports it with — identical refusal text and exit
-        // status on both surfaces (#257); only weight/width range errors are
-        // usage errors here (exit 2). The ONLY throw expected here is
-        // resolveFace's unknown-family refusal; any other throw presenting
-        // as this exit-1 refusal is a bug, not a refusal contract.
-        let axesError: string | undefined;
-        try {
-          axesError = validateTextFaceAxes(values.font, weight, width);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          output({ ok: false, error: message }, isJson);
-          process.exitCode = 1;
-          return;
-        }
-        if (axesError !== undefined) {
-          output({ ok: false, error: axesError }, isJson);
-          process.exitCode = 2;
-          return;
-        }
-      }
-
-      // Resize flags (#133): syntax and well-formedness at the command
-      // boundary through the shared one-path validator (DEC-001); scale
-      // semantics, caps, and kind conflicts are enforced by the edit path
-      // before any staging, so invalid resize inputs never advance live state.
-      const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
-      if (!resize.ok) {
-        output({ ok: false, error: resize.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const resizeFactor = resize.value.resizeFactor;
-      const resizeTo = resize.value.resizeTo;
-
-      // Rotate flag (#134): syntax and well-formedness at the command
-      // boundary; the finite-number semantic check is enforced again by the
-      // edit path before any staging, so an invalid angle never advances
-      // live state.
-      const rotation = parseLayerRotation(values.rotate);
-      if (!rotation.ok) {
-        output({ ok: false, error: rotation.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const rotateDeg = rotation.value;
-
-      // Flip flag (#135): the reflection mode is validated at the command
-      // boundary as a usage error (exit 2), so an invalid mode never reaches
-      // the edit path; the absolute-setter semantics are enforced again by
-      // the edit path before any staging.
-      const parsedFlip = parseLayerFlip(values.flip);
-      if (!parsedFlip.ok) {
-        output({ ok: false, error: parsedFlip.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const flip = parsedFlip.value;
-
-      // Shape content options (#208, #209): grammar at the command boundary
-      // through the SAME parsers the add surface runs; semantics are the
-      // edit path's absolute setters on a shape Layer and the kind-stability
-      // refusal on image and text Layers, both before anything is staged.
-      const parsedEditShape = parseShapeGeometry(values.shape);
-      if (!parsedEditShape.ok) {
-        output({ ok: false, error: parsedEditShape.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedEditSize = parseShapeSize(values.size);
-      if (!parsedEditSize.ok) {
-        output({ ok: false, error: parsedEditSize.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedEditRadius = parseShapeCornerRadius(values["corner-radius"]);
-      if (!parsedEditRadius.ok) {
-        output({ ok: false, error: parsedEditRadius.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedEditFill = parseLayerFill(values.fill);
-      if (!parsedEditFill.ok) {
-        output({ ok: false, error: parsedEditFill.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-
-      // Shadow flag (#139, ADR-0018): syntax and well-formedness at the
-      // command boundary as a usage error (exit 2) through the SAME parser
-      // the edit path uses, so the two boundaries never disagree; the
-      // absolute-setter semantics are enforced again by the edit path before
-      // any staging.
-      const parsedShadow = parseLayerShadow(values.shadow);
-      if (!parsedShadow.ok) {
-        output({ ok: false, error: parsedShadow.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const shadowSpec = parsedShadow.value;
-
-      // Outline flag (#140, ADR-0019): syntax and well-formedness at the
-      // command boundary as a usage error (exit 2) through the SAME parser
-      // the edit path uses, so the two boundaries never disagree; the
-      // absolute-setter semantics are enforced again by the edit path before
-      // any staging.
-      const parsedOutline = parseLayerOutline(values.outline);
-      if (!parsedOutline.ok) {
-        output({ ok: false, error: parsedOutline.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const outlineSpec = parsedOutline.value;
-
-      // Visible-region flag (#211, ADR-0023): syntax and well-formedness at
-      // the command boundary as a usage error (exit 2) through the SAME
-      // parser the edit path uses, so the two boundaries never disagree;
-      // the absolute-setter semantics (including the content-bounds
-      // validation and the no-content-edit-in-the-same-edit rule) are
-      // enforced again by the edit path before any staging.
-      const parsedRegion = parseLayerVisibleRegion(values["visible-region"]);
-      if (!parsedRegion.ok) {
-        output({ ok: false, error: parsedRegion.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const regionSpec = parsedRegion.value;
-
-      // Visible-region corner radius (#212): syntax and well-formedness at
-      // the command boundary as a usage error (exit 2) through the SAME
-      // parser the edit path uses; the range rule (over half the region
-      // rectangle's shorter side is refused, never clamped) and the
-      // needs-a-region rule are semantic, enforced by the edit path before
-      // any staging.
-      const parsedRegionRadius = parseLayerVisibleRegionRadius(values["visible-region-radius"]);
-      if (!parsedRegionRadius.ok) {
-        output({ ok: false, error: parsedRegionRadius.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const regionRadiusSpec = parsedRegionRadius.value;
-
-      // Vector-colour flag (#215, DEC-008/009): syntax and well-formedness at
-      // the command boundary as a usage error (exit 2) through the SAME
-      // parser the edit path uses (the ONE fill-colour grammar); the
-      // kind/format refusals (raster image, text, shape — naming each kind's
-      // own colour control) are semantic, enforced by the edit path before
-      // anything is staged.
-      const parsedVectorColor = parseLayerVectorColor(values["vector-color"]);
-      if (!parsedVectorColor.ok) {
-        output({ ok: false, error: parsedVectorColor.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const vectorColorSpec = parsedVectorColor.value;
-
-      // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
-      // command boundary (exit 2); semantic refusals (no visible ink,
-      // divergent multi-Composition geometry) happen in the read-only
-      // resolution BEFORE the edit is invoked (exit 1) — so no anchored
-      // input ever mutates live state.
-      const parsedAnchorResult = parseLayerAnchor(values.anchor);
-      if (!parsedAnchorResult.ok) {
-        output({ ok: false, error: parsedAnchorResult.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedAnchor = parsedAnchorResult.value;
-      if (parsedAnchor !== undefined) {
-        // Anchored placement is its own edit: transform and content edits
-        // change the reference ink, so combining them in one edit is a
-        // conflicting request (the same precedent as resize + content
-        // replacement). --opacity combines freely: opacity scales alpha
-        // values, never the ink support. The conflict set is derived from
-        // the shared option table (DEC-001), so a newly added option
-        // automatically joins it.
-        if (isAnchorConflicting(values)) {
-          output(
-            {
-              ok: false,
-              error:
-                `--anchor is its own edit: it cannot be combined with ${anchorConflictOptionList()}, or content replacement in one edit, because the reference ink would be ambiguous. ` +
-                "Make the transform, content, or effect edit first, then anchor.",
-            },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-        if (parsedAnchor.horizontal !== undefined && x === undefined) {
-          output(
-            { ok: false, error: `--x <target> is required to anchor horizontally: the ${parsedAnchor.horizontal} ink edge/center lands at the requested x.` },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-        if (parsedAnchor.vertical !== undefined && y === undefined) {
-          output(
-            { ok: false, error: `--y <target> is required to anchor vertically: the ${parsedAnchor.vertical} ink edge/center lands at the requested y.` },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-      }
+      const parsed = checked.parsed;
+      const parsedAnchor = parsed.anchor as ParsedAnchor | undefined;
 
       try {
         // Anchored placement (#138, ADR-0017): resolve ONCE against the
@@ -985,14 +610,14 @@ async function run() {
         // through the ordinary edit lifecycle — the edit path never sees an
         // anchor, so no alternate placement representation can exist.
         let anchored: AnchorResolution | undefined;
-        let editX = x;
-        let editY = y;
+        let editX = parsed.x as number | undefined;
+        let editY = parsed.y as number | undefined;
         if (parsedAnchor !== undefined) {
           try {
             anchored = await resolveAnchoredPlacement(targetProj, layerId, {
               anchor: parsedAnchor,
-              targetX: x,
-              targetY: y,
+              targetX: parsed.x as number | undefined,
+              targetY: parsed.y as number | undefined,
               contextComposition: values.fork ? forkComposition : undefined,
             });
           } catch (err) {
@@ -1028,42 +653,42 @@ async function run() {
           image: values.image,
           fromGeneration:
             values["from-generation"] !== undefined
-              ? { jobRoot: path.resolve("out", "generation"), jobId: generationJobId.value!, output: values.output }
+              ? { jobRoot: path.resolve("out", "generation"), jobId: parsed["from-generation"] as string, output: values.output }
               : undefined,
           fromMatte:
             values["from-matte"] !== undefined
               ? {
                   matteRoot: path.resolve("out", "matting"),
-                  matteId: matteId.value!,
+                  matteId: parsed["from-matte"] as string,
                   generationRoot: path.resolve("out", "generation"),
                 }
               : undefined,
           text: values.text,
           font: values.font,
           fontFile: values["font-file"],
-          fontSize,
+          fontSize: parsed["font-size"] as number | undefined,
           color: values.color,
-          weight,
-          width,
-          tracking,
-          lineHeight,
+          weight: parsed.weight as number | undefined,
+          width: parsed.width as number | undefined,
+          tracking: parsed.tracking as number | null | undefined,
+          lineHeight: parsed["line-height"] as number | null | undefined,
           x: editX,
           y: editY,
-          opacity,
-          resizeFactor,
-          resizeTo,
-          scale: resize.value.scale,
-          rotateDeg,
-          flip,
-          shadow: shadowSpec,
-          outline: outlineSpec,
-          visibleRegion: regionSpec,
-          visibleRegionRadius: regionRadiusSpec,
-          vectorColor: vectorColorSpec,
-          shape: parsedEditShape.value,
-          size: parsedEditSize.value,
-          cornerRadius: parsedEditRadius.value,
-          fill: parsedEditFill.value,
+          opacity: parsed.opacity as number | undefined,
+          resizeFactor: parsed.resize as number | undefined,
+          resizeTo: parsed["resize-to"] as { width?: number; height?: number } | undefined,
+          scale: parsed.scale as number | undefined,
+          rotateDeg: parsed.rotate as number | undefined,
+          flip: parsed.flip as "horizontal" | "vertical" | "both" | "none" | undefined,
+          shadow: parsed.shadow as string | undefined,
+          outline: parsed.outline as string | undefined,
+          visibleRegion: parsed["visible-region"] as string | undefined,
+          visibleRegionRadius: parsed["visible-region-radius"] as string | undefined,
+          vectorColor: parsed["vector-color"] as string | undefined,
+          shape: parsed.shape as "rectangle" | "ellipse" | undefined,
+          size: parsed.size as { width: number; height: number } | undefined,
+          cornerRadius: parsed["corner-radius"] as number | undefined,
+          fill: parsed.fill as LayerFill | undefined,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {

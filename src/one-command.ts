@@ -2,18 +2,23 @@
 /**
  * The ONE shared normalization and application plumbing for one-command
  * `composition add` (spec #226 DEC-001, US-001 bullet 3; finding A226-002,
- * ticket #258). The option table (`LAYER_OPTION_DEFS` in layer-options.ts)
- * declares every option once; this module carries the two registries the
- * add surface consumes wholesale, so a new option joins parse, validation,
- * and application on `composition add` by declaring itself in the shared
- * definition alone — no add-side parse block, options member, presence
- * check, name mapping, or application case (the poka-yoke DEC-001 asks
- * for: adding an option to one surface adds it to the other).
+ * ticket #258; parse convergence #263). The option table
+ * (`LAYER_OPTION_DEFS` in layer-options.ts) declares every option once and
+ * carries its parse registration; this module carries the add surface's
+ * boundary parse (`parseOneCommandOptionValues`, driven by the table's
+ * registrations through `ADD_PARSE_ORDER`'s established check order) and
+ * the application registry (`ONE_COMMAND_OPTION_APPLY`), so a new option
+ * joins parse, validation, and application on `composition add` by
+ * declaring itself in the shared definition alone — no add-side parse
+ * block, options member, presence check, name mapping, or application case
+ * (the poka-yoke DEC-001 asks for: adding an option to one surface adds it
+ * to the other).
  *
- * - **Normalization** — `parseOneCommandOptionValues` runs the ONE shared
- *   parse per option (the same `parse…` functions `layer edit` runs, so the
- *   two boundaries never disagree) and returns the parsed values keyed by
- *   the option's own key — there is no per-option member to name.
+ * - **Normalization** — `parseOneCommandOptionValues` dispatches every
+ *   supplied option through its table-carried parse (the same `parse…`
+ *   functions `layer edit` dispatches, so the two boundaries never
+ *   disagree) and returns the parsed values keyed by the option's own key
+ *   — there is no per-option member to name.
  * - **Application** — `ONE_COMMAND_OPTION_APPLY` is the one application
  *   case per option (moved verbatim from the former add-side switch);
  *   the publication path dispatches through the table-derived
@@ -21,21 +26,15 @@
  *   no application case fails loudly, never silently dropped.
  *
  * What stays per-command: the add boundary's check sequence (the order the
- * refusals are reached in, preserved exactly by the parse entries' order),
- * the add path's placement defaults, and the help text. The edit surface's
- * wiring is untouched by this module.
+ * refusals are reached in, preserved exactly by `ADD_PARSE_ORDER`), the
+ * add path's placement defaults, and the help text. The edit surface's
+ * application wiring is untouched by this module.
  */
 import {
-  parseLayerRotation,
-  parseLayerFlip,
-  parseLayerShadow,
-  parseLayerOutline,
-  parseLayerVisibleRegion,
-  parseLayerVisibleRegionRadius,
-  parseLayerVectorColor,
-  parseLayerAnchor,
-  parseResizeOptions,
+  ADD_PARSE_ORDER,
   anyOneCommandOptionProvided,
+  oneCommandAddOptionKeys,
+  parseLayerOptionSteps,
   type LayerOptionArgs,
   type LayerOptionKey,
   type OptionParse,
@@ -116,44 +115,17 @@ export type OneCommandOptionApply = (
 ) => void | Promise<void>;
 
 /**
- * The one parse entry per option: the option's key and its boundary parse
- * — the SAME shared validator `layer edit` runs, so the two boundaries
- * never disagree. The entries are in the add surface's established check
- * order (each surface keeps its established check sequence, DEC-001); the
- * resize family is NOT here — its three forms are mutually exclusive, one
- * cross-option rule (`parseResizeOptions`), parsed as one step.
- */
-export interface OneCommandOptionParseEntry {
-  key: LayerOptionKey;
-  parse: (raw: string | undefined) => OptionParse<unknown>;
-}
-
-/**
- * The shared parse entries, in the add boundary's established check order
- * — the order the refusals are reached in today, preserved exactly. A new
- * option registers its parse here; the entries are the ONLY per-option
- * parse code the add surface needs.
- */
-export const ONE_COMMAND_PARSE_ENTRIES: readonly OneCommandOptionParseEntry[] = [
-  { key: "rotate", parse: parseLayerRotation },
-  { key: "flip", parse: parseLayerFlip },
-  { key: "shadow", parse: parseLayerShadow },
-  { key: "outline", parse: parseLayerOutline },
-  { key: "visible-region", parse: parseLayerVisibleRegion },
-  { key: "visible-region-radius", parse: parseLayerVisibleRegionRadius },
-  { key: "vector-color", parse: parseLayerVectorColor },
-  { key: "anchor", parse: parseLayerAnchor },
-];
-
-/**
  * The ONE shared boundary parse for one-command `composition add`'s
- * post-content options (DEC-001): presence derives from the option table
- * (`anyOneCommandOptionProvided` — no per-option presence check exists),
- * the resize family goes through its shared exclusivity parse, and every
- * other supplied option goes through its parse entry, in the established
- * check order. Returns the normalized values keyed by the option keys, or
+ * post-content options (DEC-001, #263): presence derives from the option
+ * table (`anyOneCommandOptionProvided` — no per-option presence check
+ * exists), and every supplied option normalizes through its parse
+ * registration on the shared option table (`ADD_PARSE_ORDER`'s established
+ * check order through the ONE runner `parseLayerOptionSteps` — the same
+ * validators `layer edit` dispatches, so the two boundaries never
+ * disagree). Returns the normalized values keyed by the option keys, or
  * `undefined` when no post-content option is supplied — the established
- * plain-add behavior, unchanged.
+ * plain-add behavior, unchanged. A supplied post-content key with no parse
+ * registration throws, never silently dropped (#263).
  *
  * The `--anchor` explicit-target rule is part of the anchor's shared
  * validation: an anchored axis needs its explicit `--x`/`--y` target, the
@@ -166,20 +138,9 @@ export function parseOneCommandOptionValues(
   if (!anyOneCommandOptionProvided(values)) {
     return { ok: true, value: undefined };
   }
-  const parsed: OneCommandOptionValues = {};
-  // The resize family's cross-option exclusivity rule runs first, as the
-  // boundary's established sequence has it: one intent per add.
-  const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
-  if (!resize.ok) return resize;
-  if (resize.value.resizeFactor !== undefined) parsed.resize = resize.value.resizeFactor;
-  if (resize.value.resizeTo !== undefined) parsed["resize-to"] = resize.value.resizeTo;
-  if (resize.value.scale !== undefined) parsed.scale = resize.value.scale;
-  for (const entry of ONE_COMMAND_PARSE_ENTRIES) {
-    const result = entry.parse(values[entry.key]);
-    if (!result.ok) return result;
-    if (result.value !== undefined) parsed[entry.key] = result.value;
-  }
-  const anchor = parsed.anchor as ParsedAnchor | undefined;
+  const parsed = parseLayerOptionSteps(values, ADD_PARSE_ORDER, oneCommandAddOptionKeys());
+  if (!parsed.ok) return parsed;
+  const anchor = parsed.value?.anchor as ParsedAnchor | undefined;
   if (anchor !== undefined) {
     if (anchor.horizontal !== undefined && values.x === undefined) {
       return {
@@ -194,7 +155,7 @@ export function parseOneCommandOptionValues(
       };
     }
   }
-  return { ok: true, value: parsed };
+  return { ok: true, value: parsed.value };
 }
 
 /**

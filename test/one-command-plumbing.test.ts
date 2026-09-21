@@ -6,14 +6,15 @@
  * one-command `composition add` with NO add-side code naming it.
  *
  * The probe is registered in this file at runtime (the registration points
- * a real option would touch: the option table, the parseArgs declaration,
- * the shared parse entry, and the shared apply entry) and then driven
- * through the add surface's own paths: the ONE boundary parse
- * (`parseOneCommandOptionValues`, the call that replaced the per-option
- * parse blocks) and the real publication path (`addLayerToComposition`,
- * whose dispatch is the generic registry loop). If a future option still
- * needed an add-side parse block, member, presence check, name mapping, or
- * application case, this probe could not work — that is the poka-yoke.
+ * a real option touches: the option table — whose `parse` member is the
+ * option's ONE boundary parse — the parseArgs declaration, and the shared
+ * apply entry) and then driven through the surfaces' own paths: the ONE
+ * boundary parse (`parseOneCommandOptionValues`, the runner both surfaces'
+ * order lists dispatch through) and the real publication path
+ * (`addLayerToComposition`, whose dispatch is the generic registry loop).
+ * If a future option still needed an add-side parse block, member, presence
+ * check, name mapping, or application case, this probe could not work —
+ * that is the poka-yoke.
  *
  * The probe stamp is applied as a plain revision field, and the probe's
  * parse refusal is the probe's own wording: the test asserts the shared
@@ -29,6 +30,7 @@ import { initProject } from "../src/project.js";
 import { createComposition } from "../src/composition.js";
 import { addLayerToComposition } from "../src/composition.js";
 import {
+  ADD_PARSE_ORDER,
   LAYER_OPTION_DEFS,
   LAYER_OPTION_PARSE_ARGS,
   anyOneCommandOptionProvided,
@@ -39,9 +41,7 @@ import {
 } from "../src/layer-options.js";
 import {
   ONE_COMMAND_OPTION_APPLY,
-  ONE_COMMAND_PARSE_ENTRIES,
   parseOneCommandOptionValues,
-  type OneCommandOptionParseEntry,
   type OneCommandOptionValues,
 } from "../src/one-command.js";
 
@@ -59,23 +59,26 @@ function parseProbeStamp(raw: string | undefined) {
   return { ok: true, value: raw } as const;
 }
 
-const PROBE_PARSE_ENTRY: OneCommandOptionParseEntry = { key: PROBE_KEY, parse: parseProbeStamp };
+const PROBE_PARSE_ENTRY = parseProbeStamp;
 
 const PROBE_DEF: LayerOptionDef = {
   key: PROBE_KEY,
   group: "effect",
   appliesTo: ["image", "text", "shape"],
   editOption: true,
+  // The probe's ONE boundary parse (DEC-001, #263): carried on the shared
+  // option table itself, so both command boundaries dispatch through it.
+  parse: PROBE_PARSE_ENTRY,
 };
 
 beforeAll(() => {
   // The probe's registration — the shared-definition points a real option
-  // declares (DEC-001): the option table, the parseArgs declaration, the
-  // shared parse entry, and the shared apply entry. Nothing on the add
-  // surface names it.
+  // declares (DEC-001): the option table (whose parse member is the ONE
+  // boundary parse), the parseArgs declaration, and the shared apply entry.
+  // Nothing on either command surface names it.
   (LAYER_OPTION_DEFS as LayerOptionDef[]).push(PROBE_DEF);
   (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[PROBE_KEY] = { type: "string" };
-  (ONE_COMMAND_PARSE_ENTRIES as OneCommandOptionParseEntry[]).push(PROBE_PARSE_ENTRY);
+  (ADD_PARSE_ORDER as LayerOptionKey[]).push(PROBE_KEY);
   (ONE_COMMAND_OPTION_APPLY as Record<string, NonNullable<(typeof ONE_COMMAND_OPTION_APPLY)[LayerOptionKey]>>)[
     PROBE_KEY
   ] = (rev, value) => {
@@ -90,7 +93,7 @@ afterAll(() => {
   // clean regardless of execution order.
   (LAYER_OPTION_DEFS as LayerOptionDef[]).pop();
   delete (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[PROBE_KEY];
-  (ONE_COMMAND_PARSE_ENTRIES as OneCommandOptionParseEntry[]).pop();
+  (ADD_PARSE_ORDER as LayerOptionKey[]).pop();
   delete (ONE_COMMAND_OPTION_APPLY as Record<string, unknown>)[PROBE_KEY];
 });
 
@@ -167,7 +170,7 @@ test("the shared parse and apply registries cover every post-content option (the
   for (const key of oneCommandAddOptionKeys()) {
     expect(ONE_COMMAND_OPTION_APPLY[key]).toBeDefined();
     if (!trio.has(key)) {
-      expect((ONE_COMMAND_PARSE_ENTRIES as OneCommandOptionParseEntry[]).some((e) => e.key === key)).toBe(true);
+      expect((ADD_PARSE_ORDER as LayerOptionKey[]).includes(key)).toBe(true);
     }
   }
   // The resize family's shared parse: each form normalizes through the ONE
