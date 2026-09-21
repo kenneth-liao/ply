@@ -310,9 +310,10 @@ test("rejects missing/invalid text arguments through the CLI with JSON errors", 
   // Invalid color: runtime rejection.
   const badColor = await addText("args", "t", { text: "hi", color: "red" });
   expect(badColor.code).toBe(1);
-  // Invalid font size: runtime rejection.
+  // Invalid font size: the shared boundary refusal (exit 2, #257) — the
+  // canonical positive-finite wording and exit status, before ingestion.
   const badSize = await addText("args", "t", { text: "hi", fontSize: 0 });
-  expect(badSize.code).toBe(1);
+  expect(badSize.code).toBe(2);
   // Nothing was published.
   const comp = JSON.parse((await invoke(["composition", "inspect", "args", "--project", projDir, "--json"])).stdout);
   expect(comp.composition.layers).toHaveLength(0);

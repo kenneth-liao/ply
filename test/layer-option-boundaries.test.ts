@@ -219,11 +219,12 @@ test("composition add: the placement block precedes the text-branch validators",
     2,
     "Opacity (--opacity) must be a finite number between 0 and 1.",
   );
-  // The add surface names the coordinate PAIR (edit names the single axis).
+  // The refusal names the single coordinate axis (the canonical wording,
+  // #257).
   await expectRefusal(
     ["composition", "add", "demo", "t7", "--text", "hi", "--font", "Archivo", "--opacity", "abc", "--x", "abc", "--project", projDir],
     2,
-    "Placement coordinates (--x, --y) must be finite numbers.",
+    "Placement coordinate (--x) must be a finite number.",
   );
 });
 
@@ -231,7 +232,7 @@ test("composition add: the text branch validates font size, then axes, in order"
   await expectRefusal(
     ["composition", "add", "demo", "t8", "--text", "hi", "--font", "Archivo", "--tracking", "abc", "--font-size", "abc", "--project", projDir],
     2,
-    "Font size (--font-size) must be a finite number.",
+    "Font size (--font-size) must be a positive finite number.",
   );
   await expectRefusal(
     ["composition", "add", "demo", "t9", "--text", "hi", "--font", "Archivo", "--tracking", "abc", "--line-height", "abc", "--project", projDir],

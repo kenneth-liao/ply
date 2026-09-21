@@ -675,14 +675,14 @@ async function run() {
       // Each option's shape validation below is the shared validator from
       // the option definition (DEC-001) — the same function composition add
       // runs, so the two boundaries can never disagree.
-      const placementX = parseLayerCoordinate("x", values.x, "edit");
+      const placementX = parseLayerCoordinate("x", values.x);
       if (!placementX.ok) {
         output({ ok: false, error: placementX.error }, isJson);
         process.exitCode = 2;
         return;
       }
       const x = placementX.value;
-      const placementY = parseLayerCoordinate("y", values.y, "edit");
+      const placementY = parseLayerCoordinate("y", values.y);
       if (!placementY.ok) {
         output({ ok: false, error: placementY.error }, isJson);
         process.exitCode = 2;
@@ -696,7 +696,7 @@ async function run() {
         return;
       }
       const opacity = parsedOpacity.value;
-      const parsedFontSize = parseLayerFontSize(values["font-size"], "edit");
+      const parsedFontSize = parseLayerFontSize(values["font-size"]);
       if (!parsedFontSize.ok) {
         output({ ok: false, error: parsedFontSize.error }, isJson);
         process.exitCode = 2;
@@ -772,9 +772,18 @@ async function run() {
       }
       if (values.font !== undefined) {
         // An unknown family keeps its established semantic refusal (exit 1,
-        // from the edit path's resolveFace); only weight/width range errors
-        // are usage errors here (exit 2).
-        const axesError = validateTextFaceAxes(values.font, weight, width);
+        // resolveFace's throw), reported through the same refusal envelope
+        // the add surface reports it with — identical refusal text and exit
+        // status on both surfaces (#257); only weight/width range errors are
+        // usage errors here (exit 2).
+        let axesError: string | undefined;
+        try {
+          axesError = validateTextFaceAxes(values.font, weight, width);
+        } catch (err) {
+          output({ ok: false, error: (err as Error).message }, isJson);
+          process.exitCode = 1;
+          return;
+        }
         if (axesError !== undefined) {
           output({ ok: false, error: axesError }, isJson);
           process.exitCode = 2;

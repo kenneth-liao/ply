@@ -760,14 +760,14 @@ async function run() {
 
       // Placement shape validation through the shared validators (DEC-001);
       // this surface's established defaults apply when absent.
-      const placementX = parseLayerCoordinate("x", values.x, "add");
+      const placementX = parseLayerCoordinate("x", values.x);
       if (!placementX.ok) {
         output({ ok: false, error: placementX.error }, isJson);
         process.exitCode = 2;
         return;
       }
       const x = placementX.value ?? 0;
-      const placementY = parseLayerCoordinate("y", values.y, "add");
+      const placementY = parseLayerCoordinate("y", values.y);
       if (!placementY.ok) {
         output({ ok: false, error: placementY.error }, isJson);
         process.exitCode = 2;
@@ -1002,7 +1002,7 @@ async function run() {
           // the add path re-resolves against the face before anything
           // publishes. This surface's established font-size default (48)
           // applies when absent.
-          const parsedFontSize = parseLayerFontSize(values["font-size"], "add");
+          const parsedFontSize = parseLayerFontSize(values["font-size"]);
           if (!parsedFontSize.ok) {
             output({ ok: false, error: parsedFontSize.error }, isJson);
             process.exitCode = 2;

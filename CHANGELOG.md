@@ -371,6 +371,27 @@
 
 ### Fixed
 
+- `composition add` and `layer edit` refuse the same bad value for a shared
+  option with the same text and the same exit status (#257, spec #226 US-001
+  bullet 1, DEC-001; acceptance-audit finding A226-001): `--x invalid` and
+  `--font-size invalid` used to produce different refusal texts on the two
+  surfaces (add named the coordinate pair and a finite-only font size; edit
+  named the single axis and a positive-finite size), and `--font-size 0`
+  exited 1 on `add` (the ingestion path's "Invalid font size 0" refusal)
+  but 2 on `layer edit`. The two add-versus-edit validation branches in
+  `src/layer-options.ts` are removed — each option now has ONE validation
+  path and wording, the `layer edit` one, which is canonical by the
+  decision recorded on #226: a coordinate or font-size refusal now reads
+  `Placement coordinate (--x) must be a finite number.` /
+  `Font size (--font-size) must be a positive finite number.` and exits 2
+  on both surfaces. Successful `add` invocations keep their output. A new
+  CLI-seam parity test enumerates the shared option table and asserts, for
+  every option, byte-identical refusal text and exit status on both
+  surfaces; it also pins the previously uncaught unknown-font-family crash
+  on `layer edit --font` to the same clean exit-1 semantic refusal the add
+  surface reports. The content-kind exclusivity refusals keep each
+  surface's established wording (they are combination rules, not
+  shared-option value validation).
 - `ply composition add --help` names the Layer kinds `--resize-to` and
   `--scale` really accept (#234 review INT-1, spec #226 DEC-001): it said
   "image Layers only" and "image and text Layers", while shape Layers
