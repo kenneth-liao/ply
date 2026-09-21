@@ -30,26 +30,14 @@ import { resolveFace, resolveTextAxes, fontAssetBytes, callerFontFace, verifyCal
 import { readCallerFontFile } from "./font-file.js";
 import { type LayerFill } from "./fill.js";
 import {
-  parseShadowSpec,
-  parseOutlineSpec,
-  parseVisibleRegionSpec,
-  parseVisibleRegionRadiusSpec,
-  parseVectorColorSpec,
-  vectorColorKindRefusal,
-  validateRectangleCornerRadius,
-  validateVisibleRegionAgainstContent,
-  resolveEditScale,
-  resolveEditRotation,
-  resolveEditFlip,
-  type LayerTransformFlip,
-  type LayerVisibleRegion,
-} from "./layer.js";
-import { measureStandaloneSnapshot } from "./composition-measure.js";
-import { resolveProvisionalAnchoredPlacement, type ParsedAnchor } from "./layer-anchor.js";
-import {
   oneCommandApplicationOrder,
-  type LayerOptionKey,
 } from "./layer-options.js";
+import {
+  ONE_COMMAND_OPTION_APPLY,
+  type OneCommandApplyContext,
+  type OneCommandOptionValues,
+  type OneCommandRevision,
+} from "./one-command.js";
 import {
   selectGenerationOutput,
   retainGenerationRecord,
@@ -341,326 +329,60 @@ export interface AddLayerOptions {
    * One-command creation (#229, spec #226 US-001/DEC-002): the post-content
    * options — transforms, anchored placement, effects — applied to the
    * initial revision in the documented order, publishing exactly one Layer
-   * revision. Shape-validated at the command boundary; the semantic
+   * revision. Normalized at the command boundary through the ONE shared
+   * parse (`parseOneCommandOptionValues`, DEC-001); the semantic
    * resolutions run here, before any content retention or revision staging,
    * so a refused option publishes nothing. Absent (or empty) keeps the
    * established single-option add behavior byte-identical.
    */
-  oneCommand?: OneCommandOptions;
-}
-
-/** The parsed post-content options of one-command `composition add` (#229):
- *  the values the command boundary shape-validated and parsed through the
- *  shared option definition (DEC-001). The semantic resolutions (scale
- *  bounds and aspect rules, kind applicability, anchored-placement ink
- *  resolution, effect canonicalization) run in the documented application
- *  order inside the publication path — the same paths `layer edit` uses,
- *  so the two surfaces' results and refusals agree by construction. */
-export interface OneCommandOptions {
-  /** The --resize factor (a finite number > 0, boundary-validated). */
-  resizeFactor?: number;
-  /** The --resize-to target axes (boundary-validated shape). */
-  resizeTo?: { width?: number; height?: number };
-  /** The --scale absolute factor (a finite number > 0, boundary-validated). */
-  scale?: number;
-  /** The --rotate angle in degrees (a finite number, boundary-validated). */
-  rotateDeg?: number;
-  /** The --flip mode (a validated literal, boundary-validated). */
-  flip?: "horizontal" | "vertical" | "both" | "none";
-  /** The raw --shadow spec; canonicalized here through the edit path's
-   *  parser (ADR-0018). */
-  shadow?: string;
-  /** The raw --outline spec; canonicalized here through the edit path's
-   *  parser (ADR-0019). */
-  outline?: string;
-  /** The raw --visible-region spec (#211, ADR-0023); validated here
-   *  against the fresh content's box through the edit path's parser and
-   *  bounds check, applied BEFORE the anchor resolves (the anchor
-   *  resolves against the region-clipped visible ink, DEC-005). */
-  visibleRegion?: string;
-  /** The raw --visible-region-radius spec (#212): the optional corner
-   *  radius on the visible region fact, applied right after the rectangle
-   *  (the same region stage) — it needs the rectangle (--visible-region in
-   *  the same add, or a region already applied), and the ONE corner-radius
-   *  range rule (over half the rectangle's shorter side is refused, never
-   *  clamped) validates against it before anything is retained. */
-  visibleRegionRadius?: string;
-  /** The raw --vector-color spec (#215, spec #207 US-005, DEC-008): ONE
-   *  paint-time colour over a vector image Layer's alpha, applied FIRST in
-   *  the documented order — it is content-level paint (ADR-0023 paints it
-   *  with the content, before the region, outline, and shadow). "none"
-   *  removes nothing on a fresh Layer (absence IS the no-colour form). The
-   *  kind/format refusals run here, before any content retention: text
-   *  Layers are refused naming --color, shape Layers naming --fill, and a
-   *  raster image content naming the raster refusal. */
-  vectorColor?: string;
-  /** The parsed --anchor axes; resolved against the content+transform ink
-   *  in the target Composition's canvas before the effects apply. */
-  anchor?: ParsedAnchor;
+  oneCommand?: OneCommandOptionValues;
 }
 
 /**
- * One-command option application (spec #226 US-001, DEC-002): the ONE home
- * for applying one-command `composition add`'s post-content options to a
- * freshly built content revision — transforms first, then anchored
- * placement, then effects, the order derived from the shared option
- * table's group fact (`oneCommandApplicationOrder`) — so the result equals
- * the documented multi-command sequence and publishes exactly ONE Layer
- * revision. Everything here runs inside the publication protocol BEFORE
- * any content retention or revision staging, so a refused option publishes
- * nothing: no Layer, no use, no content.
+ * One-command option application (spec #226 US-001, DEC-002): the ONE
+ * publication-path step for applying one-command `composition add`'s
+ * post-content options to a freshly built content revision — transforms
+ * first, then anchored placement, then effects, the order derived from the
+ * shared option table's group fact (`oneCommandApplicationOrder`) — so the
+ * result equals the documented multi-command sequence and publishes exactly
+ * ONE Layer revision. Everything here runs inside the publication protocol
+ * BEFORE any content retention or revision staging, so a refused option
+ * publishes nothing: no Layer, no use, no content.
  *
  * With no post-content option supplied the revision is returned untouched,
  * so existing `add` invocations keep their meaning and their exact stored
  * revision bytes.
  *
- * Reused edit paths (DEC-001, one validation path per option): the scale
- * resolution (including its image cap and text-Layer --resize-to refusal,
- * identical wording) and the rotation/reflection normalizers come from
- * `layer.ts`; the effects parse through the edit path's own spec parsers;
- * anchored placement resolves through the same ink-measurement authority
- * the edit surface resolves against, over a PROVISIONAL revision measured
- * in the target Composition's canvas.
+ * There is NO per-option application code here (DEC-001, A226-002): each
+ * supplied key dispatches through its ONE shared application case
+ * (`ONE_COMMAND_OPTION_APPLY` in one-command.ts — the edit-path resolvers,
+ * spec parsers, and anchored-placement authority live there with it), and
+ * a key without a case fails loudly (review INT-plumb-1): an option that
+ * parses at the command boundary but has no application case would
+ * otherwise be silently dropped while the guard test stays green — exactly
+ * the parse-but-drop gap. The guard test (TEST-003) reads the applied
+ * facts back from the published revision per kind, and the probe test
+ * registers a new option through the shared definition alone, so a future
+ * table key without a case fails the build, not a Project.
  */
 async function applyOneCommandOptions(
   revision: LayerRevision,
-  options: OneCommandOptions | undefined,
-  context: {
-    /** The target Composition's name (refusal wording, anchor context). */
-    composition: string;
-    /** The target Composition's canvas: the measurement context. */
-    canvas: { width: number; height: number };
-    /** The verified content bytes (the measurement's paint input). */
-    contentBytes: Buffer;
-    /** The image content's format fact, for the provisional paint markup. */
-    format?: "png" | "jpeg" | "webp" | "svg";
-    /** The image content's intrinsic size, for the scale resolution. */
-    intrinsic?: { width: number; height: number };
-  },
+  options: OneCommandOptionValues | undefined,
+  context: OneCommandApplyContext,
 ): Promise<LayerRevision> {
-  const hasOptions =
-    options !== undefined &&
-    (options.resizeFactor !== undefined ||
-      options.resizeTo !== undefined ||
-      options.scale !== undefined ||
-      options.rotateDeg !== undefined ||
-      options.flip !== undefined ||
-      options.shadow !== undefined ||
-      options.outline !== undefined ||
-      options.vectorColor !== undefined ||
-      options.visibleRegion !== undefined ||
-      options.visibleRegionRadius !== undefined ||
-      options.anchor !== undefined);
-  if (!hasOptions) {
+  // The application order reads the option table by its own key names; the
+  // parsed values are already keyed by those keys — no name mapping.
+  const supplied = oneCommandApplicationOrder(options ?? {});
+  if (supplied.length === 0) {
     return revision;
   }
-  // The application order reads the option table by its own key names; the
-  // parsed OneCommandOptions shape maps onto it by option.
-  const supplied = oneCommandApplicationOrder({
-    ...(options.resizeFactor !== undefined ? { resize: options.resizeFactor } : {}),
-    ...(options.resizeTo !== undefined ? { "resize-to": options.resizeTo } : {}),
-    ...(options.scale !== undefined ? { scale: options.scale } : {}),
-    ...(options.rotateDeg !== undefined ? { rotate: options.rotateDeg } : {}),
-    ...(options.flip !== undefined ? { flip: options.flip } : {}),
-    ...(options.shadow !== undefined ? { shadow: options.shadow } : {}),
-    ...(options.outline !== undefined ? { outline: options.outline } : {}),
-    ...(options.vectorColor !== undefined ? { "vector-color": options.vectorColor } : {}),
-    ...(options.visibleRegion !== undefined ? { "visible-region": options.visibleRegion } : {}),
-    ...(options.visibleRegionRadius !== undefined ? { "visible-region-radius": options.visibleRegionRadius } : {}),
-    ...(options.anchor !== undefined ? { anchor: options.anchor } : {}),
-  });
-  const rev = { ...revision } as LayerRevision & {
-    scaleX: number;
-    scaleY: number;
-    rotationDeg: number;
-    flipX: boolean;
-    flipY: boolean;
-  };
-
-  // The scale resolution runs against the fresh content's intrinsic facts
-  // at scale 1: the same rules, caps, and refusal texts the edit surface's
-  // resize path produces (DEC-001) — including --resize-to's text-Layer
-  // refusal, thrown here with the would-be Layer id before anything is
-  // retained.
-  const pseudoPrev = context.intrinsic
-    ? ({
-        kind: "image",
-        width: context.intrinsic.width,
-        height: context.intrinsic.height,
-        scaleX: 1,
-        scaleY: 1,
-        rotationDeg: 0,
-        flipX: false,
-        flipY: false,
-      } as unknown as ResolvedLayerRevision)
-    : ({ kind: "text", scaleX: 1, scaleY: 1, rotationDeg: 0, flipX: false, flipY: false } as unknown as ResolvedLayerRevision);
-
+  const rev = { ...revision } as OneCommandRevision;
   for (const key of supplied) {
-    switch (key) {
-      case "vector-color": {
-        // The vector colour (#215, spec #207 US-005, DEC-008): the FIRST
-        // stage — content-level paint, before the transforms, the region,
-        // and the effects (ADR-0023's order). "none" removes nothing on a
-        // fresh Layer (absence IS the no-colour form). The kind/format
-        // refusals run here, before any content retention: the colour is
-        // defined for vector (format svg) image content only, and the
-        // refusal names each kind's own colour control.
-        const colour = parseVectorColorSpec(options.vectorColor!);
-        if (colour !== undefined) {
-          if (rev.kind === "text") {
-            throw new Error(vectorColorKindRefusal("text", rev.layerId));
-          }
-          if (rev.kind === "shape") {
-            throw new Error(vectorColorKindRefusal("shape", rev.layerId));
-          }
-          if (context.format !== "svg") {
-            throw new Error(vectorColorKindRefusal("raster", rev.layerId, context.format));
-          }
-          rev.vectorColor = colour;
-        }
-        break;
-      }
-      case "resize": {
-        const scale = resolveEditScale({ resizeFactor: options.resizeFactor! }, pseudoPrev, rev.layerId);
-        rev.scaleX = scale.scaleX;
-        rev.scaleY = scale.scaleY;
-        break;
-      }
-      case "resize-to": {
-        const scale = resolveEditScale({ resizeTo: options.resizeTo! }, pseudoPrev, rev.layerId);
-        rev.scaleX = scale.scaleX;
-        rev.scaleY = scale.scaleY;
-        break;
-      }
-      case "scale": {
-        // Absolute scale setter (#231, DEC-005): the value IS the canonical
-        // scale (ADR-0016), resolved through the edit path's ONE scale
-        // resolution — so the add surface's refusals, bounds, and idempotence
-        // are byte-identical to the edit surface's by construction.
-        const scale = resolveEditScale({ scale: options.scale! }, pseudoPrev, rev.layerId);
-        rev.scaleX = scale.scaleX;
-        rev.scaleY = scale.scaleY;
-        break;
-      }
-      case "rotate": {
-        rev.rotationDeg = resolveEditRotation({ rotateDeg: options.rotateDeg! }, pseudoPrev);
-        break;
-      }
-      case "flip": {
-        const flip: LayerTransformFlip = resolveEditFlip({ flip: options.flip! }, pseudoPrev);
-        rev.flipX = flip.flipX;
-        rev.flipY = flip.flipY;
-        break;
-      }
-      case "anchor": {
-        // Anchored placement (ADR-0017) resolves against the content+
-        // transform ink BEFORE the effects apply (the documented order),
-        // measuring the provisional revision in the target Composition's
-        // canvas; the resolved placement publishes as plain canonical
-        // (x, y) in the SAME single revision.
-        const resolved = await resolveProvisionalAnchoredPlacement(
-          context.canvas,
-          {
-            layerId: rev.layerId,
-            revision: {
-              ...rev,
-              ...(context.format !== undefined
-                ? { format: context.format, width: context.intrinsic!.width, height: context.intrinsic!.height }
-                : {}),
-            } as ResolvedLayerRevision,
-            contentBytes: context.contentBytes,
-          },
-          { anchor: options.anchor!, contextComposition: context.composition },
-        );
-        rev.x = resolved.placement.x;
-        rev.y = resolved.placement.y;
-        break;
-      }
-      case "shadow": {
-        // "none" resolves to undefined — absence IS the no-shadow form,
-        // the same canonical shape the edit path publishes (ADR-0018).
-        const shadow = parseShadowSpec(options.shadow!);
-        if (shadow !== undefined) rev.shadow = shadow;
-        break;
-      }
-      case "outline": {
-        const outline = parseOutlineSpec(options.outline!);
-        if (outline !== undefined) rev.outline = outline;
-        break;
-      }
-      case "visible-region": {
-        // The visible region (#211, ADR-0023): "none" removes nothing on a
-        // fresh Layer (absence IS the no-region form) — an explicit region
-        // validates against the FRESH content's box before anything is
-        // retained: the image's intrinsic facts, the shape's geometry, or
-        // the text's measured line-box extent (the unwrapped standalone
-        // line, the same box the edit surface validates against). The refusal
-        // runs before any content retention or revision staging.
-        const region = parseVisibleRegionSpec(options.visibleRegion!);
-        if (region !== undefined) {
-          if (rev.kind === "text") {
-            // A text Layer's content box is its measured line-box extent —
-            // the SAME convention `layer edit` validates against (the
-            // unwrapped standalone line, DEC-006's one authority), measured
-            // from the in-memory provisional snapshot; no lock is held on
-            // this path (nothing is retained yet).
-            const measured = await measureStandaloneSnapshot(
-              { ...rev, x: 0, y: 0 } as ResolvedLayerRevision,
-              context.contentBytes,
-            );
-            validateVisibleRegionAgainstContent(region, measured.content, rev.layerId);
-          } else if (rev.kind === "shape") {
-            validateVisibleRegionAgainstContent(region, { width: rev.width, height: rev.height }, rev.layerId);
-          } else {
-            // An image Layer: the fresh content's intrinsic facts (always
-            // supplied on this path — the add boundary resolves them before
-            // any option application).
-            validateVisibleRegionAgainstContent(
-              region,
-              { width: context.intrinsic!.width, height: context.intrinsic!.height },
-              rev.layerId,
-            );
-          }
-          rev.visibleRegion = region;
-        }
-        break;
-      }
-      case "visible-region-radius": {
-        // The region's corner radius (#212): the rectangle's stage ran first
-        // (the table's region order), so the rect is whatever this add has.
-        // A positive radius without a region is refused before anything is
-        // retained; `none` and 0 — the removal forms — remove nothing, the
-        // same idempotent no-op the edit surface gives them. The range rule
-        // is the ONE shared corner-radius validator (refuse, never clamp)
-        // against the region rectangle; a radius of 0 stores nothing (the
-        // same look as absent).
-        const radius = parseVisibleRegionRadiusSpec(options.visibleRegionRadius!);
-        if (radius !== undefined && radius > 0) {
-          const region = rev.visibleRegion;
-          if (region === undefined) {
-            throw new Error(
-              `--visible-region-radius needs a visible region: Layer "${rev.layerId}" is fresh and has none. ` +
-                `Pass --visible-region "<x>,<y>,<width>,<height>" in the same add, then round its corners.`,
-            );
-          }
-          validateRectangleCornerRadius(radius, region.width, region.height);
-          rev.visibleRegion = { ...region, cornerRadius: radius };
-        }
-        break;
-      }
-      default: {
-        // Fail fast (review INT-plumb-1): an option that parses at the
-        // command boundary but has no application case here would otherwise
-        // be silently dropped while the guard test stays green — exactly
-        // the parse-but-drop gap. One-command add must never publish a
-        // revision that quietly lacks a supplied option, so throw instead
-        // (this runs BEFORE any retention or staging, so the refusal stays
-        // fail-closed), and the guard test (TEST-003) reads the applied
-        // facts back from the published revision per kind, so a future
-        // table key without a case fails the build, not a Project.
-        throw new Error(`One-command add: no application case for the "--${key}" option.`);
-      }
+    const apply = ONE_COMMAND_OPTION_APPLY[key];
+    if (apply === undefined) {
+      throw new Error(`One-command add: no application case for the "--${key}" option.`);
     }
+    await apply(rev, options![key], context);
   }
   return rev;
 }

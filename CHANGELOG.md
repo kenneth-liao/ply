@@ -1128,6 +1128,10 @@
 
 - Browser-backed render paths run on one shared, serialized, self-healing Chromium page per process instead of a context cycle per render — injected pages stay caller-owned and `closeBrowser()` leaves no Chromium process behind (#27, ADR-0010). Bare single-process `bun test` needs Bun ≥ 1.4.0 (upstream oven-sh/bun #15679)
 
+### Changed
+
+- Internal refactor, no version-visible behavior change (#258, spec #226 US-001 bullet 3, DEC-001; acceptance-audit finding A226-002): one-command `composition add` now consumes the shared option definition's normalization and application plumbing wholesale, so a new edit option reaches `add` with no per-option work. The ~9 per-option parse blocks, the `OneCommandOptions` members, the presence check, the option-name mapping, and the per-option application switch in `src/composition-cli.ts` and `src/composition.ts` are gone: the add boundary calls the ONE shared parse (`parseOneCommandOptionValues` in the new `src/one-command.ts` — the same shared validators `layer edit` runs, the resize family's exclusivity rule, and the anchor's explicit-target rule, in the surface's established check order), returning the parsed values keyed by the option table's own keys, and the publication path dispatches through the ONE application case per option (`ONE_COMMAND_OPTION_APPLY`), in the table-derived application order, failing loudly when a table key has no case. A probe test (`test/one-command-plumbing.test.ts`) registers an option through the shared definition alone and shows `add` parsing, validating, and applying it with no add-side code naming it. `--help` output and every refusal text and exit status on both surfaces are byte-identical to before; the documented creation order (content, transforms, anchored placement, effects), the single published revision, and publish-nothing-on-refusal are unchanged, and no option is accepted or refused differently
+
 ## [0.24.1]
 
 ### Fixed

@@ -24,32 +24,22 @@ import { renderComposition, replayRender } from "./composition-render.js";
 import {
   COMPOSITION_ADD_OPTION_KEYS,
   COMPOSITION_ADD_OPTION_PARSE_ARGS,
-  anyOneCommandOptionProvided,
   layerContentKindConflict,
   layerDashNumericFlags,
   parseGenerationJobId,
   parseGenerationOutputSelector,
   parseGenerationOutputValue,
-  parseLayerAnchor,
   parseLayerCoordinate,
   parseLayerFontSize,
   parseLayerFontFile,
   parseLayerFill,
-  parseLayerFlip,
   parseLayerLineHeight,
   parseLayerOpacity,
-  parseLayerOutline,
-  parseLayerVisibleRegion,
-  parseLayerVisibleRegionRadius,
-  parseLayerRotation,
-  parseLayerShadow,
   parseLayerTracking,
-  parseLayerVectorColor,
   parseLayerWeight,
   parseLayerWidth,
   parseMatteId,
   parseNumericArgument,
-  parseResizeOptions,
   parseShapeCornerRadius,
   parseShapeGeometry,
   parseShapeSize,
@@ -63,6 +53,7 @@ import {
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
 } from "./layer-options.js";
+import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill } from "./fill.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
@@ -782,124 +773,27 @@ async function run() {
       }
       const opacity = parsedOpacity.value ?? 1.0;
 
-      // Transform and effect options (one-command creation, spec #226
-      // US-001/DEC-002): shape-validated at this boundary through the SAME
-      // shared validators layer edit runs (DEC-001). The semantic
-      // resolutions — scale bounds and aspect rules, the text-Layer
+      // The post-content options (one-command creation, spec #226
+      // US-001/DEC-002): normalized at this boundary through the ONE shared
+      // parse (DEC-001) — the SAME shared validators layer edit runs, the
+      // resize family's exclusivity rule, and the anchor's explicit-target
+      // rule, in this surface's established check order. There is no
+      // per-option parse block, presence check, or name mapping here: an
+      // option added to the shared definition reaches this surface without
+      // any add-side code naming it (A226-002, the probe test pins it). The
+      // semantic resolutions — scale bounds and aspect rules, the text-Layer
       // --resize-to refusal, anchored-placement ink resolution, effect
       // canonicalization — apply in the documented order (content, then
       // transforms, then anchored placement, then effects) inside the
       // publication path, before anything is stored, so a refused option
       // publishes nothing.
-      const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
-      if (!resize.ok) {
-        output({ ok: false, error: resize.error }, isJson);
+      const oneCommandParsed = parseOneCommandOptionValues(values);
+      if (!oneCommandParsed.ok) {
+        output({ ok: false, error: oneCommandParsed.error }, isJson);
         process.exitCode = 2;
         return;
       }
-      const parsedRotation = parseLayerRotation(values.rotate);
-      if (!parsedRotation.ok) {
-        output({ ok: false, error: parsedRotation.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedFlip = parseLayerFlip(values.flip);
-      if (!parsedFlip.ok) {
-        output({ ok: false, error: parsedFlip.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedShadow = parseLayerShadow(values.shadow);
-      if (!parsedShadow.ok) {
-        output({ ok: false, error: parsedShadow.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedOutline = parseLayerOutline(values.outline);
-      if (!parsedOutline.ok) {
-        output({ ok: false, error: parsedOutline.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      // Visible-region flag (#211, ADR-0023): syntax and well-formedness at
-      // the command boundary through the SAME parser the edit path uses;
-      // the content-bounds validation runs in the publication path against
-      // the fresh content's box, before anything is stored.
-      const parsedRegion = parseLayerVisibleRegion(values["visible-region"]);
-      if (!parsedRegion.ok) {
-        output({ ok: false, error: parsedRegion.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      // Visible-region corner radius (#212): syntax and well-formedness at
-      // the command boundary through the SAME parser the edit path uses;
-      // the needs-a-region rule and the ONE range rule (over half the
-      // rectangle's shorter side is refused, never clamped) run in the
-      // publication path against the region rectangle, before anything is
-      // stored.
-      const parsedRegionRadius = parseLayerVisibleRegionRadius(values["visible-region-radius"]);
-      if (!parsedRegionRadius.ok) {
-        output({ ok: false, error: parsedRegionRadius.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      // Vector-colour flag (#215, DEC-008/009): syntax and well-formedness at
-      // the command boundary through the SAME parser the edit path uses (the
-      // ONE fill-colour grammar); the kind/format refusals (raster image
-      // content, text, shape — naming each kind's own colour control) run in
-      // the publication path, before anything is stored.
-      const parsedVectorColor = parseLayerVectorColor(values["vector-color"]);
-      if (!parsedVectorColor.ok) {
-        output({ ok: false, error: parsedVectorColor.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      // Anchor flag (#138, ADR-0017): syntax and well-formedness at the
-      // command boundary (exit 2), like on the edit surface. Anchored
-      // placement on add is defined by the documented order (it combines
-      // with transforms and effects), and needs EXPLICIT targets for the
-      // anchored axes, exactly as layer edit requires — add's placement
-      // defaults are plain placement, never an implicit anchor target.
-      const parsedAnchorResult = parseLayerAnchor(values.anchor);
-      if (!parsedAnchorResult.ok) {
-        output({ ok: false, error: parsedAnchorResult.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
-      const parsedAnchor = parsedAnchorResult.value;
-      if (parsedAnchor !== undefined) {
-        if (parsedAnchor.horizontal !== undefined && values.x === undefined) {
-          output(
-            { ok: false, error: `--x <target> is required to anchor horizontally: the ${parsedAnchor.horizontal} ink edge/center lands at the requested x.` },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-        if (parsedAnchor.vertical !== undefined && values.y === undefined) {
-          output(
-            { ok: false, error: `--y <target> is required to anchor vertically: the ${parsedAnchor.vertical} ink edge/center lands at the requested y.` },
-            isJson,
-          );
-          process.exitCode = 2;
-          return;
-        }
-      }
-      const oneCommand = anyOneCommandOptionProvided(values)
-        ? {
-            ...(resize.value.resizeFactor !== undefined ? { resizeFactor: resize.value.resizeFactor } : {}),
-            ...(resize.value.resizeTo !== undefined ? { resizeTo: resize.value.resizeTo } : {}),
-            ...(resize.value.scale !== undefined ? { scale: resize.value.scale } : {}),
-            ...(parsedRotation.value !== undefined ? { rotateDeg: parsedRotation.value } : {}),
-            ...(parsedFlip.value !== undefined ? { flip: parsedFlip.value } : {}),
-            ...(parsedShadow.value !== undefined ? { shadow: parsedShadow.value } : {}),
-            ...(parsedOutline.value !== undefined ? { outline: parsedOutline.value } : {}),
-            ...(parsedVectorColor.value !== undefined ? { vectorColor: parsedVectorColor.value } : {}),
-            ...(parsedRegion.value !== undefined ? { visibleRegion: parsedRegion.value } : {}),
-            ...(parsedRegionRadius.value !== undefined ? { visibleRegionRadius: parsedRegionRadius.value } : {}),
-            ...(parsedAnchor !== undefined ? { anchor: parsedAnchor } : {}),
-          }
-        : undefined;
+      const oneCommand = oneCommandParsed.value;
 
       try {
         if (values["from-generation"] !== undefined) {

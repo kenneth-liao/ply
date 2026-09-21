@@ -33,13 +33,18 @@
  * an option means adding it here — to the table, the parseArgs entries,
  * and one validator — and both surfaces inherit it.
  *
- * One-command `composition add` (#229, DEC-002) consumes this table
- * directly: its accepted keys are the table's keys, and its post-content
- * application order (transforms, then anchored placement, then effects)
- * is derived from the table's group fact. Per-kind applicability is NOT a
- * second enforcement surface here: the two surfaces' kind parity rests on
- * the shared domain validators (the content-kind exclusivity rule above
- * the resize path's text-Layer refusal), each with its established
+ * One-command `composition add` (#229, DEC-002; #258, A226-002) consumes
+ * this table directly: its accepted keys are the table's keys, its ONE
+ * boundary parse and ONE application case per option are the shared
+ * registries of `one-command.ts` (`parseOneCommandOptionValues`,
+ * `ONE_COMMAND_OPTION_APPLY`), and its post-content application order
+ * (transforms, then anchored placement, then effects) is derived from the
+ * table's group fact — no add-side parse block, options member, presence
+ * check, name mapping, or application case names an option. Per-kind
+ * applicability is NOT a second enforcement surface here: the two
+ * surfaces' kind parity rests on the shared domain validators (the
+ * content-kind exclusivity rule above the resize path's text-Layer
+ * refusal), each with its established
  * wording — see `layerOptionsApplicableTo`. The canvas `--width` note from
  * #237 is resolved by decision on #229: on the add surface `--width` IS
  * the text width axis — the same spelling `layer edit` uses, validated
