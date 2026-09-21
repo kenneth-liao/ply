@@ -775,12 +775,15 @@ async function run() {
         // resolveFace's throw), reported through the same refusal envelope
         // the add surface reports it with — identical refusal text and exit
         // status on both surfaces (#257); only weight/width range errors are
-        // usage errors here (exit 2).
+        // usage errors here (exit 2). The ONLY throw expected here is
+        // resolveFace's unknown-family refusal; any other throw presenting
+        // as this exit-1 refusal is a bug, not a refusal contract.
         let axesError: string | undefined;
         try {
           axesError = validateTextFaceAxes(values.font, weight, width);
         } catch (err) {
-          output({ ok: false, error: (err as Error).message }, isJson);
+          const message = err instanceof Error ? err.message : String(err);
+          output({ ok: false, error: message }, isJson);
           process.exitCode = 1;
           return;
         }

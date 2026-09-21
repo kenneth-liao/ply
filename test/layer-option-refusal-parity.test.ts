@@ -97,7 +97,11 @@ async function addLayer(name: string, args: string[]): Promise<string> {
  * One parity row per shared option: the invalid value's args (identical on
  * both surfaces) beside each surface's content context. The edit target is
  * the Layer kind the row's context names; the add's use name is derived
- * from the key.
+ * from the key. `names` is the fragment of the row's OWN refusal that the
+ * row asserts on (INT-1): the flag the validator names, or — for the rows
+ * whose validator speaks in values, not flags — that validator's
+ * distinctive refusal text, so a future check reorder cannot silently
+ * un-exercise a row while it stays green.
  */
 const PARITY_ROWS: ReadonlyArray<{
   key: LayerOptionKey;
@@ -107,45 +111,52 @@ const PARITY_ROWS: ReadonlyArray<{
   addContext: string[];
   editContext: string[];
   editId: "imageId" | "textId" | "shapeId" | "svgId";
+  /** The fragment the row's own validator's refusal must contain. */
+  names: string;
 }> = [
-  { key: "image", bad: ["--image", "ply-refusal-parity-missing.png"], addContext: [], editContext: [], editId: "imageId" },
-  { key: "from-generation", bad: ["--from-generation", " "], addContext: [], editContext: [], editId: "imageId" },
-  { key: "from-matte", bad: ["--from-matte", " "], addContext: [], editContext: [], editId: "imageId" },
-  { key: "output", bad: ["--from-generation", "no-such-job", "--output", "banana"], addContext: [], editContext: [], editId: "imageId" },
-  { key: "text", bad: ["--text", "   ", "--font", "Archivo"], addContext: [], editContext: [], editId: "textId" },
-  { key: "shape", bad: ["--shape", "banana"], addContext: [], editContext: [], editId: "shapeId" },
-  { key: "size", bad: ["--shape", "rectangle", "--size", "banana"], addContext: [], editContext: ["--shape", "rectangle"], editId: "shapeId" },
-  { key: "corner-radius", bad: ["--corner-radius", "banana"], addContext: ["--shape", "rectangle", "--size", "40x20", "--fill", "#ff0000"], editContext: ["--shape", "rectangle", "--size", "40x20", "--fill", "#ff0000"], editId: "shapeId" },
-  { key: "fill", bad: ["--fill", "banana"], addContext: ["--shape", "rectangle", "--size", "40x20"], editContext: ["--shape", "rectangle", "--size", "40x20"], editId: "shapeId" },
-  { key: "vector-color", bad: ["--vector-color", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "svgId" },
-  { key: "font", bad: ["--font", "Comic Sans MS"], addContext: ["--text", "hi"], editContext: [], editId: "textId" },
-  { key: "font-file", bad: ["--font-file", " "], addContext: ["--text", "hi"], editContext: [], editId: "textId" },
-  { key: "font-size", bad: ["--font-size", "0"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "color", bad: ["--color", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "weight", bad: ["--weight", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "width", bad: ["--width", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "tracking", bad: ["--tracking", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "line-height", bad: ["--line-height", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "x", bad: ["--x", "abc"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "y", bad: ["--y", "abc"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "opacity", bad: ["--opacity", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId" },
-  { key: "anchor", bad: ["--anchor", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "resize", bad: ["--resize", "0"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "resize-to", bad: ["--resize-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "scale", bad: ["--scale", "0"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "rotate", bad: ["--rotate", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "flip", bad: ["--flip", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "shadow", bad: ["--shadow", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "outline", bad: ["--outline", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "visible-region", bad: ["--visible-region", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId" },
-  { key: "visible-region-radius", bad: ["--visible-region", "10,10,20,20", "--visible-region-radius", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: ["--visible-region", "10,10,20,20"], editId: "imageId" },
+  { key: "image", bad: ["--image", "ply-refusal-parity-missing.png"], addContext: [], editContext: [], editId: "imageId", names: 'cannot read the input image "ply-refusal-parity-missing.png"' },
+  { key: "from-generation", bad: ["--from-generation", " "], addContext: [], editContext: [], editId: "imageId", names: "--from-generation takes a Generation Job id" },
+  { key: "from-matte", bad: ["--from-matte", " "], addContext: [], editContext: [], editId: "imageId", names: "--from-matte takes a matte id" },
+  { key: "output", bad: ["--from-generation", "no-such-job", "--output", "banana"], addContext: [], editContext: [], editId: "imageId", names: "--output takes a 1-based output index" },
+  { key: "text", bad: ["--text", "   ", "--font", "Archivo"], addContext: [], editContext: [], editId: "textId", names: "Invalid text content" },
+  { key: "shape", bad: ["--shape", "banana"], addContext: [], editContext: [], editId: "shapeId", names: "Shape (--shape)" },
+  { key: "size", bad: ["--shape", "rectangle", "--size", "banana"], addContext: [], editContext: ["--shape", "rectangle"], editId: "shapeId", names: '--size takes "<W>x<H>"' },
+  { key: "corner-radius", bad: ["--corner-radius", "banana"], addContext: ["--shape", "rectangle", "--size", "40x20", "--fill", "#ff0000"], editContext: ["--shape", "rectangle", "--size", "40x20", "--fill", "#ff0000"], editId: "shapeId", names: "Corner radius (--corner-radius)" },
+  { key: "fill", bad: ["--fill", "banana"], addContext: ["--shape", "rectangle", "--size", "40x20"], editContext: ["--shape", "rectangle", "--size", "40x20"], editId: "shapeId", names: 'Invalid fill color "banana"' },
+  { key: "vector-color", bad: ["--vector-color", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "svgId", names: 'Invalid fill color "banana"' },
+  { key: "font", bad: ["--font", "Comic Sans MS"], addContext: ["--text", "hi"], editContext: [], editId: "textId", names: 'unknown font family "Comic Sans MS"' },
+  { key: "font-file", bad: ["--font-file", " "], addContext: ["--text", "hi"], editContext: [], editId: "textId", names: "--font-file takes a path" },
+  { key: "font-size", bad: ["--font-size", "0"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Font size (--font-size)" },
+  { key: "color", bad: ["--color", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: 'Invalid color "banana"' },
+  { key: "weight", bad: ["--weight", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Weight (--weight)" },
+  { key: "width", bad: ["--width", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Width (--width)" },
+  { key: "tracking", bad: ["--tracking", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Tracking (--tracking)" },
+  { key: "line-height", bad: ["--line-height", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Line height (--line-height)" },
+  { key: "x", bad: ["--x", "abc"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Placement coordinate (--x)" },
+  { key: "y", bad: ["--y", "abc"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Placement coordinate (--y)" },
+  { key: "opacity", bad: ["--opacity", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Opacity (--opacity)" },
+  { key: "anchor", bad: ["--anchor", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid anchor "banana"' },
+  { key: "resize", bad: ["--resize", "0"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Resize factor (--resize)" },
+  { key: "resize-to", bad: ["--resize-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--resize-to takes" },
+  { key: "scale", bad: ["--scale", "0"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Scale (--scale)" },
+  { key: "rotate", bad: ["--rotate", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Rotation (--rotate)" },
+  { key: "flip", bad: ["--flip", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Flip (--flip)" },
+  { key: "shadow", bad: ["--shadow", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid shadow "banana"' },
+  { key: "outline", bad: ["--outline", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid outline "banana"' },
+  { key: "visible-region", bad: ["--visible-region", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid visible region "banana"' },
+  { key: "visible-region-radius", bad: ["--visible-region", "10,10,20,20", "--visible-region-radius", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: ["--visible-region", "10,10,20,20"], editId: "imageId", names: 'Invalid visible-region corner radius "banana"' },
 ];
 
 test("the parity rows cover every option the shared table declares", () => {
   // The enumeration guard: a table entry without a parity row (or a row
   // whose key the table no longer declares) fails here, so a future option
-  // cannot reach one surface with a different refusal contract.
-  expect(PARITY_ROWS.map((row) => row.key)).toEqual(LAYER_OPTION_DEFS.map((def) => def.key));
+  // cannot reach one surface with a different refusal contract. Compared
+  // as sets plus a length check (INT-2): a pure table reorder must not
+  // break the guard, only a coverage change may.
+  const rowKeys = PARITY_ROWS.map((row) => row.key);
+  const tableKeys = LAYER_OPTION_DEFS.map((def) => def.key);
+  expect(rowKeys).toHaveLength(tableKeys.length);
+  expect([...rowKeys].sort()).toEqual([...tableKeys].sort());
 });
 
 test(
@@ -174,6 +185,13 @@ test(
       { code: add.code, stderr: add.stderr },
       `parity row "${row.key}" (add exit ${add.code}, edit exit ${edit.code})`,
     ).toEqual({ code: edit.code, stderr: edit.stderr });
+    // INT-1: the refusal must come from the ROW's own validator — both
+    // surfaces' stderr must contain the row's distinctive fragment (the
+    // flag the validator names, or that validator's distinctive text for
+    // the rows whose validators speak in values, not flags) — so a future
+    // check reorder cannot silently un-exercise a row while it stays green.
+    expect(add.stderr).toContain(row.names);
+    expect(edit.stderr).toContain(row.names);
   }
   },
   // 31 rows x 2 CLI spawns each: one generous timeout for the whole loop.
