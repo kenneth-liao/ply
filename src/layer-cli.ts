@@ -7,10 +7,12 @@ import { resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } fr
 import {
   LAYER_OPTION_PARSE_ARGS,
   anyLayerEditOptionProvided,
+  applyLayerOption,
   checkEditLayerOptions,
   layerDashNumericFlags,
   layerEditOptionKeys,
   type LayerOptionArgs,
+  type SharedOptionDraft,
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
 } from "./layer-options.js";
@@ -606,7 +608,9 @@ async function run() {
 
       try {
         // Anchored placement (#138, ADR-0017): resolve ONCE against the
-        // live state's painted ink (read-only), then publish plain x/y
+        // live state's painted ink (read-only), through the anchor's ONE
+        // shared application case in the live context (the resolution must
+        // run outside the edit's own Project lock), then publish plain x/y
         // through the ordinary edit lifecycle — the edit path never sees an
         // anchor, so no alternate placement representation can exist.
         let anchored: AnchorResolution | undefined;
@@ -614,12 +618,20 @@ async function run() {
         let editY = parsed.y as number | undefined;
         if (parsedAnchor !== undefined) {
           try {
-            anchored = await resolveAnchoredPlacement(targetProj, layerId, {
-              anchor: parsedAnchor,
-              targetX: parsed.x as number | undefined,
-              targetY: parsed.y as number | undefined,
-              contextComposition: values.fork ? forkComposition : undefined,
-            });
+            anchored = (await applyLayerOption(
+              "anchor",
+              { layerId } as SharedOptionDraft,
+              parsedAnchor,
+              {
+                layerId,
+                live: {
+                  projectPath: targetProj,
+                  x: parsed.x as number | undefined,
+                  y: parsed.y as number | undefined,
+                  contextComposition: values.fork ? forkComposition : undefined,
+                },
+              },
+            )) as AnchorResolution;
           } catch (err) {
             const errObj = err as Error & { referringCompositions?: string[]; referrersCount?: number };
             const result: { ok: false; error: string; [key: string]: unknown } = { ok: false, error: errObj.message };
@@ -675,20 +687,14 @@ async function run() {
           x: editX,
           y: editY,
           opacity: parsed.opacity as number | undefined,
-          resizeFactor: parsed.resize as number | undefined,
-          resizeTo: parsed["resize-to"] as { width?: number; height?: number } | undefined,
-          scale: parsed.scale as number | undefined,
-          rotateDeg: parsed.rotate as number | undefined,
-          flip: parsed.flip as "horizontal" | "vertical" | "both" | "none" | undefined,
-          shadow: parsed.shadow as string | undefined,
-          outline: parsed.outline as string | undefined,
-          visibleRegion: parsed["visible-region"] as string | undefined,
-          visibleRegionRadius: parsed["visible-region-radius"] as string | undefined,
-          vectorColor: parsed["vector-color"] as string | undefined,
           shape: parsed.shape as "rectangle" | "ellipse" | undefined,
           size: parsed.size as { width: number; height: number } | undefined,
           cornerRadius: parsed["corner-radius"] as number | undefined,
           fill: parsed.fill as LayerFill | undefined,
+          // The converged post-content options (DEC-001, #263): the parsed
+          // values, keyed by the option table's own keys — the edit path
+          // dispatches each through its ONE shared application case.
+          shared: parsed,
         });
 
         const resultBody: { ok: true; [key: string]: unknown } = {

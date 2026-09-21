@@ -31,12 +31,14 @@ import { readCallerFontFile } from "./font-file.js";
 import { type LayerFill } from "./fill.js";
 import {
   oneCommandApplicationOrder,
+  LAYER_OPTION_DEFS,
+  type SharedOptionApplyContext,
+  type SharedOptionValues,
+  type SharedOptionDraft,
 } from "./layer-options.js";
 import {
-  ONE_COMMAND_OPTION_APPLY,
-  type OneCommandApplyContext,
+  provisionalScaleContext,
   type OneCommandOptionValues,
-  type OneCommandRevision,
 } from "./one-command.js";
 import {
   selectGenerationOutput,
@@ -367,8 +369,8 @@ export interface AddLayerOptions {
  */
 async function applyOneCommandOptions(
   revision: LayerRevision,
-  options: OneCommandOptionValues | undefined,
-  context: OneCommandApplyContext,
+  options: SharedOptionValues | undefined,
+  context: SharedOptionApplyContext,
 ): Promise<LayerRevision> {
   // The application order reads the option table by its own key names; the
   // parsed values are already keyed by those keys — no name mapping.
@@ -376,15 +378,25 @@ async function applyOneCommandOptions(
   if (supplied.length === 0) {
     return revision;
   }
-  const rev = { ...revision } as OneCommandRevision;
+  const rev = { ...revision } as SharedOptionDraft;
+  // The shared cases resolve against the fresh content's provisional facts
+  // at scale 1 (`provisionalScaleContext`) — the stored-revision-under-lock
+  // side of the same context the edit path supplies.
+  const applyContext: SharedOptionApplyContext = {
+    ...context,
+    surface: "add",
+    base: provisionalScaleContext(context),
+    layerId: revision.layerId,
+    parsed: options ?? {},
+  };
   for (const key of supplied) {
-    const apply = ONE_COMMAND_OPTION_APPLY[key];
+    const apply = LAYER_OPTION_DEFS.find((def) => def.key === key)?.apply;
     if (apply === undefined) {
       throw new Error(`One-command add: no application case for the "--${key}" option.`);
     }
-    await apply(rev, options![key], context);
+    await apply(rev, options![key], applyContext);
   }
-  return rev;
+  return rev as unknown as LayerRevision;
 }
 
 /**
