@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "layerId": "layer_mubtt3l6_rip7p7",
+  "createdAt": "2026-09-21T22:37:54.666Z",
+  "kind": "text",
+  "contentHash": "af1545228e2d71d10718deb5998de1347b22063236d61c4ce2f394cb27fb2daf",
+  "text": "pre-spec render",
+  "fontSize": 40,
+  "color": "#ffffff",
+  "x": 60,
+  "y": 120,
+  "opacity": 1,
+  "scaleX": 1,
+  "scaleY": 1,
+  "rotationDeg": 0,
+  "flipX": false,
+  "flipY": false
+}
