@@ -138,6 +138,12 @@ describe("weights directory resolution", () => {
     process.env.PLY_MODEL_DIR = customDir;
     expect(modelDir()).toBe(customDir);
     expect(weightsPath()).toBe(path.join(customDir, DYNAMIC_SEGMENTER.file));
+
+    // A relative override resolves against cwd to an absolute path
+    process.chdir(root);
+    process.env.PLY_MODEL_DIR = "relative-models";
+    expect(modelDir()).toBe(path.resolve("relative-models"));
+    expect(weightsPath()).toBe(path.resolve("relative-models", DYNAMIC_SEGMENTER.file));
   });
 
   test("missing-weights message contains PLY_MODEL_DIR and an absolute warm-cache script path", () => {
