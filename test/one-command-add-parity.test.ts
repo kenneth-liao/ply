@@ -178,6 +178,26 @@ const TEXT_TRANSFORMS = ["--resize", "1.25", "--rotate", "-12"];
 const TEXT_ANCHOR = ["--anchor", "center,center", "--x", "200", "--y", "150"];
 const TEXT_EFFECTS = ["--shadow", "3,3,5,#000000"];
 
+// Shape (#259, finding A226-004): the same full-option parity for a shape
+// Layer — the kind-shared controls production supports on shapes (absolute
+// scale, rotation, flip, anchored placement, effects) in the documented
+// order. No rendering change: the shape paints through the same markup the
+// multi-command route always produced.
+const SHAPE_ONE_COMMAND = [
+  "--shape", "rectangle", "--size", "120x60", "--corner-radius", "12", "--fill", "#1d4ed8",
+  "--x", "160", "--y", "120", "--opacity", "0.9",
+  "--scale", "1.5", "--rotate", "20", "--flip", "horizontal",
+  "--anchor", "center,center",
+  "--shadow", "3,4,5,#000000", "--outline", "2,#00ff00",
+];
+const SHAPE_CONTENT = [
+  "--shape", "rectangle", "--size", "120x60", "--corner-radius", "12", "--fill", "#1d4ed8",
+  "--x", "160", "--y", "120", "--opacity", "0.9",
+];
+const SHAPE_TRANSFORMS = ["--scale", "1.5", "--rotate", "20", "--flip", "horizontal"];
+const SHAPE_ANCHOR = ["--anchor", "center,center", "--x", "160", "--y", "120"];
+const SHAPE_EFFECTS = ["--shadow", "3,4,5,#000000", "--outline", "2,#00ff00"];
+
 test("image Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one");
   await createComposition("multi");
@@ -234,6 +254,65 @@ test("text Layer: one-command add equals the multi-command sequence (render, mea
   const oneMeasure = await measure("one-t", "headline");
   const multiMeasure = await measure("multi-t", "headline");
   expect(geometry(oneMeasure)).toEqual(geometry(multiMeasure));
+});
+
+test("shape Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
+  await createComposition("one-s");
+  await createComposition("multi-s");
+
+  const one = await json(["composition", "add", "one-s", "panel", ...SHAPE_ONE_COMMAND]);
+  const oneLayerId = (one.layer as { id: string }).id;
+  const multiLayerId = await multiCommandBuild(
+    "multi-s", "panel", SHAPE_CONTENT, SHAPE_TRANSFORMS, SHAPE_ANCHOR, SHAPE_EFFECTS,
+  );
+
+  expect(await revisionCount(oneLayerId)).toBe(1);
+  expect(await revisionCount(multiLayerId)).toBe(4);
+
+  expect(await renderBytes("one-s")).toEqual(await renderBytes("multi-s"));
+
+  const oneMeasure = await measure("one-s", "panel");
+  const multiMeasure = await measure("multi-s", "panel");
+  expect(oneMeasure.kind).toBe("shape");
+  expect(multiMeasure.kind).toBe("shape");
+  expect(geometry(oneMeasure)).toEqual(geometry(multiMeasure));
+
+  // The one-command shape's Render replays byte-identically from its
+  // manifest (the shape-kind replay leg of TEST-002).
+  const rendered = await json(["composition", "render", "one-s"]);
+  const manifest = (rendered.render as { manifest: string }).manifest;
+  const renderedOutput = (rendered.render as { output: string }).output;
+  const replay = await json(["composition", "replay", manifest]);
+  const replayed = (replay.replay as { output: string }).output;
+  expect(await readFile(replayed)).toEqual(await readFile(renderedOutput));
+});
+
+// ---------------------------------------------------------------------------
+// A refused option publishes nothing, for a shape too (TEST-002): the
+// one-command resolutions run before any staging, so a refused scale on a
+// shape add leaves no Layer, no use, and no Project state change.
+// ---------------------------------------------------------------------------
+
+async function stateSnapshot(comp: string): Promise<{ uses: string[]; layerFiles: number }> {
+  const compDoc = JSON.parse(await readFile(path.join(projDir, "compositions", `${comp}.json`), "utf8"));
+  const layerFiles = (await readdir(path.join(projDir, "layers"))).filter((f) => f.endsWith(".revisions")).length;
+  return { uses: compDoc.layers.map((l: { name: string }) => l.name), layerFiles };
+}
+
+test("a refused option on a shape add publishes nothing: no Layer, no use, no state change", async () => {
+  await createComposition("shapeless");
+  const before = await stateSnapshot("shapeless");
+  // Over the per-axis effective-size cap: the scale resolution refuses
+  // inside the publication path, before any staging (120px × 200 = 24000).
+  const res = await spawn([
+    "composition", "add", "shapeless", "too-big",
+    "--shape", "rectangle", "--size", "120x60", "--fill", "#1d4ed8", "--scale", "200",
+    "--project", projDir,
+  ]);
+  expect(res.code).toBe(1);
+  expect(res.stderr).toContain("Resize result 24000×12000px is over the 8192px per-axis limit");
+  const after = await stateSnapshot("shapeless");
+  expect(after).toEqual(before);
 });
 
 test("a pre-existing manifest replays byte-identically after later edits", async () => {

@@ -85,14 +85,27 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   });
 
   it("a consumer can enumerate the options applicable to a Layer kind", () => {
-    const forKind = (kind: "image" | "text") =>
+    const forKind = (kind: "image" | "text" | "shape") =>
       LAYER_OPTION_DEFS.filter((def) => def.appliesTo.includes(kind)).map((def) => def.key);
-    // Text Layers have no intrinsic pixel size: --resize-to is image-only.
-    expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize-to")!.appliesTo).toEqual(["image"]);
-    expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize")!.appliesTo).toEqual(["image", "text"]);
-    expect(LAYER_OPTION_DEFS.find((def) => def.key === "scale")!.appliesTo).toEqual(["image", "text"]);
+    // Text Layers have no intrinsic pixel size: --resize-to is image and
+    // shape only (#259 — a shape's stored width/height are intrinsic pixel
+    // facts like an image's).
+    expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize-to")!.appliesTo).toEqual(["image", "shape"]);
+    expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize")!.appliesTo).toEqual(["image", "text", "shape"]);
+    expect(LAYER_OPTION_DEFS.find((def) => def.key === "scale")!.appliesTo).toEqual(["image", "text", "shape"]);
     expect(forKind("image")).toContain("image");
     expect(forKind("text")).toContain("text");
+    // The shape applicability (#259, A226-004): the kind-shared placement,
+    // transform, effect, and region controls — never the vector colour (a
+    // shape's colour is its fill) and never the text style options.
+    expect(forKind("shape")).toContain("shape");
+    expect(forKind("shape")).toContain("anchor");
+    expect(forKind("shape")).toContain("scale");
+    expect(forKind("shape")).toContain("rotate");
+    expect(forKind("shape")).toContain("shadow");
+    expect(forKind("shape")).toContain("outline");
+    expect(forKind("shape")).not.toContain("vector-color");
+    expect(forKind("shape")).not.toContain("font-size");
     for (const def of LAYER_OPTION_DEFS) {
       expect(def.appliesTo.length).toBeGreaterThan(0);
     }

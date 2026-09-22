@@ -238,22 +238,28 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "width", group: "text", appliesTo: ["text"], editOption: true, parse: parseLayerWidth },
   { key: "tracking", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerTracking },
   { key: "line-height", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerLineHeight },
-  // Placement, transform, and effect options.
-  { key: "x", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("x", raw) },
-  { key: "y", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("y", raw) },
-  { key: "opacity", group: "placement", appliesTo: ["image", "text"], editOption: true, parse: parseLayerOpacity },
-  { key: "anchor", group: "placement", appliesTo: ["image", "text"], editOption: true, parse: parseLayerAnchor, apply: applyAnchor },
+  // Placement, transform, and effect options: kind-shared across image,
+  // text, and shape Layers (#259) — the shared validators and the paint
+  // markup treat a shape's box exactly like an image's content box. Only
+  // the vector colour stays image-only (a shape's colour is its fill).
+  { key: "x", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("x", raw) },
+  { key: "y", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("y", raw) },
+  { key: "opacity", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerOpacity },
+  { key: "anchor", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerAnchor, apply: applyAnchor },
   // The resize family: three mutually exclusive forms through the ONE
   // cross-option exclusivity parse (`parseResizeOptions`) — each surface's
   // order list dispatches it as one step at the family's established check
   // position, and each form has its own ONE application case.
-  { key: "resize", group: "transform", appliesTo: ["image", "text"], editOption: true, apply: applyResizeFactor },
-  { key: "resize-to", group: "transform", appliesTo: ["image"], editOption: true, apply: applyResizeTo },
-  { key: "scale", group: "transform", appliesTo: ["image", "text"], editOption: true, apply: applyScale },
-  { key: "rotate", group: "transform", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: parseLayerRotation, apply: applyRotation },
-  { key: "flip", group: "transform", appliesTo: ["image", "text"], editOption: true, parse: parseLayerFlip, apply: applyFlip },
-  { key: "shadow", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: parseLayerShadow, apply: applyShadow },
-  { key: "outline", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: parseLayerOutline, apply: applyOutline },
+  { key: "resize", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, apply: applyResizeFactor },
+  // --resize-to needs an intrinsic pixel size: an image's or a shape's
+  // stored width/height, never a text Layer's (the shared scale resolution
+  // refuses it on text, identical wording on both surfaces).
+  { key: "resize-to", group: "transform", appliesTo: ["image", "shape"], editOption: true, apply: applyResizeTo },
+  { key: "scale", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, apply: applyScale },
+  { key: "rotate", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerRotation, apply: applyRotation },
+  { key: "flip", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerFlip, apply: applyFlip },
+  { key: "shadow", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerShadow, apply: applyShadow },
+  { key: "outline", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerOutline, apply: applyOutline },
   // The rectangular visible region (#211, spec #207 US-003, ADR-0023): a
   // Layer revision fact about what part of the content is ink — its own
   // group between the transform and effect groups, because one-command add
