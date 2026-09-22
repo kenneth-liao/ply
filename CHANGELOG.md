@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Oversized Layers exceeding the capture bound are now refused per-Layer in the
+  measurement result (`refused: string | null`) with exit status 1 rather than
+  aborting the measurement call. Previously, one oversized Layer threw an
+  unhandled error that blocked measuring the whole Composition, broke region
+  checks, and prevented anchoring unrelated sibling Layers (#206).
+
 ### Changed
 
 - One registration of a Layer option serves both `layer edit` and

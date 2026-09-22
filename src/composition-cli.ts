@@ -57,7 +57,7 @@ import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill } from "./fill.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
-import { checkCompositionRegions, type RegionFinding } from "./composition-region-check.js";
+import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
 import { renderComparisonSheet, parseLabelOverrides } from "./composition-sheet.js";
 import { DEFAULT_SHEET_CELL, DEFAULT_SHEET_COLUMNS } from "./composition-sheet.js";
@@ -148,7 +148,8 @@ composition — Composition authoring and inspection
       Layer's effect extent, and a Layer whose window — its layout box plus
       effect extent plus pad — exceeds the capture bounds (8192px per axis,
       16,777,216px total) is refused with an actionable error instead of
-      growing memory. Painted bounds are the browser's own paint of the exact
+      growing memory. A refused Layer keeps ok true in --json and sets exit
+      status 1. Painted bounds are the browser's own paint of the exact
       markup rendering uses, so
       measurement and rendering agree; opacity scaling
       changes alpha values, never the ink footprint. Text dimensions are measured with
@@ -1227,6 +1228,9 @@ async function run() {
 
       try {
         const result = await measureCompositionLayers(targetProj, compName, useName);
+        if (result.layers.some((l) => l.refused !== null)) {
+          process.exitCode = 1;
+        }
         output(
           { ok: true, composition: result.composition, canvas: result.canvas, layers: result.layers },
           isJson,
@@ -1298,7 +1302,11 @@ async function run() {
       try {
         const result = await checkCompositionRegions(targetProj, compName, path.resolve(values.regions.trim()));
         // Findings are information, never render failures (ADR-0005): the
-        // check completes with exit 0 regardless of findings.
+        // check completes with exit 0 regardless of findings, unless a Layer
+        // was refused measurement (#206).
+        if (result.refused.length > 0) {
+          process.exitCode = 1;
+        }
         output(
           {
             ok: true,
@@ -1307,6 +1315,7 @@ async function run() {
             regionFile: result.regionFile,
             regionCount: result.regionCount,
             findings: result.findings,
+            refused: result.refused,
           },
           isJson,
           () => {
@@ -1324,6 +1333,15 @@ async function run() {
                   `${f.region.label}: ${f.region.reason} — move, resize, or accept the overlap`,
               );
             });
+            if (result.refused.length > 0) {
+              const refCount = result.refused.length;
+              console.log(
+                `\n${refCount} Layer${refCount === 1 ? "" : "s"} refused measurement (footprint unverified):`,
+              );
+              result.refused.forEach((rf: RegionRefusal, i: number) => {
+                console.log(`  ${i + 1}. Layer "${rf.layer}" (${rf.layerId}): ${rf.message}`);
+              });
+            }
           },
         );
       } catch (err) {
@@ -1580,7 +1598,8 @@ function contentLabel(layer: { kind: string; content: { width: number; height: n
  * box, plus the on-canvas intersection only when ink is clipped, or the
  * explicit no-visible-ink wording when there is nothing painted.
  */
-function paintedText(layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped">): string {
+function paintedText(layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped" | "refused">): string {
+  if (layer.refused) return `refused (${layer.refused})`;
   if (!layer.painted) return "painted: none (no visible ink)";
   const p = layer.painted;
   let segment = `painted (${p.x}, ${p.y}) ${p.width}×${p.height}`;

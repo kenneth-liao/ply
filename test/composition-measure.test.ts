@@ -825,9 +825,9 @@ test("a Layer box beyond the capture window is refused loudly, not measured with
   const { res } = await measure("huge", "giant");
   expect(res.code).toBe(1);
   const out = JSON.parse(res.stdout);
-  expect(out.ok).toBe(false);
-  expect(out.error).toContain("giant");
-  expect(out.error).toMatch(/capture window/i);
+  expect(out.ok).toBe(true);
+  expect(out.layers[0].refused).toContain("giant");
+  expect(out.layers[0].refused).toMatch(/capture window/i);
 });
 
 test("a Composition that renders is measurable: each Layer is captured through its own window (#185)", async () => {
@@ -923,12 +923,12 @@ test("a single Layer whose own window is over the decoder's pixel budget gets th
   const { res } = await measure("pixelheavy", "wide");
   expect(res.code).toBe(1);
   const out = JSON.parse(res.stdout);
-  expect(out.ok).toBe(false);
+  expect(out.ok).toBe(true);
   // Names the Layer and the fix — never the raw decoder error.
-  expect(out.error).toContain("wide");
-  expect(out.error).toMatch(/capture window/i);
-  expect(out.error).toMatch(/reduce the transform scale/i);
-  expect(out.error).not.toMatch(/parse limit/i);
+  expect(out.layers[0].refused).toContain("wide");
+  expect(out.layers[0].refused).toMatch(/capture window/i);
+  expect(out.layers[0].refused).toMatch(/reduce the transform scale/i);
+  expect(out.layers[0].refused).not.toMatch(/parse limit/i);
 }, 60000);
 
 test("effect reach is per-Layer: it widens only that Layer's window and refuses that Layer (#185)", async () => {
@@ -953,10 +953,10 @@ test("effect reach is per-Layer: it widens only that Layer's window and refuses 
   const refusal = await measure("reachrefusal");
   expect(refusal.res.code).toBe(1);
   const out = JSON.parse(refusal.res.stdout);
-  expect(out.ok).toBe(false);
-  expect(out.error).toContain("inked");
-  expect(out.error).toContain("plus up to 121.92px of effect extent");
-  expect(out.error).not.toMatch(/parse limit/i);
+  expect(out.ok).toBe(true);
+  expect(out.layers[0].refused).toContain("inked");
+  expect(out.layers[0].refused).toContain("plus up to 121.92px of effect extent");
+  expect(out.layers[0].refused).not.toMatch(/parse limit/i);
 
   // Reach independence: a shadowed Layer's painted extents (shadow ink
   // included) are identical with and without another Layer in the
@@ -1001,7 +1001,7 @@ test("a window at exactly the decoder's bounds measures; one pixel over is refus
   ({ res } = await measure("boundary"));
   expect(res.code).toBe(1);
   const out = JSON.parse(res.stdout);
-  expect(out.ok).toBe(false);
-  expect(out.error).toContain("edge");
-  expect(out.error).not.toMatch(/parse limit/i);
+  expect(out.ok).toBe(true);
+  expect(out.layers[0].refused).toContain("edge");
+  expect(out.layers[0].refused).not.toMatch(/parse limit/i);
 }, 120000);
