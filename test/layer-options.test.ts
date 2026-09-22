@@ -36,6 +36,10 @@ import {
   parseLayerTracking,
   parseLayerWeight,
   parseLayerWidth,
+  parseLayerBrightness,
+  parseLayerContrast,
+  parseLayerSaturation,
+  parseLayerWarmth,
   parseMatteId,
   parseResizeOptions,
   validateTextFaceAxes,
@@ -76,10 +80,27 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // The table's paint, transform, region, and effect groups plus anchored
     // placement — no re-declared list. The paint group (the vector colour,
     // #215) applies first: content-level paint, before the transforms.
-    expect(oneCommandAddOptionKeys()).toEqual(["vector-color", "anchor", "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius"]);
+    expect(oneCommandAddOptionKeys()).toEqual([
+      "vector-color",
+      "anchor",
+      "resize",
+      "resize-to",
+      "scale",
+      "rotate",
+      "flip",
+      "shadow",
+      "outline",
+      "visible-region",
+      "visible-region-radius",
+      "brightness",
+      "contrast",
+      "saturation",
+      "warmth",
+    ]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
     expect(anyOneCommandOptionProvided({ "vector-color": "#22c55e" })).toBe(true);
+    expect(anyOneCommandOptionProvided({ brightness: "1.2" })).toBe(true);
     expect(anyOneCommandOptionProvided({ opacity: "0.5" })).toBe(false);
     expect(anyOneCommandOptionProvided({})).toBe(false);
   });
@@ -104,6 +125,10 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(forKind("shape")).toContain("rotate");
     expect(forKind("shape")).toContain("shadow");
     expect(forKind("shape")).toContain("outline");
+    expect(forKind("shape")).toContain("brightness");
+    expect(forKind("shape")).toContain("contrast");
+    expect(forKind("shape")).toContain("saturation");
+    expect(forKind("shape")).toContain("warmth");
     expect(forKind("shape")).not.toContain("vector-color");
     expect(forKind("shape")).not.toContain("font-size");
     for (const def of LAYER_OPTION_DEFS) {
@@ -118,6 +143,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
+      "brightness", "contrast", "saturation", "warmth",
     ]);
   });
 
@@ -135,15 +161,16 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // options too.
     const editFlags = layerDashNumericFlags(layerEditOptionKeys());
     expect(editFlags).toEqual(
-      expect.arrayContaining(["--x", "--y", "--rotate", "--shadow", "--outline", "--visible-region", "--tracking", "--line-height"]),
+      expect.arrayContaining(["--x", "--y", "--rotate", "--shadow", "--outline", "--visible-region", "--tracking", "--line-height", "--warmth"]),
     );
     // #208 adds the shape size and corner radius options (dash-numeric: a
     // negative value is legitimate input the ingestion validator refuses
     // with its range); #211 adds --visible-region the same way; #212 adds
     // --visible-region-radius (a negative radius is refused by the parser,
-    // but the boundary still accepts dash-leading values).
-    expect(editFlags).toHaveLength(11);
+    // but the boundary still accepts dash-leading values); #219 adds --warmth (-1..1).
+    expect(editFlags).toHaveLength(12);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
+    expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--warmth");
   });
 
   it("the anchor conflict set is derived from the table", () => {
@@ -309,5 +336,45 @@ describe("shared option validators: both surfaces' established texts", () => {
     expect(parseLayerAnchor("center")!.ok).toBe(false);
     expect(parseLayerAnchor("left")).toEqual({ ok: true, value: { horizontal: "left" } });
     expect(parseLayerFlip("NONE")).toEqual({ ok: true, value: "none" });
+  });
+
+  it("grade controls: one text and range check for both surfaces (#219)", () => {
+    expect(parseLayerBrightness("abc")).toEqual({
+      ok: false,
+      error: 'Brightness (--brightness) must be a finite number between 0 and 5 (got "abc").',
+    });
+    expect(parseLayerBrightness("-0.1")).toEqual({
+      ok: false,
+      error: 'Brightness (--brightness) must be a finite number between 0 and 5 (got "-0.1").',
+    });
+    expect(parseLayerBrightness("5.1")).toEqual({
+      ok: false,
+      error: 'Brightness (--brightness) must be a finite number between 0 and 5 (got "5.1").',
+    });
+    expect(parseLayerBrightness("1.5")).toEqual({ ok: true, value: 1.5 });
+    expect(parseLayerBrightness(undefined)).toEqual({ ok: true, value: undefined });
+
+    expect(parseLayerContrast("6")).toEqual({
+      ok: false,
+      error: 'Contrast (--contrast) must be a finite number between 0 and 5 (got "6").',
+    });
+    expect(parseLayerContrast("0")).toEqual({ ok: true, value: 0 });
+
+    expect(parseLayerSaturation("-1")).toEqual({
+      ok: false,
+      error: 'Saturation (--saturation) must be a finite number between 0 and 5 (got "-1").',
+    });
+    expect(parseLayerSaturation("2")).toEqual({ ok: true, value: 2 });
+
+    expect(parseLayerWarmth("-1.5")).toEqual({
+      ok: false,
+      error: 'Warmth (--warmth) must be a finite number between -1 and 1 (got "-1.5").',
+    });
+    expect(parseLayerWarmth("1.5")).toEqual({
+      ok: false,
+      error: 'Warmth (--warmth) must be a finite number between -1 and 1 (got "1.5").',
+    });
+    expect(parseLayerWarmth("-0.5")).toEqual({ ok: true, value: -0.5 });
+    expect(parseLayerWarmth("0")).toEqual({ ok: true, value: 0 });
   });
 });

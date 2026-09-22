@@ -134,6 +134,10 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "visible-region": return ["10,10,20,20"];
     case "visible-region-radius": return ["8"];
     case "vector-color": return ["#22c55e"];
+    case "brightness": return ["1.5"];
+    case "contrast": return ["1.2"];
+    case "saturation": return ["0.8"];
+    case "warmth": return ["0.5"];
     default: throw new Error(`guard test: no value for option "${key}"`);
   }
 }
@@ -214,6 +218,10 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
       expect(rev.format).toBe("svg");
       expect(rev.vectorColor).toBe("#22c55e");
       break;
+    case "brightness": expect((rev.grade as { brightness: number } | undefined)?.brightness).toBe(1.5); break;
+    case "contrast": expect((rev.grade as { contrast: number } | undefined)?.contrast).toBe(1.2); break;
+    case "saturation": expect((rev.grade as { saturation: number } | undefined)?.saturation).toBe(0.8); break;
+    case "warmth": expect((rev.grade as { warmth: number } | undefined)?.warmth).toBe(0.5); break;
     case "font-size": expect(rev.fontSize).toBe(64); break;
     case "color": expect(rev.color).toBe("#ffcc00"); break;
     case "weight": expect(rev.weight).toBe(800); break;
@@ -280,6 +288,10 @@ test("every edit option applicable to a shape Layer is accepted and APPLIED on a
   expect(applicable).toContain("shadow");
   expect(applicable).toContain("outline");
   expect(applicable).toContain("visible-region");
+  expect(applicable).toContain("brightness");
+  expect(applicable).toContain("contrast");
+  expect(applicable).toContain("saturation");
+  expect(applicable).toContain("warmth");
   expect(applicable).not.toContain("vector-color");
   expect(applicable).not.toContain("font-size");
   // The guard shape is 64×48 so the resize-to read-back ("96x" → 96/64 = 1.5)

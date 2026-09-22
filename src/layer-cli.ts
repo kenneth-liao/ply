@@ -2,7 +2,7 @@
 // Layer management CLI: edit, inspect, and list Layers within a Project.
 import { parseArgs } from "node:util";
 import path from "node:path";
-import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
+import { inspectLayer, listLayers, editLayer, roundEffective, formatGrade, type ResolvedLayer } from "./layer.js";
 import { type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import {
   LAYER_OPTION_PARSE_ARGS,
@@ -370,6 +370,31 @@ Options:
                         with --visible-region (rectangle and radius in one
                         edit); a radius kept across a rectangle re-set must
                         still fit the new rectangle.
+  --brightness <num>    Set brightness factor for image, text, and shape Layers: an
+                        ABSOLUTE setter 0 to 5 (neutral: 1) that replaces any
+                        previous brightness, and 1 removes it (the same command
+                        twice keeps the same brightness). Values < 1 darken;
+                        values > 1 brighten. Applied at paint time to the
+                        Layer's content only — never to outline, shadow, or
+                        alpha. It is a revision fact: sharing propagates it,
+                        forks isolate it, and removal is its own edit. Never
+                        changes retained pixels.
+  --contrast <num>      Set contrast factor for image, text, and shape Layers: an
+                        ABSOLUTE setter 0 to 5 (neutral: 1) that replaces any
+                        previous contrast, and 1 removes it. Values < 1 reduce
+                        contrast; values > 1 increase contrast. Applied at
+                        paint time to the Layer's content only.
+  --saturation <num>    Set saturation factor for image, text, and shape Layers: an
+                        ABSOLUTE setter 0 to 5 (neutral: 1) that replaces any
+                        previous saturation, and 1 removes it. Values < 1
+                        desaturate (0 is greyscale); values > 1 oversaturate.
+                        Applied at paint time to the Layer's content only.
+  --warmth <num>        Set warmth shift for image, text, and shape Layers: an
+                        ABSOLUTE setter -1 to 1 (neutral: 0) that replaces any
+                        previous warmth, and 0 removes it. Positive values shift
+                        toward orange/red; negative values shift toward blue.
+                        Applied at paint time via an sRGB colour matrix to the
+                        Layer's content only without changing alpha.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -751,6 +776,9 @@ async function run() {
         if (res.shapeEdited) {
           resultBody.shapeEdited = res.shapeEdited;
         }
+        if (res.gradeSet) {
+          resultBody.gradeSet = res.gradeSet;
+        }
         if (anchored) {
           resultBody.anchored = anchored;
         }
@@ -806,6 +834,11 @@ async function run() {
                 ? `; vector colour ${res.vectorColorSet.vectorColor}`
                 : "; vector colour removed"
               : "";
+            const gradeSet = res.gradeSet
+              ? res.gradeSet.grade !== null
+                ? `; grade ${formatGrade(res.gradeSet.grade)}`
+                : "; grade removed"
+              : "";
             const shapeEdited = res.shapeEdited
               ? `; dropped carried corner radius ${res.shapeEdited.droppedCornerRadius}px (an ellipse has no corners)`
               : "";
@@ -815,10 +848,10 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${shapeEdited}${anchorSummary}`);
             }
           },
         );
@@ -934,7 +967,11 @@ async function run() {
                   (rev.visibleRegion.cornerRadius !== undefined
                     ? `, corner radius ${rev.visibleRegion.cornerRadius}px`
                     : "");
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}`);
+            const grade =
+              rev.grade === undefined
+                ? ""
+                : `, Grade: ${formatGrade(rev.grade)}`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}${grade}`);
           },
         );
       } catch (err) {

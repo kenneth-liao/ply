@@ -47,7 +47,14 @@ import { decodePng, encodePngRgba } from "./png.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
 import { createHash } from "node:crypto";
-import { normalizeStoredTextAxes, normalizeStoredTextTypography, type LayerOutline, type LayerVisibleRegion, type ResolvedLayerRevision } from "./layer.js";
+import {
+  normalizeStoredTextAxes,
+  normalizeStoredTextTypography,
+  type LayerOutline,
+  type LayerVisibleRegion,
+  type ResolvedLayerRevision,
+  type LayerGrade,
+} from "./layer.js";
 import { fillCssBackground } from "./fill.js";
 
 const MIME: Record<"png" | "jpeg" | "webp" | "svg", string> = {
@@ -501,15 +508,66 @@ export function escapeHtml(text: string): string {
 }
 
 /**
+ * The warmth control's SVG filter id and def (#219, spec #218 US-001,
+ * ADR-0024): an SVG feColorMatrix filter running in sRGB
+ * (color-interpolation-filters="sRGB") that scales red by (1 + warmth * 0.3)
+ * and blue by (1 - warmth * 0.3), leaving green and alpha completely
+ * unchanged. The filter is referenced from the Layer's inner content
+ * element's CSS filter chain.
+ */
+function warmthFilterId(warmth: number, layerIndex: number): string {
+  return `ply-w-${createHash("sha256").update(`${warmth}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+}
+
+function warmthFilterDef(warmth: number, layerIndex: number): string {
+  const id = warmthFilterId(warmth, layerIndex);
+  const rScale = (1 + warmth * 0.3).toFixed(4);
+  const bScale = (1 - warmth * 0.3).toFixed(4);
+  return (
+    `<filter id="${id}" color-interpolation-filters="sRGB">` +
+    `<feColorMatrix type="matrix" values="${rScale} 0 0 0 0  0 1 0 0 0  0 0 ${bScale} 0 0  0 0 0 1 0"/>` +
+    `</filter>`
+  );
+}
+
+/**
+ * The CSS filter chain for a graded Layer (#219, spec #218 US-001, ADR-0024):
+ * applied to the INNER content element in the fixed deterministic sequence
+ * (DEC-003): brightness -> contrast -> saturate -> warmth.
+ */
+function gradeFilterCss(grade: LayerGrade | undefined, layerIndex: number): string {
+  if (!grade) return "";
+  const parts: string[] = [];
+  // Trust the normalized fact (storage normalisation at normalizeStoredGrade /
+  // updateDraftGrade is the ONE home for neutral-value dropping): emit whatever
+  // controls are present on the grade fact.
+  if (grade.brightness !== undefined) {
+    parts.push(`brightness(${grade.brightness})`);
+  }
+  if (grade.contrast !== undefined) {
+    parts.push(`contrast(${grade.contrast})`);
+  }
+  if (grade.saturation !== undefined) {
+    parts.push(`saturate(${grade.saturation})`);
+  }
+  if (grade.warmth !== undefined) {
+    parts.push(`url(#${warmthFilterId(grade.warmth, layerIndex)})`);
+  }
+  return parts.length > 0 ? `filter:${parts.join(" ")};` : "";
+}
+
+/**
  * The per-Layer `<defs>` markup for every outlined Layer's filter (#140,
- * ADR-0019) and every region-clipped Layer's clipPath (#211, ADR-0023) in
+ * ADR-0019), every region-clipped Layer's clipPath (#211, ADR-0023), and
+ * every warmth-filtered Layer's feColorMatrix filter (#219, ADR-0024) in
  * the snapshot. Emitted once per Composition as an inline SVG OUTSIDE
  * the `#canvas` element — zero-size, so it paints nothing itself, and
  * outside so `#canvas`'s children remain exactly one element per Layer
  * (the measurement probe and the painted-ink pass index them by
  * position). The outline filters are referenced from the Layer elements'
  * CSS `filter` chains by id; the region clipPaths from the inner content
- * elements' `clip-path`. The outline regions' placeholder is sized
+ * elements' `clip-path`; the warmth filters from the inner content
+ * elements' `filter` chain. The outline regions' placeholder is sized
  * in-page before any screenshot by `sizeOutlineFilterRegions`.
  */
 function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
@@ -523,7 +581,11 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
         l.revision.visibleRegion !== undefined
           ? regionClipPathDef(l.revision.visibleRegion, i)
           : "";
-      return outline + region;
+      const warmth =
+        l.revision.grade?.warmth !== undefined
+          ? warmthFilterDef(l.revision.grade.warmth, i)
+          : "";
+      return outline + region + warmth;
     })
     .join("");
   if (defs === "") return "";
@@ -715,6 +777,12 @@ export function buildCompositionHtml(
       // before.
       const regionClip =
         rev.visibleRegion !== undefined ? `clip-path:url(#${regionClipPathId(rev.visibleRegion, layerIndex)});` : "";
+      // The grade controls (#219, spec #218 US-001, ADR-0024): applied to the
+      // INNER content element in the DEC-003 fixed deterministic sequence
+      // (brightness -> contrast -> saturate -> warmth) so outline and shadow
+      // colors and alpha are never affected. Emitted only when a non-neutral
+      // grade fact exists.
+      const gradeFilter = gradeFilterCss(rev.grade, layerIndex);
       if (rev.kind === "text") {
         // Selected text axes (#179, ADR-0021): read from the revision alone
         // through the one stored-axes reader — this builder is the one
@@ -747,12 +815,12 @@ export function buildCompositionHtml(
         const textStyle =
           `font-family:'${internalFontFamily(rev.contentHash)}';` +
           `font-size:${rev.fontSize}px;color:${rev.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
-        if (rev.visibleRegion === undefined) {
+        if (rev.visibleRegion === undefined && gradeFilter === "") {
           return `<div style="${base}${transformed}${effectsFilter}${textStyle}">${escapeHtml(rev.text)}</div>`;
         }
         return (
           `<div style="${base}${transformed}${effectsFilter}">` +
-          `<div style="${textStyle}${regionClip}">${escapeHtml(rev.text)}</div></div>`
+          `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`
         );
       }
       if (rev.kind === "shape") {
@@ -776,12 +844,12 @@ export function buildCompositionHtml(
         const shapeStyle =
           `width:${rev.width}px;height:${rev.height}px;` +
           `background:${fillCssBackground(rev.fill)};${radiusCss}`;
-        if (rev.visibleRegion === undefined) {
+        if (rev.visibleRegion === undefined && gradeFilter === "") {
           return `<div style="${base}${transformed}${effectsFilter}${shapeStyle}"></div>`;
         }
         return (
           `<div style="${base}${transformed}${effectsFilter}">` +
-          `<div style="${shapeStyle}${regionClip}"></div></div>`
+          `<div style="${shapeStyle}${regionClip}${gradeFilter}"></div></div>`
         );
       }
       // The vector colour (#215, spec #207 US-005, DEC-008): a recoloured
@@ -826,13 +894,13 @@ export function buildCompositionHtml(
         // already used, with an empty clip.
         return (
           `<div style="${base}${transformed}${effectsFilter}">` +
-          `<div style="${vectorColorCss}${regionClip}"></div></div>`
+          `<div style="${vectorColorCss}${regionClip}${gradeFilter}"></div></div>`
         );
       }
-      if (rev.visibleRegion !== undefined) {
+      if (rev.visibleRegion !== undefined || gradeFilter !== "") {
         return (
           `<div style="${base}${transformed}${effectsFilter}">` +
-          `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="display:block;${regionClip}">` +
+          `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="display:block;${regionClip}${gradeFilter}">` +
           `</div>`
         );
       }

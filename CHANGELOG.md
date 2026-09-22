@@ -26,6 +26,8 @@
 
 ### Added
 
+- Layer grade controls (`--brightness`, `--contrast`, `--saturation`, `--warmth`) adjust image, text, and shape tonal and colour balance as revision facts applied deterministically to content at paint time, with neutral values removing stored facts (#219).
+
 - The comparison sheet command (`ply composition sheet <input...>`, #233,
   spec #226 US-006, DEC-007/008/009, TEST-008): one command lays an ordered
   list of inputs — Composition names (rendered current through the existing
