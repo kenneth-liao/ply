@@ -95,7 +95,7 @@ import {
   buildCompositionHtml,
   layerMaxScale,
   rejectUnresolvedFonts,
-  sizeOutlineFilterRegions,
+  sizeEffectFilterRegions,
   type SnapshotLayer,
 } from "./composition-paint.js";
 import {
@@ -106,6 +106,7 @@ import {
   type LayerTextTypography,
   type ResolvedLayerRevision,
   type LayerGrade,
+  type LayerGlow,
   type StoredLayerBlendMode,
 } from "./layer.js";
 import type { Page } from "playwright";
@@ -143,6 +144,11 @@ export interface MeasuredLayerBounds {
    * the stored grade parameters (or null when the Layer has no grade) — the
    * same facts painting applies, reported for auditability. */
   grade: LayerGrade | null;
+  /** The revision's effective edge glow (#221, spec #218 US-002, ADR-0024):
+   * the stored glow parameters (or null when the Layer has no glow) — the
+   * same fact painting applies, reported for auditability. The glow never
+   * extends painted extents (DEC-005), so this fact rides beside them. */
+  glow: LayerGlow | null;
   /** The revision's effective blend mode (#220, spec #218 US-003, ADR-0024):
    * the stored mix-blend-mode (or null when normal/unblended) — the same fact
    * painting applies, reported for auditability. */
@@ -418,7 +424,7 @@ async function measureSnapshot(
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     // Per-Layer outline-filter region sizing (#140, ADR-0019): the paint
     // path's exact adjustment, so painted extents agree with the render.
-    await sizeOutlineFilterRegions(page, layers);
+    await sizeEffectFilterRegions(page, layers);
     // The same retained-font gate as painting: an unresolved face is a
     // loud failure, never a fallback measurement.
     await rejectUnresolvedFonts(page, layers);
@@ -630,6 +636,7 @@ export async function measureCompositionLayers(
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
         grade: rev.grade ?? null,
+        glow: rev.glow ?? null,
         blend: rev.blend ?? null,
         visibleRegion: rev.visibleRegion ?? null,
         // The vector colour (#215): the stored canonical hex (or null —

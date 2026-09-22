@@ -362,9 +362,10 @@ placement, and clipping remain identical to the ungraded Layer).
   mode. Passing `normal` removes the stored fact (`undefined`), returning the
   Layer to default standard compositing. An omitted `--blend` preserves the
   current mode across edits.
-- **Unit of blend**: The whole Layer — content, visible region, grade, outline,
-  shadow, and opacity — blends as ONE unit against everything beneath it
-  (ADR-0024) via CSS `mix-blend-mode` on the Layer's outer wrapper element.
+- **Unit of blend**: The whole Layer — content, visible region, grade, edge
+  glow, outline, shadow, and opacity — blends as ONE unit against everything
+  beneath it (ADR-0024) via CSS `mix-blend-mode` on the Layer's outer wrapper
+  element.
 - **Transparent-canvas behaviour (DEC-007)**: When blending over transparent
   canvas areas (where no underlying pixels exist), compositing follows the
   browser's standard CSS compositing specification without special-casing:
@@ -372,6 +373,38 @@ placement, and clipping remain identical to the ungraded Layer).
   preserving the Layer's content and alpha into the canvas output.
 - **Refusals**: Supplying an unknown blend mode is refused before publication
   with exit code 2, listing the allowed set.
+
+## Layer edge glow
+
+`ply layer edit` and `ply composition add` accept `--glow` for image (raster
+and vector), text, and shape Layers (#221, spec #218 US-002):
+
+- **Value form**: `"<width>,<softness>,<color>[,<angle>,<strength>]"`, e.g.
+  `"14,6,#ff9900"` or `"14,6,#ff990080,45,0.8"`; `none` removes the stored
+  fact. An omitted `--glow` preserves the current glow across edits.
+- **Width and softness**: each a finite number of px between `0` and `256`.
+  Width is how far the glow reaches inward from the alpha edge; softness is
+  the feather between the band and the untouched interior.
+- **Colour**: the same hex forms the shadow and outline accept (`#RGB`,
+  `#RRGGBB`, `#RRGGBBAA`), canonicalized the same way.
+- **Direction**: an optional pair — `<angle>` in degrees clockwise from top
+  (`-360` to `360`) with `<strength>` between `0` and `1`, always supplied
+  together. Without the pair the glow is even all round; strength `0` is the
+  even glow and drops the pair. The angle is stored canonically in `[0, 360)`,
+  so equivalent spellings (`-360`, `0`, `360` ≡ light from top) publish one
+  fact.
+- **Not relighting**: the edge glow is a two-dimensional edge effect on the
+  Layer's own alpha — a coloured band painted just inside the alpha edge,
+  over the graded content, following the visible region's edge (including
+  its rounded corners) and transforming with the Layer. It never changes the
+  direction or shape of light on the subject; that is generation.
+- **Alpha coverage (DEC-005)**: the glow is composited atop the content with
+  exactly the content's alpha, so painted extents, anchored placement, and
+  `clipped` are unchanged by it.
+- **Refusals**: a malformed value — wrong part count, out-of-range width,
+  softness, angle, or strength, a non-hex colour, or a lone angle or
+  strength — is refused before publication with exit code 2, naming the part
+  and its range.
 
 ## Exit codes
 

@@ -180,6 +180,18 @@ interface LayerRevisionBase {
    */
   grade?: LayerGrade;
   /**
+   * Canonical edge glow (#221, spec #218 US-002, ADR-0024): a coloured light
+   * painted just inside the Layer's alpha edge, over the graded content,
+   * without extending painted extents or altering alpha coverage (DEC-005).
+   * Stored only when set; 'none' removes the stored fact.
+   *
+   * Present ⟺ an edge glow exists: absence IS the canonical no-glow form,
+   * so removal drops the field and every reader treats absence as none.
+   * The revision hash appends it only when present, so revisions written
+   * before #221 keep their exact ids.
+   */
+  glow?: LayerGlow;
+  /**
    * Canonical blend mode (#220, spec #218 US-003, ADR-0024): controls how the
    * whole Layer combines with everything painted beneath it on the canvas
    * via CSS mix-blend-mode. An absolute setter; 'normal' removes the stored
@@ -207,6 +219,15 @@ export const LAYER_BLEND_MODES = [
 
 export type LayerBlendMode = (typeof LAYER_BLEND_MODES)[number];
 export type StoredLayerBlendMode = Exclude<LayerBlendMode, "normal">;
+
+/** Canonical edge-glow parameters (#221, spec #218 US-002, ADR-0024). */
+export interface LayerGlow {
+  width: number;
+  softness: number;
+  color: string;
+  angle?: number;
+  strength?: number;
+}
 
 /** Canonical grade parameters (#219, spec #218 US-001, ADR-0024). */
 export interface LayerGrade {
@@ -952,6 +973,120 @@ export function normalizeStoredBlend(revision: { blend?: unknown }): StoredLayer
   return raw as StoredLayerBlendMode;
 }
 
+/**
+ * The largest edge-glow width and softness in px (#221, spec #218 US-002):
+ * the same bound the outline width uses (ADR-0019) — the effect footprint
+ * stays bounded, and one number reads the same in help, the limits guide,
+ * and every refusal.
+ */
+export const MAX_GLOW_PX = 256;
+
+/**
+ * Canonical stored edge-glow validation and normalization (#221, spec #218
+ * US-002, ADR-0024). The one normalization boundary for the glow fact:
+ * documents written before #221 lack the field, and absence IS the canonical
+ * no-glow form — every downstream reader projects through this function and
+ * never re-derives a default.
+ *
+ * Stored parameters must be:
+ * - `width` and `softness`: finite numbers between 0 and MAX_GLOW_PX.
+ * - `color`: a hex colour (#RGB/#RRGGBB/#RRGGBBAA).
+ * - `angle` and `strength`: an optional PAIR — a finite angle within
+ *   ±360 degrees (clockwise from top) and a finite strength between 0 and 1.
+ *   One without the other is a malformed document; strength 0 (an even
+ *   glow) drops the pair, the same neutral-dropping rule the setter applies.
+ *
+ * Extra or non-conformant properties are refused loudly as malformed
+ * documents before the revision hash is consulted.
+ */
+export function normalizeStoredGlow(revision: { glow?: unknown }): LayerGlow | undefined {
+  if (revision.glow === undefined) {
+    return undefined;
+  }
+  const raw = revision.glow;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `Malformed revision document: glow must be an object when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  const rawObj = raw as Record<string, unknown>;
+  const allowedKeys = new Set(["width", "softness", "color", "angle", "strength"]);
+  for (const key of Object.keys(rawObj)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(
+        `Malformed revision document: unknown glow property ${JSON.stringify(key)}.`,
+      );
+    }
+  }
+  const { width, softness, color, angle, strength } = rawObj;
+  if (typeof width !== "number" || !Number.isFinite(width) || width < 0 || width > MAX_GLOW_PX) {
+    throw new Error(
+      `Malformed revision document: glow.width must be a finite number between 0 and ${MAX_GLOW_PX} when present (got ${JSON.stringify(width)}).`,
+    );
+  }
+  if (typeof softness !== "number" || !Number.isFinite(softness) || softness < 0 || softness > MAX_GLOW_PX) {
+    throw new Error(
+      `Malformed revision document: glow.softness must be a finite number between 0 and ${MAX_GLOW_PX} when present (got ${JSON.stringify(softness)}).`,
+    );
+  }
+  if (typeof color !== "string" || !EFFECT_COLOR_PATTERN.test(color)) {
+    throw new Error(
+      `Malformed revision document: glow.color must be a hex colour like #000000, #000, or #00000080 when present (got ${JSON.stringify(color)}).`,
+    );
+  }
+  const normalized: LayerGlow = {
+    width,
+    softness,
+    color: canonicalizeEffectColor(color),
+  };
+  if (angle !== undefined || strength !== undefined) {
+    if (angle === undefined || strength === undefined) {
+      throw new Error(
+        "Malformed revision document: glow.angle and glow.strength are one direction pair — both must be present or both absent.",
+      );
+    }
+    if (
+      typeof angle !== "number" ||
+      !Number.isFinite(angle) ||
+      angle < -360 ||
+      angle > 360 ||
+      typeof strength !== "number" ||
+      !Number.isFinite(strength) ||
+      strength < 0 ||
+      strength > 1
+    ) {
+      throw new Error(
+        `Malformed revision document: glow.angle must be a finite number between -360 and 360 and glow.strength a finite number between 0 and 1 when present (got ${JSON.stringify(angle)}, ${JSON.stringify(strength)}).`,
+      );
+    }
+    if (strength !== 0) {
+      // Canonical direction form: the angle in [0, 360) — the same paint as
+      // any equivalent spelling, so equivalent directions cannot mint
+      // redundant revisions.
+      normalized.angle = ((angle % 360) + 360) % 360;
+      normalized.strength = strength;
+    }
+  }
+  return normalized;
+}
+
+export function glowEq(a: LayerGlow | undefined, b: LayerGlow | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.width === b.width &&
+    a.softness === b.softness &&
+    a.color === b.color &&
+    a.angle === b.angle &&
+    a.strength === b.strength
+  );
+}
+
+export function formatGlow(glow: LayerGlow): string {
+  const direction =
+    glow.angle !== undefined ? `, from ${glow.angle}° (strength ${glow.strength})` : "";
+  return `glow width ${glow.width}px, softness ${glow.softness}px, ${glow.color}${direction}`;
+}
+
 export type ResolvedLayerRevision =
   | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
   | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
@@ -1512,7 +1647,17 @@ export function computeRevisionHash(rev: LayerRevision): string {
   // present and non-normal, so revisions written before #220 keep their exact ids.
   const blend = normalizeStoredBlend(rev);
   const blendField = blend !== undefined ? `:blend(${blend})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}`).digest("hex").slice(0, 16)}`;
+  // The edge glow (#221, spec #218 US-002, ADR-0024): appended only when
+  // present, in fixed order (width, softness, color, then the direction pair
+  // when present), so revisions written before #221 keep their exact ids.
+  const glow = normalizeStoredGlow(rev);
+  const glowField =
+    glow !== undefined
+      ? `:glow(${glow.width},${glow.softness},${glow.color}` +
+        (glow.angle !== undefined ? `,a${glow.angle},s${glow.strength}` : "") +
+        `)`
+      : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1772,6 +1917,10 @@ export async function readRevisionInternalFull(
   // and normalized at this same one boundary — malformed modes are refused
   // loudly before the revision hash is consulted. Absence IS the normal/no-blend form.
   const blend = normalizeStoredBlend(revision);
+  // Canonical edge glow (#221, spec #218 US-002, ADR-0024): validated and
+  // normalized at this same one boundary — malformed parameters are refused
+  // loudly before the revision hash is consulted. Absence IS the no-glow form.
+  const glow = normalizeStoredGlow(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -1863,6 +2012,7 @@ export async function readRevisionInternalFull(
             ...(vectorColor !== undefined ? { vectorColor } : {}),
             ...(grade !== undefined ? { grade } : {}),
             ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
+            ...(glow !== undefined ? { glow } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -1890,6 +2040,7 @@ export async function readRevisionInternalFull(
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
           ...(grade !== undefined ? { grade } : {}),
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
+          ...(glow !== undefined ? { glow } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -1925,6 +2076,7 @@ export async function readRevisionInternalFull(
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
           ...(grade !== undefined ? { grade } : {}),
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
+          ...(glow !== undefined ? { glow } : {}),
         };
 
   return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0) };
@@ -2149,6 +2301,9 @@ export interface EditLayerResult {
   /** Present when the edit set or removed the blend mode (#220): the
    * absolute blend state now recorded on the revision (null when removed). */
   blendSet?: { blend: StoredLayerBlendMode | null };
+  /** Present when the edit set or removed the edge glow (#221): the
+   * absolute glow state now recorded on the revision (null when removed). */
+  glowSet?: { glow: LayerGlow | null };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -2378,6 +2533,85 @@ export function parseOutlineSpec(spec: string): LayerOutline | undefined {
     );
   }
   return { width, color: canonicalizeEffectColor(color) };
+}
+
+/**
+ * Canonical edge-glow normalization (#221, spec #218 US-002, ADR-0024,
+ * DEC-006): `--glow` sets an ABSOLUTE glow, replacing any previous one;
+ * `"none"` removes it. Omitted option preserves the current revision's
+ * glow. The spec is "<width>,<softness>,<color>[,<angle>,<strength>]" with
+ * width and softness in px (0..MAX_GLOW_PX), the same hex colour forms as
+ * the shadow and outline (canonicalized by `canonicalizeEffectColor`), and an
+ * optional direction pair — angle in degrees clockwise from top within
+ * ±360, strength between 0 and 1, supplied together; strength 0 (an even
+ * glow) drops the pair. The angle is stored canonically in [0, 360), so
+ * equivalent spellings of the same direction cannot mint redundant
+ * revisions. Exported for the CLI boundary: the command classifies
+ * malformed specs as usage errors (exit 2) with this same parser, so the
+ * two never disagree.
+ */
+export function parseGlowSpec(spec: string): LayerGlow | undefined {
+  const raw = spec.trim();
+  if (raw.toLowerCase() === "none") {
+    return undefined;
+  }
+  const parts = raw.split(",").map((p) => p.trim());
+  if (parts.length !== 3 && parts.length !== 5) {
+    throw new Error(
+      `Invalid glow "${raw}": --glow takes "<width>,<softness>,<color>" or ` +
+        `"<width>,<softness>,<color>,<angle>,<strength>" (e.g. "12,4,#ff9900,45,0.8"), or "none".`,
+    );
+  }
+  const [widthRaw, softnessRaw, colorRaw, angleRaw, strengthRaw] = parts;
+  const width = Number(widthRaw);
+  const softness = Number(softnessRaw);
+  const color = colorRaw ?? "";
+  if (widthRaw === "" || softnessRaw === "" || color === "") {
+    throw new Error(
+      `Invalid glow "${raw}": --glow takes "<width>,<softness>,<color>" or ` +
+        `"<width>,<softness>,<color>,<angle>,<strength>" (e.g. "12,4,#ff9900"), or "none".`,
+    );
+  }
+  if (!Number.isFinite(width) || width < 0 || width > MAX_GLOW_PX) {
+    throw new Error(
+      `Invalid glow width ${widthRaw}: must be a finite number of px between 0 and ${MAX_GLOW_PX}.`,
+    );
+  }
+  if (!Number.isFinite(softness) || softness < 0 || softness > MAX_GLOW_PX) {
+    throw new Error(
+      `Invalid glow softness ${softnessRaw}: must be a finite number of px between 0 and ${MAX_GLOW_PX}.`,
+    );
+  }
+  if (!EFFECT_COLOR_PATTERN.test(color)) {
+    throw new Error(
+      `Invalid glow color "${color}": must be a hex color like #000000, #000, or #00000080.`,
+    );
+  }
+  const glow: LayerGlow = { width, softness, color: canonicalizeEffectColor(color) };
+  if (angleRaw !== undefined || strengthRaw !== undefined) {
+    if (angleRaw === undefined || strengthRaw === undefined || angleRaw === "" || strengthRaw === "") {
+      throw new Error(
+        `Invalid glow "${raw}": the direction is one pair — pass both <angle> (degrees clockwise from top, -360 to 360) and <strength> (0 to 1), or neither.`,
+      );
+    }
+    const angle = Number(angleRaw);
+    const strength = Number(strengthRaw);
+    if (!Number.isFinite(angle) || angle < -360 || angle > 360) {
+      throw new Error(
+        `Invalid glow angle ${angleRaw}: must be a finite number of degrees between -360 and 360 (clockwise from top).`,
+      );
+    }
+    if (!Number.isFinite(strength) || strength < 0 || strength > 1) {
+      throw new Error(
+        `Invalid glow strength ${strengthRaw}: must be a finite number between 0 and 1.`,
+      );
+    }
+    if (strength !== 0) {
+      glow.angle = ((angle % 360) + 360) % 360;
+      glow.strength = strength;
+    }
+  }
+  return glow;
 }
 
 /**
@@ -3076,6 +3310,7 @@ async function buildEditedRevision(
       ...(draft.vectorColor !== undefined ? { vectorColor: draft.vectorColor } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
+      ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
       ...carried,
     };
     const unchanged =
@@ -3089,6 +3324,7 @@ async function buildEditedRevision(
       draft.vectorColor === prevRev.vectorColor &&
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
+      glowEq(draft.glow, prevRev.glow) &&
       Object.keys(carried).length === 0;
     return { revision, unchanged, mattedFrom, retainedGeneration, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
@@ -3195,6 +3431,7 @@ async function buildEditedRevision(
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
+      ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
       ...carried,
     };
     const unchanged =
@@ -3218,6 +3455,7 @@ async function buildEditedRevision(
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
+      glowEq(draft.glow, prevRev.glow) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
     // --size change the content box, so the kept region re-validates against
@@ -3386,6 +3624,7 @@ async function buildEditedRevision(
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
+      ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
       ...carried,
     };
     const unchanged =
@@ -3411,6 +3650,7 @@ async function buildEditedRevision(
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
+      glowEq(draft.glow, prevRev.glow) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a text edit (#211 review PROD-1): the text
     // content box is the measured line-box extent, so a text edit that can
@@ -3686,6 +3926,8 @@ export async function editLayerInternal(
   const gradeSetReport = { grade: draft.grade ?? null };
   const hasBlend = shared.blend !== undefined;
   const blendSetReport = { blend: draft.blend ?? null };
+  const hasGlow = shared.glow !== undefined;
+  const glowSetReport = { glow: draft.glow ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -3740,7 +3982,8 @@ export async function editLayerInternal(
     const withColour = shared["vector-color"] !== undefined ? { ...withRegion, vectorColorSet: vectorColorSetReport } : withRegion;
     const withGrade = hasGrade ? { ...withColour, gradeSet: gradeSetReport } : withColour;
     const withBlend = hasBlend ? { ...withGrade, blendSet: blendSetReport } : withGrade;
-    const withCarried = regionCarried ? { ...withBlend, regionCarried } : withBlend;
+    const withGlow = hasGlow ? { ...withBlend, glowSet: glowSetReport } : withBlend;
+    const withCarried = regionCarried ? { ...withGlow, regionCarried } : withGlow;
     const withShape = shapeEdited ? { ...withCarried, shapeEdited } : withCarried;
     return options.fromGeneration !== undefined
       ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
@@ -3783,6 +4026,7 @@ export async function editLayerInternal(
       ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
       ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
       ...(hasBlend ? { blendSet: blendSetReport } : {}),
+      ...(hasGlow ? { glowSet: glowSetReport } : {}),
       ...(regionCarried ? { regionCarried } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
@@ -3842,6 +4086,7 @@ export async function editLayerInternal(
     ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
     ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
     ...(hasBlend ? { blendSet: blendSetReport } : {}),
+    ...(hasGlow ? { glowSet: glowSetReport } : {}),
     ...(regionCarried ? { regionCarried } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined

@@ -98,6 +98,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "saturation",
       "warmth",
       "blend",
+      "glow",
     ]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
@@ -145,7 +146,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
-      "brightness", "contrast", "saturation", "warmth", "blend",
+      "brightness", "contrast", "saturation", "warmth", "blend", "glow",
     ]);
   });
 

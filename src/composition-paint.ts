@@ -23,6 +23,15 @@
  * the clip lives on an inner content element under the Layer's wrapper
  * element, so `#canvas` keeps exactly one child per Layer and Layers
  * without a region paint exactly the pre-#211 markup.
+ * A revision's grade (#219, ADR-0024) and edge glow (#221, ADR-0024) paint
+ * in the same local space between the region and the outline: the grade's
+ * CSS filter chain rides the inner content element (content only, alpha
+ * untouched), and the glow is the first function of the outer element's
+ * effect chain — an inner-alpha band over the graded content, under
+ * outline and shadow, never extending painted extents (DEC-005). The
+ * blend mode (#220, ADR-0024) then composites the whole Layer — content,
+ * visible region, grade, glow, outline, shadow, transform, opacity — as
+ * ONE unit against everything beneath it.
  * A revision's vector colour (#215, DEC-008) is content paint: a recoloured
  * Layer paints as ONE solid-colour element masked by the retained bytes
  * themselves (ADR-0012's machinery, through the browser image path), placed
@@ -54,6 +63,7 @@ import {
   type LayerVisibleRegion,
   type ResolvedLayerRevision,
   type LayerGrade,
+  type LayerGlow,
 } from "./layer.js";
 import { fillCssBackground } from "./fill.js";
 
@@ -296,7 +306,7 @@ export async function paintComposition(
  *
  * `options.beforeScreenshot` is a page hook for the guideline path's
  * in-page placement pass (measured text placement needs the live page, the
- * same pattern as `sizeOutlineFilterRegions`); the render path never passes
+ * same pattern as `sizeEffectFilterRegions`); the render path never passes
  * one, so no render-page flow runs guideline code.
  */
 export async function paintCompositionHtml(
@@ -319,8 +329,8 @@ export async function paintCompositionHtml(
     // Awaited decode: a partially painted canvas is never screenshotted.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     // Per-Layer outline-filter region sizing (#140, ADR-0019): before any
-    // pixel leaves this page — see sizeOutlineFilterRegions.
-    await sizeOutlineFilterRegions(page, layers);
+    // pixel leaves this page — see sizeEffectFilterRegions.
+    await sizeEffectFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
     if (options.beforeScreenshot) await options.beforeScreenshot(page);
     const png = await page.screenshot({
@@ -404,7 +414,7 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
  * source graphic to the declared region, contrary to the pre-review
  * comment's claim). The region is therefore declared as a placeholder here
  * and sized in-page from the element's real untransformed border box by
- * `sizeOutlineFilterRegions` — the SAME sizing pass in the paint and
+ * `sizeEffectFilterRegions` — the SAME sizing pass in the paint and
  * measurement flows, so render and painted extents agree exactly. The id
  * is a deterministic hash of the pair plus the Layer's snapshot index, so
  * the same facts always emit the same markup.
@@ -440,6 +450,91 @@ function outlineFilterDef(
     `<feFlood flood-color="${outline.color}" result="flood"/>` +
     `<feComposite in="flood" in2="dil" operator="in" result="ring"/>` +
     `<feMerge><feMergeNode in="ring"/><feMergeNode in="SourceGraphic"/></feMerge>` +
+    `</filter>`
+  );
+}
+
+/**
+ * The edge glow's SVG-filter id and def (#221, spec #218 US-002, ADR-0024):
+ * an inner-alpha edge light — a coloured band painted just INSIDE the
+ * Layer's alpha edge, over the graded content. The chain operates on the
+ * filter input's alpha — for the outer element's filter chain that input is
+ * the region-clipped, graded composite, so the glow follows the visible
+ * region's edge (including its rounded corners, ADR-0023) and paints over
+ * the graded content, in ADR-0024's order:
+ *
+ * 1. `feMorphology erode` the source alpha by `width` px (LOCAL px, before
+ *    the transform; chained under the same MAX_OUTLINE_DILATE_PX raster cap
+ *    the outline dilate obeys — sequential box erosions compose exactly,
+ *    the mirror of the chained dilate's argument).
+ * 2. When a direction pair is stored, `feOffset` the eroded mask AWAY from
+ *    the light direction — angle `a` degrees clockwise from top has its
+ *    source at direction `(sin a, -cos a)` in screen coordinates (y down),
+ *    so the mask moves the opposite way, thickening the band on the lit
+ *    side — by `strength × width` px (strength 0 is the even glow).
+ * 3. `feGaussianBlur` the mask by `softness` px — the feather between the
+ *    band and the untouched interior.
+ * 4. `feComposite operator="out"` against `SourceAlpha`: the band is the
+ *    source alpha minus the blurred interior, so it never reaches beyond
+ *    the source's alpha (zero where the source is transparent).
+ * 5. `feFlood` the glow colour and `feComposite operator="in"` the band,
+ *    then composite the coloured band ATOP the source graphic — Porter-Duff
+ *    atop keeps the composite's alpha EXACTLY the source's alpha everywhere
+ *    (the glow colours the edge pixels without raising their alpha), so
+ *    alpha coverage is never altered (DEC-005) and painted extents equal
+ *    the no-glow extents at every transform. The glow paints over the
+ *    content, under outline and shadow, which the outer chain applies
+ *    after this filter.
+ *
+ * One filter per GLOW Layer, the same recipe as the outline's def (its
+ * region must be sized in-page from the element's real untransformed
+ * box — the glow's output never leaves the box, so the sizing pass pads
+ * it by the antialiasing 1px only), with a deterministic id hashed from
+ * the glow facts plus the Layer's snapshot index. Emitted only when a
+ * glow fact exists, so pre-#221 revisions paint exactly as before.
+ */
+function glowFilterId(glow: LayerGlow, layerIndex: number): string {
+  return `ply-g-${createHash("sha256").update(`${glow.width}:${glow.softness}:${glow.color}:${glow.angle ?? ""}:${glow.strength ?? ""}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+}
+
+function glowFilterDef(
+  glow: LayerGlow,
+  layerIndex: number,
+  rev: { scaleX: number; scaleY: number },
+  supersample = 1,
+): string {
+  const id = glowFilterId(glow, layerIndex);
+  // The erode is split the same way the outline's dilate is (#194): no
+  // single feMorphology step exceeds Chromium's 256px device-raster cap,
+  // and sequential box erosions compose exactly like the dilate steps do.
+  const n = outlineDilateSteps(glow.width, rev, supersample);
+  const radii = outlineDilateRadii(glow.width, n);
+  const erodeNodes = radii
+    .map((r, i) => {
+      const inName = i === 0 ? "SourceAlpha" : `ger_${i}`;
+      const outName = i === radii.length - 1 ? "ger" : `ger_${i + 1}`;
+      return `<feMorphology in="${inName}" operator="erode" radius="${r}" result="${outName}"/>`;
+    })
+    .join("");
+  // The direction pair offsets the eroded mask OPPOSITE the light direction
+  // (DEC-006: one angle plus strength, not a light model): angle `a`
+  // clockwise from top puts the light source at (sin a, -cos a) in screen
+  // coordinates, so the mask moves by strength × width along (-sin a, cos a)
+  // and the band thickens on the lit side.
+  const offsetNode =
+    glow.angle !== undefined
+      ? `<feOffset in="ger" dx="${(-glow.strength! * glow.width * Math.sin((glow.angle * Math.PI) / 180)).toFixed(4)}" dy="${(glow.strength! * glow.width * Math.cos((glow.angle * Math.PI) / 180)).toFixed(4)}" result="goff"/>`
+      : "";
+  const blurredIn = glow.angle !== undefined ? "goff" : "ger";
+  return (
+    `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
+    erodeNodes +
+    offsetNode +
+    `<feGaussianBlur in="${blurredIn}" stdDeviation="${glow.softness}" result="gblur"/>` +
+    `<feComposite in="SourceAlpha" in2="gblur" operator="out" result="gband"/>` +
+    `<feFlood flood-color="${glow.color}" result="gflood"/>` +
+    `<feComposite in="gflood" in2="gband" operator="in" result="gglow"/>` +
+    `<feComposite in="gglow" in2="SourceGraphic" operator="atop"/>` +
     `</filter>`
   );
 }
@@ -568,7 +663,7 @@ function gradeFilterCss(grade: LayerGrade | undefined, layerIndex: number): stri
  * CSS `filter` chains by id; the region clipPaths from the inner content
  * elements' `clip-path`; the warmth filters from the inner content
  * elements' `filter` chain. The outline regions' placeholder is sized
- * in-page before any screenshot by `sizeOutlineFilterRegions`.
+ * in-page before any screenshot by `sizeEffectFilterRegions`.
  */
 function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
   const defs = layers
@@ -576,6 +671,10 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
       const outline =
         l.revision.outline !== undefined
           ? outlineFilterDef(l.revision.outline, i, l.revision, supersample)
+          : "";
+      const glow =
+        l.revision.glow !== undefined
+          ? glowFilterDef(l.revision.glow, i, l.revision, supersample)
           : "";
       const region =
         l.revision.visibleRegion !== undefined
@@ -585,7 +684,7 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
         l.revision.grade?.warmth !== undefined
           ? warmthFilterDef(l.revision.grade.warmth, i)
           : "";
-      return outline + region + warmth;
+      return outline + glow + region + warmth;
     })
     .join("");
   if (defs === "") return "";
@@ -593,16 +692,26 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
 }
 
 /**
- * The per-Layer outline-filter specs handed to `sizeOutlineFilterRegions`:
- * null for Layers without an outline; the name rides along for the loud
- * failure message.
+ * The per-Layer filter specs handed to `sizeEffectFilterRegions` (#140,
+ * ADR-0019, extended by the glow #221): the outline's spec pads the region
+ * by the outline width plus the antialiasing 1px; the glow's spec pads by
+ * the 1px only — the glow's band is a subset of the source's alpha (it
+ * never leaves the element's box), so its filter region needs no effect
+ * reach. Both defs are sized in-page from the same element box.
  */
-function outlineFilterSpecs(layers: SnapshotLayer[]): ({ id: string; width: number; name: string } | null)[] {
-  return layers.map((l, i) =>
-    l.revision.outline !== undefined
-      ? { id: outlineFilterId(l.revision.outline, i), width: l.revision.outline.width, name: l.name }
-      : null,
-  );
+function outlineFilterSpecs(
+  layers: SnapshotLayer[],
+): { id: string; pad: number; name: string; index: number }[] {
+  const specs: { id: string; pad: number; name: string; index: number }[] = [];
+  layers.forEach((l, i) => {
+    if (l.revision.outline !== undefined) {
+      specs.push({ id: outlineFilterId(l.revision.outline, i), pad: l.revision.outline.width + 1, name: l.name, index: i });
+    }
+    if (l.revision.glow !== undefined) {
+      specs.push({ id: glowFilterId(l.revision.glow, i), pad: 1, name: l.name, index: i });
+    }
+  });
+  return specs;
 }
 
 /**
@@ -628,27 +737,26 @@ function outlineFilterSpecs(layers: SnapshotLayer[]): ({ id: string; width: numb
  * emitted (the same `buildCompositionHtml` call emits the elements and
  * their defs), i.e. a markup-contract violation — fail fast at the seam.
  */
-export async function sizeOutlineFilterRegions(page: Page, layers: SnapshotLayer[]): Promise<void> {
+export async function sizeEffectFilterRegions(page: Page, layers: SnapshotLayer[]): Promise<void> {
   const specs = outlineFilterSpecs(layers);
-  if (specs.every((s) => s === null)) return;
+  if (specs.length === 0) return;
   const failure = await page.evaluate((input) => {
     const canvas = document.getElementById("canvas");
     if (!canvas) return "#canvas element missing";
     const problems: string[] = [];
-    input.forEach((spec, i) => {
-      if (!spec) return;
-      const el = canvas.children[i] as HTMLElement | undefined;
+    input.forEach((spec) => {
+      const el = canvas.children[spec.index] as HTMLElement | undefined;
       const filter = document.getElementById(spec.id);
       if (!el) {
-        problems.push(`Layer "${spec.name}": element ${i} not found in #canvas`);
+        problems.push(`Layer "${spec.name}": element ${spec.index} not found in #canvas`);
       } else if (!filter) {
-        problems.push(`Layer "${spec.name}": outline filter ${spec.id} not found`);
+        problems.push(`Layer "${spec.name}": effect filter ${spec.id} not found`);
       } else {
         const saved = el.style.transform;
         el.style.transform = "none";
         const box = el.getBoundingClientRect();
         el.style.transform = saved;
-        const pad = spec.width + 1;
+        const pad = spec.pad;
         filter.setAttribute("filterUnits", "userSpaceOnUse");
         filter.setAttribute("x", String(-pad));
         filter.setAttribute("y", String(-pad));
@@ -661,7 +769,7 @@ export async function sizeOutlineFilterRegions(page: Page, layers: SnapshotLayer
   if (failure !== null) {
     throw new Error(
       `Outline filter region sizing failed: ${failure}. ` +
-        `The page is not the markup the composition builder emitted, so the outline would be clipped to its ` +
+        `The page is not the markup the composition builder emitted, so the effect would be clipped to its ` +
         `placeholder region — refusing to paint or measure clipped ink.`,
     );
   }
@@ -741,28 +849,44 @@ export function buildCompositionHtml(
         transformParts.length > 0
           ? `transform:${transformParts.join(" ")};transform-origin:0 0;`
           : "";
-      // Canonical effects (#139/#140, ADR-0018/0019): one `filter` chain on
-      // the Layer element. The outline comes FIRST — its feMorphology dilate
-      // filter hugs the content's alpha/glyph ink and composites the ring
-      // under the source graphic (def above, referenced by id) — and the
-      // shadow's single drop-shadow comes LAST, so it is cast from the
-      // outlined composite. CSS filter-list chaining feeds each function's
-      // output to the next, so the chain builds the union exactly once per
-      // primitive — dilate extends exactly `width` px in every direction
-      // with no scallop and no compounding. The transform above then maps
-      // content+outline+shadow together, and the element's opacity fades
-      // all of it. Emitted only when an effect exists, so pre-#139/#140
+      // Canonical effects (#139/#140, ADR-0018/0019; edge glow #221, ADR-0024):
+      // one `filter` chain on the Layer element. The edge glow comes FIRST —
+      // its inner-alpha band operates on the region-clipped, graded composite
+      // (see glowFilterDef) — then the outline's feMorphology dilate filter
+      // hugs the composite's alpha/glyph ink and composites the ring under
+      // the source graphic (def above, referenced by id), and the shadow's
+      // single drop-shadow comes LAST, so it is cast from the outlined
+      // composite. CSS filter-list chaining feeds each function's output to
+      // the next, so the chain builds the union exactly once per primitive —
+      // dilate extends exactly `width` px in every direction with no scallop
+      // and no compounding. The transform above then maps
+      // content+glow+outline+shadow together, and the element's opacity
+      // fades all of it. Emitted only when an effect exists, so pre-#139/#140
       // revisions and their pinned Render history paint exactly as before
       // (the shadow-only markup is byte-identical to the #139 form).
       const outlineFn =
         rev.outline !== undefined
           ? `url(#${outlineFilterId(rev.outline, layerIndex)})`
           : "";
+      // The edge glow (#221, spec #218 US-002, ADR-0024): the FIRST function
+      // of the outer element's filter chain — ahead of outline and shadow —
+      // so it operates on the region-clipped, graded composite the inner
+      // element renders, paints over the graded content, and stays inside
+      // the blend unit (the whole Layer still blends as one against the
+      // backdrop). CSS filter-list chaining then feeds the glow composite
+      // to the outline's dilate — the glow's band is a subset of the
+      // source's alpha, so the outline's geometry is unchanged — and the
+      // shadow is cast from the outlined composite. Emitted only when a
+      // glow fact exists, so pre-#221 revisions paint exactly as before.
+      const glowFn =
+        rev.glow !== undefined
+          ? `url(#${glowFilterId(rev.glow, layerIndex)})`
+          : "";
       const shadowFn =
         rev.shadow !== undefined
           ? `drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color})`
           : "";
-      const effectsFns = [outlineFn, shadowFn].filter(Boolean).join(" ");
+      const effectsFns = [glowFn, outlineFn, shadowFn].filter(Boolean).join(" ");
       const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
       // The blend mode (#220, spec #218 US-003, ADR-0024): applied to the
       // OUTER element via CSS mix-blend-mode in the DEC-002 paint order,

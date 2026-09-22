@@ -398,7 +398,13 @@ test("the removal form is an idempotent no-op on every kind, on both surfaces", 
     "--fill", "#1d4ed8", "--vector-color", "none", "--project", projDir, "--json",
   ]);
   expect(addNoneShape.code).toBe(0);
-});
+  // Cap reflects the measured test time, not suite load (#267's rule): this
+  // test enumerates every registered option's removal form on every kind —
+  // six CLI spawns, measured 4.9-5.2 s against Bun's default 5 s cap — and
+  // timed out under full-suite load once #221 registered another option
+  // (observed 2026-09, Bun 1.4.0). 30 s is ~6x that measured time; a
+  // timeout here means spawn cost regressed.
+}, 30000);
 
 test("a colour carried across a content replacement to raster content is refused naming the fix", async () => {
   const svgPath = await writeSvg();

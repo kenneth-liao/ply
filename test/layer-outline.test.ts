@@ -801,21 +801,21 @@ test("the supersampled outline ring matches the 1× ink support exactly", async 
  * seam: a page missing the defs, and a page missing #canvas, must reject
  * naming the Layer — never a silent success. */
 test("filter-region sizing fails loudly when the page is not the built composition", async () => {
-  const { sizeOutlineFilterRegions } = await import("../src/composition-paint.js");
+  const { sizeEffectFilterRegions } = await import("../src/composition-paint.js");
   const { withRenderPage } = await import("../src/browser.js");
   const outlined = [{
     name: "hero",
     revision: { outline: { width: 4, color: "#000000" } },
-  }] as unknown as Parameters<typeof sizeOutlineFilterRegions>[1];
+  }] as unknown as Parameters<typeof sizeEffectFilterRegions>[1];
 
   await withRenderPage(async (page) => {
     // The Layer element exists but its filter def does not.
     await page.setContent(`<body><div id="canvas"><img style="width:10px;height:10px"></div></body>`);
-    await expect(sizeOutlineFilterRegions(page, outlined)).rejects.toThrow(/Layer "hero".*not found/);
+    await expect(sizeEffectFilterRegions(page, outlined)).rejects.toThrow(/Layer "hero".*not found/);
 
     // #canvas itself is missing: nothing can be sized.
     await page.setContent(`<body><p>no canvas</p></body>`);
-    await expect(sizeOutlineFilterRegions(page, outlined)).rejects.toThrow(/#canvas element missing/);
+    await expect(sizeEffectFilterRegions(page, outlined)).rejects.toThrow(/#canvas element missing/);
 
     // A page the builder WOULD emit (element + def present) sizes fine.
     const id = `ply-o-${createHash("sha256").update(`4:#000000:0`).digest("hex").slice(0, 16)}`;
@@ -823,7 +823,7 @@ test("filter-region sizing fails loudly when the page is not the built compositi
       `<body><svg width="0" height="0"><defs><filter id="${id}"></filter></defs></svg>` +
         `<div id="canvas"><img style="width:10px;height:10px"></div></body>`,
     );
-    await expect(sizeOutlineFilterRegions(page, outlined)).resolves.toBeUndefined();
+    await expect(sizeEffectFilterRegions(page, outlined)).resolves.toBeUndefined();
     const region = await page.evaluate(
       (fid) => { const f = document.getElementById(fid); return f ? { units: f.getAttribute("filterUnits"), x: f.getAttribute("x") } : null; },
       id,

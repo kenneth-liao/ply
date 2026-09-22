@@ -139,6 +139,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "saturation": return ["0.8"];
     case "warmth": return ["0.5"];
     case "blend": return ["multiply"];
+    case "glow": return ["6,2,#ff9900"];
     default: throw new Error(`guard test: no value for option "${key}"`);
   }
 }
@@ -224,6 +225,7 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
     case "saturation": expect((rev.grade as { saturation: number } | undefined)?.saturation).toBe(0.8); break;
     case "warmth": expect((rev.grade as { warmth: number } | undefined)?.warmth).toBe(0.5); break;
     case "blend": expect(rev.blend).toBe("multiply"); break;
+    case "glow": expect(rev.glow).toEqual({ width: 6, softness: 2, color: "#ff9900" }); break;
     case "font-size": expect(rev.fontSize).toBe(64); break;
     case "color": expect(rev.color).toBe("#ffcc00"); break;
     case "weight": expect(rev.weight).toBe(800); break;
@@ -295,6 +297,7 @@ test("every edit option applicable to a shape Layer is accepted and APPLIED on a
   expect(applicable).toContain("saturation");
   expect(applicable).toContain("warmth");
   expect(applicable).toContain("blend");
+  expect(applicable).toContain("glow");
   expect(applicable).not.toContain("vector-color");
   expect(applicable).not.toContain("font-size");
   // The guard shape is 64×48 so the resize-to read-back ("96x" → 96/64 = 1.5)
