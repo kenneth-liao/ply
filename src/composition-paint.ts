@@ -764,6 +764,13 @@ export function buildCompositionHtml(
           : "";
       const effectsFns = [outlineFn, shadowFn].filter(Boolean).join(" ");
       const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
+      // The blend mode (#220, spec #218 US-003, ADR-0024): applied to the
+      // OUTER element via CSS mix-blend-mode in the DEC-002 paint order,
+      // so the whole Layer — content, visible region, grade, outline,
+      // shadow, transform, and opacity — blends as ONE unit against everything
+      // beneath it. Emitted only when set, so pre-#220 revisions and their
+      // pinned Render history paint byte-identically.
+      const blendCss = rev.blend !== undefined ? `mix-blend-mode:${rev.blend};` : "";
       // The visible region's clip reference (#211, ADR-0023): applied to the
       // INNER content element, so the clip crops the content BEFORE the
       // Layer element's filter chain — the outline dilate and the drop-shadow
@@ -816,10 +823,10 @@ export function buildCompositionHtml(
           `font-family:'${internalFontFamily(rev.contentHash)}';` +
           `font-size:${rev.fontSize}px;color:${rev.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
         if (rev.visibleRegion === undefined && gradeFilter === "") {
-          return `<div style="${base}${transformed}${effectsFilter}${textStyle}">${escapeHtml(rev.text)}</div>`;
+          return `<div style="${base}${transformed}${effectsFilter}${blendCss}${textStyle}">${escapeHtml(rev.text)}</div>`;
         }
         return (
-          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
           `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`
         );
       }
@@ -845,10 +852,10 @@ export function buildCompositionHtml(
           `width:${rev.width}px;height:${rev.height}px;` +
           `background:${fillCssBackground(rev.fill)};${radiusCss}`;
         if (rev.visibleRegion === undefined && gradeFilter === "") {
-          return `<div style="${base}${transformed}${effectsFilter}${shapeStyle}"></div>`;
+          return `<div style="${base}${transformed}${effectsFilter}${blendCss}${shapeStyle}"></div>`;
         }
         return (
-          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
           `<div style="${shapeStyle}${regionClip}${gradeFilter}"></div></div>`
         );
       }
@@ -893,18 +900,18 @@ export function buildCompositionHtml(
         // without a region emit the same wrapper shape the region path
         // already used, with an empty clip.
         return (
-          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
           `<div style="${vectorColorCss}${regionClip}${gradeFilter}"></div></div>`
         );
       }
       if (rev.visibleRegion !== undefined || gradeFilter !== "") {
         return (
-          `<div style="${base}${transformed}${effectsFilter}">` +
+          `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
           `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="display:block;${regionClip}${gradeFilter}">` +
           `</div>`
         );
       }
-      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="${base}${transformed}${effectsFilter}">`;
+      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="${base}${transformed}${effectsFilter}${blendCss}">`;
     })
     .join("");
   return (

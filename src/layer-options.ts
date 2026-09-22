@@ -74,6 +74,9 @@ import {
   type LayerOutline,
   type LayerVisibleRegion,
   type LayerGrade,
+  LAYER_BLEND_MODES,
+  type LayerBlendMode,
+  type StoredLayerBlendMode,
 } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { measureStandaloneSnapshot } from "./composition-measure.js";
@@ -284,6 +287,10 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "contrast", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerContrast, apply: applyContrast },
   { key: "saturation", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerSaturation, apply: applySaturation },
   { key: "warmth", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerWarmth, apply: applyWarmth },
+  // Blend mode (#220, spec #218 US-003, ADR-0024): an absolute setter over
+  // the documented set of mix-blend-mode values. Part of the "look" group,
+  // applying to image, text, and shape Layers.
+  { key: "blend", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerBlend, apply: applyBlend },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -333,6 +340,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   contrast: { type: "string" },
   saturation: { type: "string" },
   warmth: { type: "string" },
+  blend: { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string" }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
@@ -1065,6 +1073,26 @@ export function parseLayerWarmth(raw: string | undefined): OptionParse<number | 
 }
 
 /**
+ * --blend (#220, spec #218 US-003, ADR-0024): normal, multiply, screen, overlay,
+ * soft-light, darken, lighten, color-dodge. Accepts 'color-dodge' and 'colour-dodge'
+ * (stored canonically as 'color-dodge').
+ */
+export function parseLayerBlend(raw: string | undefined): OptionParse<LayerBlendMode | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  let value = raw.trim().toLowerCase();
+  if (value === "colour-dodge") {
+    value = "color-dodge";
+  }
+  if (!LAYER_BLEND_MODES.includes(value as LayerBlendMode)) {
+    return {
+      ok: false,
+      error: `Blend mode (--blend) takes normal, multiply, screen, overlay, soft-light, darken, lighten, or color-dodge (got "${raw}").`,
+    };
+  }
+  return { ok: true, value: value as LayerBlendMode };
+}
+
+/**
  * --anchor: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Semantic refusals (no
  * visible ink, divergent multi-Composition geometry) happen in the
@@ -1287,6 +1315,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "contrast" },
   { option: "saturation" },
   { option: "warmth" },
+  { option: "blend" },
   { option: "anchor" },
   { policy: "anchor-conflict" },
   { policy: "anchor-targets" },
@@ -1313,6 +1342,7 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "contrast",
   "saturation",
   "warmth",
+  "blend",
   "anchor",
 ];
 
@@ -1491,6 +1521,7 @@ export interface SharedOptionDraft {
   visibleRegion?: LayerVisibleRegion;
   vectorColor?: string;
   grade?: LayerGrade;
+  blend?: StoredLayerBlendMode;
   /** Anything else the application cases set — including a shared option's
    *  own revision fact (the probe's stamp) — flows into the published
    *  revision through the applied-fact carry (DEC-001). */
@@ -1880,6 +1911,19 @@ function applyWarmth(
   updateDraftGrade(draft, context, "warmth", value as number, 0);
 }
 
+function applyBlend(
+  draft: SharedOptionDraft,
+  value: unknown,
+  _context: SharedOptionApplyContext,
+): void {
+  const mode = value as LayerBlendMode;
+  if (mode === "normal") {
+    delete draft.blend;
+  } else {
+    draft.blend = mode;
+  }
+}
+
 /**
  * The edit surface's established application order (spec #226 DEC-002 as
  * the edit path resolves it, #263): the resize family's domain re-checks,
@@ -1911,4 +1955,5 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "contrast" },
   { option: "saturation" },
   { option: "warmth" },
+  { option: "blend" },
 ];

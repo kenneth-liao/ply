@@ -106,6 +106,7 @@ import {
   type LayerTextTypography,
   type ResolvedLayerRevision,
   type LayerGrade,
+  type StoredLayerBlendMode,
 } from "./layer.js";
 import type { Page } from "playwright";
 import type { LayerFill } from "./fill.js";
@@ -142,6 +143,10 @@ export interface MeasuredLayerBounds {
    * the stored grade parameters (or null when the Layer has no grade) — the
    * same facts painting applies, reported for auditability. */
   grade: LayerGrade | null;
+  /** The revision's effective blend mode (#220, spec #218 US-003, ADR-0024):
+   * the stored mix-blend-mode (or null when normal/unblended) — the same fact
+   * painting applies, reported for auditability. */
+  blend: StoredLayerBlendMode | null;
   /** The revision's visible region (#211, ADR-0023): the stored
    * region facts painting clips to (or null when the Layer has none —
    * absence IS the no-region form), including the optional corner radius
@@ -625,6 +630,7 @@ export async function measureCompositionLayers(
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
         grade: rev.grade ?? null,
+        blend: rev.blend ?? null,
         visibleRegion: rev.visibleRegion ?? null,
         // The vector colour (#215): the stored canonical hex (or null —
         // absence IS the no-colour form), reported like the effects and

@@ -58,6 +58,16 @@ file or changing its alpha. Each control is an absolute setter stored only when
 set; a documented neutral value removes the stored fact. Paint order within the
 Layer applies the grade after the visible region and before edge glow, outline,
 and shadow (ADR-0024).
+
+**Blend mode**:
+How a Layer's rendered output blends into the composited image beneath it.
+Specified via `--blend <mode>` across a documented set of CSS mix-blend-mode
+keywords (normal, multiply, screen, overlay, soft-light, darken, lighten,
+color-dodge). The mode is an absolute setter stored on the Layer's revision;
+`normal` removes the stored fact. At paint time, the whole Layer — content,
+visible region, grade, outline, shadow, and opacity — blends as ONE unit
+against everything beneath it (ADR-0024). It applies uniformly across image,
+text, and shape Layers.
 _Avoid_: destructive pixel editing, LUTs, adjustment layers
 
 **Vector**:

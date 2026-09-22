@@ -40,6 +40,7 @@ import {
   parseLayerContrast,
   parseLayerSaturation,
   parseLayerWarmth,
+  parseLayerBlend,
   parseMatteId,
   parseResizeOptions,
   validateTextFaceAxes,
@@ -96,6 +97,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "contrast",
       "saturation",
       "warmth",
+      "blend",
     ]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
@@ -143,7 +145,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
-      "brightness", "contrast", "saturation", "warmth",
+      "brightness", "contrast", "saturation", "warmth", "blend",
     ]);
   });
 
@@ -376,5 +378,17 @@ describe("shared option validators: both surfaces' established texts", () => {
     });
     expect(parseLayerWarmth("-0.5")).toEqual({ ok: true, value: -0.5 });
     expect(parseLayerWarmth("0")).toEqual({ ok: true, value: 0 });
+  });
+
+  it("blend mode: one validator for both surfaces (#220)", () => {
+    expect(parseLayerBlend("banana")).toEqual({
+      ok: false,
+      error:
+        'Blend mode (--blend) takes normal, multiply, screen, overlay, soft-light, darken, lighten, or color-dodge (got "banana").',
+    });
+    expect(parseLayerBlend("normal")).toEqual({ ok: true, value: "normal" });
+    expect(parseLayerBlend("multiply")).toEqual({ ok: true, value: "multiply" });
+    expect(parseLayerBlend("colour-dodge")).toEqual({ ok: true, value: "color-dodge" });
+    expect(parseLayerBlend(undefined)).toEqual({ ok: true, value: undefined });
   });
 });

@@ -149,6 +149,7 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "contrast", bad: ["--contrast", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Contrast (--contrast)" },
   { key: "saturation", bad: ["--saturation", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Saturation (--saturation)" },
   { key: "warmth", bad: ["--warmth", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Warmth (--warmth)" },
+  { key: "blend", bad: ["--blend", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Blend mode (--blend)" },
 ];
 
 test("the parity rows cover every option the shared table declares", () => {
