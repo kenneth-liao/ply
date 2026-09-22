@@ -1,5 +1,17 @@
 import { isStoredTimestamp } from "./stored-schema.js";
-import { parseFillSpec, parseFillColorSpec, normalizeStoredFill, fillsEqual, fillIdentityString, FILL_TYPES, FILL_COLOR_PATTERN, type LayerFill } from "./fill.js";
+import {
+  parseFillSpec,
+  parseFillColorSpec,
+  normalizeStoredFill,
+  normalizeStoredTextFill,
+  canonicalizeTextFillForStorage,
+  textFillIdentityString,
+  fillsEqual,
+  fillIdentityString,
+  FILL_TYPES,
+  FILL_COLOR_PATTERN,
+  type LayerFill,
+} from "./fill.js";
 /**
  * Layer identity, immutable revisions, and content-addressed image/text
  * ingestion (ADR-0013, ADR-0014, DEC-001–006, #81).
@@ -310,7 +322,7 @@ export interface LayerTextRevision extends LayerRevisionBase {
   contentHash: string;
   text: string;
   fontSize: number;
-  color: string;
+  color: string | LayerFill;
   /**
    * Selected text axes (#179, ADR-0021): present if and only if the retained
    * font is a variable face — the resolved weight and width the look is, so
@@ -1292,11 +1304,13 @@ export async function validateAndIngestImage(
 }
 
 /**
- * Canonical text content validation (#81): one home for the text facts every
+ * Canonical text content validation (#81, #222): one home for the text facts every
  * writer and reader must agree on. Ingestion and the stored-revision parser
- * both call this, so no alternate representation can drift.
+ * both call this, so no alternate representation can drift. Text colour and gradient
+ * are one fact (DEC-008): a solid colour string or gradient object resolves through
+ * the single fill normalizer (normalizeStoredTextFill), returning the canonical LayerFill.
  */
-export function validateTextContent(text: unknown, fontSize: unknown, color: unknown): void {
+export function validateTextContent(text: unknown, fontSize: unknown, color: unknown): LayerFill {
   if (typeof text !== "string" || text.length === 0 || text.trim().length === 0) {
     throw new Error(`Invalid text content: must be a nonempty string.`);
   }
@@ -1308,9 +1322,13 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
       `Invalid font size ${fontSize}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
     );
   }
-  if (typeof color !== "string" || !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) {
-    throw new Error(`Invalid color "${color}": must be a hex color like #ffffff or #fff.`);
+  if (color === undefined || color === null) {
+    throw new Error(`Invalid color: must be a hex color like #ffffff or #fff, or a gradient fill.`);
   }
+  if (typeof color !== "string" && (typeof color !== "object" || Array.isArray(color))) {
+    throw new Error(`Invalid color "${String(color)}": must be a hex color like #ffffff or #fff, or a gradient fill.`);
+  }
+  return normalizeStoredTextFill(color);
 }
 
 /** Canonical normalized text axes (#179, ADR-0021): the one shape every
@@ -1575,7 +1593,7 @@ export function normalizeStoredCallerFont(revision: { callerFont?: unknown }): C
  * written before #215 keep their exact ids (#215, DEC-010). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
-  const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${rev.color}` : "";
+  const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${textFillIdentityString(rev.color)}` : "";
   const scaleFields =
     rev.scaleX !== undefined || rev.scaleY !== undefined ? `:${rev.scaleX}:${rev.scaleY}` : "";
   const rotationField = rev.rotationDeg !== undefined ? `:${rev.rotationDeg}` : "";
@@ -2140,7 +2158,7 @@ export interface EditLayerOptions {
    */
   fontFile?: string;
   fontSize?: number;
-  color?: string;
+  color?: string | LayerFill;
   /**
    * Select the text look's weight (#179, ADR-0021): an ABSOLUTE setter
    * validated against the target face's real axis range (a `--font` edit's
@@ -3585,10 +3603,11 @@ async function buildEditedRevision(
 
     const text = options.text !== undefined ? options.text : prevRev.text;
     const fontSize = options.fontSize !== undefined ? options.fontSize : prevRev.fontSize;
-    const color = options.color !== undefined ? options.color : prevRev.color;
+    const rawColor = options.color !== undefined ? options.color : prevRev.color;
 
     // Canonical text validation
-    validateTextContent(text, fontSize, color);
+    const fill = validateTextContent(text, fontSize, rawColor);
+    const color = canonicalizeTextFillForStorage(fill);
 
     // The revision's caller font facts (#232, DEC-006): a --font-file edit
     // stores the file's facts; a later edit without a font option keeps the
@@ -3631,7 +3650,7 @@ async function buildEditedRevision(
       contentHash === prevRev.contentHash &&
       text === prevRev.text &&
       fontSize === prevRev.fontSize &&
-      color === prevRev.color &&
+      fillsEqual(fill, normalizeStoredTextFill(prevRev.color)) &&
       axes.weight === prevRev.weight &&
       axes.width === prevRev.width &&
       typography.tracking === prevRev.tracking &&

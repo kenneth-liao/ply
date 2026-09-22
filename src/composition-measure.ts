@@ -110,7 +110,7 @@ import {
   type StoredLayerBlendMode,
 } from "./layer.js";
 import type { Page } from "playwright";
-import type { LayerFill } from "./fill.js";
+import { type LayerFill, normalizeStoredTextFill } from "./fill.js";
 
 /** One Layer's measured layout geometry (module doc documents each box). */
 export interface MeasuredLayerBounds {
@@ -167,9 +167,9 @@ export interface MeasuredLayerBounds {
    * setter refuses the fact on every other kind, so other kinds report
    * null. */
   vectorColor: string | null;
-  /** The revision's ONE fill (DEC-003), for shape Layers (#208/#210): the
-   * canonical fill object painting applies — a solid colour, or a linear or
-   * radial gradient with its stops. Other kinds report null. */
+  /** The revision's ONE fill (DEC-003), for shape Layers (#208/#210) and text
+   *  Layers (#222): the canonical fill object painting applies — a solid colour,
+   *  or a linear or radial gradient with its stops. Image Layers report null. */
   fill: LayerFill | null;
   /** The revision's selected text axes (#179, ADR-0021): the stored weight
    * and width a variable-font text Layer paints with (or null when the
@@ -644,10 +644,10 @@ export async function measureCompositionLayers(
         // the fill for auditability.
         vectorColor: rev.kind === "image" ? rev.vectorColor ?? null : null,
         // The revision's ONE fill (DEC-003), reported for shape Layers
-        // (#208/#210): the canonical fill object — solid, linear, or radial —
-        // the same facts painting applies, reported for auditability. Other
-        // kinds have no fill and report null.
-        fill: rev.kind === "shape" ? rev.fill : null,
+        // (#208/#210) and text Layers (#222): the canonical fill object —
+        // solid, linear, or radial — the same facts painting applies, reported
+        // for auditability. Image Layers have no fill and report null.
+        fill: rev.kind === "shape" ? rev.fill : rev.kind === "text" ? normalizeStoredTextFill(rev.color) : null,
         axes:
           rev.kind === "text" ? normalizeStoredTextAxes(rev) ?? null : null,
         font:

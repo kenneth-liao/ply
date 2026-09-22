@@ -26,6 +26,8 @@
 
 ### Added
 
+- Gradient fill on text Layers (`--color <spec>`) accepts linear and radial gradients using the single fill representation, automatically re-spanning across text or typography edits while preserving byte-identical solid text and effects (#222).
+
 - Layer blend mode control (`--blend <mode>`) sets how image, text, and shape Layers composite against underlying pixels via CSS mix-blend-mode as a single paint-time unit, with `normal` removing the stored fact (#220).
 
 - Layer edge glow control (`--glow "<width>,<softness>,<color>[,<angle>,<strength>]"`) paints a coloured rim of light just inside a Layer's alpha edge, over the graded content, with an optional direction (one angle plus strength, not a light model); `none` removes the stored fact, painted extents never change, and it is a two-dimensional edge effect rather than relighting (#221).

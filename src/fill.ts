@@ -170,11 +170,11 @@ function splitStopTokens(value: string, type: "linear" | "radial"): string[] {
  * the grammar; a malformed colour, a lone stop, or an out-of-range position
  * is refused here, before anything is published (US-001).
  */
-export function parseFillSpec(spec: string): LayerFill {
+export function parseFillSpec(spec: string, label = "--fill"): LayerFill {
   const trimmed = spec.trim();
   if (!trimmed) {
     throw new Error(
-      '--fill takes a solid color like "#22c55e", "solid:#22c55e", or a gradient like "linear:45deg,#ff0000,#00ff00" or "radial:#ff0000,#00ff00".',
+      `${label} takes a solid color like "#22c55e", "solid:#22c55e", or a gradient like "linear:45deg,#ff0000,#00ff00" or "radial:#ff0000,#00ff00".`,
     );
   }
   const colon = trimmed.indexOf(":");
@@ -448,4 +448,49 @@ export function fillCssBackground(fill: LayerFill): string {
   return fill.type === "linear"
     ? `linear-gradient(${fill.angleDeg}deg,${stopList})`
     : `radial-gradient(circle farthest-side at center,${stopList})`;
+}
+
+/**
+ * The ONE text fill reader (spec #218 DEC-008): existing stored text revisions
+ * that carry a solid color string (e.g. "#ffffff") read as the solid case of fill
+ * at this one reader; no stored document is rewritten. Gradient text revisions
+ * store the canonical LayerFill object (DEC-010). Both project to ONE canonical
+ * LayerFill union arm.
+ */
+export function normalizeStoredTextFill(value: unknown): LayerFill {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (FILL_COLOR_PATTERN.test(trimmed)) {
+      return { type: "solid", color: canonicalizeFillColor(trimmed) };
+    }
+    return parseFillSpec(trimmed, "--color");
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return normalizeStoredFill(value);
+  }
+  throw new Error(
+    `Malformed revision document: text color must be a hex color or fill object (got ${JSON.stringify(value)}).`,
+  );
+}
+
+/**
+ * The canonical text fill representation for storage (DEC-008, DEC-010):
+ * solid fills are stored as the canonical lowercase hex string so existing
+ * documents stay byte-identical and revision IDs unmoved. Gradient fills
+ * are stored as canonical LayerFill objects.
+ */
+export function canonicalizeTextFillForStorage(fill: LayerFill): string | LayerFill {
+  return fill.type === "solid" ? fill.color : fill;
+}
+
+/**
+ * Text fill encoding for revision hashing (DEC-008, DEC-010):
+ * solid colors return the hex string (e.g. "#ffffff"), matching the exact pre-#222
+ * encoding `:${rev.text}:${rev.fontSize}:${rev.color}` so existing revision IDs
+ * do not move. Gradients return their full deterministic identity string.
+ */
+export function textFillIdentityString(color: string | LayerFill): string {
+  if (typeof color === "string") return color;
+  if (color.type === "solid") return color.color;
+  return fillIdentityString(color);
 }

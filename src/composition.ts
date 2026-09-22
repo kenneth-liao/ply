@@ -28,7 +28,7 @@ import {
 } from "./layer.js";
 import { resolveFace, resolveTextAxes, fontAssetBytes, callerFontFace, verifyCallerFontResolves, type CallerFontFacts } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
-import { type LayerFill } from "./fill.js";
+import { type LayerFill, canonicalizeTextFillForStorage } from "./fill.js";
 import {
   oneCommandApplicationOrder,
   applyLayerOption,
@@ -634,10 +634,11 @@ export async function addTextLayerToComposition(
 
   const { x, y, opacity } = parsePlacement(options);
   const fontSize = options.fontSize ?? 48;
-  const color = input.color ?? "#ffffff";
+  const rawColor = input.color ?? "#ffffff";
   // Canonical text validation at the ingestion boundary; the stored-revision
   // parser reuses the same validator.
-  validateTextContent(input.text, fontSize, color);
+  const fill = validateTextContent(input.text, fontSize, rawColor);
+  const color = canonicalizeTextFillForStorage(fill);
 
   const resolvedRoot = await resolveProjectRoot(projectPath);
   return withProjectLock(resolvedRoot, async () => {
@@ -1279,7 +1280,7 @@ export interface ImportCompositionResult {
  */
 function buildCopiedRevision(newLayerId: string, createdAt: string, source: ResolvedLayerRevision): LayerRevision {
   if (source.kind === "text") {
-    validateTextContent(source.text, source.fontSize, source.color);
+    const fill = validateTextContent(source.text, source.fontSize, source.color);
     return {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId: newLayerId,
@@ -1288,7 +1289,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       contentHash: source.contentHash,
       text: source.text,
       fontSize: source.fontSize,
-      color: source.color,
+      color: canonicalizeTextFillForStorage(fill),
       ...(source.weight !== undefined ? { weight: source.weight, width: source.width } : {}),
       ...(source.tracking !== undefined ? { tracking: source.tracking } : {}),
       ...(source.lineHeight !== undefined ? { lineHeight: source.lineHeight } : {}),

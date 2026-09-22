@@ -127,7 +127,7 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "font", bad: ["--font", "Comic Sans MS"], addContext: ["--text", "hi"], editContext: [], editId: "textId", names: 'unknown font family "Comic Sans MS"' },
   { key: "font-file", bad: ["--font-file", " "], addContext: ["--text", "hi"], editContext: [], editId: "textId", names: "--font-file takes a path" },
   { key: "font-size", bad: ["--font-size", "0"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Font size (--font-size)" },
-  { key: "color", bad: ["--color", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: 'Invalid color "banana"' },
+  { key: "color", bad: ["--color", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: 'Invalid fill color "banana"' },
   { key: "weight", bad: ["--weight", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Weight (--weight)" },
   { key: "width", bad: ["--width", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Width (--width)" },
   { key: "tracking", bad: ["--tracking", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Tracking (--tracking)" },

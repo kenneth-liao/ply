@@ -36,10 +36,10 @@ like any other Layer. A full-canvas background is an ordinary shape Layer
 sized to the canvas — there is no separate background concept.
 
 **Fill**:
-How a shape Layer's region is painted: one discriminated value — a solid
-colour, a linear gradient, or a radial gradient. The fill is normalized once
-at ingestion and stored as part of the Layer's revision, so the same
-representation can paint other content kinds later. Colours accept alpha.
+How a shape Layer's region or a text Layer's glyphs are painted: one
+discriminated value — a solid colour, a linear gradient, or a radial gradient.
+The fill is normalized once at ingestion and stored as part of the Layer's
+revision, so the same representation serves both kinds. Colours accept alpha.
 _Avoid_: baked backgrounds, drawn-in-advance helper images
 
 **Visible region**:
