@@ -265,6 +265,41 @@ test("every edit option applicable to a text Layer is accepted and APPLIED on a 
   }
 });
 
+test("every edit option applicable to a shape Layer is accepted and APPLIED on a shape add (TEST-003, #259)", async () => {
+  // The table's shape applicability is the ONE home for the fact: the guard
+  // enumerates it (A226-004), spot-pins the controls production supports on
+  // shapes, and pins the one refusal the table carries for the kind (the
+  // vector colour — a shape's colour is its fill).
+  const applicable = layerOptionsApplicableTo("shape");
+  expect(applicable).toContain("anchor");
+  expect(applicable).toContain("resize");
+  expect(applicable).toContain("resize-to");
+  expect(applicable).toContain("scale");
+  expect(applicable).toContain("rotate");
+  expect(applicable).toContain("flip");
+  expect(applicable).toContain("shadow");
+  expect(applicable).toContain("outline");
+  expect(applicable).toContain("visible-region");
+  expect(applicable).not.toContain("vector-color");
+  expect(applicable).not.toContain("font-size");
+  // The guard shape is 64×48 so the resize-to read-back ("96x" → 96/64 = 1.5)
+  // is shared with the image loop unchanged.
+  let n = 0;
+  for (const key of applicable) {
+    if (["image", "from-generation", "from-matte", "output", "text", "font", "font-file", "shape", "size", "corner-radius", "fill"].includes(key)) continue;
+    const extra = key === "anchor"
+      ? ["--x", "80", "--y", "60"]
+      : key === "visible-region-radius"
+        ? ["--visible-region", "10,10,20,20"]
+        : [];
+    const { revision } = await addJson(`sh${n++}`, [
+      "--shape", "rectangle", "--size", "64x48", "--fill", "#1d4ed8",
+      `--${key}`, ...guardValue(key, imagePath), ...extra,
+    ]);
+    expectAppliedFact(key, revision);
+  }
+});
+
 test("the generation/matte/output flags parse and route to their established refusals (TEST-003)", async () => {
   // These need external fixtures to accept; the guard pins that add parses
   // them (never an unknown-option usage failure) and routes them to the
