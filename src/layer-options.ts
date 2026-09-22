@@ -73,6 +73,7 @@ import {
   type LayerShadow,
   type LayerOutline,
   type LayerVisibleRegion,
+  type LayerGrade,
 } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { measureStandaloneSnapshot } from "./composition-measure.js";
@@ -100,7 +101,7 @@ export type LayerOptionSurface = "edit" | "add";
 /** The Layer kinds an option can apply to. */
 export type LayerOptionKind = "image" | "text" | "shape";
 
-export type LayerOptionGroup = "content" | "paint" | "text" | "placement" | "transform" | "region" | "effect";
+export type LayerOptionGroup = "content" | "paint" | "text" | "placement" | "transform" | "region" | "look" | "effect";
 
 export interface LayerOptionDef {
   /** parseArgs key: the flag is `--<key>`. */
@@ -174,7 +175,11 @@ export type LayerOptionKey =
   | "outline"
   | "vector-color"
   | "visible-region"
-  | "visible-region-radius";
+  | "visible-region-radius"
+  | "brightness"
+  | "contrast"
+  | "saturation"
+  | "warmth";
 
 /**
  * The one option table (DEC-001), in the order the edit surface's
@@ -272,6 +277,13 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // region's corners (one-command add applies it right after the rectangle,
   // still before the anchor and the effects).
   { key: "visible-region-radius", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerVisibleRegionRadius, apply: applyVisibleRegionRadius },
+  // The grade controls (#219, spec #218 US-001, ADR-0024): brightness,
+  // contrast, saturation, warmth. Their own group "look" applied to content
+  // only.
+  { key: "brightness", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerBrightness, apply: applyBrightness },
+  { key: "contrast", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerContrast, apply: applyContrast },
+  { key: "saturation", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerSaturation, apply: applySaturation },
+  { key: "warmth", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerWarmth, apply: applyWarmth },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -317,6 +329,10 @@ export const LAYER_OPTION_PARSE_ARGS = {
   "vector-color": { type: "string" },
   "visible-region": { type: "string" },
   "visible-region-radius": { type: "string" },
+  brightness: { type: "string" },
+  contrast: { type: "string" },
+  saturation: { type: "string" },
+  warmth: { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string" }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
@@ -386,6 +402,7 @@ export function oneCommandAddOptionKeys(): LayerOptionKey[] {
         def.group === "paint" ||
         def.group === "transform" ||
         def.group === "region" ||
+        def.group === "look" ||
         def.group === "effect" ||
         def.key === "anchor",
     )
@@ -401,7 +418,8 @@ export function anyOneCommandOptionProvided(args: LayerOptionPresence): boolean 
  *  (spec #226 DEC-002, extended by #211 and #215): the table's paint group
  *  first (the vector colour — content-level paint), then the transform
  *  group, then the visible region (whose clipped ink the anchor and the
- *  effects must both see), then anchored placement, then the effect group
+ *  effects must both see), then anchored placement, then the look group,
+ *  then the effect group
  *  — the stages derived from the group fact, in table order within a
  *  stage. Content and plain placement
  *  (--x/--y/--opacity) are applied by the ingestion itself before this
@@ -414,7 +432,8 @@ export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOpti
     ...LAYER_OPTION_DEFS.filter((def) => def.group === "transform").map((def) => [def.key, 1] as const),
     ...LAYER_OPTION_DEFS.filter((def) => def.group === "region").map((def) => [def.key, 2] as const),
     ["anchor" as LayerOptionKey, 3],
-    ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 4] as const),
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "look").map((def) => [def.key, 4] as const),
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 5] as const),
   ]);
   // Fail fast (review INT-plumb-3): a supplied key with no stage would
   // otherwise sort as NaN — an unpredictable order — instead of naming
@@ -424,7 +443,7 @@ export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOpti
     if (s === undefined) {
       throw new Error(
         `One-command add: option "${key}" has no application stage — ` +
-          "the option table's post-content groups (paint, transform, region, effect, anchor) moved?",
+          "the option table's post-content groups (paint, transform, region, look, effect, anchor) moved?",
       );
     }
     return s;
@@ -986,6 +1005,66 @@ export function parseLayerVectorColor(raw: string | undefined): OptionParse<stri
 }
 
 /**
+ * --brightness (#219, spec #218 US-001): 0..5, neutral 1.
+ */
+export function parseLayerBrightness(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 5) {
+    return {
+      ok: false,
+      error: `Brightness (--brightness) must be a finite number between 0 and 5 (got "${raw}").`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * --contrast (#219, spec #218 US-001): 0..5, neutral 1.
+ */
+export function parseLayerContrast(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 5) {
+    return {
+      ok: false,
+      error: `Contrast (--contrast) must be a finite number between 0 and 5 (got "${raw}").`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * --saturation (#219, spec #218 US-001): 0..5, neutral 1.
+ */
+export function parseLayerSaturation(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 5) {
+    return {
+      ok: false,
+      error: `Saturation (--saturation) must be a finite number between 0 and 5 (got "${raw}").`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * --warmth (#219, spec #218 US-001): -1..1, neutral 0.
+ */
+export function parseLayerWarmth(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < -1 || value > 1) {
+    return {
+      ok: false,
+      error: `Warmth (--warmth) must be a finite number between -1 and 1 (got "${raw}").`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/**
  * --anchor: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Semantic refusals (no
  * visible ink, divergent multi-Composition geometry) happen in the
@@ -1025,7 +1104,16 @@ export function anchorConflictOptionList(): string {
     LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === group).map((def) => def.key);
   const flags = (keys: readonly LayerOptionKey[]): string => keys.map((key) => `--${key}`).join(", ");
   const shape = `shape parameters (${SHAPE_CONTENT_KEYS.map((key) => `--${key}`).join(", ")})`;
-  return [flags(editKeysOfGroup("paint")), flags(editKeysOfGroup("transform")), flags(editKeysOfGroup("region")), flags(editKeysOfGroup("effect")), shape, flags(editKeysOfGroup("text"))]
+  return [
+    flags(editKeysOfGroup("paint")),
+    flags(editKeysOfGroup("transform")),
+    flags(editKeysOfGroup("region")),
+    flags(editKeysOfGroup("look")),
+    flags(editKeysOfGroup("effect")),
+    shape,
+    flags(editKeysOfGroup("text")),
+  ]
+    .filter(Boolean)
     .join(", ");
 }
 
@@ -1195,6 +1283,10 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "visible-region" },
   { option: "visible-region-radius" },
   { option: "vector-color" },
+  { option: "brightness" },
+  { option: "contrast" },
+  { option: "saturation" },
+  { option: "warmth" },
   { option: "anchor" },
   { policy: "anchor-conflict" },
   { policy: "anchor-targets" },
@@ -1217,6 +1309,10 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "visible-region",
   "visible-region-radius",
   "vector-color",
+  "brightness",
+  "contrast",
+  "saturation",
+  "warmth",
   "anchor",
 ];
 
@@ -1394,6 +1490,7 @@ export interface SharedOptionDraft {
   outline?: LayerOutline;
   visibleRegion?: LayerVisibleRegion;
   vectorColor?: string;
+  grade?: LayerGrade;
   /** Anything else the application cases set — including a shared option's
    *  own revision fact (the probe's stamp) — flows into the published
    *  revision through the applied-fact carry (DEC-001). */
@@ -1730,6 +1827,59 @@ function applyVisibleRegionRadius(
   draft.visibleRegion = { ...region, cornerRadius: radius };
 }
 
+function updateDraftGrade(
+  draft: SharedOptionDraft,
+  context: SharedOptionApplyContext,
+  key: "brightness" | "contrast" | "saturation" | "warmth",
+  value: number,
+  neutral: number,
+): void {
+  if (value === neutral) {
+    if (draft.grade !== undefined) {
+      const updated = { ...draft.grade };
+      delete updated[key];
+      draft.grade = Object.keys(updated).length > 0 ? updated : undefined;
+    }
+    return;
+  }
+  draft.grade = {
+    ...draft.grade,
+    [key]: value,
+  };
+}
+
+function applyBrightness(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  updateDraftGrade(draft, context, "brightness", value as number, 1);
+}
+
+function applyContrast(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  updateDraftGrade(draft, context, "contrast", value as number, 1);
+}
+
+function applySaturation(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  updateDraftGrade(draft, context, "saturation", value as number, 1);
+}
+
+function applyWarmth(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  updateDraftGrade(draft, context, "warmth", value as number, 0);
+}
+
 /**
  * The edit surface's established application order (spec #226 DEC-002 as
  * the edit path resolves it, #263): the resize family's domain re-checks,
@@ -1757,4 +1907,8 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "visible-region" },
   { option: "visible-region-radius" },
   { option: "vector-color" },
+  { option: "brightness" },
+  { option: "contrast" },
+  { option: "saturation" },
+  { option: "warmth" },
 ];

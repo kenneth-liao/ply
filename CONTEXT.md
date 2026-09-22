@@ -51,6 +51,15 @@ effects' edge all follow it, while the placement point and transform origin
 stay defined against the full content box.
 _Avoid_: cropping the file, baking the crop
 
+**Grade**:
+A set of colour and tonal adjustments — brightness, contrast, saturation, and
+warmth — applied at paint time to a Layer's content only, without editing its
+file or changing its alpha. Each control is an absolute setter stored only when
+set; a documented neutral value removes the stored fact. Paint order within the
+Layer applies the grade after the visible region and before edge glow, outline,
+and shadow (ADR-0024).
+_Avoid_: destructive pixel editing, LUTs, adjustment layers
+
 **Vector**:
 An SVG file imported as image-kind content with a recorded vector format
 (DEC-007) — not a fourth Layer kind. Its intrinsic size is parsed from the

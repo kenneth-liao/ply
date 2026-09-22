@@ -326,6 +326,30 @@ cell:
   the input list — is a usage error (exit 2); a missing, undecodable, or
   over-limit input — or an over-limit sheet — is exit 1.
 
+## Layer grading (brightness, contrast, saturation, warmth)
+
+`ply layer edit` and `ply composition add` accept four tonal and colour grade
+controls for image (raster and vector), text, and shape Layers (#219, spec #218 US-001):
+
+- **`--brightness <num>`**: `0` to `5` (neutral `1`). Values `< 1` darken; values `> 1` brighten.
+- **`--contrast <num>`**: `0` to `5` (neutral `1`). Values `< 1` reduce contrast; values `> 1` increase contrast.
+- **`--saturation <num>`**: `0` to `5` (neutral `1`). Values `< 1` desaturate (`0` is greyscale); values `> 1` oversaturate.
+- **`--warmth <num>`**: `-1` to `1` (neutral `0`). Positive values shift toward orange/red; negative values shift toward blue.
+
+Every control is an **absolute setter**: passing the control replaces any
+previously set value. Passing the documented neutral value (`1` for brightness,
+contrast, saturation; `0` for warmth) removes the stored fact. An omitted
+control preserves its current value across edits. A Layer with all controls at
+neutral values renders byte-identically to an ungraded Layer.
+
+**Paint order & filter pipeline:** Grade applies offline via the rendering
+browser's deterministic CSS filter chain:
+`brightness` → `contrast` → `saturate` → `warmth` (via an SVG `feColorMatrix`
+with `color-interpolation-filters="sRGB"`).
+Grading applies to the Layer's **content only**: outline and shadow keep their
+own exact colours, and alpha is untouched everywhere (painted extents, anchored
+placement, and clipping remain identical to the ungraded Layer).
+
 ## Exit codes
 
 Every composer command reports its outcome through its exit code:

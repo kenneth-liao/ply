@@ -166,6 +166,27 @@ interface LayerRevisionBase {
    * corner radius additively (#212) without reshaping this fact.
    */
   visibleRegion?: LayerVisibleRegion;
+  /**
+   * Canonical Layer grade (#219, spec #218 US-001, ADR-0024): paint-time
+   * colour and light adjustments (brightness, contrast, saturation, warmth)
+   * applied to the Layer's content element only — never to outline, shadow,
+   * or alpha. Stored only when set and non-neutral; neutral values remove the
+   * stored fact and an omitted control keeps its value.
+   *
+   * Present ⟺ at least one non-neutral grade control exists: absence IS the
+   * canonical no-grade form, so removal drops the field and every reader
+   * treats absence as none. The revision hash appends it only when present, so
+   * revisions written before #219 keep their exact ids.
+   */
+  grade?: LayerGrade;
+}
+
+/** Canonical grade parameters (#219, spec #218 US-001, ADR-0024). */
+export interface LayerGrade {
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  warmth?: number;
 }
 
 /** Canonical shadow parameters (#139, ADR-0018): offset, softening, color. */
@@ -773,6 +794,97 @@ export function normalizeStoredVectorColor(revision: { vectorColor?: unknown }):
   return parseFillColorSpec(value, "stored vector colour");
 }
 
+/**
+ * Canonical stored-grade validation and normalization (#219, spec #218 US-001,
+ * ADR-0024). The one normalization boundary for the grade fact: documents
+ * written before #219 lack the field, and absence IS the canonical no-grade
+ * form — every downstream reader projects through this function and never
+ * re-derives a default.
+ *
+ * Stored controls must be finite numbers in their documented ranges:
+ * - brightness: 0..5 (neutral 1)
+ * - contrast: 0..5 (neutral 1)
+ * - saturation: 0..5 (neutral 1)
+ * - warmth: -1..1 (neutral 0)
+ *
+ * Neutral values are dropped (neutral removes the fact); an object with only
+ * neutral values normalizes to undefined. Extra or non-numeric properties are
+ * refused loudly as malformed documents before the revision hash is consulted.
+ */
+export function normalizeStoredGrade(revision: { grade?: unknown }): LayerGrade | undefined {
+  if (revision.grade === undefined) {
+    return undefined;
+  }
+  const raw = revision.grade;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `Malformed revision document: grade must be an object when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  const { brightness, contrast, saturation, warmth } = raw as Record<string, unknown>;
+  const normalized: LayerGrade = {};
+  if (brightness !== undefined) {
+    if (typeof brightness !== "number" || !Number.isFinite(brightness) || brightness < 0 || brightness > 5) {
+      throw new Error(
+        `Malformed revision document: grade.brightness must be a finite number between 0 and 5 when present (got ${JSON.stringify(brightness)}).`,
+      );
+    }
+    if (brightness !== 1) {
+      normalized.brightness = brightness;
+    }
+  }
+  if (contrast !== undefined) {
+    if (typeof contrast !== "number" || !Number.isFinite(contrast) || contrast < 0 || contrast > 5) {
+      throw new Error(
+        `Malformed revision document: grade.contrast must be a finite number between 0 and 5 when present (got ${JSON.stringify(contrast)}).`,
+      );
+    }
+    if (contrast !== 1) {
+      normalized.contrast = contrast;
+    }
+  }
+  if (saturation !== undefined) {
+    if (typeof saturation !== "number" || !Number.isFinite(saturation) || saturation < 0 || saturation > 5) {
+      throw new Error(
+        `Malformed revision document: grade.saturation must be a finite number between 0 and 5 when present (got ${JSON.stringify(saturation)}).`,
+      );
+    }
+    if (saturation !== 1) {
+      normalized.saturation = saturation;
+    }
+  }
+  if (warmth !== undefined) {
+    if (typeof warmth !== "number" || !Number.isFinite(warmth) || warmth < -1 || warmth > 1) {
+      throw new Error(
+        `Malformed revision document: grade.warmth must be a finite number between -1 and 1 when present (got ${JSON.stringify(warmth)}).`,
+      );
+    }
+    if (warmth !== 0) {
+      normalized.warmth = warmth;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+export function gradeEq(a: LayerGrade | undefined, b: LayerGrade | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.brightness === b.brightness &&
+    a.contrast === b.contrast &&
+    a.saturation === b.saturation &&
+    a.warmth === b.warmth
+  );
+}
+
+export function formatGrade(grade: LayerGrade): string {
+  const parts: string[] = [];
+  if (grade.brightness !== undefined) parts.push(`brightness ${grade.brightness}`);
+  if (grade.contrast !== undefined) parts.push(`contrast ${grade.contrast}`);
+  if (grade.saturation !== undefined) parts.push(`saturation ${grade.saturation}`);
+  if (grade.warmth !== undefined) parts.push(`warmth ${grade.warmth}`);
+  return parts.join(", ");
+}
+
 export type ResolvedLayerRevision =
   | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
   | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
@@ -1319,7 +1431,17 @@ export function computeRevisionHash(rev: LayerRevision): string {
         (shapeFields.cornerRadius !== undefined ? `,r${shapeFields.cornerRadius}` : "") +
         `,fill(${fillIdentityString(shapeFields.fill)}))`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}`).digest("hex").slice(0, 16)}`;
+  // The grade controls (#219, spec #218 US-001, ADR-0024): appended only
+  // when at least one non-neutral control is present, in fixed order
+  // (b, c, s, w), so revisions written before #219 keep their exact ids.
+  const grade = normalizeStoredGrade(rev);
+  const gradeParts: string[] = [];
+  if (grade?.brightness !== undefined) gradeParts.push(`b${grade.brightness}`);
+  if (grade?.contrast !== undefined) gradeParts.push(`c${grade.contrast}`);
+  if (grade?.saturation !== undefined) gradeParts.push(`s${grade.saturation}`);
+  if (grade?.warmth !== undefined) gradeParts.push(`w${grade.warmth}`);
+  const gradeField = gradeParts.length > 0 ? `:grade(${gradeParts.join(",")})` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1571,6 +1693,10 @@ export async function readRevisionInternalFull(
   // this same one boundary — a malformed stored colour is refused loudly
   // before the revision hash is consulted. Absence IS the no-colour form.
   const vectorColor = revision.kind === "image" ? normalizeStoredVectorColor(revision) : undefined;
+  // Canonical grade controls (#219, spec #218 US-001, ADR-0024): validated
+  // and normalized at this same one boundary — malformed controls are refused
+  // loudly before the revision hash is consulted. Absence IS the no-grade form.
+  const grade = normalizeStoredGrade(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -1660,6 +1786,7 @@ export async function readRevisionInternalFull(
             ...(outline !== undefined ? { outline } : {}),
             ...(visibleRegion !== undefined ? { visibleRegion } : {}),
             ...(vectorColor !== undefined ? { vectorColor } : {}),
+            ...(grade !== undefined ? { grade } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -1685,6 +1812,7 @@ export async function readRevisionInternalFull(
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
+          ...(grade !== undefined ? { grade } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -1718,6 +1846,7 @@ export async function readRevisionInternalFull(
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
+          ...(grade !== undefined ? { grade } : {}),
         };
 
   return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0) };
@@ -1936,6 +2065,9 @@ export interface EditLayerResult {
   /** Present when the edit set or removed the vector colour (#215): the
    * absolute colour state now recorded on the revision (null when removed). */
   vectorColorSet?: { vectorColor: string | null };
+  /** Present when the edit set or removed any grade control (#219): the
+   * absolute grade state now recorded on the revision (null when removed). */
+  gradeSet?: { grade: LayerGrade | null };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -2861,6 +2993,7 @@ async function buildEditedRevision(
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.vectorColor !== undefined ? { vectorColor: draft.vectorColor } : {}),
+      ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...carried,
     };
     const unchanged =
@@ -2872,6 +3005,7 @@ async function buildEditedRevision(
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       draft.vectorColor === prevRev.vectorColor &&
+      gradeEq(draft.grade, prevRev.grade) &&
       Object.keys(carried).length === 0;
     return { revision, unchanged, mattedFrom, retainedGeneration, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
@@ -2976,6 +3110,7 @@ async function buildEditedRevision(
       ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
+      ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...carried,
     };
     const unchanged =
@@ -2997,6 +3132,7 @@ async function buildEditedRevision(
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
+      gradeEq(draft.grade, prevRev.grade) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
     // --size change the content box, so the kept region re-validates against
@@ -3163,6 +3299,7 @@ async function buildEditedRevision(
       ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
+      ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...carried,
     };
     const unchanged =
@@ -3186,6 +3323,7 @@ async function buildEditedRevision(
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
+      gradeEq(draft.grade, prevRev.grade) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a text edit (#211 review PROD-1): the text
     // content box is the measured line-box extent, so a text edit that can
@@ -3453,6 +3591,12 @@ export async function editLayerInternal(
   const hasRegion = shared["visible-region"] !== undefined || shared["visible-region-radius"] !== undefined;
   const regionSetReport = { visibleRegion: draft.visibleRegion ?? null };
   const vectorColorSetReport = { vectorColor: draft.vectorColor ?? null };
+  const hasGrade =
+    shared.brightness !== undefined ||
+    shared.contrast !== undefined ||
+    shared.saturation !== undefined ||
+    shared.warmth !== undefined;
+  const gradeSetReport = { grade: draft.grade ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -3505,7 +3649,8 @@ export async function editLayerInternal(
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
     const withRegion = hasRegion ? { ...withOutline, regionSet: regionSetReport } : withOutline;
     const withColour = shared["vector-color"] !== undefined ? { ...withRegion, vectorColorSet: vectorColorSetReport } : withRegion;
-    const withCarried = regionCarried ? { ...withColour, regionCarried } : withColour;
+    const withGrade = hasGrade ? { ...withColour, gradeSet: gradeSetReport } : withColour;
+    const withCarried = regionCarried ? { ...withGrade, regionCarried } : withGrade;
     const withShape = shapeEdited ? { ...withCarried, shapeEdited } : withCarried;
     return options.fromGeneration !== undefined
       ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
@@ -3546,6 +3691,7 @@ export async function editLayerInternal(
       ...(hasOutline ? { outlined: outlinedReport } : {}),
       ...(hasRegion ? { regionSet: regionSetReport } : {}),
       ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
+      ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
       ...(regionCarried ? { regionCarried } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
@@ -3603,6 +3749,7 @@ export async function editLayerInternal(
     ...(hasOutline ? { outlined: outlinedReport } : {}),
     ...(hasRegion ? { regionSet: regionSetReport } : {}),
     ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
+    ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
     ...(regionCarried ? { regionCarried } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined

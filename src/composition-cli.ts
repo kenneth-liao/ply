@@ -56,6 +56,7 @@ import {
 import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill } from "./fill.js";
+import { formatGrade, type LayerGrade } from "./layer.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -371,7 +372,7 @@ placement, transform, region, effect, and text option 'layer edit' accepts
 for that Layer kind, with identical spelling, validation, and refusal
 texts. The options apply in the documented order — content (and its vector
 colour), then transforms, then the visible region, then anchored placement,
-then effects — and publish exactly one Layer revision; any refused option
+then grade, then effects — and publish exactly one Layer revision; any refused option
 publishes nothing (no Layer, no use, no content). On 'add' the anchor
 combination is defined by that order: the anchor resolves the
 content+transform+region ink in the target Composition's canvas, and the
@@ -459,6 +460,22 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         radius are transparent, and the outline and shadow
                         follow the rounded edge. Applied right after the
                         rectangle, before the anchor resolves.
+  --brightness <num>    Set brightness factor for image, text, and shape Layers: an
+                        absolute setter 0 to 5 (neutral: 1), applied to the
+                        Layer's content only. Values < 1 darken; values > 1
+                        brighten.
+  --contrast <num>      Set contrast factor for image, text, and shape Layers: an
+                        absolute setter 0 to 5 (neutral: 1), applied to the
+                        Layer's content only. Values < 1 reduce contrast;
+                        values > 1 increase contrast.
+  --saturation <num>    Set saturation factor for image, text, and shape Layers: an
+                        absolute setter 0 to 5 (neutral: 1), applied to the
+                        Layer's content only. Values < 1 desaturate; values > 1
+                        oversaturate.
+  --warmth <num>        Set warmth shift for image, text, and shape Layers: an
+                        absolute setter -1 to 1 (neutral: 0), applied to the
+                        Layer's content only. Positive shifts toward
+                        orange/red; negative shifts toward blue.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -503,6 +520,7 @@ function oneCommandFacts(
     outline?: { width: number; color: string };
     vectorColor?: string;
     visibleRegion?: { x: number; y: number; width: number; height: number; cornerRadius?: number };
+    grade?: LayerGrade;
   },
   anchorSpec?: string,
 ): string {
@@ -522,6 +540,9 @@ function oneCommandFacts(
       `visible region (${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})` +
         (rev.visibleRegion.cornerRadius !== undefined ? ` with corner radius ${rev.visibleRegion.cornerRadius}px` : ""),
     );
+  }
+  if (rev.grade) {
+    facts.push(`grade ${formatGrade(rev.grade)}`);
   }
   if (anchorSpec !== undefined) {
     facts.push(`anchored ${anchorSpec} -> placement (${rev.x}, ${rev.y})`);
@@ -1251,6 +1272,9 @@ async function run() {
               // painting applies, reported for auditability.
               if (layer.fill) {
                 facts.push(`fill ${formatFill(layer.fill)}`);
+              }
+              if (layer.grade) {
+                facts.push(`grade ${formatGrade(layer.grade)}`);
               }
               if (layer.axes) {
                 facts.push(`weight ${layer.axes.weight}, width ${layer.axes.width}`);

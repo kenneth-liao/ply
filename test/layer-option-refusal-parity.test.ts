@@ -145,6 +145,10 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "outline", bad: ["--outline", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid outline "banana"' },
   { key: "visible-region", bad: ["--visible-region", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid visible region "banana"' },
   { key: "visible-region-radius", bad: ["--visible-region", "10,10,20,20", "--visible-region-radius", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: ["--visible-region", "10,10,20,20"], editId: "imageId", names: 'Invalid visible-region corner radius "banana"' },
+  { key: "brightness", bad: ["--brightness", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Brightness (--brightness)" },
+  { key: "contrast", bad: ["--contrast", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Contrast (--contrast)" },
+  { key: "saturation", bad: ["--saturation", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Saturation (--saturation)" },
+  { key: "warmth", bad: ["--warmth", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Warmth (--warmth)" },
 ];
 
 test("the parity rows cover every option the shared table declares", () => {

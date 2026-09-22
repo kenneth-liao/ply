@@ -105,6 +105,7 @@ import {
   type LayerShadow,
   type LayerTextTypography,
   type ResolvedLayerRevision,
+  type LayerGrade,
 } from "./layer.js";
 import type { Page } from "playwright";
 import type { LayerFill } from "./fill.js";
@@ -137,6 +138,10 @@ export interface MeasuredLayerBounds {
    * none of that effect) — the same facts painting applies, reported for
    * auditability. */
   effects: { shadow: LayerShadow | null; outline: LayerOutline | null };
+  /** The revision's effective grade controls (#219, spec #218 US-001, ADR-0024):
+   * the stored grade parameters (or null when the Layer has no grade) — the
+   * same facts painting applies, reported for auditability. */
+  grade: LayerGrade | null;
   /** The revision's visible region (#211, ADR-0023): the stored
    * region facts painting clips to (or null when the Layer has none —
    * absence IS the no-region form), including the optional corner radius
@@ -619,6 +624,7 @@ export async function measureCompositionLayers(
           flipY: rev.flipY,
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
+        grade: rev.grade ?? null,
         visibleRegion: rev.visibleRegion ?? null,
         // The vector colour (#215): the stored canonical hex (or null —
         // absence IS the no-colour form), reported like the effects and
