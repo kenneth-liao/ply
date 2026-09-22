@@ -3,7 +3,7 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { inspectLayer, listLayers, editLayer, roundEffective, type ResolvedLayer } from "./layer.js";
-import { resolveAnchoredPlacement, type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
+import { type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import {
   LAYER_OPTION_PARSE_ARGS,
   anyLayerEditOptionProvided,
