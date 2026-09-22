@@ -821,7 +821,16 @@ export function normalizeStoredGrade(revision: { grade?: unknown }): LayerGrade 
       `Malformed revision document: grade must be an object when present (got ${JSON.stringify(raw)}).`,
     );
   }
-  const { brightness, contrast, saturation, warmth } = raw as Record<string, unknown>;
+  const rawObj = raw as Record<string, unknown>;
+  const allowedKeys = new Set(["brightness", "contrast", "saturation", "warmth"]);
+  for (const key of Object.keys(rawObj)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(
+        `Malformed revision document: unknown grade property ${JSON.stringify(key)}.`,
+      );
+    }
+  }
+  const { brightness, contrast, saturation, warmth } = rawObj;
   const normalized: LayerGrade = {};
   if (brightness !== undefined) {
     if (typeof brightness !== "number" || !Number.isFinite(brightness) || brightness < 0 || brightness > 5) {

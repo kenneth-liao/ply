@@ -538,16 +538,19 @@ function warmthFilterDef(warmth: number, layerIndex: number): string {
 function gradeFilterCss(grade: LayerGrade | undefined, layerIndex: number): string {
   if (!grade) return "";
   const parts: string[] = [];
-  if (grade.brightness !== undefined && grade.brightness !== 1) {
+  // Trust the normalized fact (storage normalisation at normalizeStoredGrade /
+  // updateDraftGrade is the ONE home for neutral-value dropping): emit whatever
+  // controls are present on the grade fact.
+  if (grade.brightness !== undefined) {
     parts.push(`brightness(${grade.brightness})`);
   }
-  if (grade.contrast !== undefined && grade.contrast !== 1) {
+  if (grade.contrast !== undefined) {
     parts.push(`contrast(${grade.contrast})`);
   }
-  if (grade.saturation !== undefined && grade.saturation !== 1) {
+  if (grade.saturation !== undefined) {
     parts.push(`saturate(${grade.saturation})`);
   }
-  if (grade.warmth !== undefined && grade.warmth !== 0) {
+  if (grade.warmth !== undefined) {
     parts.push(`url(#${warmthFilterId(grade.warmth, layerIndex)})`);
   }
   return parts.length > 0 ? `filter:${parts.join(" ")};` : "";
@@ -579,7 +582,7 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
           ? regionClipPathDef(l.revision.visibleRegion, i)
           : "";
       const warmth =
-        l.revision.grade?.warmth !== undefined && l.revision.grade.warmth !== 0
+        l.revision.grade?.warmth !== undefined
           ? warmthFilterDef(l.revision.grade.warmth, i)
           : "";
       return outline + region + warmth;

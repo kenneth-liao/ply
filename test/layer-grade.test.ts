@@ -26,6 +26,7 @@ import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { encodePngRgba, decodePng } from "../src/png.js";
+import { normalizeStoredGrade } from "../src/layer.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -117,6 +118,23 @@ async function addTextLayer(comp: string, localName: string, text: string, opts:
   expect(res.code).toBe(0);
   return JSON.parse(res.stdout);
 }
+
+async function addShapeLayer(comp: string, localName: string, shape: string, opts: { size?: string; fill?: string; x?: number; y?: number } = {}) {
+  const args = ["composition", "add", comp, localName, "--shape", shape, "--project", projDir, "--json"];
+  if (opts.size !== undefined) args.push("--size", opts.size);
+  if (opts.fill !== undefined) args.push("--fill", opts.fill);
+  if (opts.x !== undefined) args.push("--x", String(opts.x));
+  if (opts.y !== undefined) args.push("--y", String(opts.y));
+  const res = await invoke(args);
+  expect(res.code).toBe(0);
+  return JSON.parse(res.stdout);
+}
+
+test("normalizeStoredGrade rejects unknown properties loudly (INT-1)", () => {
+  expect(() => normalizeStoredGrade({ grade: { brightness: 1.5, bogus: 1 } })).toThrow(
+    /Malformed revision document: unknown grade property "bogus"/,
+  );
+});
 
 test("grade controls validate ranges and refuse out-of-range or non-numeric before publication", async () => {
   const imgFile = path.join(tempDir, "grey.png");
@@ -486,30 +504,88 @@ test("outline and shadow colours are unaffected by grade", async () => {
   expect(shadowPx).toEqual([0, 0, 255, 255]);
 });
 
-test("text Layer grading alters text appearance while keeping text properties", async () => {
+test("text Layer grading alters text appearance while keeping text properties (INT-4, US-005)", async () => {
   await makeComp("poster", 400, 300);
   const tRes = await addTextLayer("poster", "headline", "HELLO", { fontSize: 40, color: "#ffffff", x: 50, y: 50 });
   const layerId = tRes.use.layerId as string;
+
+  // Render baseline text and locate a solid ink pixel
+  const baseOut = path.join(tempDir, "text-base.png");
+  await invoke(["composition", "render", "poster", "--project", projDir, "--out", baseOut, "--supersample", "1"]);
+  const basePng = decodePng(await readFile(baseOut));
+  let inkX = -1;
+  let inkY = -1;
+  for (let y = 50; y < 100; y++) {
+    for (let x = 50; x < 150; x++) {
+      const px = pixel(basePng, x, y);
+      if (px[3] === 255 && px[0] > 200) {
+        inkX = x;
+        inkY = y;
+        break;
+      }
+    }
+    if (inkX !== -1) break;
+  }
+  expect(inkX).toBeGreaterThanOrEqual(0);
+  const baseInk = pixel(basePng, inkX, inkY);
 
   // Edit with warmth shift and brightness
   const editRes = await invoke([
     "layer", "edit", layerId,
     "--warmth", "0.5",
-    "--brightness", "0.8",
+    "--brightness", "0.5",
     "--project", projDir,
     "--json",
   ]);
   expect(editRes.code).toBe(0);
   const editJson = JSON.parse(editRes.stdout);
   expect(editJson.layer.currentRevision.grade).toEqual({
-    brightness: 0.8,
+    brightness: 0.5,
     warmth: 0.5,
   });
+
+  // Render graded text: brightness moves known ink pixel in documented direction (INT-4)
+  const gradedOut = path.join(tempDir, "text-graded.png");
+  await invoke(["composition", "render", "poster", "--project", projDir, "--out", gradedOut, "--supersample", "1"]);
+  const gradedPng = decodePng(await readFile(gradedOut));
+  const gradedInk = pixel(gradedPng, inkX, inkY);
+
+  expect(gradedInk[0]).toBeLessThan(baseInk[0]); // Darkened by brightness 0.5
+  expect(gradedInk[3]).toBe(baseInk[3]); // Alpha unchanged
 
   // Verify inspect reports the grade
   const insp = await invoke(["layer", "inspect", layerId, "--project", projDir]);
   expect(insp.code).toBe(0);
-  expect(insp.stdout).toContain("Grade: brightness 0.8, warmth 0.5");
+  expect(insp.stdout).toContain("Grade: brightness 0.5, warmth 0.5");
+});
+
+test("shape Layer grading shifts rendered ink pixels in documented direction (INT-4, US-005)", async () => {
+  await makeComp("poster", 400, 300);
+  const sRes = await addShapeLayer("poster", "box", "rectangle", {
+    size: "100x100",
+    fill: "#808080",
+    x: 50,
+    y: 50,
+  });
+  const layerId = sRes.use.layerId as string;
+
+  // Render baseline
+  const baseOut = path.join(tempDir, "shape-base.png");
+  await invoke(["composition", "render", "poster", "--project", projDir, "--out", baseOut, "--supersample", "1"]);
+  const basePng = decodePng(await readFile(baseOut));
+  const basePx = pixel(basePng, 100, 100);
+  expect(basePx[0]).toBe(128);
+  expect(basePx[3]).toBe(255);
+
+  // Edit shape with brightness 1.8
+  await invoke(["layer", "edit", layerId, "--brightness", "1.8", "--project", projDir]);
+  const brightOut = path.join(tempDir, "shape-bright.png");
+  await invoke(["composition", "render", "poster", "--project", projDir, "--out", brightOut, "--supersample", "1"]);
+  const brightPng = decodePng(await readFile(brightOut));
+  const brightPx = pixel(brightPng, 100, 100);
+
+  expect(brightPx[0]).toBeGreaterThan(128); // Brightened by brightness 1.8
+  expect(brightPx[3]).toBe(255); // Alpha unchanged
 });
 
 test("inspect, measure, and layer review report effective controls; shared Layers obey in-place/fork intent", async () => {
