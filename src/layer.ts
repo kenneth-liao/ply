@@ -34,7 +34,7 @@ import {
 } from "./matting-retention.js";
 import {
   EDIT_APPLICATION_ORDER,
-  LAYER_OPTION_DEFS,
+  applyLayerOption,
   type SharedOptionApplyContext,
   type SharedOptionDraft,
   type SharedOptionValues,
@@ -2655,54 +2655,20 @@ function resolveEditTextAxes(
  * uses `unchanged` to skip storage churn; fork ignores it because an explicit
  * fork always publishes a new identity, even with unchanged content.
  */
-/** The revision keys the edited-revision construction sets explicitly per
- *  kind, plus the resolved-only facts a stored revision document never
- *  carries: everything else on the application draft is a shared option's
- *  applied fact (DEC-001, #263) and is carried into the published revision,
- *  so one registration publishes its fact on both surfaces. For every
- *  existing option the carry is empty — the published revisions stay
- *  byte-identical. */
-const CONSTRUCTED_REVISION_KEYS = new Set([
-  "schemaVersion",
-  "layerId",
-  "createdAt",
-  "kind",
-  "contentHash",
-  "text",
-  "fontSize",
-  "color",
-  "weight",
-  "width",
-  "tracking",
-  "lineHeight",
-  "callerFont",
-  "shape",
-  "cornerRadius",
-  "fill",
-  "x",
-  "y",
-  "opacity",
-  "scaleX",
-  "scaleY",
-  "rotationDeg",
-  "flipX",
-  "flipY",
-  "shadow",
-  "outline",
-  "visibleRegion",
-  "vectorColor",
-  // The resolved-only facts the reader computes: never stored.
-  "revisionId",
-  "format",
-  "bytes",
-  "fontBytes",
-  "height",
-]);
-
-function carryAppliedSharedFacts(draft: SharedOptionDraft): Record<string, unknown> {
+/** The applied shared-option facts an edit publishes (DEC-001, #263):
+ *  derived, not enumerated — an application case's fact carries when the
+ *  stored revision's own key set has no such key, i.e. when the case ADDED
+ *  it. Every stored-revision field (canonical or resolved-only) is in
+ *  prevRev, so the carry is empty for every existing edit and no stored
+ *  field can flow into it: no-op edits stay no-ops, and a new option's
+ *  fact publishes on both surfaces from one registration. */
+function carryAppliedSharedFacts(
+  draft: SharedOptionDraft,
+  prevRev: ResolvedLayerRevision,
+): Record<string, unknown> {
   const carried: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(draft)) {
-    if (!CONSTRUCTED_REVISION_KEYS.has(key) && value !== undefined) {
+    if (!(key in prevRev) && value !== undefined) {
       carried[key] = value;
     }
   }
@@ -2876,7 +2842,7 @@ async function buildEditedRevision(
       contentHash = ingested.contentHash;
     }
 
-    const carried = carryAppliedSharedFacts(draft);
+    const carried = carryAppliedSharedFacts(draft, prevRev);
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
@@ -2987,7 +2953,7 @@ async function buildEditedRevision(
     // from the merged parameters exactly as creation hashes them.
     const contentHash = createHash("sha256").update(shapeContentIdentity(shapeContent)).digest("hex");
 
-    const carried = carryAppliedSharedFacts(draft);
+    const carried = carryAppliedSharedFacts(draft, prevRev);
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
@@ -3172,7 +3138,7 @@ async function buildEditedRevision(
     const resolvedCallerFont =
       callerFont ?? (options.font !== undefined ? undefined : prevRev.callerFont);
 
-    const carried = carryAppliedSharedFacts(draft);
+    const carried = carryAppliedSharedFacts(draft, prevRev);
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
@@ -3475,14 +3441,10 @@ export async function editLayerInternal(
     }
     const value = shared[step.option];
     if (value === undefined) continue;
-    const apply = LAYER_OPTION_DEFS.find((def) => def.key === step.option)?.apply;
-    if (apply === undefined) {
-      // Fail loudly, never silently (the #262 review gap): an option that
-      // parses at the command boundary but has no application case would
-      // otherwise be silently dropped while the guard test stays green.
-      throw new Error(`layer edit: no application case for the "--${step.option}" option.`);
-    }
-    await apply(draft, value, sharedContext);
+    // The ONE single-option dispatch (DEC-001, #263): the same lookup the
+    // add path runs — an option that parses at the command boundary but has
+    // no application case fails loudly here, never silently dropped.
+    await applyLayerOption(step.option, draft, value, sharedContext);
   }
   const hasShadow = shared.shadow !== undefined;
   const shadowedReport = { shadow: draft.shadow ?? null };

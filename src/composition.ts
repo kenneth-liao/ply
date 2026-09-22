@@ -31,7 +31,7 @@ import { readCallerFontFile } from "./font-file.js";
 import { type LayerFill } from "./fill.js";
 import {
   oneCommandApplicationOrder,
-  LAYER_OPTION_DEFS,
+  applyLayerOption,
   type SharedOptionApplyContext,
   type SharedOptionValues,
   type SharedOptionDraft,
@@ -391,11 +391,10 @@ async function applyOneCommandOptions(
     parsed: options ?? {},
   };
   for (const key of supplied) {
-    const apply = LAYER_OPTION_DEFS.find((def) => def.key === key)?.apply;
-    if (apply === undefined) {
-      throw new Error(`One-command add: no application case for the "--${key}" option.`);
-    }
-    await apply(rev, options![key], applyContext);
+    // The ONE single-option dispatch (DEC-001, #263): the same lookup the
+    // edit path runs — a parse-present/apply-missing key fails loudly
+    // here, never silently dropped.
+    await applyLayerOption(key, rev, options![key], applyContext);
   }
   return rev as unknown as LayerRevision;
 }

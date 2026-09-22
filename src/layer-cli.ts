@@ -11,6 +11,8 @@ import {
   checkEditLayerOptions,
   layerDashNumericFlags,
   layerEditOptionKeys,
+  type EditLayerCheck,
+  type EditLayerRefusal,
   type LayerOptionArgs,
   type SharedOptionDraft,
   RESIZE_TO_HELP_KINDS,
@@ -597,7 +599,19 @@ async function run() {
       // steps are this surface's cross-option rules at their established
       // positions (#257). Byte-identical refusals and exit statuses; no
       // per-option parse block remains on the edit surface.
-      const checked = checkEditLayerOptions(values);
+      // A loud runtime throw (a table option with no parse registration,
+      // #263) must still reach the refusal envelope: the check phase sits
+      // inside the same catch as the edit lifecycle — an internal
+      // invariant failure reports {ok:false} and exits 1, never an
+      // unhandled rejection.
+      let checked: EditLayerCheck | EditLayerRefusal;
+      try {
+        checked = checkEditLayerOptions(values);
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+        return;
+      }
       if (!checked.ok) {
         output({ ok: false, error: checked.error }, isJson);
         process.exitCode = checked.exitCode;

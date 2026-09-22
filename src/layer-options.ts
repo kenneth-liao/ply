@@ -180,6 +180,29 @@ export type LayerOptionKey =
  * The one option table (DEC-001), in the order the edit surface's
  * enumeration and refusals state the options. Every `layer edit` option
  * and every `composition add` Layer option is declared exactly once here.
+ *
+ * The FULL registration checklist for one option (DEC-001, #263) — the
+ * entry below is the first item; the rest live beside the table:
+ *
+ * 1. the table entry: key, group, kind applicability, `editOption`, and
+ *    `dashNumeric`; `parse` — the ONE boundary parse (the identity parse
+ *    for a shapeless marker) — and, for a post-content option, `apply` —
+ *    the ONE application case;
+ * 2. a `LAYER_OPTION_PARSE_ARGS` entry (the `satisfies` makes a missing
+ *    or misspelled entry a compile error);
+ * 3. order-list membership: `EDIT_CHECK_ORDER` and `EDIT_APPLICATION_ORDER`
+ *    on the edit surface (application only for a post-content option — the
+ *    anchor's edit application is the CLI boundary's live-context
+ *    resolution through the same shared case), and `ADD_PARSE_ORDER` for a
+ *    post-content option (add's application order derives from the
+ *    group fact and needs no entry).
+ *
+ * Every gap in the checklist fails loudly: a missing parse or an order-list
+ * omission throws at runtime when the option is supplied on either surface,
+ * a missing application case throws at the dispatch, and a missing
+ * parseArgs entry is a compile error. The order lists are deliberately
+ * per-surface — they hold each surface's established check and application
+ * sequences (#257), not per-option code.
  */
 export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // Content options: what the Layer is made of. Mutually exclusive kinds.
@@ -1025,6 +1048,49 @@ export const RESIZE_FAMILY_KEYS: readonly LayerOptionKey[] = ["resize", "resize-
  * instead of being silently dropped (the #262 review gap, #263): the flag
  * can never be silently absent from a published revision.
  */
+/**
+ * The ONE single-option boundary parse dispatch (DEC-001, #263): the lookup
+ * BOTH check paths run — the option table's parse registration, with the
+ * loud runtime throw for a key with no registration. No check loop
+ * implements its own find-and-throw; the boundaries cannot disagree on
+ * which parse runs or how a missing registration fails.
+ */
+export function parseSharedOption(
+  key: LayerOptionKey,
+  values: LayerOptionArgs,
+): OptionParse<unknown> {
+  const def = LAYER_OPTION_DEFS.find((d) => d.key === key);
+  if (def?.parse === undefined) {
+    // Fail loudly, never silently (the #262 review gap): the option is
+    // declared in the table but registered nowhere it can be parsed.
+    throw new Error(
+      `Option "--${key}" is declared in the shared option table but has no parse registration.`,
+    );
+  }
+  return def.parse(values[key]);
+}
+
+/**
+ * The resize family's ONE cross-option step (DEC-001): the three mutually
+ * exclusive forms through the shared exclusivity parse, mapped into the
+ * parsed record by the family's own keys. Both check paths run this one
+ * step at the family's first check position.
+ */
+export function parseResizeFamilyStep(
+  values: LayerOptionArgs,
+): OptionParse<ParsedLayerOptionValues | undefined> {
+  const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
+  if (!resize.ok) return resize;
+  if (resize.value.resizeFactor === undefined && resize.value.resizeTo === undefined && resize.value.scale === undefined) {
+    return { ok: true, value: undefined };
+  }
+  const mapped: ParsedLayerOptionValues = {};
+  if (resize.value.resizeFactor !== undefined) mapped.resize = resize.value.resizeFactor;
+  if (resize.value.resizeTo !== undefined) mapped["resize-to"] = resize.value.resizeTo;
+  if (resize.value.scale !== undefined) mapped.scale = resize.value.scale;
+  return { ok: true, value: mapped };
+}
+
 export function parseLayerOptionSteps(
   values: LayerOptionArgs,
   steps: readonly LayerOptionKey[],
@@ -1041,22 +1107,12 @@ export function parseLayerOptionSteps(
       // three forms, run once at the family's first check position.
       if (familyRan) continue;
       familyRan = true;
-      const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
-      if (!resize.ok) return resize;
-      if (resize.value.resizeFactor !== undefined) parsed.resize = resize.value.resizeFactor;
-      if (resize.value.resizeTo !== undefined) parsed["resize-to"] = resize.value.resizeTo;
-      if (resize.value.scale !== undefined) parsed.scale = resize.value.scale;
+      const family = parseResizeFamilyStep(values);
+      if (!family.ok) return family;
+      if (family.value !== undefined) Object.assign(parsed, family.value);
       continue;
     }
-    const def = LAYER_OPTION_DEFS.find((d) => d.key === key);
-    if (def?.parse === undefined) {
-      // Fail loudly, never silently (the #262 review gap): the option is
-      // declared in the table but registered nowhere it can be parsed.
-      throw new Error(
-        `Option "--${key}" is declared in the shared option table but has no parse registration.`,
-      );
-    }
-    const result = def.parse(values[key]);
+    const result = parseSharedOption(key, values);
     if (!result.ok) return result;
     if (result.value !== undefined) parsed[key] = result.value;
   }
@@ -1276,20 +1332,12 @@ export function checkEditLayerOptions(values: LayerOptionArgs): EditLayerCheck |
     if (RESIZE_FAMILY_KEYS.includes(key)) {
       if (familyRan) continue;
       familyRan = true;
-      const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
-      if (!resize.ok) return refuse(resize.error);
-      if (resize.value.resizeFactor !== undefined) parsed.resize = resize.value.resizeFactor;
-      if (resize.value.resizeTo !== undefined) parsed["resize-to"] = resize.value.resizeTo;
-      if (resize.value.scale !== undefined) parsed.scale = resize.value.scale;
+      const family = parseResizeFamilyStep(values);
+      if (!family.ok) return refuse(family.error);
+      if (family.value !== undefined) Object.assign(parsed, family.value);
       continue;
     }
-    const def = LAYER_OPTION_DEFS.find((d) => d.key === key);
-    if (def?.parse === undefined) {
-      throw new Error(
-        `Option "--${key}" is declared in the shared option table but has no parse registration.`,
-      );
-    }
-    const result = def.parse(values[key]);
+    const result = parseSharedOption(key, values);
     if (!result.ok) return refuse(result.error);
     if (result.value !== undefined) parsed[key] = result.value;
   }
