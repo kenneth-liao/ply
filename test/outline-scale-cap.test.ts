@@ -489,7 +489,13 @@ test("measurement path measures chained outline dilation without clipping, agree
   expect(minY2).toBe(0);
   expect(maxX2 - minX2 + 1).toBe(800);
   expect(maxY2 - minY2 + 1).toBe(800);
-}, 30000);
+  // Cap reflects the measured render time, not suite load (#267): the factor-2
+  // paint above is a 1600×1600 raster with an 800 px dilation in four chained
+  // feMorphology steps, which headless Chromium rasters on the CPU in a
+  // stable ~24 s; with the measure and 1x phases the test takes 28–30 s
+  // (observed 2026-09, Bun 1.4.0, three repeats). 120 s is 4× that total:
+  // a timeout here means the paint regressed.
+}, 120000);
 
 test("measurement agrees with rendered ink when supersample factor causes differing n (n=1 at 1x vs n=2 at 2x)", async () => {
   // Unclipped differing-n geometry (INT-6):
