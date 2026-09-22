@@ -95,7 +95,7 @@ import {
   buildCompositionHtml,
   layerMaxScale,
   rejectUnresolvedFonts,
-  sizeOutlineFilterRegions,
+  sizeEffectFilterRegions,
   type SnapshotLayer,
 } from "./composition-paint.js";
 import {
@@ -424,7 +424,7 @@ async function measureSnapshot(
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     // Per-Layer outline-filter region sizing (#140, ADR-0019): the paint
     // path's exact adjustment, so painted extents agree with the render.
-    await sizeOutlineFilterRegions(page, layers);
+    await sizeEffectFilterRegions(page, layers);
     // The same retained-font gate as painting: an unresolved face is a
     // loud failure, never a fallback measurement.
     await rejectUnresolvedFonts(page, layers);

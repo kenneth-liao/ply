@@ -2541,7 +2541,7 @@ export function parseOutlineSpec(spec: string): LayerOutline | undefined {
  * `"none"` removes it. Omitted option preserves the current revision's
  * glow. The spec is "<width>,<softness>,<color>[,<angle>,<strength>]" with
  * width and softness in px (0..MAX_GLOW_PX), the same hex colour forms as
- * the shadow and outline (canonicalized by the same INT-2 rule), and an
+ * the shadow and outline (canonicalized by `canonicalizeEffectColor`), and an
  * optional direction pair — angle in degrees clockwise from top within
  * ±360, strength between 0 and 1, supplied together; strength 0 (an even
  * glow) drops the pair. The angle is stored canonically in [0, 360), so

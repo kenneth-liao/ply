@@ -306,7 +306,7 @@ export async function paintComposition(
  *
  * `options.beforeScreenshot` is a page hook for the guideline path's
  * in-page placement pass (measured text placement needs the live page, the
- * same pattern as `sizeOutlineFilterRegions`); the render path never passes
+ * same pattern as `sizeEffectFilterRegions`); the render path never passes
  * one, so no render-page flow runs guideline code.
  */
 export async function paintCompositionHtml(
@@ -329,8 +329,8 @@ export async function paintCompositionHtml(
     // Awaited decode: a partially painted canvas is never screenshotted.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     // Per-Layer outline-filter region sizing (#140, ADR-0019): before any
-    // pixel leaves this page — see sizeOutlineFilterRegions.
-    await sizeOutlineFilterRegions(page, layers);
+    // pixel leaves this page — see sizeEffectFilterRegions.
+    await sizeEffectFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
     if (options.beforeScreenshot) await options.beforeScreenshot(page);
     const png = await page.screenshot({
@@ -414,7 +414,7 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
  * source graphic to the declared region, contrary to the pre-review
  * comment's claim). The region is therefore declared as a placeholder here
  * and sized in-page from the element's real untransformed border box by
- * `sizeOutlineFilterRegions` — the SAME sizing pass in the paint and
+ * `sizeEffectFilterRegions` — the SAME sizing pass in the paint and
  * measurement flows, so render and painted extents agree exactly. The id
  * is a deterministic hash of the pair plus the Layer's snapshot index, so
  * the same facts always emit the same markup.
@@ -663,7 +663,7 @@ function gradeFilterCss(grade: LayerGrade | undefined, layerIndex: number): stri
  * CSS `filter` chains by id; the region clipPaths from the inner content
  * elements' `clip-path`; the warmth filters from the inner content
  * elements' `filter` chain. The outline regions' placeholder is sized
- * in-page before any screenshot by `sizeOutlineFilterRegions`.
+ * in-page before any screenshot by `sizeEffectFilterRegions`.
  */
 function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
   const defs = layers
@@ -692,7 +692,7 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
 }
 
 /**
- * The per-Layer filter specs handed to `sizeOutlineFilterRegions` (#140,
+ * The per-Layer filter specs handed to `sizeEffectFilterRegions` (#140,
  * ADR-0019, extended by the glow #221): the outline's spec pads the region
  * by the outline width plus the antialiasing 1px; the glow's spec pads by
  * the 1px only — the glow's band is a subset of the source's alpha (it
@@ -737,7 +737,7 @@ function outlineFilterSpecs(
  * emitted (the same `buildCompositionHtml` call emits the elements and
  * their defs), i.e. a markup-contract violation — fail fast at the seam.
  */
-export async function sizeOutlineFilterRegions(page: Page, layers: SnapshotLayer[]): Promise<void> {
+export async function sizeEffectFilterRegions(page: Page, layers: SnapshotLayer[]): Promise<void> {
   const specs = outlineFilterSpecs(layers);
   if (specs.length === 0) return;
   const failure = await page.evaluate((input) => {

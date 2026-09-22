@@ -123,7 +123,7 @@ function guidelineOverlayMarkup(regions: Region[]): string {
  * callouts by index (both are emitted in region-file order; duplicate ids
  * are rejected at the ingestion point). A missing box or callout is a
  * markup-contract violation and fails loudly, like
- * `sizeOutlineFilterRegions`.
+ * `sizeEffectFilterRegions`.
  */
 export async function placeRegionCallouts(page: Page): Promise<void> {
   const failure = await page.evaluate(() => {
