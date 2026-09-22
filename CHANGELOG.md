@@ -26,6 +26,8 @@
 
 ### Added
 
+- Layer blend mode control (`--blend <mode>`) sets how image, text, and shape Layers composite against underlying pixels via CSS mix-blend-mode as a single paint-time unit, with `normal` removing the stored fact (#220).
+
 - Layer grade controls (`--brightness`, `--contrast`, `--saturation`, `--warmth`) adjust image, text, and shape tonal and colour balance as revision facts applied deterministically to content at paint time, with neutral values removing stored facts (#219).
 
 - The comparison sheet command (`ply composition sheet <input...>`, #233,

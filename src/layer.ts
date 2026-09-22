@@ -179,7 +179,34 @@ interface LayerRevisionBase {
    * revisions written before #219 keep their exact ids.
    */
   grade?: LayerGrade;
+  /**
+   * Canonical blend mode (#220, spec #218 US-003, ADR-0024): controls how the
+   * whole Layer combines with everything painted beneath it on the canvas
+   * via CSS mix-blend-mode. An absolute setter; 'normal' removes the stored
+   * fact.
+   *
+   * Present ⟺ a non-normal blend mode exists: absence IS the canonical
+   * normal/no-blend form, so removal drops the field and every reader
+   * treats absence as normal. The revision hash appends it only when
+   * present, so revisions written before #220 keep their exact ids.
+   */
+  blend?: StoredLayerBlendMode;
 }
+
+/** The documented blend modes (#220, spec #218 US-003, ADR-0024). */
+export const LAYER_BLEND_MODES = [
+  "normal",
+  "multiply",
+  "screen",
+  "overlay",
+  "soft-light",
+  "darken",
+  "lighten",
+  "color-dodge",
+] as const;
+
+export type LayerBlendMode = (typeof LAYER_BLEND_MODES)[number];
+export type StoredLayerBlendMode = Exclude<LayerBlendMode, "normal">;
 
 /** Canonical grade parameters (#219, spec #218 US-001, ADR-0024). */
 export interface LayerGrade {
@@ -894,6 +921,37 @@ export function formatGrade(grade: LayerGrade): string {
   return parts.join(", ");
 }
 
+/**
+ * Canonical stored blend-mode validation and normalization (#220, spec #218 US-003,
+ * ADR-0024). The one normalization boundary for the blend mode fact: documents
+ * written before #220 lack the field, and absence IS the canonical normal/no-blend
+ * form — every downstream reader projects through this function and never
+ * re-derives a default.
+ *
+ * 'normal' drops the fact; an unknown or non-string property is refused loudly
+ * as a malformed document before the revision hash is consulted.
+ */
+export function normalizeStoredBlend(revision: { blend?: unknown }): StoredLayerBlendMode | undefined {
+  if (revision.blend === undefined) {
+    return undefined;
+  }
+  const raw = revision.blend;
+  if (typeof raw !== "string") {
+    throw new Error(
+      `Malformed revision document: blend must be a string when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  if (raw === "normal") {
+    return undefined;
+  }
+  if (!LAYER_BLEND_MODES.includes(raw as LayerBlendMode)) {
+    throw new Error(
+      `Malformed revision document: unknown blend mode ${JSON.stringify(raw)}.`,
+    );
+  }
+  return raw as StoredLayerBlendMode;
+}
+
 export type ResolvedLayerRevision =
   | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
   | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
@@ -1450,7 +1508,11 @@ export function computeRevisionHash(rev: LayerRevision): string {
   if (grade?.saturation !== undefined) gradeParts.push(`s${grade.saturation}`);
   if (grade?.warmth !== undefined) gradeParts.push(`w${grade.warmth}`);
   const gradeField = gradeParts.length > 0 ? `:grade(${gradeParts.join(",")})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}`).digest("hex").slice(0, 16)}`;
+  // The blend mode (#220, spec #218 US-003, ADR-0024): appended only when
+  // present and non-normal, so revisions written before #220 keep their exact ids.
+  const blend = normalizeStoredBlend(rev);
+  const blendField = blend !== undefined ? `:blend(${blend})` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1706,6 +1768,10 @@ export async function readRevisionInternalFull(
   // and normalized at this same one boundary — malformed controls are refused
   // loudly before the revision hash is consulted. Absence IS the no-grade form.
   const grade = normalizeStoredGrade(revision);
+  // Canonical blend mode (#220, spec #218 US-003, ADR-0024): validated
+  // and normalized at this same one boundary — malformed modes are refused
+  // loudly before the revision hash is consulted. Absence IS the normal/no-blend form.
+  const blend = normalizeStoredBlend(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -1796,6 +1862,7 @@ export async function readRevisionInternalFull(
             ...(visibleRegion !== undefined ? { visibleRegion } : {}),
             ...(vectorColor !== undefined ? { vectorColor } : {}),
             ...(grade !== undefined ? { grade } : {}),
+            ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -1822,6 +1889,7 @@ export async function readRevisionInternalFull(
           ...(outline !== undefined ? { outline } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
           ...(grade !== undefined ? { grade } : {}),
+          ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -1856,6 +1924,7 @@ export async function readRevisionInternalFull(
           ...(outline !== undefined ? { outline } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
           ...(grade !== undefined ? { grade } : {}),
+          ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
         };
 
   return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0) };
@@ -2077,6 +2146,9 @@ export interface EditLayerResult {
   /** Present when the edit set or removed any grade control (#219): the
    * absolute grade state now recorded on the revision (null when removed). */
   gradeSet?: { grade: LayerGrade | null };
+  /** Present when the edit set or removed the blend mode (#220): the
+   * absolute blend state now recorded on the revision (null when removed). */
+  blendSet?: { blend: StoredLayerBlendMode | null };
   /** Present only when the edit ingested generated content (#107). */
   generatedFrom?: { jobId: string; contentHash: string };
   /** Present only when the edit ingested matted content (#108). */
@@ -3003,6 +3075,7 @@ async function buildEditedRevision(
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.vectorColor !== undefined ? { vectorColor: draft.vectorColor } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
+      ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...carried,
     };
     const unchanged =
@@ -3015,6 +3088,7 @@ async function buildEditedRevision(
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       draft.vectorColor === prevRev.vectorColor &&
       gradeEq(draft.grade, prevRev.grade) &&
+      draft.blend === prevRev.blend &&
       Object.keys(carried).length === 0;
     return { revision, unchanged, mattedFrom, retainedGeneration, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
@@ -3120,6 +3194,7 @@ async function buildEditedRevision(
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
+      ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...carried,
     };
     const unchanged =
@@ -3142,6 +3217,7 @@ async function buildEditedRevision(
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       gradeEq(draft.grade, prevRev.grade) &&
+      draft.blend === prevRev.blend &&
       Object.keys(carried).length === 0;
     // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
     // --size change the content box, so the kept region re-validates against
@@ -3309,6 +3385,7 @@ async function buildEditedRevision(
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
+      ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...carried,
     };
     const unchanged =
@@ -3333,6 +3410,7 @@ async function buildEditedRevision(
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       gradeEq(draft.grade, prevRev.grade) &&
+      draft.blend === prevRev.blend &&
       Object.keys(carried).length === 0;
     // A region KEPT across a text edit (#211 review PROD-1): the text
     // content box is the measured line-box extent, so a text edit that can
@@ -3606,6 +3684,8 @@ export async function editLayerInternal(
     shared.saturation !== undefined ||
     shared.warmth !== undefined;
   const gradeSetReport = { grade: draft.grade ?? null };
+  const hasBlend = shared.blend !== undefined;
+  const blendSetReport = { blend: draft.blend ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
@@ -3659,7 +3739,8 @@ export async function editLayerInternal(
     const withRegion = hasRegion ? { ...withOutline, regionSet: regionSetReport } : withOutline;
     const withColour = shared["vector-color"] !== undefined ? { ...withRegion, vectorColorSet: vectorColorSetReport } : withRegion;
     const withGrade = hasGrade ? { ...withColour, gradeSet: gradeSetReport } : withColour;
-    const withCarried = regionCarried ? { ...withGrade, regionCarried } : withGrade;
+    const withBlend = hasBlend ? { ...withGrade, blendSet: blendSetReport } : withGrade;
+    const withCarried = regionCarried ? { ...withBlend, regionCarried } : withBlend;
     const withShape = shapeEdited ? { ...withCarried, shapeEdited } : withCarried;
     return options.fromGeneration !== undefined
       ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
@@ -3701,6 +3782,7 @@ export async function editLayerInternal(
       ...(hasRegion ? { regionSet: regionSetReport } : {}),
       ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
       ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
+      ...(hasBlend ? { blendSet: blendSetReport } : {}),
       ...(regionCarried ? { regionCarried } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
@@ -3759,6 +3841,7 @@ export async function editLayerInternal(
     ...(hasRegion ? { regionSet: regionSetReport } : {}),
     ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
     ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
+    ...(hasBlend ? { blendSet: blendSetReport } : {}),
     ...(regionCarried ? { regionCarried } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined

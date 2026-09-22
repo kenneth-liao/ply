@@ -395,6 +395,14 @@ Options:
                         toward orange/red; negative values shift toward blue.
                         Applied at paint time via an sRGB colour matrix to the
                         Layer's content only without changing alpha.
+  --blend <mode>        Set blend mode for image, text, and shape Layers: an
+                        ABSOLUTE setter (normal, multiply, screen, overlay,
+                        soft-light, darken, lighten, color-dodge) that replaces
+                        any previous mode, and normal removes it. Blends the
+                        whole Layer — content, visible region, grade, outline,
+                        shadow, and opacity — as one unit against everything
+                        beneath it. It is a revision fact: sharing propagates
+                        it, forks isolate it.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -839,6 +847,11 @@ async function run() {
                 ? `; grade ${formatGrade(res.gradeSet.grade)}`
                 : "; grade removed"
               : "";
+            const blendSet = res.blendSet
+              ? res.blendSet.blend !== null
+                ? `; blend ${res.blendSet.blend}`
+                : "; blend removed"
+              : "";
             const shapeEdited = res.shapeEdited
               ? `; dropped carried corner radius ${res.shapeEdited.droppedCornerRadius}px (an ellipse has no corners)`
               : "";
@@ -848,10 +861,10 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${shapeEdited}${anchorSummary}`);
             }
           },
         );
@@ -971,7 +984,11 @@ async function run() {
               rev.grade === undefined
                 ? ""
                 : `, Grade: ${formatGrade(rev.grade)}`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}${grade}`);
+            const blend =
+              rev.blend === undefined
+                ? ""
+                : `, Blend: ${rev.blend}`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}${grade}${blend}`);
           },
         );
       } catch (err) {

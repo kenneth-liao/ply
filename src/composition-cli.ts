@@ -476,6 +476,11 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         absolute setter -1 to 1 (neutral: 0), applied to the
                         Layer's content only. Positive shifts toward
                         orange/red; negative shifts toward blue.
+  --blend <mode>        Set blend mode for image, text, and shape Layers: an
+                        ABSOLUTE setter (normal, multiply, screen, overlay,
+                        soft-light, darken, lighten, color-dodge) that replaces
+                        any previous mode, and normal removes it. Blends the
+                        whole Layer as one unit against everything beneath it.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -543,6 +548,9 @@ function oneCommandFacts(
   }
   if (rev.grade) {
     facts.push(`grade ${formatGrade(rev.grade)}`);
+  }
+  if (rev.blend) {
+    facts.push(`blend ${rev.blend}`);
   }
   if (anchorSpec !== undefined) {
     facts.push(`anchored ${anchorSpec} -> placement (${rev.x}, ${rev.y})`);
@@ -1275,6 +1283,9 @@ async function run() {
               }
               if (layer.grade) {
                 facts.push(`grade ${formatGrade(layer.grade)}`);
+              }
+              if (layer.blend) {
+                facts.push(`blend ${layer.blend}`);
               }
               if (layer.axes) {
                 facts.push(`weight ${layer.axes.weight}, width ${layer.axes.width}`);

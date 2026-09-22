@@ -1,8 +1,8 @@
 # ADR-0024: Layer grade and the look paint order
 
-- Status: Accepted — Layer grade and look paint order ship in
-  [spec #218](https://github.com/kenneth-liao/ply/issues/218) ticket #219
-  (US-001, DEC-001..005, DEC-009..011).
+- Status: Accepted — Layer grade, look paint order, and blend mode ship in
+  [spec #218](https://github.com/kenneth-liao/ply/issues/218) tickets #219 and
+  #220 (US-001, US-003, DEC-001..005, DEC-007, DEC-009..011).
 
 ## Context
 
@@ -58,7 +58,7 @@ space apply in one fixed, canonical sequence (DEC-002, DEC-003):
 6. **Outline**: local stroke dilation around visible ink (ADR-0019).
 7. **Shadow**: local drop-shadow cast from the outlined composite (ADR-0018).
 8. **Transform & Opacity**: scale, flip, rotation, and Layer-level opacity.
-9. **[Blend against backdrop reserved for #220]**: composite unit against underlying canvas.
+9. **Blend against backdrop (#220)**: composite unit against underlying canvas.
 
 ### 3. Deterministic CSS filter chain & DOM structure
 
@@ -92,6 +92,22 @@ Because grade filters preserve alpha coverage exactly (DEC-005):
 - Canvas clipping checks (`clipped`) report identical boundaries.
 - `composition measure`, `layer inspect`, and `layer review` report the
   effective grade controls for auditability.
+
+### 5. Blend mode compositing unit (#220)
+
+- `--blend <mode>` is an absolute setter across the documented set (`normal`,
+  `multiply`, `screen`, `overlay`, `soft-light`, `darken`, `lighten`,
+  `color-dodge`).
+- `normal` removes the stored fact. An unknown mode is refused before publication
+  listing the allowed set.
+- Storage normalisation (`normalizeStoredBlend`) is the single source of truth
+  for allowed modes and neutral dropping; paint trusts the normalized fact.
+- At paint time, `mix-blend-mode: <mode>` is placed on the outer element of the
+  Layer, after transform and opacity (DEC-002). Thus, the whole Layer — content,
+  visible region, grade, outline, shadow, and opacity — blends as ONE unit
+  against everything beneath it.
+- Over a transparent canvas backdrop, blending follows standard browser
+  compositing semantics without special-casing (DEC-007).
 
 ## Consequences
 

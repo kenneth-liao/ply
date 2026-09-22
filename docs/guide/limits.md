@@ -350,6 +350,29 @@ Grading applies to the Layer's **content only**: outline and shadow keep their
 own exact colours, and alpha is untouched everywhere (painted extents, anchored
 placement, and clipping remain identical to the ungraded Layer).
 
+## Layer blend modes
+
+`ply layer edit` and `ply composition add` accept `--blend <mode>` for image
+(raster and vector), text, and shape Layers (#220, spec #218 US-003):
+
+- **Allowed modes**: `normal`, `multiply`, `screen`, `overlay`, `soft-light`,
+  `darken`, `lighten`, `color-dodge` (accepts both `color-dodge` and
+  `colour-dodge` spelling; stored canonically as `color-dodge`).
+- **Absolute setter & removal**: Passing `--blend <mode>` replaces any existing
+  mode. Passing `normal` removes the stored fact (`undefined`), returning the
+  Layer to default standard compositing. An omitted `--blend` preserves the
+  current mode across edits.
+- **Unit of blend**: The whole Layer — content, visible region, grade, outline,
+  shadow, and opacity — blends as ONE unit against everything beneath it
+  (ADR-0024) via CSS `mix-blend-mode` on the Layer's outer wrapper element.
+- **Transparent-canvas behaviour (DEC-007)**: When blending over transparent
+  canvas areas (where no underlying pixels exist), compositing follows the
+  browser's standard CSS compositing specification without special-casing:
+  the blend mode operates against a transparent backdrop ($rgba(0,0,0,0)$),
+  preserving the Layer's content and alpha into the canvas output.
+- **Refusals**: Supplying an unknown blend mode is refused before publication
+  with exit code 2, listing the allowed set.
+
 ## Exit codes
 
 Every composer command reports its outcome through its exit code:

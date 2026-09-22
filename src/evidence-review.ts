@@ -347,6 +347,7 @@ export async function reviewRetainedLayer(
   // paint-time colour the Layer renders with.
   let vectorColorFact: string | null = null;
   let gradeFact: string | null = null;
+  let blendFact: string | null = null;
   const review = await withProjectLock(resolvedRoot, async () => {
     const full = await readLayerInternalFull(resolvedRoot, layerId);
     const layer: ResolvedLayer = {
@@ -361,6 +362,9 @@ export async function reviewRetainedLayer(
     }
     if (rev.grade !== undefined) {
       gradeFact = formatGrade(rev.grade);
+    }
+    if (rev.blend !== undefined) {
+      blendFact = rev.blend;
     }
     if (rev.kind === "shape") {
       // A shape Layer (#208) has no retained bytes and no generation/matting
@@ -377,6 +381,9 @@ export async function reviewRetainedLayer(
         ["fill", formatFill(rev.fill)],
         ...(rev.grade !== undefined
           ? [["grade", formatGrade(rev.grade)] as [string, string]]
+          : []),
+        ...(rev.blend !== undefined
+          ? [["blend mode", `${rev.blend} (paint-time)`] as [string, string]]
           : []),
         ...(rev.visibleRegion !== undefined
           ? [["visible region", `(${rev.visibleRegion.x}, ${rev.visibleRegion.y}, ${rev.visibleRegion.width}, ${rev.visibleRegion.height})`] as [string, string]]
@@ -501,6 +508,9 @@ export async function reviewRetainedLayer(
   }
   if (gradeFact !== null) {
     facts.push(["grade", `${gradeFact} (paint-time)`]);
+  }
+  if (blendFact !== null) {
+    facts.push(["blend mode", `${blendFact} (paint-time)`]);
   }
   if (review.matting) {
     facts.push(["matted by", `${review.matting.matteId} (engine ${review.matting.engine})`]);
