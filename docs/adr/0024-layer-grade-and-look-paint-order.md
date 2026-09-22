@@ -2,7 +2,9 @@
 
 - Status: Accepted — Layer grade, look paint order, and blend mode ship in
   [spec #218](https://github.com/kenneth-liao/ply/issues/218) tickets #219 and
-  #220 (US-001, US-003, DEC-001..005, DEC-007, DEC-009..011).
+  #220 (US-001, US-003, DEC-001..005, DEC-007, DEC-009..011); the edge glow
+  ships in the same spec's ticket #221 (US-002, DEC-006), filling the order
+  step this ADR reserved for it.
 
 ## Context
 
@@ -54,7 +56,12 @@ space apply in one fixed, canonical sequence (DEC-002, DEC-003):
 2. **Vector colour**: recolouring of vector alpha (#215, spec #207 US-005).
 3. **Visible region**: rectangular crop and optional corner radius (ADR-0023).
 4. **Grade**: brightness, contrast, saturation, and warmth.
-5. **[Edge glow reserved for #221]**: inner-alpha edge lighting.
+5. **Edge glow (#221)**: a coloured band painted just INSIDE the Layer's
+   alpha edge — the inner-alpha rim light. It operates on the alpha AFTER
+   the region clip and the grade (the region's rounded corners shape its
+   edge; it paints over the graded content), weights by one angle plus
+   strength (DEC-006), and never extends painted extents or alters alpha
+   coverage (DEC-005).
 6. **Outline**: local stroke dilation around visible ink (ADR-0019).
 7. **Shadow**: local drop-shadow cast from the outlined composite (ADR-0018).
 8. **Transform & Opacity**: scale, flip, rotation, and Layer-level opacity.
@@ -104,10 +111,34 @@ Because grade filters preserve alpha coverage exactly (DEC-005):
   for allowed modes and neutral dropping; paint trusts the normalized fact.
 - At paint time, `mix-blend-mode: <mode>` is placed on the outer element of the
   Layer, after transform and opacity (DEC-002). Thus, the whole Layer — content,
-  visible region, grade, outline, shadow, and opacity — blends as ONE unit
-  against everything beneath it.
+  visible region, grade, edge glow, outline, shadow, and opacity — blends as ONE
+  unit against everything beneath it.
 - Over a transparent canvas backdrop, blending follows standard browser
   compositing semantics without special-casing (DEC-007).
+
+### 6. The edge glow filter (#221)
+
+- `--glow "<width>,<softness>,<color>[,<angle>,<strength>]"` is an absolute
+  setter (`none` removes it) over the documented ranges: width and softness
+  `0..256` px, the effects' hex colour grammar, angle `-360..360` degrees
+  clockwise from top stored canonically in `[0, 360)`, strength `0..1`, the
+  pair supplied together, strength `0` dropping the pair (the even glow).
+- Storage normalisation (`normalizeStoredGlow`) is the ONE home for
+  validation and removal — paint trusts the fact; the compact-value parser
+  (`parseGlowSpec`) is the one boundary parse both command surfaces run, so
+  refusals (exit 2, naming the part and its range) can never disagree.
+- Paint emits one SVG filter per glow Layer (deterministic id, sized in-page
+  by the same pass as the outline's region) as the FIRST function of the
+  outer element's filter chain — glow → outline → shadow — so the band
+  operates on the region-clipped, graded alpha and stays inside the blend
+  unit. The chain: erode the source alpha by `width` (chained under the same
+  256px raster cap as the outline's dilate), offset the eroded mask opposite
+  the light direction by `strength × width` px when a direction is stored,
+  blur by `softness`, subtract from the source alpha, flood the colour,
+  composite `in` the band, and composite the band ATOP the source graphic —
+  Porter-Duff atop keeps the composite's alpha exactly the source's, so
+  alpha coverage is never altered (DEC-005) and painted extents equal the
+  no-glow extents at every transform.
 
 ## Consequences
 

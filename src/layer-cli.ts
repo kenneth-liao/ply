@@ -2,7 +2,7 @@
 // Layer management CLI: edit, inspect, and list Layers within a Project.
 import { parseArgs } from "node:util";
 import path from "node:path";
-import { inspectLayer, listLayers, editLayer, roundEffective, formatGrade, type ResolvedLayer } from "./layer.js";
+import { inspectLayer, listLayers, editLayer, roundEffective, formatGrade, formatGlow, type ResolvedLayer } from "./layer.js";
 import { type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import {
   LAYER_OPTION_PARSE_ARGS,
@@ -399,10 +399,27 @@ Options:
                         ABSOLUTE setter (normal, multiply, screen, overlay,
                         soft-light, darken, lighten, color-dodge) that replaces
                         any previous mode, and normal removes it. Blends the
-                        whole Layer — content, visible region, grade, outline,
-                        shadow, and opacity — as one unit against everything
-                        beneath it. It is a revision fact: sharing propagates
-                        it, forks isolate it.
+                        whole Layer — content, visible region, grade, edge
+                        glow, outline, shadow, and opacity — as one unit
+                        against everything beneath it. It is a revision fact:
+                        sharing propagates it, forks isolate it.
+  --glow <spec>         Paint a two-dimensional edge glow — a coloured rim of
+                        light just INSIDE the Layer's alpha edge, over the
+                        graded content — for image, text, and shape Layers.
+                        This is an edge effect on the Layer's own alpha, NOT
+                        relighting: it never changes the direction or shape
+                        of light on the subject and never extends painted
+                        extents. An ABSOLUTE setter
+                        "<width>,<softness>,<color>[,<angle>,<strength>]" —
+                        width and softness in px (each 0 to 256), colour a hex
+                        value like #ff9900 or #ff990080, and an optional
+                        direction pair: <angle> in degrees clockwise from top
+                        (-360 to 360) with <strength> between 0 and 1, passed
+                        together; without the pair the glow is even all
+                        round. "none" removes it; an omitted --glow preserves
+                        the current glow. It is a revision fact: sharing
+                        propagates it, forks isolate it, and removal is its
+                        own edit. Never changes retained pixels.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -787,6 +804,9 @@ async function run() {
         if (res.gradeSet) {
           resultBody.gradeSet = res.gradeSet;
         }
+        if (res.glowSet) {
+          resultBody.glowSet = res.glowSet;
+        }
         if (anchored) {
           resultBody.anchored = anchored;
         }
@@ -852,6 +872,11 @@ async function run() {
                 ? `; blend ${res.blendSet.blend}`
                 : "; blend removed"
               : "";
+            const glowSet = res.glowSet
+              ? res.glowSet.glow !== null
+                ? `; ${formatGlow(res.glowSet.glow)}`
+                : "; glow removed"
+              : "";
             const shapeEdited = res.shapeEdited
               ? `; dropped carried corner radius ${res.shapeEdited.droppedCornerRadius}px (an ellipse has no corners)`
               : "";
@@ -861,10 +886,10 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`);
             }
           },
         );
@@ -988,7 +1013,11 @@ async function run() {
               rev.blend === undefined
                 ? ""
                 : `, Blend: ${rev.blend}`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}${grade}${blend}`);
+            const glow =
+              rev.glow === undefined
+                ? ""
+                : `, Glow: ${formatGlow(rev.glow)}`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}${grade}${glow}${blend}`);
           },
         );
       } catch (err) {

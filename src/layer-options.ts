@@ -58,6 +58,7 @@ import { parseAnchorSpec, type AnchorResolution, type ParsedAnchor, resolveAncho
 import {
   parseShadowSpec,
   parseOutlineSpec,
+  parseGlowSpec,
   parseVisibleRegionSpec,
   parseVisibleRegionRadiusSpec,
   parseVectorColorSpec,
@@ -74,6 +75,7 @@ import {
   type LayerOutline,
   type LayerVisibleRegion,
   type LayerGrade,
+  type LayerGlow,
   LAYER_BLEND_MODES,
   type LayerBlendMode,
   type StoredLayerBlendMode,
@@ -182,7 +184,9 @@ export type LayerOptionKey =
   | "brightness"
   | "contrast"
   | "saturation"
-  | "warmth";
+  | "warmth"
+  | "blend"
+  | "glow";
 
 /**
  * The one option table (DEC-001), in the order the edit surface's
@@ -291,6 +295,13 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // the documented set of mix-blend-mode values. Part of the "look" group,
   // applying to image, text, and shape Layers.
   { key: "blend", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerBlend, apply: applyBlend },
+  // Edge glow (#221, spec #218 US-002, ADR-0024): an absolute setter whose
+  // compact value carries colour with alpha, width and softness in px, and
+  // an optional direction pair (angle in degrees clockwise from top plus
+  // strength). Part of the "look" group — the glow paints over the graded
+  // content and under outline and shadow (ADR-0024's step 5) — applying to
+  // image, text, and shape Layers. Removal value "none".
+  { key: "glow", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerGlow, apply: applyGlow },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -341,6 +352,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   saturation: { type: "string" },
   warmth: { type: "string" },
   blend: { type: "string" },
+  glow: { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string" }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
@@ -1093,6 +1105,21 @@ export function parseLayerBlend(raw: string | undefined): OptionParse<LayerBlend
 }
 
 /**
+ * --glow (#221, spec #218 US-002, ADR-0024): syntax and well-formedness
+ * through the SAME parser the edit path uses, so the two boundaries never
+ * disagree. Returns the raw spec (the application case re-resolves it).
+ */
+export function parseLayerGlow(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    parseGlowSpec(raw);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
  * --anchor: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Semantic refusals (no
  * visible ink, divergent multi-Composition geometry) happen in the
@@ -1316,6 +1343,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "saturation" },
   { option: "warmth" },
   { option: "blend" },
+  { option: "glow" },
   { option: "anchor" },
   { policy: "anchor-conflict" },
   { policy: "anchor-targets" },
@@ -1343,6 +1371,7 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "saturation",
   "warmth",
   "blend",
+  "glow",
   "anchor",
 ];
 
@@ -1522,6 +1551,7 @@ export interface SharedOptionDraft {
   vectorColor?: string;
   grade?: LayerGrade;
   blend?: StoredLayerBlendMode;
+  glow?: LayerGlow;
   /** Anything else the application cases set — including a shared option's
    *  own revision fact (the probe's stamp) — flows into the published
    *  revision through the applied-fact carry (DEC-001). */
@@ -1924,6 +1954,18 @@ function applyBlend(
   }
 }
 
+function applyGlow(
+  draft: SharedOptionDraft,
+  value: unknown,
+  _context: SharedOptionApplyContext,
+): void {
+  // "none" resolves to undefined — absence IS the no-glow form, the same
+  // canonical shape the edit path publishes (ADR-0024); an omitted option
+  // preserves the current revision's glow by construction (the draft
+  // starts there).
+  draft.glow = parseGlowSpec(value as string);
+}
+
 /**
  * The edit surface's established application order (spec #226 DEC-002 as
  * the edit path resolves it, #263): the resize family's domain re-checks,
@@ -1956,4 +1998,5 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "saturation" },
   { option: "warmth" },
   { option: "blend" },
+  { option: "glow" },
 ];

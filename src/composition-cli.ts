@@ -56,7 +56,7 @@ import {
 import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill } from "./fill.js";
-import { formatGrade, type LayerGrade } from "./layer.js";
+import { formatGrade, formatGlow, type LayerGrade, type LayerGlow, type StoredLayerBlendMode } from "./layer.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -481,6 +481,21 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         soft-light, darken, lighten, color-dodge) that replaces
                         any previous mode, and normal removes it. Blends the
                         whole Layer as one unit against everything beneath it.
+  --glow <spec>         Paint a two-dimensional edge glow — a coloured rim of
+                        light just INSIDE the Layer's alpha edge, over the
+                        graded content — for image, text, and shape Layers.
+                        This is an edge effect on the Layer's own alpha, NOT
+                        relighting: it never changes the direction or shape
+                        of light on the subject and never extends painted
+                        extents. An ABSOLUTE setter
+                        "<width>,<softness>,<color>[,<angle>,<strength>]" —
+                        width and softness in px (each 0 to 256), colour a hex
+                        value like #ff9900 or #ff990080, and an optional
+                        direction pair: <angle> in degrees clockwise from top
+                        (-360 to 360) with <strength> between 0 and 1, passed
+                        together; without the pair the glow is even all
+                        round. "none" removes it. Never changes retained
+                        pixels.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -526,6 +541,8 @@ function oneCommandFacts(
     vectorColor?: string;
     visibleRegion?: { x: number; y: number; width: number; height: number; cornerRadius?: number };
     grade?: LayerGrade;
+    blend?: StoredLayerBlendMode;
+    glow?: LayerGlow;
   },
   anchorSpec?: string,
 ): string {
@@ -548,6 +565,9 @@ function oneCommandFacts(
   }
   if (rev.grade) {
     facts.push(`grade ${formatGrade(rev.grade)}`);
+  }
+  if (rev.glow) {
+    facts.push(formatGlow(rev.glow));
   }
   if (rev.blend) {
     facts.push(`blend ${rev.blend}`);
@@ -1283,6 +1303,9 @@ async function run() {
               }
               if (layer.grade) {
                 facts.push(`grade ${formatGrade(layer.grade)}`);
+              }
+              if (layer.glow) {
+                facts.push(formatGlow(layer.glow));
               }
               if (layer.blend) {
                 facts.push(`blend ${layer.blend}`);

@@ -59,14 +59,27 @@ set; a documented neutral value removes the stored fact. Paint order within the
 Layer applies the grade after the visible region and before edge glow, outline,
 and shadow (ADR-0024).
 
+**Edge glow**:
+A coloured rim of light painted just INSIDE a Layer's alpha edge, over the
+graded content — the two-dimensional rim light that makes a cutout read as
+lit by its scene. One absolute setter (`--glow`) carries the colour (with
+alpha), the width and softness in px, and an optional direction (one angle
+clockwise from top plus a strength, never a light model); `none` removes the
+stored fact. The glow follows the visible region's edge, including its
+rounded corners, and transforms with the Layer, and it never extends painted
+extents or changes alpha coverage. It is a two-dimensional edge effect on the
+Layer's own alpha, not relighting: changing the direction or shape of light
+on a subject is generation, not a Layer parameter.
+_Avoid_: relighting, cast shadows, outer glow, a light model
+
 **Blend mode**:
 How a Layer's rendered output blends into the composited image beneath it.
 Specified via `--blend <mode>` across a documented set of CSS mix-blend-mode
 keywords (normal, multiply, screen, overlay, soft-light, darken, lighten,
 color-dodge). The mode is an absolute setter stored on the Layer's revision;
 `normal` removes the stored fact. At paint time, the whole Layer — content,
-visible region, grade, outline, shadow, and opacity — blends as ONE unit
-against everything beneath it (ADR-0024). It applies uniformly across image,
+visible region, grade, edge glow, outline, shadow, and opacity — blends as ONE
+unit against everything beneath it (ADR-0024). It applies uniformly across image,
 text, and shape Layers.
 _Avoid_: destructive pixel editing, LUTs, adjustment layers
 

@@ -43,7 +43,7 @@ import {
   RETAINED_MATTING_DIR,
   type RetainedMattingProvenance,
 } from "./matting-retention.js";
-import { readLayerInternalFull, formatGrade, type ResolvedLayer } from "./layer.js";
+import { readLayerInternalFull, formatGrade, formatGlow, type ResolvedLayer } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock, atomicCreate } from "./project-lock.js";
 import { atomicReplace } from "./reference-import.js";
@@ -347,6 +347,7 @@ export async function reviewRetainedLayer(
   // paint-time colour the Layer renders with.
   let vectorColorFact: string | null = null;
   let gradeFact: string | null = null;
+  let glowFact: string | null = null;
   let blendFact: string | null = null;
   const review = await withProjectLock(resolvedRoot, async () => {
     const full = await readLayerInternalFull(resolvedRoot, layerId);
@@ -362,6 +363,9 @@ export async function reviewRetainedLayer(
     }
     if (rev.grade !== undefined) {
       gradeFact = formatGrade(rev.grade);
+    }
+    if (rev.glow !== undefined) {
+      glowFact = formatGlow(rev.glow);
     }
     if (rev.blend !== undefined) {
       blendFact = rev.blend;
@@ -381,6 +385,9 @@ export async function reviewRetainedLayer(
         ["fill", formatFill(rev.fill)],
         ...(rev.grade !== undefined
           ? [["grade", formatGrade(rev.grade)] as [string, string]]
+          : []),
+        ...(rev.glow !== undefined
+          ? [["edge glow", `${formatGlow(rev.glow)} (paint-time)`] as [string, string]]
           : []),
         ...(rev.blend !== undefined
           ? [["blend mode", `${rev.blend} (paint-time)`] as [string, string]]
@@ -508,6 +515,9 @@ export async function reviewRetainedLayer(
   }
   if (gradeFact !== null) {
     facts.push(["grade", `${gradeFact} (paint-time)`]);
+  }
+  if (glowFact !== null) {
+    facts.push(["edge glow", `${glowFact} (paint-time)`]);
   }
   if (blendFact !== null) {
     facts.push(["blend mode", `${blendFact} (paint-time)`]);
