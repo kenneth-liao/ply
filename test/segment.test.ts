@@ -10,6 +10,7 @@ import {
   ensureSegmenterReady,
   localSegmentationMatteEngine,
   missingWeightsMessage,
+  modelDir,
   parseInferenceResult,
   weightsPath,
 } from "../src/segment.js";
@@ -19,12 +20,14 @@ import { encodePng } from "./png.js";
 import { readPngHeader } from "../src/png.js";
 
 const originalModelDir = process.env.PLY_MODEL_DIR;
+const originalCwd = process.cwd();
 
 let root: string;
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "ply-segment-"));
 });
 afterEach(async () => {
+  process.chdir(originalCwd);
   if (originalModelDir === undefined) delete process.env.PLY_MODEL_DIR;
   else process.env.PLY_MODEL_DIR = originalModelDir;
   await rm(root, { recursive: true, force: true });
@@ -118,6 +121,36 @@ describe("weights are pinned and failures are loud", () => {
     const script = await readFile(path.resolve("scripts/matte-birefnet-dynamic.py"), "utf8");
     expect(script).toContain(DYNAMIC_SEGMENTER.revision);
     expect(script).toContain(DYNAMIC_SEGMENTER.repo);
+  });
+});
+
+describe("weights directory resolution", () => {
+  test("with PLY_MODEL_DIR unset, weightsPath points into the install models dir regardless of cwd", () => {
+    delete process.env.PLY_MODEL_DIR;
+    process.chdir(root);
+    const installModels = path.join(import.meta.dir, "..", "models");
+    expect(weightsPath()).toBe(path.join(installModels, DYNAMIC_SEGMENTER.file));
+    expect(modelDir()).toBe(installModels);
+  });
+
+  test("PLY_MODEL_DIR still takes precedence over the install models dir when set", () => {
+    const customDir = path.join(root, "custom-models");
+    process.env.PLY_MODEL_DIR = customDir;
+    expect(modelDir()).toBe(customDir);
+    expect(weightsPath()).toBe(path.join(customDir, DYNAMIC_SEGMENTER.file));
+
+    // A relative override resolves against cwd to an absolute path
+    process.chdir(root);
+    process.env.PLY_MODEL_DIR = "relative-models";
+    expect(modelDir()).toBe(path.resolve("relative-models"));
+    expect(weightsPath()).toBe(path.resolve("relative-models", DYNAMIC_SEGMENTER.file));
+  });
+
+  test("missing-weights message contains PLY_MODEL_DIR and an absolute warm-cache script path", () => {
+    const message = missingWeightsMessage("the weights file is not there");
+    expect(message).toContain("PLY_MODEL_DIR");
+    expect(message).toContain(dynamicScriptPath());
+    expect(path.isAbsolute(dynamicScriptPath())).toBe(true);
   });
 });
 

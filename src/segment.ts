@@ -62,7 +62,9 @@ export const BACKEND_MPS = "mps" as const;
 
 /** Where weights are cached. Gitignored; `PLY_MODEL_DIR` overrides it. */
 export function modelDir(): string {
-  return process.env.PLY_MODEL_DIR ?? path.resolve("models");
+  return process.env.PLY_MODEL_DIR
+    ? path.resolve(process.env.PLY_MODEL_DIR)
+    : path.join(import.meta.dir, "..", "models");
 }
 
 export function weightsPath(): string {
@@ -88,8 +90,10 @@ export function missingWeightsMessage(why: string): string {
     `  mkdir -p ${modelDir()}`,
     `  curl -L --fail -o ${weightsPath()} ${DYNAMIC_SEGMENTER.source}`,
     ``,
+    `Or point PLY_MODEL_DIR at a directory containing the weights file.`,
+    ``,
     `Then warm the pinned architecture cache once (small, needs network once):`,
-    `  uv run --locked --script scripts/matte-birefnet-dynamic.py --warm-cache`,
+    `  uv run --locked --script ${dynamicScriptPath()} --warm-cache`,
     ``,
     `The locked script runs that revision and nothing else — the pin above is`,
     `the model's identity. Inference needs Apple Silicon with PyTorch MPS:`,
