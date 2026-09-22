@@ -31,12 +31,14 @@ import { readCallerFontFile } from "./font-file.js";
 import { type LayerFill } from "./fill.js";
 import {
   oneCommandApplicationOrder,
+  applyLayerOption,
+  type SharedOptionApplyContext,
+  type SharedOptionValues,
+  type SharedOptionDraft,
 } from "./layer-options.js";
 import {
-  ONE_COMMAND_OPTION_APPLY,
-  type OneCommandApplyContext,
+  provisionalScaleContext,
   type OneCommandOptionValues,
-  type OneCommandRevision,
 } from "./one-command.js";
 import {
   selectGenerationOutput,
@@ -353,22 +355,23 @@ export interface AddLayerOptions {
  * so existing `add` invocations keep their meaning and their exact stored
  * revision bytes.
  *
- * There is NO per-option application code here (DEC-001, A226-002): each
- * supplied key dispatches through its ONE shared application case
- * (`ONE_COMMAND_OPTION_APPLY` in one-command.ts — the edit-path resolvers,
- * spec parsers, and anchored-placement authority live there with it), and
- * a key without a case fails loudly (review INT-plumb-1): an option that
- * parses at the command boundary but has no application case would
- * otherwise be silently dropped while the guard test stays green — exactly
- * the parse-but-drop gap. The guard test (TEST-003) reads the applied
- * facts back from the published revision per kind, and the probe test
- * registers a new option through the shared definition alone, so a future
- * table key without a case fails the build, not a Project.
+ * There is NO per-option application code here (DEC-001, A226-002, #263):
+ * each supplied key dispatches through its ONE shared application case,
+ * carried on the shared option table itself (the case takes the context it
+ * resolves against — the stored revision under lock on edit, the
+ * provisional fresh revision here), and a key without a case fails loudly
+ * (review INT-plumb-1): an option that parses at the command boundary but
+ * has no application case would otherwise be silently dropped while the
+ * guard test stays green — exactly the parse-but-drop gap. The guard test
+ * (TEST-003) reads the applied facts back from the published revision per
+ * kind, and the probe test registers a new option through the shared
+ * definition alone, so a future table key without a case fails the build,
+ * not a Project.
  */
 async function applyOneCommandOptions(
   revision: LayerRevision,
-  options: OneCommandOptionValues | undefined,
-  context: OneCommandApplyContext,
+  options: SharedOptionValues | undefined,
+  context: SharedOptionApplyContext,
 ): Promise<LayerRevision> {
   // The application order reads the option table by its own key names; the
   // parsed values are already keyed by those keys — no name mapping.
@@ -376,15 +379,24 @@ async function applyOneCommandOptions(
   if (supplied.length === 0) {
     return revision;
   }
-  const rev = { ...revision } as OneCommandRevision;
+  const rev = { ...revision } as SharedOptionDraft;
+  // The shared cases resolve against the fresh content's provisional facts
+  // at scale 1 (`provisionalScaleContext`) — the stored-revision-under-lock
+  // side of the same context the edit path supplies.
+  const applyContext: SharedOptionApplyContext = {
+    ...context,
+    surface: "add",
+    base: provisionalScaleContext(context),
+    layerId: revision.layerId,
+    parsed: options ?? {},
+  };
   for (const key of supplied) {
-    const apply = ONE_COMMAND_OPTION_APPLY[key];
-    if (apply === undefined) {
-      throw new Error(`One-command add: no application case for the "--${key}" option.`);
-    }
-    await apply(rev, options![key], context);
+    // The ONE single-option dispatch (DEC-001, #263): the same lookup the
+    // edit path runs — a parse-present/apply-missing key fails loudly
+    // here, never silently dropped.
+    await applyLayerOption(key, rev, options![key], applyContext);
   }
-  return rev;
+  return rev as unknown as LayerRevision;
 }
 
 /**

@@ -26,21 +26,22 @@
  *   one place, selected by surface — they are content-kind combination
  *   rules, not shared-option value validation.
  *
- * What deliberately stays per-command: check *sequencing* (each surface
- * keeps its established check order), command-level policy (edit intents
- * like --fork/--in-place, add's defaults and required-content rules), and
- * the help text (each surface's manual describes its own contract). Adding
- * an option means adding it here — to the table, the parseArgs entries,
- * and one validator — and both surfaces inherit it.
+ * What deliberately stays per-command: each surface's established check
+ * and application *orders* (held as order lists, not per-option code),
+ * command-level policy (edit intents like --fork/--in-place, add's
+ * defaults and required-content rules), and the help text (each surface's
+ * manual describes its own contract). Adding a post-content option means
+ * adding it here — to the table with its parse and apply, the parseArgs
+ * entry, and the order-list membership — and both surfaces inherit it.
  *
- * One-command `composition add` (#229, DEC-002; #258, A226-002) consumes
- * this table directly: its accepted keys are the table's keys, its ONE
- * boundary parse and ONE application case per option are the shared
- * registries of `one-command.ts` (`parseOneCommandOptionValues`,
- * `ONE_COMMAND_OPTION_APPLY`), and its post-content application order
- * (transforms, then anchored placement, then effects) is derived from the
- * table's group fact — no add-side parse block, options member, presence
- * check, name mapping, or application case names an option. Per-kind
+ * Both command surfaces consume this table directly (#263): the option's
+ * ONE boundary parse and ONE application case are carried on the table
+ * itself (`parse` / `apply`), and both surfaces dispatch through them over
+ * their established check and application orders (`EDIT_CHECK_ORDER`,
+ * `EDIT_APPLICATION_ORDER`, `ADD_PARSE_ORDER`,
+ * `oneCommandApplicationOrder`) — no per-option parse block, options
+ * member, presence check, name mapping, or application case names an
+ * option on either surface. Per-kind
  * applicability is NOT a second enforcement surface here: the two
  * surfaces' kind parity rests on the shared domain validators (the
  * content-kind exclusivity rule above the resize path's text-Layer
@@ -53,14 +54,44 @@
  * `composition create` alone. The two subcommands share one parsed flag;
  * no rename and no alias.
  */
-import { parseAnchorSpec, type ParsedAnchor } from "./layer-anchor.js";
-import { parseShadowSpec, parseOutlineSpec, parseVisibleRegionSpec, parseVisibleRegionRadiusSpec, parseVectorColorSpec, resolveTextTypographyControls } from "./layer.js";
+import { parseAnchorSpec, type AnchorResolution, type ParsedAnchor, resolveAnchoredPlacement, resolveProvisionalAnchoredPlacement } from "./layer-anchor.js";
+import {
+  parseShadowSpec,
+  parseOutlineSpec,
+  parseVisibleRegionSpec,
+  parseVisibleRegionRadiusSpec,
+  parseVectorColorSpec,
+  resolveTextTypographyControls,
+  vectorColorKindRefusal,
+  validateRectangleCornerRadius,
+  validateVisibleRegionAgainstContent,
+  resolveEditScale,
+  resolveEditRotation,
+  resolveEditFlip,
+  type LayerRevision,
+  type ResolvedLayerRevision,
+  type LayerShadow,
+  type LayerOutline,
+  type LayerVisibleRegion,
+} from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
+import { measureStandaloneSnapshot } from "./composition-measure.js";
 import { parseFillSpec, type LayerFill as LayerFillSpec } from "./fill.js";
 
 /** Blank supplied values are invalid, never implicit zero (#128). */
 export function parseNumericArgument(value: string | undefined): number {
   return value?.trim() ? Number(value) : NaN;
+}
+
+/** The presence-only identity parse (DEC-001, #263): for the options whose
+ *  value carries no boundary shape — the content markers --image/--text,
+ *  --font, and --color, whose validation is the content-kind exclusivity
+ *  rule and the semantic ingestion gates — the ONE registration in the
+ *  shared option table. Registered so a table key with no registration
+ *  fails loudly at runtime on both surfaces instead of being silently
+ *  dropped; it never refuses. */
+function parseRawOptionValue(raw: string | undefined): OptionParse<string | undefined> {
+  return { ok: true, value: raw };
 }
 
 /** The command surfaces that share this option surface. */
@@ -88,6 +119,28 @@ export interface LayerOptionDef {
   /** The option's value may legitimately begin with "-" (a negative
    *  number), so each command boundary joins it before parsing. */
   dashNumeric?: boolean;
+  /** The ONE boundary parse for the option (DEC-001, #263): the shared
+   *  validator both command boundaries dispatch through, keyed by the
+   *  option's own key — no per-option parse block exists on either
+   *  surface. The resize family's three forms are the one cross-option
+   *  exclusivity parse (`parseResizeOptions`), dispatched as one step by
+   *  each surface's order list. An option whose value carries no boundary
+   *  shape (the content markers --image/--text, --font, and --color, whose
+   *  validation is semantic in the ingestion paths) registers the
+   *  presence-only identity parse, so a table key with NO registration
+   *  fails loudly at runtime on both surfaces (#263) instead of being
+   *  silently dropped. */
+  parse?: (raw: string | undefined) => OptionParse<unknown>;
+  /** The ONE application case for the option (DEC-001, #263): the shared
+   *  application both command surfaces dispatch through, keyed by the
+   *  option's own key. Registered for the post-content options — the ones
+   *  whose application differs only by the context it resolves against
+   *  (the stored revision under lock on edit; a provisional fresh
+   *  revision on add). Options whose application differs by more than
+   *  context (content replacement, text and shape style merging, add's
+   *  placement defaults) stay per-surface by design. A post-content
+   *  option with no application case fails loudly at dispatch (#263). */
+  apply?: LayerOptionApply;
 }
 
 export type LayerOptionKey =
@@ -127,19 +180,45 @@ export type LayerOptionKey =
  * The one option table (DEC-001), in the order the edit surface's
  * enumeration and refusals state the options. Every `layer edit` option
  * and every `composition add` Layer option is declared exactly once here.
+ *
+ * The FULL registration checklist for one option (DEC-001, #263) — the
+ * entry below is the first item; the rest live beside the table:
+ *
+ * 1. the table entry: key, group, kind applicability, `editOption`, and
+ *    `dashNumeric`; `parse` — the ONE boundary parse (the identity parse
+ *    for a shapeless marker) — and, for a post-content option, `apply` —
+ *    the ONE application case;
+ * 2. a `LAYER_OPTION_PARSE_ARGS` entry (the `satisfies` makes a missing
+ *    or misspelled entry a compile error);
+ * 3. order-list membership: `EDIT_CHECK_ORDER` and `EDIT_APPLICATION_ORDER`
+ *    on the edit surface (application only for a post-content option — the
+ *    anchor's edit application is the CLI boundary's live-context
+ *    resolution through the same shared case), and `ADD_PARSE_ORDER` for a
+ *    post-content option (add's application order derives from the
+ *    group fact and needs no entry).
+ *
+ * Every gap in the checklist fails loudly: a missing parse or an order-list
+ * omission throws at runtime when the option is supplied on either surface,
+ * a missing application case throws at the dispatch, and a missing
+ * parseArgs entry is a compile error. The order lists are deliberately
+ * per-surface — they hold each surface's established check and application
+ * sequences (#257), not per-option code.
  */
 export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // Content options: what the Layer is made of. Mutually exclusive kinds.
-  { key: "image", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true },
-  { key: "from-generation", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true },
-  { key: "from-matte", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true },
-  { key: "output", group: "content", contentKind: "image", appliesTo: ["image"], editOption: false },
-  { key: "text", group: "content", contentKind: "text", appliesTo: ["text"], editOption: true },
+  // --image/--text carry no boundary shape (their validation is the
+  // content-kind exclusivity rule and the semantic ingestion gates), so
+  // their parse is the presence-only identity.
+  { key: "image", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true, parse: parseRawOptionValue },
+  { key: "from-generation", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true, parse: parseGenerationJobId },
+  { key: "from-matte", group: "content", contentKind: "image", appliesTo: ["image"], editOption: true, parse: parseMatteId },
+  { key: "output", group: "content", contentKind: "image", appliesTo: ["image"], editOption: false, parse: (raw) => parseGenerationOutputValue(raw as string) },
+  { key: "text", group: "content", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseRawOptionValue },
   // Shape content options (#208): only meaningful with a shape content kind.
-  { key: "shape", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true },
-  { key: "size", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true },
-  { key: "corner-radius", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true },
-  { key: "fill", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true },
+  { key: "shape", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, parse: parseShapeGeometry },
+  { key: "size", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true, parse: parseShapeSize },
+  { key: "corner-radius", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true, parse: parseShapeCornerRadius },
+  { key: "fill", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, parse: parseLayerFill },
   // The vector colour (#215, spec #207 US-005, DEC-008/009): ONE paint-time
   // colour over a vector image Layer's alpha. Its own group BEFORE the
   // transform group — the colour is content-level paint (it replaces the
@@ -149,40 +228,44 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // (format svg) image Layers only: the kind/format refusals live with the
   // domain paths (the raster gate reads the would-be content's format, which
   // only ingestion knows).
-  { key: "vector-color", group: "paint", appliesTo: ["image"], editOption: true },
+  { key: "vector-color", group: "paint", appliesTo: ["image"], editOption: true, parse: parseLayerVectorColor, apply: applyVectorColor },
   // Text style options: only meaningful with a text content kind.
-  { key: "font", group: "text", appliesTo: ["text"], editOption: true },
-  { key: "font-file", group: "text", appliesTo: ["text"], editOption: true },
-  { key: "font-size", group: "text", appliesTo: ["text"], editOption: true },
-  { key: "color", group: "text", appliesTo: ["text"], editOption: true },
-  { key: "weight", group: "text", appliesTo: ["text"], editOption: true },
-  { key: "width", group: "text", appliesTo: ["text"], editOption: true },
-  { key: "tracking", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true },
-  { key: "line-height", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true },
+  { key: "font", group: "text", appliesTo: ["text"], editOption: true, parse: parseRawOptionValue },
+  { key: "font-file", group: "text", appliesTo: ["text"], editOption: true, parse: parseLayerFontFile },
+  { key: "font-size", group: "text", appliesTo: ["text"], editOption: true, parse: parseLayerFontSize },
+  { key: "color", group: "text", appliesTo: ["text"], editOption: true, parse: parseRawOptionValue },
+  { key: "weight", group: "text", appliesTo: ["text"], editOption: true, parse: parseLayerWeight },
+  { key: "width", group: "text", appliesTo: ["text"], editOption: true, parse: parseLayerWidth },
+  { key: "tracking", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerTracking },
+  { key: "line-height", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerLineHeight },
   // Placement, transform, and effect options.
-  { key: "x", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
-  { key: "y", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
-  { key: "opacity", group: "placement", appliesTo: ["image", "text"], editOption: true },
-  { key: "anchor", group: "placement", appliesTo: ["image", "text"], editOption: true },
-  { key: "resize", group: "transform", appliesTo: ["image", "text"], editOption: true },
-  { key: "resize-to", group: "transform", appliesTo: ["image"], editOption: true },
-  { key: "scale", group: "transform", appliesTo: ["image", "text"], editOption: true },
-  { key: "rotate", group: "transform", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
-  { key: "flip", group: "transform", appliesTo: ["image", "text"], editOption: true },
-  { key: "shadow", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
-  { key: "outline", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true },
+  { key: "x", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("x", raw) },
+  { key: "y", group: "placement", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("y", raw) },
+  { key: "opacity", group: "placement", appliesTo: ["image", "text"], editOption: true, parse: parseLayerOpacity },
+  { key: "anchor", group: "placement", appliesTo: ["image", "text"], editOption: true, parse: parseLayerAnchor, apply: applyAnchor },
+  // The resize family: three mutually exclusive forms through the ONE
+  // cross-option exclusivity parse (`parseResizeOptions`) — each surface's
+  // order list dispatches it as one step at the family's established check
+  // position, and each form has its own ONE application case.
+  { key: "resize", group: "transform", appliesTo: ["image", "text"], editOption: true, apply: applyResizeFactor },
+  { key: "resize-to", group: "transform", appliesTo: ["image"], editOption: true, apply: applyResizeTo },
+  { key: "scale", group: "transform", appliesTo: ["image", "text"], editOption: true, apply: applyScale },
+  { key: "rotate", group: "transform", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: parseLayerRotation, apply: applyRotation },
+  { key: "flip", group: "transform", appliesTo: ["image", "text"], editOption: true, parse: parseLayerFlip, apply: applyFlip },
+  { key: "shadow", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: parseLayerShadow, apply: applyShadow },
+  { key: "outline", group: "effect", appliesTo: ["image", "text"], editOption: true, dashNumeric: true, parse: parseLayerOutline, apply: applyOutline },
   // The rectangular visible region (#211, spec #207 US-003, ADR-0023): a
   // Layer revision fact about what part of the content is ink — its own
   // group between the transform and effect groups, because one-command add
   // applies it after the transforms and BEFORE anchored placement (the
   // anchor resolves against the region-clipped visible ink, DEC-005) and
   // before the effects (which hug the region's edge, DEC-004).
-  { key: "visible-region", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true },
+  { key: "visible-region", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerVisibleRegion, apply: applyVisibleRegion },
   // The visible region's corner radius (#212): the same revision fact's
   // second axis — the same region group, because the radius rounds the
   // region's corners (one-command add applies it right after the rectangle,
   // still before the anchor and the effects).
-  { key: "visible-region-radius", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true },
+  { key: "visible-region-radius", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerVisibleRegionRadius, apply: applyVisibleRegionRadius },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -939,3 +1022,732 @@ export function anchorConflictOptionList(): string {
   return [flags(editKeysOfGroup("paint")), flags(editKeysOfGroup("transform")), flags(editKeysOfGroup("region")), flags(editKeysOfGroup("effect")), shape, flags(editKeysOfGroup("text"))]
     .join(", ");
 }
+
+/** The parsed values of the option surface, keyed by the option table's own
+ *  keys (DEC-001): the normalized values the shared parse produced — no
+ *  per-option member exists to name. */
+export type ParsedLayerOptionValues = Partial<Record<LayerOptionKey, unknown>>;
+
+/** The resize family's keys: three mutually exclusive forms through the ONE
+ *  cross-option exclusivity parse (`parseResizeOptions`), which each
+ *  surface's order list dispatches as one step at the family's established
+ *  check position. */
+export const RESIZE_FAMILY_KEYS: readonly LayerOptionKey[] = ["resize", "resize-to", "scale"];
+
+/**
+ * The ONE boundary parse for the shared option surface (DEC-001, #263): a
+ * single runner both command boundaries dispatch through, driven by the
+ * surface's order list and the option table's parse registrations. Each
+ * supplied option's value normalizes through its table-carried parse; the
+ * resize family's three forms normalize through the shared exclusivity
+ * parse as one step. Returns the parsed values keyed by the option keys, or
+ * `undefined` when no listed option is supplied.
+ *
+ * A supplied option the steps never parsed — a table key with no
+ * registration, or one missing from the surface's order list — throws
+ * instead of being silently dropped (the #262 review gap, #263): the flag
+ * can never be silently absent from a published revision.
+ */
+/**
+ * The ONE single-option boundary parse dispatch (DEC-001, #263): the lookup
+ * BOTH check paths run — the option table's parse registration, with the
+ * loud runtime throw for a key with no registration. No check loop
+ * implements its own find-and-throw; the boundaries cannot disagree on
+ * which parse runs or how a missing registration fails.
+ */
+export function parseSharedOption(
+  key: LayerOptionKey,
+  values: LayerOptionArgs,
+): OptionParse<unknown> {
+  const def = LAYER_OPTION_DEFS.find((d) => d.key === key);
+  if (def?.parse === undefined) {
+    // Fail loudly, never silently (the #262 review gap): the option is
+    // declared in the table but registered nowhere it can be parsed.
+    throw new Error(
+      `Option "--${key}" is declared in the shared option table but has no parse registration.`,
+    );
+  }
+  return def.parse(values[key]);
+}
+
+/**
+ * The resize family's ONE cross-option step (DEC-001): the three mutually
+ * exclusive forms through the shared exclusivity parse, mapped into the
+ * parsed record by the family's own keys. Both check paths run this one
+ * step at the family's first check position.
+ */
+export function parseResizeFamilyStep(
+  values: LayerOptionArgs,
+): OptionParse<ParsedLayerOptionValues | undefined> {
+  const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
+  if (!resize.ok) return resize;
+  if (resize.value.resizeFactor === undefined && resize.value.resizeTo === undefined && resize.value.scale === undefined) {
+    return { ok: true, value: undefined };
+  }
+  const mapped: ParsedLayerOptionValues = {};
+  if (resize.value.resizeFactor !== undefined) mapped.resize = resize.value.resizeFactor;
+  if (resize.value.resizeTo !== undefined) mapped["resize-to"] = resize.value.resizeTo;
+  if (resize.value.scale !== undefined) mapped.scale = resize.value.scale;
+  return { ok: true, value: mapped };
+}
+
+export function parseLayerOptionSteps(
+  values: LayerOptionArgs,
+  steps: readonly LayerOptionKey[],
+  coveredKeys: readonly LayerOptionKey[],
+): OptionParse<ParsedLayerOptionValues | undefined> {
+  const parsed: ParsedLayerOptionValues = {};
+  let supplied = false;
+  let familyRan = false;
+  for (const key of steps) {
+    if (values[key] === undefined) continue;
+    supplied = true;
+    if (RESIZE_FAMILY_KEYS.includes(key)) {
+      // The resize family's cross-option exclusivity rule: one parse for the
+      // three forms, run once at the family's first check position.
+      if (familyRan) continue;
+      familyRan = true;
+      const family = parseResizeFamilyStep(values);
+      if (!family.ok) return family;
+      if (family.value !== undefined) Object.assign(parsed, family.value);
+      continue;
+    }
+    const result = parseSharedOption(key, values);
+    if (!result.ok) return result;
+    if (result.value !== undefined) parsed[key] = result.value;
+  }
+  // The order list must cover every key the surface accepts: a supplied key
+  // the steps never reached is a registration gap — loud, never silent.
+  for (const key of coveredKeys) {
+    if (values[key] !== undefined && !(key in parsed)) {
+      throw new Error(
+        `Option "--${key}" is declared in the shared option table but is missing from this surface's check order.`,
+      );
+    }
+  }
+  return { ok: true, value: supplied ? parsed : undefined };
+}
+
+/**
+ * The edit boundary's established check order (#257, DEC-001, #263) as ONE
+ * order list: the option keys dispatch through the shared option table's
+ * parse registrations, and the surface's cross-option policy rules hold
+ * their established positions between them. The sequence is byte-identical
+ * to the former per-option parse blocks' order — same validators, same
+ * refusals, same exit statuses; only the per-option code is gone.
+ */
+export type LayerEditCheckStep =
+  | { option: LayerOptionKey }
+  | {
+      policy:
+        | "content-image"
+        | "content-generation"
+        | "content-matte"
+        | "output-selector"
+        | "text-typography"
+        | "text-font-source"
+        | "text-font-axes"
+        | "anchor-conflict"
+        | "anchor-targets";
+    };
+
+export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
+  { policy: "content-image" },
+  { option: "from-generation" },
+  { policy: "content-generation" },
+  { option: "from-matte" },
+  { policy: "content-matte" },
+  { policy: "output-selector" },
+  { option: "output" },
+  { option: "image" },
+  { option: "text" },
+  { option: "x" },
+  { option: "y" },
+  { option: "opacity" },
+  { option: "font-size" },
+  { option: "color" },
+  { option: "font" },
+  { option: "weight" },
+  { option: "width" },
+  { option: "tracking" },
+  { option: "line-height" },
+  { policy: "text-typography" },
+  { policy: "text-font-source" },
+  { option: "font-file" },
+  { policy: "text-font-axes" },
+  { option: "resize" },
+  { option: "resize-to" },
+  { option: "scale" },
+  { option: "rotate" },
+  { option: "flip" },
+  { option: "shape" },
+  { option: "size" },
+  { option: "corner-radius" },
+  { option: "fill" },
+  { option: "shadow" },
+  { option: "outline" },
+  { option: "visible-region" },
+  { option: "visible-region-radius" },
+  { option: "vector-color" },
+  { option: "anchor" },
+  { policy: "anchor-conflict" },
+  { policy: "anchor-targets" },
+];
+
+/** The add boundary's established check order for the post-content options
+ *  (#229, DEC-001, #263): the resize family's exclusivity parse first, then
+ *  the shared parse per option in the order the refusals are reached in —
+ *  the same sequence the former parse entries carried, now driven from the
+ *  option table's parse registrations through the ONE runner. The anchor's
+ *  explicit-target rule stays the add boundary's policy after the loop. */
+export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
+  "resize",
+  "resize-to",
+  "scale",
+  "rotate",
+  "flip",
+  "shadow",
+  "outline",
+  "visible-region",
+  "visible-region-radius",
+  "vector-color",
+  "anchor",
+];
+
+/** The edit surface's `--anchor` exclusivity refusal (established wording,
+ *  #257): the conflict set is derived from the shared option table
+ *  (`isAnchorConflicting`), so the policy step and the refusal text come
+ *  from the same derivation. */
+function anchorConflictRefusal(): string {
+  return (
+    `--anchor is its own edit: it cannot be combined with ${anchorConflictOptionList()}, or content replacement in one edit, because the reference ink would be ambiguous. ` +
+    "Make the transform, content, or effect edit first, then anchor."
+  );
+}
+
+/** The edit boundary's check phase (DEC-001, #263): the established check
+ *  order (#257) runs from ONE order list — every option's shape validation
+ *  dispatches through the shared option table's parse registration (the
+ *  same function `composition add` runs, so the two boundaries can never
+ *  disagree), and the policy steps are the edit surface's cross-option
+ *  rules at their established positions. Returns the parsed values keyed
+ *  by the option keys, or the established refusal with its exit status —
+ *  byte-identical to the former per-option parse blocks. */
+export function checkEditLayerOptions(values: LayerOptionArgs): EditLayerCheck | EditLayerRefusal {
+  const refuse = (error: string, exitCode: 1 | 2 = 2): EditLayerRefusal => ({ ok: false, error, exitCode });
+  const parsed: ParsedLayerOptionValues = {};
+  let familyRan = false;
+  for (const step of EDIT_CHECK_ORDER) {
+    if ("policy" in step) {
+      switch (step.policy) {
+        case "content-image": {
+          const conflict = layerContentKindConflict(values, "image", "edit");
+          if (conflict !== undefined) return refuse(conflict);
+          break;
+        }
+        case "content-generation": {
+          const conflict = layerContentKindConflict(values, "from-generation", "edit");
+          if (conflict !== undefined) return refuse(conflict);
+          break;
+        }
+        case "content-matte": {
+          const conflict = layerContentKindConflict(values, "from-matte", "edit");
+          if (conflict !== undefined) return refuse(conflict);
+          break;
+        }
+        case "output-selector": {
+          const selector = parseGenerationOutputSelector(values.output, values["from-generation"] !== undefined);
+          if (!selector.ok) return refuse(selector.error);
+          break;
+        }
+        case "text-typography": {
+          const typographyError = validateTextTypographyControls(
+            parsed.tracking as number | null | undefined,
+            parsed["line-height"] as number | null | undefined,
+          );
+          if (typographyError !== undefined) return refuse(typographyError);
+          break;
+        }
+        case "text-font-source": {
+          // One font source per edit (#232): --font and --font-file are
+          // mutually exclusive — a usage error (exit 2) at the boundary.
+          if (values.font !== undefined || values["font-file"] !== undefined) {
+            const fontSourceError = validateTextFontSource(values.font, values["font-file"]);
+            if (fontSourceError !== undefined) return refuse(fontSourceError);
+          }
+          break;
+        }
+        case "text-font-axes": {
+          // An unknown family keeps its established semantic refusal (exit 1,
+          // resolveFace's throw), reported through the same refusal envelope
+          // the add surface reports it with — identical refusal text and exit
+          // status on both surfaces (#257); only weight/width range errors are
+          // usage errors here (exit 2).
+          if (values.font !== undefined) {
+            try {
+              const axesError = validateTextFaceAxes(
+                values.font,
+                parsed.weight as number | undefined,
+                parsed.width as number | undefined,
+              );
+              if (axesError !== undefined) return refuse(axesError);
+            } catch (err) {
+              return refuse(err instanceof Error ? err.message : String(err), 1);
+            }
+          }
+          break;
+        }
+        case "anchor-conflict": {
+          // Anchored placement is its own edit: transform and content edits
+          // change the reference ink, so combining them in one edit is a
+          // conflicting request (the same precedent as resize + content
+          // replacement). --opacity combines freely: opacity scales alpha
+          // values, never the ink support. The conflict set is derived from
+          // the shared option table (DEC-001), so a newly added option
+          // automatically joins it.
+          if (parsed.anchor !== undefined && isAnchorConflicting(values)) {
+            return refuse(anchorConflictRefusal());
+          }
+          break;
+        }
+        case "anchor-targets": {
+          const anchor = parsed.anchor as ParsedAnchor | undefined;
+          if (anchor?.horizontal !== undefined && parsed.x === undefined) {
+            return refuse(
+              `--x <target> is required to anchor horizontally: the ${anchor.horizontal} ink edge/center lands at the requested x.`,
+            );
+          }
+          if (anchor?.vertical !== undefined && parsed.y === undefined) {
+            return refuse(
+              `--y <target> is required to anchor vertically: the ${anchor.vertical} ink edge/center lands at the requested y.`,
+            );
+          }
+          break;
+        }
+      }
+      continue;
+    }
+    const key = step.option;
+    if (values[key] === undefined) continue;
+    if (RESIZE_FAMILY_KEYS.includes(key)) {
+      if (familyRan) continue;
+      familyRan = true;
+      const family = parseResizeFamilyStep(values);
+      if (!family.ok) return refuse(family.error);
+      if (family.value !== undefined) Object.assign(parsed, family.value);
+      continue;
+    }
+    const result = parseSharedOption(key, values);
+    if (!result.ok) return refuse(result.error);
+    if (result.value !== undefined) parsed[key] = result.value;
+  }
+  // Loud runtime failure (the #262 review gap, #263): a supplied option the
+  // check order never parsed is declared without a registration — throw,
+  // never silently absent from the edit.
+  for (const def of LAYER_OPTION_DEFS) {
+    if (values[def.key] !== undefined && !(def.key in parsed)) {
+      throw new Error(
+        `Option "--${def.key}" is declared in the shared option table but is missing from the edit check order.`,
+      );
+    }
+  }
+  return { ok: true, parsed };
+}
+
+/** The edit boundary check's outcomes: the parsed values, or the surface's
+ *  established refusal with its exit status. */
+export interface EditLayerCheck {
+  ok: true;
+  parsed: ParsedLayerOptionValues;
+}
+
+export interface EditLayerRefusal {
+  ok: false;
+  error: string;
+  exitCode: 1 | 2;
+}
+/**
+ * The draft revision one application case mutates (DEC-001, #263): the
+ * revision the option's application publishes its fact into — the stored
+ * revision (plus the resolved placement) on edit, the provisional fresh
+ * revision on add. A case mutates it in place, in the surface's
+ * established application order, before anything is retained or staged.
+ */
+export interface SharedOptionDraft {
+  layerId: string;
+  kind: "image" | "text" | "shape";
+  x: number;
+  y: number;
+  opacity: number;
+  scaleX: number;
+  scaleY: number;
+  rotationDeg: number;
+  flipX: boolean;
+  flipY: boolean;
+  shadow?: LayerShadow;
+  outline?: LayerOutline;
+  visibleRegion?: LayerVisibleRegion;
+  vectorColor?: string;
+  /** Anything else the application cases set — including a shared option's
+   *  own revision fact (the probe's stamp) — flows into the published
+   *  revision through the applied-fact carry (DEC-001). */
+  [key: string]: unknown;
+}
+/**
+ * The context one application case runs in (DEC-001, #263): WHAT the case
+ * resolves against is the context's input, not the case's business. The
+ * stored revision under the Project lock on edit; a provisional fresh
+ * revision's facts on add. Each dispatcher supplies what its surface has;
+ * the cases read only what their application needs.
+ */
+export interface SharedOptionApplyContext {
+  /** The revision the option resolves against: the stored revision under
+   *  lock on edit, the fresh content's provisional facts at scale 1 on add
+   *  (`provisionalScaleContext`). Every dispatcher of the scale, rotation,
+   *  flip, and region cases supplies it. */
+  base?: ResolvedLayerRevision;
+  /** The Layer id the draft publishes as (refusal wording) — set by the
+   *  dispatcher from the draft when it builds the context. */
+  layerId?: string;
+  /** The verified content bytes the option's measurements paint: the fresh
+   *  content's on add, the retained content's on edit. */
+  contentBytes?: Buffer;
+  /** Add surface: the target Composition's name (anchor context) and its
+   *  canvas (the measurement context). */
+  composition?: string;
+  canvas?: { width: number; height: number };
+  /** The format fact of the content the option resolves against: the fresh
+   *  image content's format on add; the stored revision's on edit — absent
+   *  when a same-edit content replacement defers the vector-colour raster
+   *  gate to the ingested format (still before anything is stored). */
+  format?: "png" | "jpeg" | "webp" | "svg";
+  /** Add surface: the fresh image content's intrinsic size (the region's
+   *  content box, the provisional paint markup). */
+  intrinsic?: { width: number; height: number };
+  /** Edit surface: the anchored placement's live-resolution inputs — the
+   *  CLI boundary resolves the anchor against the live state (read-only),
+   *  never under the edit's own lock. */
+  live?: { projectPath: string; x?: number; y?: number; contextComposition?: string };
+  /** Which surface the dispatch runs on: selects the per-surface wording
+   *  where the surfaces' established refusals differ (the region radius's
+   *  needs-a-region rule) and the region's measurement source. */
+  surface?: LayerOptionSurface;
+  /** The surface's parsed values: sibling presence for the region pair's
+   *  interlocked rules (a radius in the same edit as the rectangle). */
+  parsed?: ParsedLayerOptionValues;
+}
+
+/** One application case: mutates the draft in place, in the surface's
+ *  established application order, before anything is retained or staged.
+ *  The anchor's case returns its resolution for the command report. */
+export type LayerOptionApply = (
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+) => AnchorResolution | void | Promise<AnchorResolution | void>;
+
+/** The parsed values of the option surface, keyed by the option table's own
+ *  keys (DEC-001): the normalized values the shared parse produced — no
+ *  per-option member exists to name. */
+export type SharedOptionValues = ParsedLayerOptionValues;
+
+/** Dispatch one option's ONE application case (DEC-001, #263): the lookup
+ *  the edit surface's dispatch loop and the CLI's anchored boundary use. A
+ *  post-content option with no application case fails loudly here. */
+export async function applyLayerOption(
+  key: LayerOptionKey,
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): Promise<unknown> {
+  const def = LAYER_OPTION_DEFS.find((d) => d.key === key);
+  if (def?.apply === undefined) {
+    throw new Error(
+      `Option "--${key}" is declared in the shared option table but has no application case.`,
+    );
+  }
+  return def.apply(draft, value, context);
+}
+
+/**
+ * The ONE application case per post-content option (DEC-001, #263), keyed
+ * by the shared option table: each case below is the ONE application its
+ * option has on either surface, taking the context it resolves against as
+ * its input. On edit the context carries the stored revision (under the
+ * Project lock) and its verified bytes; on add the provisional fresh
+ * revision's facts. The bodies preserve each surface's established
+ * semantics verbatim; where a wording is per-surface (the region radius's
+ * needs-a-region refusals), the case selects it by context — the same
+ * convention the content-kind exclusivity refusals use.
+ *
+ * The semantic resolutions run before any content retention or revision
+ * staging, so a refused option publishes nothing.
+ */
+function applyVectorColor(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  const colour = parseVectorColorSpec(value as string);
+  if (colour === undefined) {
+    // "none" removes nothing on a fresh Layer (absence IS the no-colour
+    // form) and removes the stored colour on edit — the removal form never
+    // hits a kind gate, the same idempotent removal every absolute
+    // setter's "none" has.
+    draft.vectorColor = undefined;
+    return;
+  }
+  // The kind/format refusals run here, before any content retention: the
+  // colour is defined for vector (format svg) image content only, and the
+  // refusal names each kind's own colour control. The raster gate reads
+  // the format of the content the edit/add would publish: the stored
+  // revision's on edit (a same-edit content replacement defers the gate to
+  // the ingested format, still before anything is stored), the fresh
+  // content's on add.
+  if (draft.kind === "text") {
+    throw new Error(vectorColorKindRefusal("text", draft.layerId));
+  }
+  if (draft.kind === "shape") {
+    throw new Error(vectorColorKindRefusal("shape", draft.layerId));
+  }
+  if (context.format !== undefined && context.format !== "svg") {
+    throw new Error(vectorColorKindRefusal("raster", draft.layerId, context.format));
+  }
+  draft.vectorColor = colour;
+}
+
+function applyResizeFactor(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  const scale = resolveEditScale({ resizeFactor: value as number }, context.base as ResolvedLayerRevision, draft.layerId);
+  draft.scaleX = scale.scaleX;
+  draft.scaleY = scale.scaleY;
+}
+
+function applyResizeTo(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  const scale = resolveEditScale(
+    { resizeTo: value as { width?: number; height?: number } },
+    context.base as ResolvedLayerRevision,
+    draft.layerId,
+  );
+  draft.scaleX = scale.scaleX;
+  draft.scaleY = scale.scaleY;
+}
+
+function applyScale(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  // Absolute scale setter (#231, DEC-005): the value IS the canonical scale
+  // (ADR-0016), resolved through the edit path's ONE scale resolution — so
+  // the surfaces' refusals, bounds, and idempotence are identical by
+  // construction.
+  const scale = resolveEditScale({ scale: value as number }, context.base as ResolvedLayerRevision, draft.layerId);
+  draft.scaleX = scale.scaleX;
+  draft.scaleY = scale.scaleY;
+}
+
+function applyRotation(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  draft.rotationDeg = resolveEditRotation({ rotateDeg: value as number }, context.base as ResolvedLayerRevision);
+}
+
+function applyFlip(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  const flip = resolveEditFlip(
+    { flip: value as "horizontal" | "vertical" | "both" | "none" },
+    context.base as ResolvedLayerRevision,
+  );
+  draft.flipX = flip.flipX;
+  draft.flipY = flip.flipY;
+}
+
+function applyShadow(draft: SharedOptionDraft, value: unknown): void {
+  // "none" resolves to undefined — absence IS the no-shadow form, the same
+  // canonical shape the edit path publishes (ADR-0018); an omitted option
+  // preserves the current revision's shadow by construction (the draft
+  // starts there).
+  draft.shadow = parseShadowSpec(value as string);
+}
+
+function applyOutline(draft: SharedOptionDraft, value: unknown): void {
+  draft.outline = parseOutlineSpec(value as string);
+}
+
+async function applyAnchor(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): Promise<AnchorResolution | void> {
+  if (context.live !== undefined) {
+    // Edit: the anchored placement resolves ONCE against the live state's
+    // painted ink (read-only, outside the edit's own lock); the caller
+    // publishes plain x/y through the ordinary edit lifecycle — the edit
+    // path never sees an anchor, so no alternate placement representation
+    // can exist.
+    return resolveAnchoredPlacement(context.live.projectPath, draft.layerId, {
+      anchor: value as ParsedAnchor,
+      targetX: context.live.x,
+      targetY: context.live.y,
+      contextComposition: context.live.contextComposition,
+    });
+  }
+  // Add: anchored placement (ADR-0017) resolves against the content+
+  // transform ink BEFORE the effects apply (the documented order),
+  // measuring the provisional revision in the target Composition's canvas;
+  // the resolved placement publishes as plain canonical (x, y) in the SAME
+  // single revision.
+  const resolved = await resolveProvisionalAnchoredPlacement(
+    context.canvas!,
+    {
+      layerId: draft.layerId,
+      revision: {
+        ...draft,
+        ...(context.format !== undefined
+          ? { format: context.format, width: context.intrinsic!.width, height: context.intrinsic!.height }
+          : {}),
+      } as ResolvedLayerRevision,
+      contentBytes: context.contentBytes!,
+    },
+    { anchor: value as ParsedAnchor, contextComposition: context.composition! },
+  );
+  draft.x = resolved.placement.x;
+  draft.y = resolved.placement.y;
+  return resolved;
+}
+
+async function applyVisibleRegion(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): Promise<void> {
+  const region = parseVisibleRegionSpec(value as string);
+  if (region === undefined) {
+    // "none" removes nothing on a fresh Layer (absence IS the no-region
+    // form) and removes the stored region on edit; the radius's interlock
+    // with a same-edit removal is the radius step's own rule.
+    draft.visibleRegion = undefined;
+    return;
+  }
+  // An explicit region validates against the content box of the revision
+  // it is set on: a text Layer's measured line-box extent (the unwrapped
+  // standalone line, the same box the edit surface validates against),
+  // otherwise the intrinsic facts — the fresh content's on add, the stored
+  // revision's on edit (a content replacement cannot combine with the
+  // region on edit, so the stored box is always the published one). The
+  // refusal runs before any content retention or revision staging.
+  if (draft.kind === "text") {
+    // The edit surface validates against the STORED revision's line box
+    // (its resolution runs before this edit's transforms publish); add
+    // validates against the provisional revision's.
+    const measured = await measureStandaloneSnapshot(
+      { ...(context.surface === "edit" ? context.base : draft), x: 0, y: 0 } as ResolvedLayerRevision,
+      context.contentBytes!,
+    );
+    validateVisibleRegionAgainstContent(region, measured.content, draft.layerId);
+  } else {
+    const box = context.intrinsic ?? {
+      width: (draft as unknown as { width: number }).width,
+      height: (draft as unknown as { height: number }).height,
+    };
+    validateVisibleRegionAgainstContent(region, box, draft.layerId);
+  }
+  draft.visibleRegion = { ...region };
+  // An omitted radius option preserves the current radius on the edit
+  // surface — re-validated against the NEW rectangle, the same refusal a
+  // re-issued radius would get (0 stores nothing, the same look as
+  // absent). An explicit radius is the radius step's own validation, which
+  // runs right after the rectangle in region order.
+  if (context.parsed?.["visible-region-radius"] === undefined) {
+    const preserved = context.base?.visibleRegion?.cornerRadius;
+    if (preserved !== undefined && preserved > 0) {
+      validateRectangleCornerRadius(preserved, region.width, region.height);
+      draft.visibleRegion = { ...region, cornerRadius: preserved };
+    }
+  }
+}
+
+function applyVisibleRegionRadius(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  const radius = parseVisibleRegionRadiusSpec(value as string);
+  if (radius === undefined || radius === 0) {
+    // The removal forms — "none" and 0 — remove the radius from the region
+    // the step resolves against (the same idempotent removal the edit
+    // surface gives them); a fresh Layer has nothing to remove.
+    if (draft.visibleRegion !== undefined) {
+      const { cornerRadius: _removed, ...rect } = draft.visibleRegion;
+      draft.visibleRegion = rect;
+    }
+    return;
+  }
+  const region = draft.visibleRegion;
+  if (region === undefined) {
+    if (context.surface === "edit") {
+      // The edit surface's established wordings: a radius together with the
+      // region's removal in one edit, and a radius on a Layer without one.
+      if (context.parsed?.["visible-region"] !== undefined) {
+        throw new Error(
+          `Invalid visible-region corner radius ${value}: Layer "${draft.layerId}" cannot set a corner radius while removing the visible region — a radius rounds a region's corners, so it needs a visible region. Remove the radius (--visible-region-radius none) or keep the region.`,
+        );
+      }
+      throw new Error(
+        `Invalid visible-region corner radius ${value}: Layer "${draft.layerId}" has no visible region to round — set one first (--visible-region "<x>,<y>,<width>,<height>"), then round its corners.`,
+      );
+    }
+    // Add: a positive radius without a region is refused before anything is
+    // retained.
+    throw new Error(
+      `--visible-region-radius needs a visible region: Layer "${draft.layerId}" is fresh and has none. ` +
+        `Pass --visible-region "<x>,<y>,<width>,<height>" in the same add, then round its corners.`,
+    );
+  }
+  // The range rule is the ONE shared corner-radius validator (refuse, never
+  // clamp) against the region rectangle the radius rounds.
+  validateRectangleCornerRadius(radius, region.width, region.height);
+  draft.visibleRegion = { ...region, cornerRadius: radius };
+}
+
+/**
+ * The edit surface's established application order (spec #226 DEC-002 as
+ * the edit path resolves it, #263): the resize family's domain re-checks,
+ * then the canonical transform, then the effects, then the region pair's
+ * content-edit rule and its application, then the vector colour — the
+ * resolver sequence of the former edit path, held as ONE order list the
+ * edit path dispatches through. Not the add surface's stage order: each
+ * surface keeps its established order (#257), including the refusal order
+ * of combined refusals.
+ */
+export type LayerApplyStep =
+  | { option: LayerOptionKey }
+  | { policy: "resize-forms" | "region-content" };
+
+export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
+  { policy: "resize-forms" },
+  { option: "resize" },
+  { option: "resize-to" },
+  { option: "scale" },
+  { option: "rotate" },
+  { option: "flip" },
+  { option: "shadow" },
+  { option: "outline" },
+  { policy: "region-content" },
+  { option: "visible-region" },
+  { option: "visible-region-radius" },
+  { option: "vector-color" },
+];

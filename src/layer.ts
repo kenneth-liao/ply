@@ -32,6 +32,13 @@ import {
   retainMattingSourceBytes,
   findGenerationPredecessor,
 } from "./matting-retention.js";
+import {
+  EDIT_APPLICATION_ORDER,
+  applyLayerOption,
+  type SharedOptionApplyContext,
+  type SharedOptionDraft,
+  type SharedOptionValues,
+} from "./layer-options.js";
 
 export const LAYER_SCHEMA_VERSION = 1;
 
@@ -1813,54 +1820,6 @@ export interface EditLayerOptions {
   y?: number;
   opacity?: number;
   /**
-   * Resize by a relative scale factor (#133, ADR-0016): multiplies the
-   * Layer's current canonical scale. Mutually exclusive with `resizeTo` and
-   * with content-replacement options — resizing changes placement, never
-   * retained pixels, and one edit carries one intent.
-   */
-  resizeFactor?: number;
-  /**
-   * Resize to an absolute effective size in px (#133, ADR-0016): image Layers
-   * only (text has no intrinsic pixel size until measurement exists). One
-   * omitted axis preserves the Layer's current aspect ratio (a deliberate
-   * both-axes change survives); both axes deliberately change it. Normalized
-   * to canonical scale here at the edit boundary; never stored as
-   * authoritative fields.
-   */
-  resizeTo?: { width?: number; height?: number };
-  /**
-   * Set the Layer's canonical scale to an ABSOLUTE factor (#231, spec #226
-   * US-004, DEC-005, ADR-0016): sets the Layer's canonical scale (uniform
-   * both axes), replacing any previous scale — repeating the same command
-   * keeps the same scale, never compounding (unlike the relative --resize
-   * factor). Writes the one canonical scale representation; no second
-   * scale field. Mutually exclusive with the other resize forms (--resize,
-   * --resize-to) and with content-replacement options — the effective-size
-   * cap check reads the retained content's intrinsic facts, so one edit
-   * carries one intent.
-   */
-  scale?: number;
-  /**
-   * Rotate the Layer to an ABSOLUTE angle in degrees (#134, ADR-0016): sets
-   * the Layer's canonical rotation, replacing any previous angle — repeating
-   * the same command keeps the same angle, and 0 removes the rotation. Unlike
-   * the relative resize factor this is never incremental. Rotation is
-   * independent of the retained content's size, so it combines freely with
-   * other edit options, including content replacement and resize.
-   */
-  rotateDeg?: number;
-  /**
-   * Flip the Layer to an ABSOLUTE reflection state (#135, ADR-0016): sets the
-   * Layer's canonical reflection, replacing any previous state — `horizontal`
-   * mirrors along the content's own vertical axis (left–right), `vertical`
-   * along its horizontal axis (top–bottom), `both` mirrors both axes, and
-   * `none` removes the reflection. Like rotation this is never incremental:
-   * the same command twice keeps the same state. Flip is independent of the
-   * retained content's size, so it combines freely with other edit options,
-   * including content replacement and resize.
-   */
-  flip?: "horizontal" | "vertical" | "both" | "none";
-  /**
    * Shape content options (#208, #209): parsed at the command boundary, and
    * on `layer edit` ABSOLUTE setters on a shape Layer (#209, spec #207
    * US-002) — each supplied option replaces that parameter, an omitted
@@ -1868,77 +1827,26 @@ export interface EditLayerOptions {
    * ONE shape-content validator. On image and text Layers every shape
    * option is refused naming kind stability. They exist in the option table
    * so `composition add` accepts them for shape content and the guard tests
-   * can enumerate the full surface.
+   * can enumerate the full surface. Their application is per-surface by
+   * design (creation vs the kind-stable parameter merge — not a
+   * stored-vs-provisional context difference), so they are not shared
+   * application cases (#263).
    */
   shape?: "rectangle" | "ellipse";
   size?: { width: number; height: number };
   cornerRadius?: number;
   fill?: LayerFill;
   /**
-   * Apply a shadow to the Layer's content (#139, ADR-0018): an ABSOLUTE
-   * setter that replaces any previous shadow — the same command twice keeps
-   * the same shadow — and `"none"` removes it. The spec string is normalized
-   * by `resolveEditShadow` against the current revision, so an omitted option
-   * preserves the current revision's shadow. Independent of the retained
-   * content's size, so it combines freely with other edit options including
-   * content replacement and resize; it must not combine with --anchor, whose
-   * resolution would see different ink than the edit publishes.
+   * The shared option values (DEC-001, #263): the parsed post-content
+   * options — the resize forms, the canonical transform, the effects, the
+   * visible region, and the vector colour — keyed by the option table's
+   * own keys, normalized by the table's parse registrations at the command
+   * boundary. The edit path dispatches each supplied key through its ONE
+   * shared application case (`EDIT_APPLICATION_ORDER`) against a draft of
+   * the stored revision under the Project lock; there is no per-option
+   * member or application call for these options left.
    */
-  shadow?: string;
-  /**
-   * Apply an outline to the Layer's content (#140, ADR-0019): an ABSOLUTE
-   * setter that replaces any previous outline — the same command twice keeps
-   * the same outline — and `"none"` removes it. The spec string is
-   * normalized by `resolveEditOutline` against the current revision, so an
-   * omitted option preserves the current revision's outline. Independent of
-   * the retained content's size, so it combines freely with other edit
-   * options including content replacement and resize; it must not combine
-   * with --anchor, whose resolution would see different ink than the edit
-   * publishes.
-   */
-  outline?: string;
-  /**
-   * Set the Layer's rectangular visible region (#211, spec #207 US-003,
-   * ADR-0023): an ABSOLUTE setter "<x>,<y>,<width>,<height>" in the Layer's
-   * own content pixels, replacing any previous region — and "none" removes
-   * it. The region is validated against the content box before anything is
-   * staged: a region outside the content or with zero area is refused, and
-   * an omitted option preserves the current revision's region. It must not
-   * combine with content edits (content replacement, text content and
-   * style, shape parameters) in one edit — the region is validated against
-   * the content box, so those are separate edits — and not with --anchor,
-   * whose resolution would see different ink than the edit publishes.
-   */
-  visibleRegion?: string;
-  /**
-   * Round the visible region's corners (#212, spec #207 US-003, ADR-0023):
-   * an ABSOLUTE setter in px that edits and removes INDEPENDENTLY of the
-   * rectangle — a positive value sets the radius, `0` or "none" removes it,
-   * and an omitted option preserves the current radius (even when the
-   * rectangle is re-set in the same edit). The radius rounds the region
-   * rectangle it is set on: it obeys the ONE corner-radius rule the shape
-   * Layer's --corner-radius ships (`validateRectangleCornerRadius`) — over
-   * half the region rectangle's shorter side is REFUSED, never clamped — and
-   * it needs a visible region: a radius on a Layer without one, or combined
-   * with the region's removal, is refused before anything is staged.
-   * Removing the region removes its radius with it (one revision fact).
-   */
-  visibleRegionRadius?: string;
-  /**
-   * Paint a vector image Layer's shape in one colour (#215, spec #207 US-005,
-   * DEC-008): an ABSOLUTE setter that replaces any previous colour — the
-   * same command twice keeps the same colour — and "none" removes it,
-   * restoring the authored colours byte-identically (absence IS the
-   * no-colour form). The colour takes the ONE fill-colour grammar
-   * (parseFillColorSpec — #RGB/#RRGGBB/#RRGGBBAA, alpha allowed). Defined
-   * for vector (format svg) image Layers only: refused on raster image,
-   * text, and shape Layers before anything is staged, naming each kind's
-   * own colour control (--color / --fill). When the same edit replaces
-   * content (--image/--from-generation/--from-matte), the refusal reads the
-   * NEW content's format. Combines freely with the transform, effect, and
-   * region options; the retained bytes never change.
-   */
-  vectorColor?: string;
+  shared?: SharedOptionValues;
   /**
    * Generated-content ingestion (#107): explicitly replace an image Layer's
    * content with one selected output of a Generation Job, retaining the job's
@@ -2126,7 +2034,10 @@ function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision)
  * staging, so an invalid angle never advances live state. Exported as the
  * ONE rotation path for one-command `composition add` too (#229, DEC-001).
  */
-export function resolveEditRotation(options: EditLayerOptions, prevRev: ResolvedLayerRevision): number {
+export function resolveEditRotation(
+  options: { rotateDeg?: number },
+  prevRev: ResolvedLayerRevision,
+): number {
   if (options.rotateDeg === undefined) {
     return prevRev.rotationDeg;
   }
@@ -2144,7 +2055,10 @@ export function resolveEditRotation(options: EditLayerOptions, prevRev: Resolved
  * staging, so an invalid mode never advances live state. Exported as the
  * ONE reflection path for one-command `composition add` too (#229, DEC-001).
  */
-export function resolveEditFlip(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerTransformFlip {
+export function resolveEditFlip(
+  options: { flip?: "horizontal" | "vertical" | "both" | "none" },
+  prevRev: ResolvedLayerRevision,
+): LayerTransformFlip {
   if (options.flip === undefined) {
     return { flipX: prevRev.flipX, flipY: prevRev.flipY };
   }
@@ -2263,8 +2177,8 @@ export function parseOutlineSpec(spec: string): LayerOutline | undefined {
  * parser exists. Exported for the CLI boundary: the command classifies
  * malformed specs as usage errors (exit 2) with this same parser, so the
  * two never disagree. The kind/format refusals (raster image, text, shape)
- * are semantic — they read live state — and live in
- * `resolveEditVectorColor` / the one-command application path.
+ * are semantic — they read the revision the option resolves against — and
+ * live in the shared application case (`applyVectorColor`).
  */
 export function parseVectorColorSpec(spec: string): string | undefined {
   const raw = spec.trim();
@@ -2317,38 +2231,12 @@ function callerFontEq(a: CallerFontFacts | undefined, b: CallerFontFacts | undef
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/**
- * Canonical shadow edit resolution (#139, ADR-0018): an omitted option
- * preserves the current revision's shadow; a spec sets or removes it
- * absolutely. The refusal runs before any staging, so an invalid shadow
- * never advances live state.
- */
-function resolveEditShadow(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerShadow | undefined {
-  if (options.shadow === undefined) {
-    return prevRev.shadow;
-  }
-  return parseShadowSpec(options.shadow);
-}
-
 /** Field-wise outline equality for the no-op check (#140): the flip
  * precedent — re-issuing an identical outline is a detected no-op, never a
  * redundant revision. */
 function outlineEq(a: LayerOutline | undefined, b: LayerOutline | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   return a.width === b.width && a.color === b.color;
-}
-
-/**
- * Canonical outline edit resolution (#140, ADR-0019): an omitted option
- * preserves the current revision's outline; a spec sets or removes it
- * absolutely. The refusal runs before any staging, so an invalid outline
- * never advances live state.
- */
-function resolveEditOutline(options: EditLayerOptions, prevRev: ResolvedLayerRevision): LayerOutline | undefined {
-  if (options.outline === undefined) {
-    return prevRev.outline;
-  }
-  return parseOutlineSpec(options.outline);
 }
 
 /**
@@ -2518,47 +2406,6 @@ const REGION_CONFLICTING_OPTION_PRESENT = (options: EditLayerOptions): boolean =
   options.fill !== undefined;
 
 /**
- * Canonical vector-colour edit resolution (#215, spec #207 US-005, DEC-008):
- * an omitted option preserves the current revision's colour; a spec sets or
- * removes it absolutely. The removal form ("none") is the established
- * idempotent no-op on EVERY kind (the same removal precedents --shadow none
- * and --flip none have: removing nothing needs no kind gate), so the kind
- * and raster refusals fire only for a SET — before anything is staged,
- * before any content ingestion. The raster gate reads the format of the
- * content the edit would publish: the live revision's when no content is
- * replaced, the ingested replacement's otherwise (checked in
- * buildEditedRevision, still before anything is stored).
- */
-function resolveEditVectorColor(
-  options: EditLayerOptions,
-  prevRev: ResolvedLayerRevision,
-  layerId: string,
-): { given: boolean; value: string | undefined } {
-  if (options.vectorColor === undefined) {
-    return { given: false, value: prevRev.kind === "image" ? prevRev.vectorColor : undefined };
-  }
-  const value = parseVectorColorSpec(options.vectorColor);
-  // The removal form is the idempotent no-op every other absolute setter's
-  // "none" is: it removes nothing on a Layer without the fact and never
-  // hits a kind gate — the parameter's refusals are about SETTING a colour.
-  if (value === undefined) {
-    return { given: true, value: undefined };
-  }
-  if (prevRev.kind === "text") {
-    throw new Error(vectorColorKindRefusal("text", layerId));
-  }
-  if (prevRev.kind === "shape") {
-    throw new Error(vectorColorKindRefusal("shape", layerId));
-  }
-  const contentReplaced =
-    options.image !== undefined || options.fromGeneration !== undefined || options.fromMatte !== undefined;
-  if (!contentReplaced && prevRev.format !== "svg") {
-    throw new Error(vectorColorKindRefusal("raster", layerId, prevRev.format));
-  }
-  return { given: true, value };
-}
-
-/**
  * The one vector-colour raster gate for a content replacement (#215): the
  * published content's format decides. A colour SET alongside the
  * replacement refuses naming the raster contract; a colour CARRIED across
@@ -2585,90 +2432,6 @@ function vectorColorRasterGate(
   );
 }
 
-/**
- * Canonical visible-region edit resolution (#211, ADR-0023; #212 radius):
- * an omitted option preserves the current revision's region; a spec sets or
- * removes it absolutely. A set region validates against the content box of
- * the Layer it is set on — the revision's intrinsic facts for image and
- * shape, and the measured line-box extent for text (the unwrapped standalone
- * line, measured from the in-memory snapshot — never a second Project read).
- * The optional corner radius (#212) resolves on the SAME fact, independently
- * of the rectangle: a radius-only edit keeps the rectangle and re-validates
- * the radius against it; a rectangle re-set keeps the current radius (an
- * omitted radius option preserves it, re-validated against the NEW
- * rectangle); `none`/`0` remove the radius. Every refusal runs before any
- * staging, so an invalid region or radius never advances live state.
- */
-async function resolveEditVisibleRegion(
-  resolvedRoot: string,
-  options: EditLayerOptions,
-  prevRev: ResolvedLayerRevision,
-  contentBytes: Buffer,
-  layerId: string,
-): Promise<LayerVisibleRegion | undefined> {
-  const rectGiven = options.visibleRegion !== undefined;
-  const radiusGiven = options.visibleRegionRadius !== undefined;
-  if (!rectGiven && !radiusGiven) {
-    return prevRev.visibleRegion;
-  }
-  const radius = radiusGiven ? parseVisibleRegionRadiusSpec(options.visibleRegionRadius!) : undefined;
-  const rect = rectGiven ? parseVisibleRegionSpec(options.visibleRegion!) : prevRev.visibleRegion;
-  // A radius needs a region to round: a positive radius on a Layer without
-  // one, or combined with the region's removal, is refused before anything
-  // is staged. `none` — and 0, the no-rounding form — remove nothing: the
-  // same idempotent removal the rectangle's `none` has, so the two removal
-  // spellings agree even without a region.
-  if (rect === undefined) {
-    if (radius !== undefined && radius > 0) {
-      throw new Error(
-        rectGiven
-          ? `Invalid visible-region corner radius ${options.visibleRegionRadius}: Layer "${layerId}" cannot set a corner radius while removing the visible region — a radius rounds a region's corners, so it needs a visible region. Remove the radius (--visible-region-radius none) or keep the region.`
-          : `Invalid visible-region corner radius ${options.visibleRegionRadius}: Layer "${layerId}" has no visible region to round — set one first (--visible-region "<x>,<y>,<width>,<height>"), then round its corners.`,
-      );
-    }
-    return undefined;
-  }
-  // The rectangle's content-bounds check runs only when the rectangle is
-  // explicitly (re-)set, against the content box of the SAME content the
-  // edit would publish — content edits are refused in one edit with the
-  // region, so that is always the live revision's box; a text Layer's box is
-  // its measured line-box extent (the unwrapped standalone line, the same
-  // measurement authority anchored placement resolves an unreferenced Layer
-  // against).
-  if (rectGiven) {
-    if (prevRev.kind === "text") {
-      // A text Layer has no stored intrinsic size: its content box is the
-      // DOM line-box extent of the retained face at this revision's settings,
-      // measured through the one measurement authority (DEC-006) on the
-      // already-resolved snapshot — the edit path holds the Project lock, so
-      // the lock-free snapshot variant is the only safe way to measure here.
-      const standalone = await measureStandaloneSnapshot({ ...prevRev, x: 0, y: 0 }, contentBytes);
-      validateVisibleRegionAgainstContent(rect, standalone.content, layerId);
-    } else {
-      validateVisibleRegionAgainstContent(rect, { width: prevRev.width, height: prevRev.height }, layerId);
-    }
-  }
-  // The radius (#212): an explicit value sets or removes it; an omitted
-  // radius option preserves the current one — and a PRESERVED radius must
-  // still fit the (possibly new) rectangle, the same refusal a re-issued
-  // radius would get. 0 stores nothing (the same look as absent).
-  const effectiveRadius = radiusGiven
-    ? radius
-    : rectGiven
-      ? prevRev.visibleRegion?.cornerRadius
-      : rect.cornerRadius;
-  if (effectiveRadius !== undefined && effectiveRadius > 0) {
-    validateRectangleCornerRadius(effectiveRadius, rect.width, rect.height);
-  }
-  return {
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height,
-    ...(effectiveRadius !== undefined && effectiveRadius > 0 ? { cornerRadius: effectiveRadius } : {}),
-  };
-}
-
 /** Rendered effective size rounds to hundredths of a px: auditable display of the scale's effect. */
 export function roundEffective(px: number): number {
   return Math.round(px * 100) / 100;
@@ -2693,8 +2456,21 @@ export function roundEffective(px: number): number {
  * aspect rules are byte-identical to the edit surface's by construction —
  * including the text-Layer refusal for --resize-to (identical wording).
  */
+/** The resize/scale intent a scale resolution reads: the three mutually
+ *  exclusive forms plus the content-replacement presence the domain
+ *  re-check reads (the shared application cases pass one form; the edit
+ *  path's domain re-check passes the content flags too). */
+export interface LayerResizeIntent {
+  resizeFactor?: number;
+  resizeTo?: { width?: number; height?: number };
+  scale?: number;
+  image?: string;
+  fromGeneration?: unknown;
+  fromMatte?: unknown;
+}
+
 export function resolveEditScale(
-  options: EditLayerOptions,
+  options: LayerResizeIntent,
   prevRev: ResolvedLayerRevision,
   layerId: string,
 ): LayerTransformScale {
@@ -2879,25 +2655,40 @@ function resolveEditTextAxes(
  * uses `unchanged` to skip storage churn; fork ignores it because an explicit
  * fork always publishes a new identity, even with unchanged content.
  */
+/** The applied shared-option facts an edit publishes (DEC-001, #263):
+ *  derived, not enumerated — an application case's fact carries when the
+ *  stored revision's own key set has no such key, i.e. when the case ADDED
+ *  it. Every stored-revision field (canonical or resolved-only) is in
+ *  prevRev, so the carry is empty for every existing edit and no stored
+ *  field can flow into it: no-op edits stay no-ops, and a new option's
+ *  fact publishes on both surfaces from one registration. */
+function carryAppliedSharedFacts(
+  draft: SharedOptionDraft,
+  prevRev: ResolvedLayerRevision,
+): Record<string, unknown> {
+  const carried: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(draft)) {
+    if (!(key in prevRev) && value !== undefined) {
+      carried[key] = value;
+    }
+  }
+  return carried;
+}
+
 async function buildEditedRevision(
   resolvedRoot: string,
   prevRev: ResolvedLayerRevision,
   layerId: string,
   createdAt: string,
   options: EditLayerOptions,
-  placement: { x: number; y: number; opacity: number },
-  scale: LayerTransformScale,
-  rotationDeg: number,
-  flip: LayerTransformFlip,
-  shadow: LayerShadow | undefined,
-  outline: LayerOutline | undefined,
-  visibleRegion: LayerVisibleRegion | undefined,
-  /** The vector-colour resolution (#215): { given, value } — `given` drives
-   * the edit report, `value` is the canonical colour to store (undefined
-   * when absent or removed). The kind gates already ran in
-   * resolveEditVectorColor; the raster gate for a same-edit content
-   * replacement runs here against the ingested format, before any store. */
-  vectorColor: { given: boolean; value: string | undefined },
+  /** The parsed shared option values (DEC-001, #263): the vector colour's
+   * presence feeds the raster gate's given/value pair. */
+  shared: SharedOptionValues,
+  /** The application draft (#263): the stored revision plus the resolved
+   * placement, mutated by the shared application cases in the edit
+   * surface's established application order. The branches read its
+   * canonical facts and carry its applied shared-option facts. */
+  draft: SharedOptionDraft,
   /** The previous revision's verified content bytes (#211 review PROD-1):
    * the text branch measures the resulting revision's standalone line box
    * with the bytes the NEW revision pins (the previous bytes when no font
@@ -2919,7 +2710,7 @@ async function buildEditedRevision(
    * PROD-1): the kept region now frames the replaced content. */
   regionCarried?: EditLayerResult["regionCarried"];
 }> {
-  const { x, y, opacity } = placement;
+  const { x, y, opacity } = draft;
 
   // Shape content options (#209, spec #207 US-002): each parameter is an
   // ABSOLUTE setter on a shape Layer; on image and text Layers every shape
@@ -2969,9 +2760,9 @@ async function buildEditedRevision(
     // here (the edit path refuses --visible-region with content options).
     let regionCarried: EditLayerResult["regionCarried"];
     const keptRegionCheck = (box: { width: number; height: number }) => {
-      if (visibleRegion !== undefined) {
-        validateKeptVisibleRegion(visibleRegion, box, layerId);
-        regionCarried = { visibleRegion };
+      if (draft.visibleRegion !== undefined) {
+        validateKeptVisibleRegion(draft.visibleRegion, box, layerId);
+        regionCarried = { visibleRegion: draft.visibleRegion };
       }
     };
     if (options.fromGeneration !== undefined) {
@@ -2993,7 +2784,7 @@ async function buildEditedRevision(
       // The vector colour's raster gate (#215): a SET alongside the
       // replacement refuses, a CARRIED colour refuses naming the fix — both
       // before any retention; the removal form passes.
-      vectorColorRasterGate(vectorColor, validated.format, layerId);
+      vectorColorRasterGate({ given: shared["vector-color"] !== undefined, value: draft.vectorColor }, validated.format, layerId);
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
       contentHash = validated.contentHash;
@@ -3022,7 +2813,7 @@ async function buildEditedRevision(
       // The vector colour's raster gate (#215): the matte output is raster
       // pixels — a set or carried colour refuses before any retention; the
       // removal form passes.
-      vectorColorRasterGate(vectorColor, validated.format, layerId);
+      vectorColorRasterGate({ given: shared["vector-color"] !== undefined, value: draft.vectorColor }, validated.format, layerId);
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainMattingRecord(resolvedRoot, selected.matte.matteId, selected.recordBytes);
       if (selected.sourceBytes) {
@@ -3046,11 +2837,12 @@ async function buildEditedRevision(
       // The vector colour's raster gate (#215): a SET alongside the
       // replacement refuses, a CARRIED colour refuses naming the fix — both
       // before the content is stored; the removal form passes.
-      vectorColorRasterGate(vectorColor, ingested.format, layerId);
+      vectorColorRasterGate({ given: shared["vector-color"] !== undefined, value: draft.vectorColor }, ingested.format, layerId);
       await storeContentBlob(resolvedRoot, ingested.contentHash, ingested.bytes);
       contentHash = ingested.contentHash;
     }
 
+    const carried = carryAppliedSharedFacts(draft, prevRev);
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
@@ -3060,25 +2852,27 @@ async function buildEditedRevision(
       x,
       y,
       opacity,
-      scaleX: scale.scaleX,
-      scaleY: scale.scaleY,
-      rotationDeg,
-      flipX: flip.flipX,
-      flipY: flip.flipY,
-      ...(shadow !== undefined ? { shadow } : {}),
-      ...(outline !== undefined ? { outline } : {}),
-      ...(visibleRegion !== undefined ? { visibleRegion } : {}),
-      ...(vectorColor.value !== undefined ? { vectorColor: vectorColor.value } : {}),
+      scaleX: draft.scaleX,
+      scaleY: draft.scaleY,
+      rotationDeg: draft.rotationDeg,
+      flipX: draft.flipX,
+      flipY: draft.flipY,
+      ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
+      ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
+      ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
+      ...(draft.vectorColor !== undefined ? { vectorColor: draft.vectorColor } : {}),
+      ...carried,
     };
     const unchanged =
       contentHash === prevRev.contentHash && x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
-      scale.scaleX === prevRev.scaleX && scale.scaleY === prevRev.scaleY &&
-      rotationDeg === prevRev.rotationDeg &&
-      flip.flipX === prevRev.flipX && flip.flipY === prevRev.flipY &&
-      shadowEq(shadow, prevRev.shadow) &&
-      outlineEq(outline, prevRev.outline) &&
-      visibleRegionEq(visibleRegion, prevRev.visibleRegion) &&
-      vectorColor.value === prevRev.vectorColor;
+      draft.scaleX === prevRev.scaleX && draft.scaleY === prevRev.scaleY &&
+      draft.rotationDeg === prevRev.rotationDeg &&
+      draft.flipX === prevRev.flipX && draft.flipY === prevRev.flipY &&
+      shadowEq(draft.shadow, prevRev.shadow) &&
+      outlineEq(draft.outline, prevRev.outline) &&
+      visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
+      draft.vectorColor === prevRev.vectorColor &&
+      Object.keys(carried).length === 0;
     return { revision, unchanged, mattedFrom, retainedGeneration, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
 
@@ -3123,7 +2917,7 @@ async function buildEditedRevision(
     // never advances live state.
     if (
       options.size !== undefined &&
-      (options.resizeFactor !== undefined || options.resizeTo !== undefined || options.scale !== undefined)
+      (shared.resize !== undefined || shared["resize-to"] !== undefined || shared.scale !== undefined)
     ) {
       throw new Error(
         `--size and the resize forms (--resize, --resize-to, --scale) are separate edits: Layer "${layerId}" cannot set the geometry's intrinsic size and resize in one edit, because the effective-size cap and the resize reference read the geometry's intrinsic size.`,
@@ -3159,6 +2953,7 @@ async function buildEditedRevision(
     // from the merged parameters exactly as creation hashes them.
     const contentHash = createHash("sha256").update(shapeContentIdentity(shapeContent)).digest("hex");
 
+    const carried = carryAppliedSharedFacts(draft, prevRev);
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
@@ -3173,14 +2968,15 @@ async function buildEditedRevision(
       x,
       y,
       opacity,
-      scaleX: scale.scaleX,
-      scaleY: scale.scaleY,
-      rotationDeg,
-      flipX: flip.flipX,
-      flipY: flip.flipY,
-      ...(shadow !== undefined ? { shadow } : {}),
-      ...(outline !== undefined ? { outline } : {}),
-      ...(visibleRegion !== undefined ? { visibleRegion } : {}),
+      scaleX: draft.scaleX,
+      scaleY: draft.scaleY,
+      rotationDeg: draft.rotationDeg,
+      flipX: draft.flipX,
+      flipY: draft.flipY,
+      ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
+      ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
+      ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
+      ...carried,
     };
     const unchanged =
       shapeContent.shape === prevRev.shape &&
@@ -3193,27 +2989,28 @@ async function buildEditedRevision(
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity &&
-      scale.scaleX === prevRev.scaleX &&
-      scale.scaleY === prevRev.scaleY &&
-      rotationDeg === prevRev.rotationDeg &&
-      flip.flipX === prevRev.flipX &&
-      flip.flipY === prevRev.flipY &&
-      shadowEq(shadow, prevRev.shadow) &&
-      outlineEq(outline, prevRev.outline) &&
-      visibleRegionEq(visibleRegion, prevRev.visibleRegion);
+      draft.scaleX === prevRev.scaleX &&
+      draft.scaleY === prevRev.scaleY &&
+      draft.rotationDeg === prevRev.rotationDeg &&
+      draft.flipX === prevRev.flipX &&
+      draft.flipY === prevRev.flipY &&
+      shadowEq(draft.shadow, prevRev.shadow) &&
+      outlineEq(draft.outline, prevRev.outline) &&
+      visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
+      Object.keys(carried).length === 0;
     // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
     // --size change the content box, so the kept region re-validates against
     // the merged geometry before anything is published — outside is refused
     // (US-003); fitting publishes with the `regionCarried` report. A radius
     // or fill edit does not change the box.
     let regionCarried: EditLayerResult["regionCarried"];
-    if (visibleRegion !== undefined && (options.shape !== undefined || options.size !== undefined)) {
+    if (draft.visibleRegion !== undefined && (options.shape !== undefined || options.size !== undefined)) {
       validateKeptVisibleRegion(
-        visibleRegion,
+        draft.visibleRegion,
         { width: shapeContent.width, height: shapeContent.height },
         layerId,
       );
-      regionCarried = { visibleRegion };
+      regionCarried = { visibleRegion: draft.visibleRegion };
     }
     return {
       revision,
@@ -3341,6 +3138,7 @@ async function buildEditedRevision(
     const resolvedCallerFont =
       callerFont ?? (options.font !== undefined ? undefined : prevRev.callerFont);
 
+    const carried = carryAppliedSharedFacts(draft, prevRev);
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
       layerId,
@@ -3357,14 +3155,15 @@ async function buildEditedRevision(
       x,
       y,
       opacity,
-      scaleX: scale.scaleX,
-      scaleY: scale.scaleY,
-      rotationDeg,
-      flipX: flip.flipX,
-      flipY: flip.flipY,
-      ...(shadow !== undefined ? { shadow } : {}),
-      ...(outline !== undefined ? { outline } : {}),
-      ...(visibleRegion !== undefined ? { visibleRegion } : {}),
+      scaleX: draft.scaleX,
+      scaleY: draft.scaleY,
+      rotationDeg: draft.rotationDeg,
+      flipX: draft.flipX,
+      flipY: draft.flipY,
+      ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
+      ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
+      ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
+      ...carried,
     };
     const unchanged =
       contentHash === prevRev.contentHash &&
@@ -3379,14 +3178,15 @@ async function buildEditedRevision(
       x === prevRev.x &&
       y === prevRev.y &&
       opacity === prevRev.opacity &&
-      scale.scaleX === prevRev.scaleX &&
-      scale.scaleY === prevRev.scaleY &&
-      rotationDeg === prevRev.rotationDeg &&
-      flip.flipX === prevRev.flipX &&
-      flip.flipY === prevRev.flipY &&
-      shadowEq(shadow, prevRev.shadow) &&
-      outlineEq(outline, prevRev.outline) &&
-      visibleRegionEq(visibleRegion, prevRev.visibleRegion);
+      draft.scaleX === prevRev.scaleX &&
+      draft.scaleY === prevRev.scaleY &&
+      draft.rotationDeg === prevRev.rotationDeg &&
+      draft.flipX === prevRev.flipX &&
+      draft.flipY === prevRev.flipY &&
+      shadowEq(draft.shadow, prevRev.shadow) &&
+      outlineEq(draft.outline, prevRev.outline) &&
+      visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
+      Object.keys(carried).length === 0;
     // A region KEPT across a text edit (#211 review PROD-1): the text
     // content box is the measured line-box extent, so a text edit that can
     // change it re-measures the RESULTING revision's standalone line (the
@@ -3397,7 +3197,7 @@ async function buildEditedRevision(
     // (the edit path refuses --visible-region with content options).
     let regionCarried: EditLayerResult["regionCarried"];
     if (
-      visibleRegion !== undefined &&
+      draft.visibleRegion !== undefined &&
       (options.text !== undefined || options.font !== undefined || options.fontFile !== undefined ||
         options.fontSize !== undefined || options.weight !== undefined || options.width !== undefined ||
         options.tracking !== undefined || options.lineHeight !== undefined)
@@ -3406,8 +3206,8 @@ async function buildEditedRevision(
         { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
         newTextBytes ?? prevContentBytes,
       );
-      validateKeptVisibleRegion(visibleRegion, standalone.content, layerId);
-      regionCarried = { visibleRegion };
+      validateKeptVisibleRegion(draft.visibleRegion, standalone.content, layerId);
+      regionCarried = { visibleRegion: draft.visibleRegion };
     }
     return { revision, unchanged, retainedGeneration: null, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
@@ -3575,61 +3375,104 @@ export async function editLayerInternal(
     throw err;
   }
 
-  // 3. Placement and transform-scale options: preserve existing values if omitted
+  // 3. Placement options: preserve existing values if omitted (placement's
+  //    application is the edit lifecycle's preserve-or-replace on the stored
+  //    revision and add's creation defaults — not a shared application
+  //    case). The converged post-content options (#263) dispatch through
+  //    their ONE shared application cases against a draft of the STORED
+  //    revision (under the Project lock), in the edit surface's established
+  //    application order — omitted options preserve the current revision by
+  //    construction (the draft starts there). The dispatch context carries
+  //    what the shared cases resolve against: the stored revision, its
+  //    verified bytes, and the vector-colour raster gate's format input
+  //    (deferred to the ingested content when this edit replaces it).
   const placement = resolveEditPlacement(options, prevRev);
-  const scale = resolveEditScale(options, prevRev, layerId);
-  const rotationDeg = resolveEditRotation(options, prevRev);
-  const flip = resolveEditFlip(options, prevRev);
-  // Shadow effect (#139, ADR-0018): absolute setter, refusal before staging.
-  const shadow = resolveEditShadow(options, prevRev);
-  const hasShadow = options.shadow !== undefined;
-  const shadowedReport = { shadow: shadow ?? null };
-  // Outline effect (#140, ADR-0019): absolute setter, refusal before staging.
-  const outline = resolveEditOutline(options, prevRev);
-  const hasOutline = options.outline !== undefined;
-  const outlinedReport = { outline: outline ?? null };
-  // Visible region (#211, spec #207 US-003, ADR-0023): absolute setter,
-  // refusal before staging. The region is validated against the content box
-  // of the SAME content the edit would publish — content edits are refused
-  // in one edit with the region, so that is always the live revision's box;
-  // a text Layer's box is its measured line-box extent (the unwrapped
-  // standalone line, the same measurement authority anchored placement
-  // resolves an unreferenced Layer against).
-  if ((options.visibleRegion !== undefined || options.visibleRegionRadius !== undefined) && REGION_CONFLICTING_OPTION_PRESENT(options)) {
-    throw new Error(
-      `Visible region and content edits are separate edits: Layer "${layerId}" cannot set --visible-region/--visible-region-radius and replace or reshape its content in one edit, because the region is validated against the content box. ` +
-        `Set the region in its own edit.`,
-    );
+  const shared = options.shared ?? {};
+  const draft = { ...prevRev, ...placement } as SharedOptionDraft;
+  const sharedContext: SharedOptionApplyContext = {
+    surface: "edit",
+    base: prevRev,
+    layerId,
+    contentBytes: current.contentBytes,
+    format:
+      options.image === undefined && options.fromGeneration === undefined && options.fromMatte === undefined && prevRev.kind === "image"
+        ? prevRev.format
+        : undefined,
+    parsed: shared,
+  };
+  for (const step of EDIT_APPLICATION_ORDER) {
+    if ("policy" in step) {
+      if (step.policy === "resize-forms") {
+        // The domain re-checks of the ONE resize-form rule (#133/#231), at
+        // the resolver's established position: at most one form per edit,
+        // and never together with content replacement — the same
+        // exclusivity rule the boundary parse refuses (exit 2), re-checked
+        // at the domain boundary so no caller of the edit functions can
+        // bypass it.
+        resolveEditScale(
+          {
+            ...(shared.resize !== undefined ? { resizeFactor: shared.resize as number } : {}),
+            ...(shared["resize-to"] !== undefined
+              ? { resizeTo: shared["resize-to"] as { width?: number; height?: number } }
+              : {}),
+            ...(shared.scale !== undefined ? { scale: shared.scale as number } : {}),
+            image: options.image,
+            fromGeneration: options.fromGeneration,
+            fromMatte: options.fromMatte,
+          },
+          prevRev,
+          layerId,
+        );
+        continue;
+      }
+      // "region-content": the region is validated against the content box,
+      // so content edits are refused in one edit with it — the established
+      // position between the effects and the region's application.
+      if (
+        (shared["visible-region"] !== undefined || shared["visible-region-radius"] !== undefined) &&
+        REGION_CONFLICTING_OPTION_PRESENT(options)
+      ) {
+        throw new Error(
+          `Visible region and content edits are separate edits: Layer "${layerId}" cannot set --visible-region/--visible-region-radius and replace or reshape its content in one edit, because the region is validated against the content box. ` +
+            `Set the region in its own edit.`,
+        );
+      }
+      continue;
+    }
+    const value = shared[step.option];
+    if (value === undefined) continue;
+    // The ONE single-option dispatch (DEC-001, #263): the same lookup the
+    // add path runs — an option that parses at the command boundary but has
+    // no application case fails loudly here, never silently dropped.
+    await applyLayerOption(step.option, draft, value, sharedContext);
   }
-  const visibleRegion = await resolveEditVisibleRegion(resolvedRoot, options, prevRev, current.contentBytes, layerId);
-  const hasRegion = options.visibleRegion !== undefined || options.visibleRegionRadius !== undefined;
-  const regionSetReport = { visibleRegion: visibleRegion ?? null };
-  // Vector colour (#215, spec #207 US-005, DEC-008): absolute setter, refusal
-  // before staging — the kind gates run here, before any content ingestion,
-  // and the raster gate reads the live revision's format (a same-edit
-  // content replacement defers the gate to the ingested format, still
-  // before anything is stored).
-  const vectorColor = resolveEditVectorColor(options, prevRev, layerId);
-  const vectorColorSetReport = { vectorColor: vectorColor.value ?? null };
+  const hasShadow = shared.shadow !== undefined;
+  const shadowedReport = { shadow: draft.shadow ?? null };
+  const hasOutline = shared.outline !== undefined;
+  const outlinedReport = { outline: draft.outline ?? null };
+  const hasRegion = shared["visible-region"] !== undefined || shared["visible-region-radius"] !== undefined;
+  const regionSetReport = { visibleRegion: draft.visibleRegion ?? null };
+  const vectorColorSetReport = { vectorColor: draft.vectorColor ?? null };
   // Absolute effective facts for the result (#133): the scale is authoritative
   // and always reported; image Layers additionally report the effective size
   // the scale produces from the retained content's intrinsic dimensions.
   const resizedReport =
     prevRev.kind === "image" || prevRev.kind === "shape"
       ? {
-          scaleX: scale.scaleX,
-          scaleY: scale.scaleY,
-          width: roundEffective(prevRev.width * scale.scaleX),
-          height: roundEffective(prevRev.height * scale.scaleY),
+          scaleX: draft.scaleX,
+          scaleY: draft.scaleY,
+          width: roundEffective(prevRev.width * draft.scaleX),
+          height: roundEffective(prevRev.height * draft.scaleY),
         }
-      : { scaleX: scale.scaleX, scaleY: scale.scaleY };
-  const hasResize = options.resizeFactor !== undefined || options.resizeTo !== undefined || options.scale !== undefined;
-  const hasRotate = options.rotateDeg !== undefined;
-  const rotatedReport = { rotationDeg };
+      : { scaleX: draft.scaleX, scaleY: draft.scaleY };
+  const hasResize =
+    shared.resize !== undefined || shared["resize-to"] !== undefined || shared.scale !== undefined;
+  const hasRotate = shared.rotate !== undefined;
+  const rotatedReport = { rotationDeg: draft.rotationDeg };
   // Narrowed once: a defined flip is always a validated literal mode, so the
   // report never needs a cast (and absence means no --flip option was given).
   const flippedReport =
-    options.flip !== undefined ? { flip: options.flip } : undefined;
+    shared.flip !== undefined ? { flip: shared.flip as "horizontal" | "vertical" | "both" | "none" } : undefined;
 
   if (intent.mode === "fork") {
     // Canonical target/use→original-id validation before any content work.
@@ -3644,14 +3487,8 @@ export async function editLayerInternal(
       newLayerId,
       createdAt,
       options,
-      placement,
-      scale,
-      rotationDeg,
-      flip,
-      shadow,
-      outline,
-      visibleRegion,
-      vectorColor,
+      shared,
+      draft,
       current.contentBytes,
     );
     // An explicit fork always publishes the new identity, even when the
@@ -3667,7 +3504,7 @@ export async function editLayerInternal(
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
     const withRegion = hasRegion ? { ...withOutline, regionSet: regionSetReport } : withOutline;
-    const withColour = vectorColor.given ? { ...withRegion, vectorColorSet: vectorColorSetReport } : withRegion;
+    const withColour = shared["vector-color"] !== undefined ? { ...withRegion, vectorColorSet: vectorColorSetReport } : withRegion;
     const withCarried = regionCarried ? { ...withColour, regionCarried } : withColour;
     const withShape = shapeEdited ? { ...withCarried, shapeEdited } : withCarried;
     return options.fromGeneration !== undefined
@@ -3690,14 +3527,8 @@ export async function editLayerInternal(
     layerId,
     new Date().toISOString(),
     options,
-    placement,
-    scale,
-    rotationDeg,
-    flip,
-    shadow,
-    outline,
-    visibleRegion,
-    vectorColor,
+    shared,
+    draft,
     current.contentBytes,
   );
 
@@ -3714,7 +3545,7 @@ export async function editLayerInternal(
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(hasOutline ? { outlined: outlinedReport } : {}),
       ...(hasRegion ? { regionSet: regionSetReport } : {}),
-      ...(vectorColor.given ? { vectorColorSet: vectorColorSetReport } : {}),
+      ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
       ...(regionCarried ? { regionCarried } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
@@ -3771,7 +3602,7 @@ export async function editLayerInternal(
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(hasOutline ? { outlined: outlinedReport } : {}),
     ...(hasRegion ? { regionSet: regionSetReport } : {}),
-    ...(vectorColor.given ? { vectorColorSet: vectorColorSetReport } : {}),
+    ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
     ...(regionCarried ? { regionCarried } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined

@@ -6,14 +6,15 @@
  * one-command `composition add` with NO add-side code naming it.
  *
  * The probe is registered in this file at runtime (the registration points
- * a real option would touch: the option table, the parseArgs declaration,
- * the shared parse entry, and the shared apply entry) and then driven
- * through the add surface's own paths: the ONE boundary parse
- * (`parseOneCommandOptionValues`, the call that replaced the per-option
- * parse blocks) and the real publication path (`addLayerToComposition`,
- * whose dispatch is the generic registry loop). If a future option still
- * needed an add-side parse block, member, presence check, name mapping, or
- * application case, this probe could not work — that is the poka-yoke.
+ * a real option touches: the option table — whose `parse` member is the
+ * option's ONE boundary parse — the parseArgs declaration, and the shared
+ * apply entry) and then driven through the surfaces' own paths: the ONE
+ * boundary parse (`parseOneCommandOptionValues`, the runner both surfaces'
+ * order lists dispatch through) and the real publication path
+ * (`addLayerToComposition`, whose dispatch is the generic registry loop).
+ * If a future option still needed an add-side parse block, member, presence
+ * check, name mapping, or application case, this probe could not work —
+ * that is the poka-yoke.
  *
  * The probe stamp is applied as a plain revision field, and the probe's
  * parse refusal is the probe's own wording: the test asserts the shared
@@ -26,22 +27,24 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { encodePngRgba } from "../src/png.js";
 import { initProject } from "../src/project.js";
-import { createComposition } from "../src/composition.js";
-import { addLayerToComposition } from "../src/composition.js";
+import { createComposition, addLayerToComposition } from "../src/composition.js";
+import { editLayer } from "../src/layer.js";
+import { readFile as readFileFs } from "node:fs/promises";
 import {
+  ADD_PARSE_ORDER,
+  EDIT_APPLICATION_ORDER,
+  EDIT_CHECK_ORDER,
   LAYER_OPTION_DEFS,
   LAYER_OPTION_PARSE_ARGS,
   anyOneCommandOptionProvided,
+  checkEditLayerOptions,
   oneCommandAddOptionKeys,
   oneCommandApplicationOrder,
   type LayerOptionDef,
   type LayerOptionKey,
 } from "../src/layer-options.js";
 import {
-  ONE_COMMAND_OPTION_APPLY,
-  ONE_COMMAND_PARSE_ENTRIES,
   parseOneCommandOptionValues,
-  type OneCommandOptionParseEntry,
   type OneCommandOptionValues,
 } from "../src/one-command.js";
 
@@ -59,28 +62,33 @@ function parseProbeStamp(raw: string | undefined) {
   return { ok: true, value: raw } as const;
 }
 
-const PROBE_PARSE_ENTRY: OneCommandOptionParseEntry = { key: PROBE_KEY, parse: parseProbeStamp };
+const PROBE_PARSE_ENTRY = parseProbeStamp;
 
 const PROBE_DEF: LayerOptionDef = {
   key: PROBE_KEY,
   group: "effect",
   appliesTo: ["image", "text", "shape"],
   editOption: true,
+  // The probe's ONE registration (DEC-001, #263): the boundary parse and
+  // the application case, carried on the shared option table itself, so
+  // both command surfaces dispatch through them.
+  parse: PROBE_PARSE_ENTRY,
+  apply: (draft, value) => {
+    (draft as unknown as Record<string, unknown>).probeStamp = value;
+  },
 };
 
 beforeAll(() => {
   // The probe's registration — the shared-definition points a real option
-  // declares (DEC-001): the option table, the parseArgs declaration, the
-  // shared parse entry, and the shared apply entry. Nothing on the add
-  // surface names it.
+  // declares (DEC-001): the option table (whose parse member is the ONE
+  // boundary parse and whose apply member is the ONE application case),
+  // the parseArgs declaration, and each surface's order-list membership.
+  // Nothing on either command surface names it.
   (LAYER_OPTION_DEFS as LayerOptionDef[]).push(PROBE_DEF);
   (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[PROBE_KEY] = { type: "string" };
-  (ONE_COMMAND_PARSE_ENTRIES as OneCommandOptionParseEntry[]).push(PROBE_PARSE_ENTRY);
-  (ONE_COMMAND_OPTION_APPLY as Record<string, NonNullable<(typeof ONE_COMMAND_OPTION_APPLY)[LayerOptionKey]>>)[
-    PROBE_KEY
-  ] = (rev, value) => {
-    (rev as unknown as Record<string, unknown>).probeStamp = value;
-  };
+  (ADD_PARSE_ORDER as LayerOptionKey[]).push(PROBE_KEY);
+  (EDIT_CHECK_ORDER as unknown as { option: LayerOptionKey }[]).push({ option: PROBE_KEY });
+  (EDIT_APPLICATION_ORDER as unknown as { option: LayerOptionKey }[]).push({ option: PROBE_KEY });
 });
 
 afterAll(() => {
@@ -90,8 +98,9 @@ afterAll(() => {
   // clean regardless of execution order.
   (LAYER_OPTION_DEFS as LayerOptionDef[]).pop();
   delete (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[PROBE_KEY];
-  (ONE_COMMAND_PARSE_ENTRIES as OneCommandOptionParseEntry[]).pop();
-  delete (ONE_COMMAND_OPTION_APPLY as Record<string, unknown>)[PROBE_KEY];
+  (ADD_PARSE_ORDER as LayerOptionKey[]).pop();
+  (EDIT_CHECK_ORDER as unknown as { option: LayerOptionKey }[]).pop();
+  (EDIT_APPLICATION_ORDER as unknown as { option: LayerOptionKey }[]).pop();
 });
 
 function solidPng(width: number, height: number, rgba: [number, number, number, number]): Buffer {
@@ -157,6 +166,65 @@ test("the shared definition parses, validates, and applies a probe option on add
   expect(res.use.name).toBe("probe1");
 });
 
+test("the same probe registration parses, validates, and applies on layer edit with no edit-side code naming it", async () => {
+  // The edit boundary's ONE check-order list dispatches the probe through
+  // its table-carried parse: the probe's value normalizes and refuses with
+  // the probe's own wording, exactly as on add.
+  const checked = checkEditLayerOptions({ [PROBE_KEY]: "good" } as Record<string, string>);
+  expect(checked.ok).toBe(true);
+  expect(checked.ok && (checked.parsed as Record<string, unknown>)[PROBE_KEY]).toBe("good");
+  const refused = checkEditLayerOptions({ [PROBE_KEY]: "bad" } as Record<string, string>);
+  expect(refused).toEqual({ ok: false, error: `${PROBE_FLAG} takes "good" (got "bad").`, exitCode: 2 });
+
+  // The real edit path applies the probe through the generic application
+  // dispatch (EDIT_APPLICATION_ORDER over the table's apply cases) against
+  // the stored revision's draft, and the applied fact publishes in the
+  // single edited revision — no edit-side code names the probe.
+  const added = await addLayerToComposition(projDir, "poster", "editprobe", imagePath, {});
+  const res = await editLayer(projDir, added.layer.id, {
+    inPlace: true,
+    shared: { [PROBE_KEY]: "good" } as OneCommandOptionValues,
+  });
+  const editRevDir = path.join(projDir, "layers", res.layer.id + ".revisions");
+  const stored = JSON.parse(await readFile(path.join(editRevDir, res.layer.currentRevisionId + ".json"), "utf8"));
+  expect(stored.probeStamp).toBe("good");
+});
+
+test("a table option with no registration throws at runtime on both surfaces (the #262 review gap, never silently absent)", () => {
+  const UNREGISTERED_KEY = "unregistered-stamp" as LayerOptionKey;
+  (LAYER_OPTION_DEFS as LayerOptionDef[]).push({
+    key: UNREGISTERED_KEY,
+    group: "effect",
+    appliesTo: ["image", "text", "shape"],
+    editOption: true,
+  });
+  (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[UNREGISTERED_KEY] = { type: "string" };
+  try {
+    // Add: the boundary parse throws loudly — the flag can never be
+    // silently dropped from a published revision.
+    let addThrew: unknown;
+    try {
+      parseOneCommandOptionValues({ [UNREGISTERED_KEY]: "good" } as Record<string, string>);
+    } catch (err) {
+      addThrew = err;
+    }
+    expect((addThrew as Error).message).toContain(`"--${UNREGISTERED_KEY}"`);
+
+    // Edit: the same table key without a registration throws at the check
+    // phase — loud on both surfaces.
+    let editThrew: unknown;
+    try {
+      checkEditLayerOptions({ [UNREGISTERED_KEY]: "good" } as Record<string, string>);
+    } catch (err) {
+      editThrew = err;
+    }
+    expect((editThrew as Error).message).toContain(`"--${UNREGISTERED_KEY}"`);
+  } finally {
+    (LAYER_OPTION_DEFS as LayerOptionDef[]).pop();
+    delete (LAYER_OPTION_PARSE_ARGS as Record<string, { type: "string" }>)[UNREGISTERED_KEY];
+  }
+});
+
 test("the shared parse and apply registries cover every post-content option (the poka-yoke the switch default carried)", () => {
   // The post-content set is DERIVED from the table (oneCommandAddOptionKeys)
   // — no local re-enumeration to decay: every key it yields must have an
@@ -165,9 +233,22 @@ test("the shared parse and apply registries cover every post-content option (the
   // boundary checks in. The probe is covered by the same derivation.
   const trio = new Set<LayerOptionKey>(["resize", "resize-to", "scale"]);
   for (const key of oneCommandAddOptionKeys()) {
-    expect(ONE_COMMAND_OPTION_APPLY[key]).toBeDefined();
+    expect(LAYER_OPTION_DEFS.find((def) => def.key === key)?.apply).toBeDefined();
     if (!trio.has(key)) {
-      expect((ONE_COMMAND_PARSE_ENTRIES as OneCommandOptionParseEntry[]).some((e) => e.key === key)).toBe(true);
+      expect((ADD_PARSE_ORDER as LayerOptionKey[]).includes(key)).toBe(true);
+    }
+  }
+  // The edit surface's check order covers every table key (a parse
+  // dispatch), and every application case is reachable through the
+  // application order — except the anchor's, whose edit application is the
+  // CLI boundary's live-context resolution through the same shared case
+  // (the edit path never sees an anchor; documented).
+  for (const def of LAYER_OPTION_DEFS) {
+    expect((EDIT_CHECK_ORDER as unknown as { option?: LayerOptionKey }[]).some((step) => step.option === def.key)).toBe(true);
+    if (def.apply !== undefined && def.key !== "anchor") {
+      expect(
+        (EDIT_APPLICATION_ORDER as unknown as { option?: LayerOptionKey }[]).some((step) => step.option === def.key),
+      ).toBe(true);
     }
   }
   // The resize family's shared parse: each form normalizes through the ONE

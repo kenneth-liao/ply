@@ -787,7 +787,19 @@ async function run() {
       // transforms, then anchored placement, then effects) inside the
       // publication path, before anything is stored, so a refused option
       // publishes nothing.
-      const oneCommandParsed = parseOneCommandOptionValues(values);
+      // A loud runtime throw (a table option with no parse registration,
+      // #263) must still reach the refusal envelope: the boundary parse
+      // sits inside the same catch as the publication paths — an internal
+      // invariant failure reports {ok:false} and exits 1, never an
+      // unhandled rejection.
+      let oneCommandParsed: ReturnType<typeof parseOneCommandOptionValues>;
+      try {
+        oneCommandParsed = parseOneCommandOptionValues(values);
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+        return;
+      }
       if (!oneCommandParsed.ok) {
         output({ ok: false, error: oneCommandParsed.error }, isJson);
         process.exitCode = 2;
