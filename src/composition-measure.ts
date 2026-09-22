@@ -120,12 +120,14 @@ export interface MeasuredLayerBounds {
   box: { x: number; y: number; width: number; height: number };
   /** Transformed content rectangle corners, clockwise from top-left, in Composition coordinates (px). */
   corners: { x: number; y: number }[];
-  /** Axis-aligned bounding box of the Layer's visible ink (alpha > 0) in Composition coordinates (px, unclipped, quantized to the screenshot's pixel grid; offsets are layout-derived and may be fractional); null when nothing is visible. */
+  /** Axis-aligned bounding box of the Layer's visible ink (alpha > 0) in Composition coordinates (px, unclipped, quantized to the screenshot's pixel grid; offsets are layout-derived and may be fractional); null when nothing is visible or when capture is refused. */
   painted: { x: number; y: number; width: number; height: number } | null;
-  /** The painted extent's intersection with the canvas rectangle — the footprint that shows in a render; null when empty. */
+  /** The painted extent's intersection with the canvas rectangle — the footprint that shows in a render; null when empty or when capture is refused. */
   paintedOnCanvas: { x: number; y: number; width: number; height: number } | null;
-  /** Whether painted ink falls outside the canvas, judged against the painted extents (never the layout box). */
+  /** Whether painted ink falls outside the canvas, judged against the painted extents (never the layout box); false when unpainted or when capture is refused. */
   clipped: boolean;
+  /** Actionable refusal message when the Layer's own capture window exceeds the bound (max 8192px per axis or 16,777,216px total); null when within bounds. Distinguishes uncaptured from empty ink (painted: null). */
+  refused: string | null;
   /** The revision's placement facts, verbatim. */
   placement: { x: number; y: number; opacity: number };
   /** The revision's normalized canonical transform facts, verbatim. */
@@ -339,14 +341,15 @@ function roundBox(box: Box | null): Box | null {
  * geometry — refused loudly with the caller's named error.
  */
 function projectMeasuredGeometry(
-  measured: { content: { width: number; height: number }; box: Box; painted: Box | null } | undefined,
+  measured: { content: { width: number; height: number }; box: Box; painted: Box | null; refused?: string | null } | undefined,
   missingError: string,
-): { painted: Box | null; box: Box; content: { width: number; height: number } } {
+): { painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null } {
   if (!measured) {
     throw new Error(missingError);
   }
+  const isRefused = measured.refused !== undefined && measured.refused !== null;
   return {
-    painted: measured.painted ? roundBox(measured.painted) : null,
+    painted: isRefused ? null : (measured.painted ? roundBox(measured.painted) : null),
     box: {
       x: round2(measured.box.x),
       y: round2(measured.box.y),
@@ -354,6 +357,7 @@ function projectMeasuredGeometry(
       height: round2(measured.box.height),
     },
     content: { width: round2(measured.content.width), height: round2(measured.content.height) },
+    refused: measured.refused ?? null,
   };
 }
 
@@ -395,8 +399,8 @@ function inkBounds(png: { width: number; height: number; rgba: Uint8Array }, off
 async function measureSnapshot(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
-  options: { page?: Page } = {},
-): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null }[]> {
+  options: { page?: Page; captureUseName?: string } = {},
+): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null; refused: string | null }[]> {
   const run = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
@@ -421,16 +425,16 @@ async function measureSnapshot(
     // canvas can be captured and the canvas intersection reported against
     // the PAINTED extents, never the layout box.
     //
-    // Bounded capture (review INT-1/PROD-1, #185): each Layer gets its OWN
-    // capture window, sized from that Layer's box plus its own effect reach
+    // Bounded capture (review INT-1/PROD-1, #185, #206): each Layer gets its
+    // OWN capture window, sized from that Layer's box plus its own effect reach
     // plus the pad — never the combination of other Layers' extremes — and
     // the canvas is SHIFTED so the box sits inside it. A placement far
     // off-canvas costs a window shift, not viewport growth; a Layer whose
     // own window exceeds the decoder's bounds (per-axis or total pixels,
-    // read from the PNG reader) is refused loudly, because a read-only
-    // query must fail safely, never grow memory without bound. Cost
-    // ceiling: O(Layers × capture-window area) — one screenshot plus one
-    // pixel scan per Layer.
+    // read from the PNG reader) is refused per-Layer, because a read-only
+    // query must fail safely, never grow memory without bound or abort
+    // measurement of unrelated Layers. Cost ceiling: O(Layers × capture-window area)
+    // — one screenshot plus one pixel scan per Layer.
     //
     // Effect reach (#139/#140, ADR-0018/0019): a Layer's effects extend
     // its ink beyond the layout box by up to the COMBINED local reach
@@ -444,7 +448,8 @@ async function measureSnapshot(
     // into the window sizing and the loud-refusal cap, so an effected
     // Layer's full painted extent is captured or refused, never clipped
     // into a smaller report.
-    let painted: (Box | null)[] = [];
+    const painted: (Box | null)[] = new Array(measured.length).fill(null);
+    const refused: (string | null)[] = new Array(measured.length).fill(null);
     if (measured.length > 0) {
       // Per-Layer capture window (#185): sized from THAT Layer's own box,
       // its own effect reach, and the pad — never the union of other
@@ -464,30 +469,36 @@ async function measureSnapshot(
         w: Math.max(1, Math.ceil(windowBoxes[i]!.width + 2 * reaches[i]! + 2 * INK_PAD_PX)),
         h: Math.max(1, Math.ceil(windowBoxes[i]!.height + 2 * reaches[i]! + 2 * INK_PAD_PX)),
       });
-      // Loud refusal, per Layer (review INT-1/PROD-1, #185): the same
-      // bounds the decoder enforces on the window screenshot — MAX_PIXELS
-      // total (imported from the PNG reader: one home for the limit, never
-      // a second copy of the numbers) in addition to the per-axis cap. A
-      // Layer whose OWN window is over either bound is refused with the
-      // measurement refusal naming the Layer, its box and effect extent,
-      // and the fix; the raw decoder error never reaches the user from
-      // this path.
+      // Per-Layer refusal (#206): the same bounds the decoder enforces on the
+      // window screenshot — MAX_PIXELS total in addition to the per-axis cap.
+      // A Layer whose OWN window is over either bound is recorded with its
+      // actionable refusal message naming the Layer, its box and effect
+      // extent, and the fix; the call does not throw. When options.captureUseName
+      // is given, only that use is checked and captured.
       for (let i = 0; i < measured.length; i++) {
+        if (options.captureUseName !== undefined && layers[i]!.name !== options.captureUseName) {
+          continue;
+        }
         const { w, h } = windowFor(i);
         if (w > MAX_INK_VIEWPORT_PX || h > MAX_INK_VIEWPORT_PX || w * h > MAX_PIXELS) {
           const reach = reaches[i]!;
           const wb = windowBoxes[i]!;
           const boxKind = layers[i]!.revision.visibleRegion !== undefined ? "visible (region-clipped) box" : "layout box";
-          throw new Error(
+          refused[i] =
             `Layer "${layers[i]!.name}" has a ${boxKind} ${Math.ceil(wb.width)}×${Math.ceil(wb.height)}px` +
-              (reach > 0 ? ` plus up to ${reach}px of effect extent` : "") +
-              `, beyond the painted-extent capture window (max ${MAX_INK_VIEWPORT_PX}px per axis, ` +
-              `${MAX_PIXELS.toLocaleString("en-US")}px total). Painted extents are refused ` +
-              `instead of growing measurement memory without bound — reduce the transform scale or the effect extent.`,
-          );
+            (reach > 0 ? ` plus up to ${reach}px of effect extent` : "") +
+            `, beyond the painted-extent capture window (max ${MAX_INK_VIEWPORT_PX}px per axis, ` +
+            `${MAX_PIXELS.toLocaleString("en-US")}px total). Painted extents are refused ` +
+            `instead of growing measurement memory without bound — reduce the transform scale or the effect extent.`;
         }
       }
       for (let i = 0; i < measured.length; i++) {
+        if (options.captureUseName !== undefined && layers[i]!.name !== options.captureUseName) {
+          continue;
+        }
+        if (refused[i] !== null) {
+          continue;
+        }
         const b = windowBoxes[i]!;
         // Per-Layer capture window and shift: position the canvas (and its
         // absolutely positioned children, so this Layer's box) inside ITS
@@ -515,11 +526,11 @@ async function measureSnapshot(
           });
         }, i);
         const shot = await page.screenshot({ type: "png", omitBackground: true });
-        painted.push(inkBounds(decodePng(Buffer.from(shot)), left, top));
+        painted[i] = inkBounds(decodePng(Buffer.from(shot)), left, top);
       }
     }
 
-    return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null }));
+    return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null, refused: refused[i] ?? null }));
   };
   return options.page ? run(options.page) : withRenderPage(run);
 }
@@ -554,16 +565,20 @@ export async function measureCompositionLayers(
     return { comp, layers };
   });
 
-  const measured = await measureSnapshot(comp.canvas, layers, options);
+  const measured = await measureSnapshot(comp.canvas, layers, {
+    ...options,
+    captureUseName: useName,
+  });
 
   const bounds: MeasuredLayerBounds[] = layers.map((l, i) => {
       const m = measured[i]!;
       const rev = l.revision;
+      const isRefused = m.refused !== null;
       // One home for the reported painted box: clipping and the canvas
       // intersection are derived from the same rounded values the report
       // carries, so a consumer recomputing them from the JSON can never
       // disagree with the reported `clipped`.
-      const painted = m.painted ? roundBox(m.painted) : null;
+      const painted = isRefused ? null : (m.painted ? roundBox(m.painted) : null);
       const paintedOnCanvas = painted ? roundBox(clipToCanvas(painted, comp.canvas)) : null;
       const clipped =
         painted !== null &&
@@ -593,6 +608,7 @@ export async function measureCompositionLayers(
         painted,
         paintedOnCanvas,
         clipped,
+        refused: m.refused,
         corners: m.corners.map((c) => ({ x: round2(c.x), y: round2(c.y) })),
         placement: { x: rev.x, y: rev.y, opacity: rev.opacity },
         transform: {
@@ -654,14 +670,15 @@ export async function measureCompositionLayers(
  * the bounded ink-capture window), so an unreferenced text Layer resolves
  * against its unwrapped ink; once the Layer is added to a Composition,
  * anchoring there re-resolves against that Composition's wrapping. A Layer
- * whose layout box exceeds the bounded capture window is refused loudly,
- * exactly as in Composition measurement.
+ * whose layout box exceeds the bounded capture window reports `refused`
+ * with the actionable refusal message and `painted: null`, exactly as in
+ * Composition measurement (#206).
  */
 export async function measureStandaloneLayer(
   projectPath: string,
   layerId: string,
   options: { page?: Page } = {},
-): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number } }> {
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null }> {
   const resolvedRoot = await resolveProjectRoot(projectPath);
   const { currentRevision, contentBytes } = await withProjectLock(resolvedRoot, () =>
     readLayerInternalFull(resolvedRoot, layerId),
@@ -683,7 +700,7 @@ export async function measureStandaloneSnapshot(
   currentRevision: ResolvedLayerRevision,
   contentBytes: Buffer,
   options: { page?: Page } = {},
-): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number } }> {
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null }> {
   const standalone: SnapshotLayer = {
     name: currentRevision.layerId,
     layerId: currentRevision.layerId,
@@ -735,7 +752,7 @@ export async function measureStandaloneSnapshot(
 export async function measureProvisionalLayer(
   canvas: { width: number; height: number },
   provisional: SnapshotLayer,
-): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number } }> {
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null }> {
   const [measured] = await measureSnapshot(canvas, [provisional]);
   // The same shared rounding projection the standalone line uses
   // (review INT-apply-1): the two lines' rounded output can never drift.

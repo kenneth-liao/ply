@@ -37,6 +37,8 @@ import {
   measureStandaloneLayer,
 } from "./composition-measure.js";
 import type { SnapshotLayer } from "./composition-paint.js";
+import { readCompositionDocument } from "./composition.js";
+import { resolveProjectRoot } from "./project.js";
 
 /** The axes of one anchored placement: each present component anchors the
  * corresponding coordinate as the target for that ink edge/center. */
@@ -141,7 +143,7 @@ function resolveAxis(
 export async function resolveAnchoredPlacement(
   projectPath: string,
   layerId: string,
-  options: { anchor: ParsedAnchor; targetX?: number; targetY?: number; contextComposition?: string },
+  options: { anchor: ParsedAnchor; targetX?: number; targetY?: number; contextComposition?: string; contextUse?: string },
 ): Promise<AnchorResolution> {
   const { anchor, targetX, targetY, contextComposition } = options;
   if (anchor.horizontal !== undefined && targetX === undefined) {
@@ -163,11 +165,24 @@ export async function resolveAnchoredPlacement(
   // fact, so every context measures the same ink offsets when they agree.
   let painted: { x: number; y: number; width: number; height: number } | undefined;
   let inkOffset = { x: 0, y: 0 };
+  const resolvedRoot = await resolveProjectRoot(projectPath);
   for (const comp of contexts) {
-    const measured = await measureCompositionLayers(projectPath, comp);
-    const entry = measured.layers.find((l) => l.layerId === layerId);
+    const { comp: compDoc } = await readCompositionDocument(resolvedRoot, comp);
+    const use =
+      (options.contextUse !== undefined ? compDoc.layers.find((l) => l.name === options.contextUse && l.layerId === layerId) : undefined) ??
+      compDoc.layers.find((l) => l.layerId === layerId);
+    if (!use) {
+      throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
+    }
+    // Measure only this Layer's own use (#206): an oversized sibling never
+    // blocks anchoring an unrelated Layer.
+    const measured = await measureCompositionLayers(projectPath, comp, use.name);
+    const entry = measured.layers.find((l) => l.name === use.name) ?? measured.layers[0];
     if (!entry) {
       throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
+    }
+    if (entry.refused) {
+      throw new Error(entry.refused);
     }
     if (!entry.painted) {
       throw noInkRefusal(layerId, comp);
@@ -190,6 +205,9 @@ export async function resolveAnchoredPlacement(
     // No referring Composition: the Layer is measured standalone at
     // placement (0, 0), so the painted box IS the ink offset.
     const standalone = await measureStandaloneLayer(projectPath, layerId);
+    if (standalone.refused) {
+      throw new Error(standalone.refused);
+    }
     if (!standalone.painted) {
       throw noInkRefusal(layerId, "standalone");
     }
@@ -288,6 +306,9 @@ export async function resolveProvisionalAnchoredPlacement(
     contentBytes,
   };
   const measured = await measureProvisionalLayer(canvas, snapshot);
+  if (measured.refused) {
+    throw new Error(measured.refused);
+  }
   if (!measured.painted) {
     throw noInkRefusal(layerId, options.contextComposition);
   }

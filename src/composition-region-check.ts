@@ -46,6 +46,16 @@ export interface RegionFinding {
   region: Region;
 }
 
+/** One Layer whose measurement was refused (e.g. capture window exceeded, #206). */
+export interface RegionRefusal {
+  /** The Composition use name of the refused Layer. */
+  layer: string;
+  /** The Layer identity the use refers to. */
+  layerId: string;
+  /** The actionable refusal message from the measurement authority. */
+  message: string;
+}
+
 export interface RegionCheckResult {
   composition: string;
   canvas: { width: number; height: number };
@@ -55,6 +65,8 @@ export interface RegionCheckResult {
   regionCount: number;
   /** One entry per (layer, region) strict intersection. */
   findings: RegionFinding[];
+  /** One entry per Layer whose measurement was refused. */
+  refused: RegionRefusal[];
 }
 
 /** Strict rectangle overlap — edges touching exactly is not an intersection. */
@@ -87,7 +99,14 @@ export async function checkCompositionRegions(
   const regions = ingestRegionCanvas(file, measured.canvas, regionFilePath);
 
   const findings: RegionFinding[] = [];
+  const refused: RegionRefusal[] = [];
   for (const layer of measured.layers) {
+    // Refused Layers must not be dropped silently (#206): report the refusal
+    // as its own finding kind so footprints are never quietly unverified.
+    if (layer.refused) {
+      refused.push({ layer: layer.name, layerId: layer.layerId, message: layer.refused });
+      continue;
+    }
     // Hidden (opacity 0) and fully transparent Layers paint nothing —
     // `painted: null` is the measurement authority's documented "nothing
     // is visible" signal — so there is no footprint to test.
@@ -105,5 +124,6 @@ export async function checkCompositionRegions(
     regionFile: regionFilePath,
     regionCount: regions.length,
     findings,
+    refused,
   };
 }

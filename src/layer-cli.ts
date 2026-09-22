@@ -643,6 +643,7 @@ async function run() {
                   x: parsed.x as number | undefined,
                   y: parsed.y as number | undefined,
                   contextComposition: values.fork ? forkComposition : undefined,
+                  contextUse: values.fork ? forkUse : addressUse,
                 },
               },
             )) as AnchorResolution;

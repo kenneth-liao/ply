@@ -1433,7 +1433,7 @@ export interface SharedOptionApplyContext {
   /** Edit surface: the anchored placement's live-resolution inputs — the
    *  CLI boundary resolves the anchor against the live state (read-only),
    *  never under the edit's own lock. */
-  live?: { projectPath: string; x?: number; y?: number; contextComposition?: string };
+  live?: { projectPath: string; x?: number; y?: number; contextComposition?: string; contextUse?: string };
   /** Which surface the dispatch runs on: selects the per-surface wording
    *  where the surfaces' established refusals differ (the region radius's
    *  needs-a-region rule) and the region's measurement source. */
@@ -1609,6 +1609,7 @@ async function applyAnchor(
       targetX: context.live.x,
       targetY: context.live.y,
       contextComposition: context.live.contextComposition,
+      contextUse: context.live.contextUse,
     });
   }
   // Add: anchored placement (ADR-0017) resolves against the content+

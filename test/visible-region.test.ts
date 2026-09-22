@@ -402,10 +402,13 @@ test("a wide padded source refused uncropped at scale measures once region-cropp
   expect((await invoke(["layer", "edit", layerId, "--scale", "2", "--project", projDir])).code).toBe(0);
 
   // Uncropped: the layout box 8192×128 plus the pad exceeds the 8192px
-  // per-axis capture window — refused loudly, naming the Layer.
+  // per-axis capture window — refused per-Layer, exit 1.
   const refused = await invoke(["composition", "measure", "poster", "--project", projDir, "--json"]);
   expect(refused.code).toBe(1);
-  expect(JSON.parse(refused.stdout).error).toMatch(/beyond the painted-extent capture window/);
+  const refusedBody = JSON.parse(refused.stdout);
+  expect(refusedBody.ok).toBe(true);
+  expect(refusedBody.layers[0].refused).toMatch(/beyond the painted-extent capture window/);
+  expect(refusedBody.layers[0].painted).toBeNull();
 
   // Cropped to the subject: the region box is 400×128, well inside the
   // window — the measurement succeeds and reports the subject's ink.
