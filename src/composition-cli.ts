@@ -148,7 +148,8 @@ composition — Composition authoring and inspection
       Layer's effect extent, and a Layer whose window — its layout box plus
       effect extent plus pad — exceeds the capture bounds (8192px per axis,
       16,777,216px total) is refused with an actionable error instead of
-      growing memory. Painted bounds are the browser's own paint of the exact
+      growing memory. A refused Layer keeps ok true in --json and sets exit
+      status 1. Painted bounds are the browser's own paint of the exact
       markup rendering uses, so
       measurement and rendering agree; opacity scaling
       changes alpha values, never the ink footprint. Text dimensions are measured with

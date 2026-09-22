@@ -4,23 +4,11 @@
 
 ### Fixed
 
-- An oversized Layer whose capture window exceeds the bounded ink-capture
-  limit (8192px per axis or 16,777,216px total) is refused per-Layer in the
-  measurement result (`refused: string | null`), never aborting measurement
-  of the whole Composition or blocking unrelated Layers (#206).
-  Before: one oversized Layer threw an error during whole-Composition
-  measurement, which aborted `ply composition measure <comp>`, caused
-  `ply composition measure <comp> <use>` and `ply layer edit <use> --anchor`
-  to fail on unrelated sibling Layers naming the oversized Layer, and broke
-  `ply composition check`.
-  After: `measureCompositionLayers` returns every Layer with layout geometry
-  and per-Layer `refused` messages, setting `painted: null` only on refused
-  Layers; requesting a single `useName` skips capture of other Layers entirely;
-  `ply composition measure` reports all Layers, marks refused ones, keeps
-  `ok: true`, and exits status 1; `layer edit --anchor` measures only its own
-  use and throws the actionable refusal message only when anchoring the
-  oversized Layer itself; `checkCompositionRegions` reports refused Layers
-  under `refused` and exits non-zero.
+- Oversized Layers exceeding the capture bound are now refused per-Layer in the
+  measurement result (`refused: string | null`) with exit status 1 rather than
+  aborting the measurement call. Previously, one oversized Layer threw an
+  unhandled error that blocked measuring the whole Composition, broke region
+  checks, and prevented anchoring unrelated sibling Layers (#206).
 
 ### Changed
 

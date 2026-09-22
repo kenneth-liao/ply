@@ -177,7 +177,7 @@ export async function resolveAnchoredPlacement(
     // Measure only this Layer's own use (#206): an oversized sibling never
     // blocks anchoring an unrelated Layer.
     const measured = await measureCompositionLayers(projectPath, comp, use.name);
-    const entry = measured.layers.find((l) => l.name === use.name) ?? measured.layers[0];
+    const entry = measured.layers.find((l) => l.name === use.name);
     if (!entry) {
       throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
     }
