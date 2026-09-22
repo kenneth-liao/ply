@@ -385,6 +385,15 @@
 
 ### Fixed
 
+- The default matting weights directory resolves against the Ply install, not
+  the working directory (#205): `modelDir()` in `src/segment.ts` defaulted to
+  `path.resolve("models")` relative to `process.cwd()`, causing `ply matte`
+  run outside the checkout to fail with "the weights file is not there" even
+  when cached in the install's `models/` directory. It now defaults to the
+  install's `models/` directory resolved against the module location (matching
+  `dynamicScriptPath()`), while `PLY_MODEL_DIR` still overrides it when set.
+  The missing-weights diagnostic now names `PLY_MODEL_DIR` and prints absolute
+  paths for the weights, download targets, and warm-cache script.
 - `composition add` and `layer edit` refuse the same bad value for a shared
   option with the same text and the same exit status (#257, spec #226 US-001
   bullet 1, DEC-001; acceptance-audit finding A226-001): `--x invalid` and
