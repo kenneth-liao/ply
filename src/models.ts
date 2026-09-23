@@ -36,8 +36,8 @@ export interface ModelSpec {
    * for) calls that carry typed References. When a run's call shape is not
    * what the rate describes — a reference call on a text-only rate — the run
    * records its cost as unknown instead of claiming the rate as measured
-   * (TEST-012: the only reference-call billing evidence is an account-window
-   * delta, not a per-image rate).
+   * (a reference call bills the image as extra input tokens, so a text-only
+   * rate understates it; #52, #270).
    */
   costCoversRefs: boolean;
   /** Accepts reference images for likeness / style transfer. */
@@ -80,19 +80,20 @@ export const MODELS: Record<string, ModelSpec> = {
     kind: "image",
     sizing: "size",
     supportedQualities: ["low", "medium", "high"],
-    approxCost: 0.0045,
+    // The billed text-only 1024x1024 call at the provider default (it billed
+    // the same as `low`): a real Gateway receipt (#270,
+    // docs/qualification/270/README.md).
+    approxCost: 0.005975,
     costMeasured: true,
-    // The measured rate is the text-only plate rate: a reference call bills
-    // the image as extra input tokens (#52, TEST-012).
     costCoversRefs: false,
     // Qualified through a real Gateway request with a typed Reference on the
     // exact production call shape (#52, TEST-012): SUPPORTED.
     supportsRef: true,
     note:
-      "GPT Image 2 — cheapest and best at following the zone brief; qualified for typed References (#52). " +
-      "The rate is the measured text-only plate cost — a reference call bills the image as extra input tokens " +
-      "(measured once: $0.016 account-window delta with a ~1 MB reference; the per-generation billing lookup " +
-      "was unavailable), not a per-image rate. Slower (~15s)",
+      "GPT Image 2 — best at following the zone brief; qualified for typed References (#52). " +
+      "The rate is the billed text-only 1024x1024 call — a reference call bills the image as extra input tokens " +
+      "($0.0166 per request with one Reference at 1024x1536, #270). Billed $0.0528 at medium and $0.2108 at high " +
+      "(1024x1024), ~4x the GPT Image 2.5 models at those tiers. ~15s at default, ~2 min at high",
   },
 
   // GPT Image 2.5 (#270). Every claim below was proven by a real Gateway
