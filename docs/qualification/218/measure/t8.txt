@@ -1,0 +1,9 @@
+Measured Composition "t8" (1280×720), 8 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720
+  2. "kenny" (image content 966×1232) box (-60, -80) 768.41×980 painted (-60, -79) 769×979, on-canvas (0, 0) 709×720 — clipped [grade brightness 1.15, contrast 1.1, saturation 1.1, warmth 0.25, glow width 5px, softness 4px, #ffaa3350, from 75° (strength 0.5), scale 0.7954545454545454×]
+  3. "holy" (text 803.56×273) box (439, -4) 803.56×273 painted (457, 40) 783×179 [fill solid #f4ede2, weight 900, width 110]
+  4. "hit" (text 516.7×273) box (729, 228) 516.7×273 painted (747, 275) 493×173 [fill solid #f4ede2, weight 900, width 110]
+  5. "tile" (image content 1024×1024) box (553, 233) 230×230 painted (590, 270) 156×156 [scale 0.224609375×]
+  6. "pill" (image content 520×110) box (640, 520) 520×110 painted (640, 520) 520×110
+  7. "try" (text 345.61×84) box (728.5, 532) 345.61×84 painted (729, 551) 341×48 [fill solid #d9774f]
+  8. "star" (image content 600×600) box (705, 545) 60×60 painted (705, 545) 60×60 [blend multiply, scale 0.1×]

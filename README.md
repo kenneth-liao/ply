@@ -892,6 +892,87 @@ removes the entities. An unterminated comment, CDATA section, `<script>`,
 content mentioning a URL is text, not a reference, and never blocks
 import.
 
+## Layer grading (new surface)
+
+`ply layer edit` and `ply composition add` accept four tonal and colour grade
+controls on image (raster and vector), text, and shape Layers (#219, spec #218 US-001):
+
+- `--brightness <num>`: `0` to `5` (neutral `1`). Values `< 1` darken; `> 1` brighten.
+- `--contrast <num>`: `0` to `5` (neutral `1`). Values `< 1` reduce contrast; `> 1` increase it.
+- `--saturation <num>`: `0` to `5` (neutral `1`). Values `< 1` desaturate (`0` is greyscale); `> 1` oversaturate.
+- `--warmth <num>`: `-1` to `1` (neutral `0`). Positive values shift toward orange/red; negative toward blue.
+
+```bash
+ply composition add poster photo --image portrait.png --brightness 1.15 --contrast 1.1 \
+  --saturation 1.1 --warmth 0.25 -p ~/projects/my-poster
+ply layer edit <layerId> --warmth 0 -p ~/projects/my-poster     # neutral removes warmth
+ply layer edit <layerId> --brightness 1 --contrast 1 --saturation 1 -p ~/projects/my-poster # fully removes grade
+```
+
+Every control is an absolute setter applied at paint time to the Layer's content
+only (ADR-0024). Outline, shadow, and alpha coverage are strictly preserved;
+`measure` painted extents and anchored placement are unchanged. Neutral values
+remove the stored facts. Refusals run before publication.
+
+## Layer blend modes (new surface)
+
+`ply layer edit` and `ply composition add` accept `--blend <mode>` on image
+(raster and vector), text, and shape Layers (#220, spec #218 US-003):
+
+- **Allowed modes**: `normal`, `multiply`, `screen`, `overlay`, `soft-light`,
+  `darken`, `lighten`, `color-dodge` (and `colour-dodge`).
+- Passing `normal` removes the stored fact.
+
+```bash
+# Multiply blend drops white backgrounds without a matting pass:
+ply composition add poster mark --image logo-on-white.png --blend multiply \
+  --resize-to 200x -p ~/projects/my-poster
+ply layer edit <layerId> --blend normal -p ~/projects/my-poster  # restore standard compositing
+```
+
+At paint time, the whole Layer — content, visible region, grade, edge glow,
+outline, shadow, and opacity — blends as ONE unit against the canvas backdrop
+(ADR-0024).
+
+## Layer edge glow (new surface)
+
+`ply layer edit` and `ply composition add` accept `--glow` on image (raster and
+vector), text, and shape Layers (#221, spec #218 US-002):
+
+```bash
+# Directional amber rim light from the right:
+ply layer edit <layerId> --glow "16,8,#ffaa33,75,0.75" -p ~/projects/my-poster
+# Even neon cyan rim light (no direction pair):
+ply layer edit <layerId> --glow "14,6,#00e5ff" -p ~/projects/my-poster
+ply layer edit <layerId> --glow none -p ~/projects/my-poster  # removes glow
+```
+
+- Value form: `"<width>,<softness>,<color>[,<angle>,<strength>]"`; `none` removes it.
+- `width` and `softness`: px between `0` and `256`.
+- `color`: hex colour (`#RGB`, `#RRGGBB`, `#RRGGBBAA`).
+- `angle` and `strength`: optional direction pair — angle in degrees clockwise
+  from top (`-360` to `360`) and strength `0` to `1` (strength `0` drops the pair).
+- **Not relighting:** Edge glow is a 2D edge effect on the Layer's own alpha edge,
+  painted just inside the alpha edge over graded content. It transforms with the
+  Layer and never alters alpha coverage or painted extents (DEC-005). Changing
+  the direction or shape of light on a subject is generation (ISC-39).
+
+## Gradient text (new surface)
+
+Text Layers accept gradients through `--color` (#222, spec #218 US-004), sharing
+the same fill grammar as shape Layers:
+
+```bash
+ply composition add poster headline --text "GRADIENT" --font Archivo --weight 800 \
+  --font-size 120 --color "linear:90deg,#ff5500,#ffaa00" -p ~/projects/my-poster
+ply layer edit <layerId> --color "#ffffff" -p ~/projects/my-poster  # restore solid colour
+```
+
+Text colour and text gradient are one fact read through one reader (DEC-008):
+solid colour is stored as a hex string and gradient as a fill object. The gradient
+automatically spans the glyph ink box and clips to glyph alpha via
+`background-clip: text`, while outlines and shadows continue to hug the glyphs.
+
 ## Region checking (new surface)
 
 `ply composition check <comp> --regions <file>` tests a Composition's painted
