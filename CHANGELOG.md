@@ -26,6 +26,12 @@
 
 ### Added
 
+- Added GPT Image 2.5 Flare and Sunburst as `gpt-image-flare` and
+  `gpt-image-sunburst`, each qualified through real Gateway requests for
+  typed References, `--quality low|medium|high`, and explicit `--size`, with
+  a measured text-only rate; `--help` and the quality refusal now list every
+  quality-capable model from the registry instead of claiming GPT Image 2 is
+  the only one (#270).
 - Gradient fill on text Layers (`--color <spec>`) accepts linear and radial gradients using the single fill representation, automatically re-spanning across text or typography edits while preserving byte-identical solid text and effects (#222).
 
 - Layer blend mode control (`--blend <mode>`) sets how image, text, and shape Layers composite against underlying pixels via CSS mix-blend-mode as a single paint-time unit, with `normal` removing the stored fact (#220).

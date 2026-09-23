@@ -126,8 +126,9 @@ for the record schema and publication contract.
 Omitting `--model` selects **nano-2** (effective
 `google/gemini-3.1-flash-image`) — the tool-wide default for general
 generation. An explicit `--model` selection always takes precedence over
-the default. Explicit GPT Image 2 quality selection (`--quality low|medium|high`)
-is qualified for `gpt-image` only — other models acquire no quality tiers, an
+the default. Explicit quality selection (`--quality low|medium|high`) is
+qualified only for the GPT Image models whose tiers were proven through the
+Gateway — `ply generate --help` lists them — other models acquire no quality tiers, an
 unsupported model/quality combination is refused before any provider call, and
 omitting `--quality` leaves the provider's own default with no quality recorded
 in the Job.
