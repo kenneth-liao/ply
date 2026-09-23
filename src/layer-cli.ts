@@ -19,7 +19,7 @@ import {
   SCALE_HELP_KINDS,
 } from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
-import { formatFill, type LayerFill } from "./fill.js";
+import { formatFill, normalizeStoredTextFill, type LayerFill } from "./fill.js";
 import { parseLayerAddress, resolveLayerToken, LayerAddressSyntaxError, type ResolvedLayerToken } from "./layer-address.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
@@ -133,7 +133,10 @@ Options:
   --width <num>         Text width for a text Layer (#179/#196): variable
                         fonts — Archivo 62-125 (default 100); static faces
                         accept only their implicit width 100
-  --color <hex>         Text color as #RGB or #RRGGBB
+  --color <spec>        Text color or gradient fill (#222): a solid hex
+                        color like #ffffff, #fff, or #ffffff80, or a gradient
+                        like "linear:90deg,#ff0000,#00ff00" or
+                        "radial:#ff0000,#00ff00" (the shared fill grammar)
   --shape <geometry>    Set a shape Layer's geometry to an ABSOLUTE value:
                         rectangle or ellipse (#209). Omitted keeps the
                         current geometry; switching to ellipse drops a
@@ -942,7 +945,8 @@ async function run() {
                 rev.callerFont !== undefined
                   ? `"${rev.callerFont.family}" (caller-supplied, ${(rev.fontBytes / 1024).toFixed(1)} KB)`
                   : `retained face (${(rev.fontBytes / 1024).toFixed(1)} KB)`;
-              console.log(`  Font: ${fontLabel}, ${rev.fontSize}px, color ${rev.color}`);
+              console.log(`  Font: ${fontLabel}, ${rev.fontSize}px`);
+              console.log(`  Fill: ${formatFill(normalizeStoredTextFill(rev.color))}`);
               // Selected text axes (#179, ADR-0021): present ⟺ variable font.
               if (rev.weight !== undefined || rev.width !== undefined) {
                 console.log(`  Axes: weight ${rev.weight}, width ${rev.width}`);

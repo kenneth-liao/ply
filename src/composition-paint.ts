@@ -65,7 +65,7 @@ import {
   type LayerGrade,
   type LayerGlow,
 } from "./layer.js";
-import { fillCssBackground } from "./fill.js";
+import { fillCssBackground, normalizeStoredTextFill } from "./fill.js";
 
 const MIME: Record<"png" | "jpeg" | "webp" | "svg", string> = {
   png: "image/png",
@@ -943,12 +943,34 @@ export function buildCompositionHtml(
         // fonts — bundled and legacy text elements keep their exact markup,
         // so pinned history paints byte-identically.
         const synthesisCss = rev.callerFont !== undefined ? "font-synthesis:none;" : "";
+        const fill = normalizeStoredTextFill(rev.color);
+        if (fill.type === "solid") {
+          const textStyle =
+            `font-family:'${internalFontFamily(rev.contentHash)}';` +
+            `font-size:${rev.fontSize}px;color:${fill.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
+          if (rev.visibleRegion === undefined && gradeFilter === "") {
+            return `<div style="${base}${transformed}${effectsFilter}${blendCss}${textStyle}">${escapeHtml(rev.text)}</div>`;
+          }
+          return (
+            `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
+            `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`
+          );
+        }
+
+        // Gradient text (#222, spec #218 US-004, DEC-008):
+        // The gradient spans the text's painted ink box via background-clip: text.
+        // Two-element structure carries the effectsFilter (outline, shadow, glow)
+        // on the outer wrapper hugging the glyph alpha, while the inner element
+        // clips the background gradient.
+        const gradientCss =
+          `background:${fillCssBackground(fill)};` +
+          `-webkit-background-clip:text;background-clip:text;` +
+          `-webkit-text-fill-color:transparent;color:transparent;`;
         const textStyle =
           `font-family:'${internalFontFamily(rev.contentHash)}';` +
-          `font-size:${rev.fontSize}px;color:${rev.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
-        if (rev.visibleRegion === undefined && gradeFilter === "") {
-          return `<div style="${base}${transformed}${effectsFilter}${blendCss}${textStyle}">${escapeHtml(rev.text)}</div>`;
-        }
+          `font-size:${rev.fontSize}px;${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;` +
+          gradientCss;
+
         return (
           `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
           `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`

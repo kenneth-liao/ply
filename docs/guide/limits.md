@@ -435,7 +435,9 @@ font size and resize/scale factor up to 8192
 ([Layer resize](../../README.md#layer-resize-new-surface)), text
 content up to 2000 characters (`MAX_TEXT_LENGTH`), and shape parameters —
 size per axis 0–8192 px, corner radius 0 to half the shorter side of the
-rectangle, and the solid fill's hex colour grammar
-([Shape Layers](../../README.md#shape-layers-new-surface)) — are refused
+rectangle, and the shared fill grammar (solid hex, linear and radial gradients)
+on a shape Layer's `--fill` and a text Layer's `--color` (#222, spec #218 US-004;
+outlines and shadows remain solid hex, OOS-006;
+[Shape Layers](../../README.md#shape-layers-new-surface)) — are refused
 before anything publishes; their option details live in the README feature
 sections and `ply layer edit --help`.
