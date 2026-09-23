@@ -12,6 +12,12 @@
 
 ### Changed
 
+- Changed the `ply generate` default model from `nano-2` to
+  `gpt-image-flare` (breaking) — omitting `--model` now sends a `--size WxH`
+  request (default 1024x1024) and accepts `--quality`, while `--aspect` or
+  `--temperature` without `--model` is refused before any provider call;
+  pass `--size WxH` or `--model nano-2` to keep the old route (#281).
+
 - One registration of a Layer option serves both `layer edit` and
   `composition add` (#263, spec #226 DEC-001, finding A226-002 residual
   after #258): the option table's entries carry each post-content option's
