@@ -1,7 +1,7 @@
 ---
 thing: Ply — general-purpose layered image composer
 phase: active
-progress: 34/63
+progress: 34/64
 principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Each layer's look — its shape, framing, colour, light, and how it blends with what is beneath it — is a set of adjustable parameters on the layer, never a change to its source, so one good asset serves every composition and any finished image can be built and tuned inside Ply without reaching for another tool. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
 started: 2026-09-07
 updated: 2026-09-23
@@ -120,13 +120,13 @@ Why: the tool is a set of primitives, not a thumbnail machine.
 - [ ] ISC-43: The nine outlier reference thumbnails are rebuilt with no image
   tool other than Ply. The only outside steps are generation and acquiring
   existing clean assets, imported unmodified.
-  Probe: a rebuild script that invokes only `ply`; renders reviewed against
-  the references. manual
+  Probe: a rebuild script that invokes only `ply`; the principal accepts the
+  renders side by side with the references. manual
 - [ ] ISC-59: The eight outlier thumbnails of the 2026-09-23 test are rebuilt
   with no image tool other than Ply. The only outside steps are generation and
   acquiring existing clean assets, imported unmodified.
-  Probe: a rebuild script that invokes only `ply`; Kenny accepts the renders
-  side by side with the references. manual
+  Probe: a rebuild script that invokes only `ply`; the principal accepts the
+  renders side by side with the references. manual
 
 ### F1 · Composition
 
@@ -209,23 +209,27 @@ Why: the agent operates the tool; the human only asks for outputs.
   renders or local images.
   Probe: a reference-versus-result sheet for the nine thumbnails. bash
 
-- [ ] ISC-60: The operating skills teach building a composition from parts:
-  every element is its own Layer, sourced or generated separately, and placed
-  freely.
+- [ ] ISC-60: The `ply-operating` and `visual-authoring` skills (Agent Profile
+  Kit Workspace source, installed by `apkit`) teach building a composition
+  from parts:
+  every element is its own Layer, sourced or generated separately, and
+  placed freely.
   Probe: a fresh agent with only the skills and a reference thumbnail makes
   separate element Layers without being told to. manual
-- [ ] ISC-61: The operating skills teach the asset order local library, then
+- [ ] ISC-61: The same skills teach the asset order local library, then
   sourced common assets, then generation, as a preference and not a rule.
   Probe: the same fresh-agent run uses an existing or sourced official mark or
   product image before it generates one. manual
-- [ ] ISC-62: The operating skills teach Reference roles by ordinal: identity,
+- [ ] ISC-62: The same skills teach Reference roles by ordinal: identity,
   pose and framing, and product.
   Probe: the same fresh-agent run declares each Reference's role in its
   generation prompt. manual
-- [ ] ISC-63: The operating skills teach a likeness retry order within a
-  budget.
-  Probe: given a candidate that looks older than its anchor, a fresh agent
-  retries with a tighter anchor crop before it changes model or tier. manual
+- [ ] ISC-63: The `visual-authoring` skill teaches a likeness retry order
+  within a budget, as authoring practice. The caller's default model and
+  quality for likeness work stay caller policy (ADR-0014).
+  Probe: given a candidate that looks older than its identity Reference, a
+  fresh agent retries with a tighter crop of that Reference before it
+  changes model or quality. manual
 
 ### F5 · Relocation discipline
 
@@ -308,21 +312,28 @@ composition and no other image tool is needed.
   naming the reference.
   Probe: the same crafted SVG's import error. bash
 - [ ] ISC-47: A Layer can be skewed and put in perspective as parameters.
-  Probe: tilt a tile's far edge inward, then remove the parameter; the render
-  is byte-identical to the untilted one. bash
+  Probe: tilt a tile's far edge inward; the render differs from the untilted
+  one and `measure` shows the far edge shorter than the near edge; removing
+  the parameter restores the untilted render byte-for-byte. bash
 - [ ] ISC-48: A Layer can be clipped by another Layer's alpha, and the mask
   stays an editable Layer.
   Probe: a cutout clipped to a shape Layer at a table edge; moving the shape
   moves the clip; removing the clip restores the render byte-for-byte. bash
 - [ ] ISC-49: A Layer can be blurred as a parameter.
-  Probe: blur a raster, a text, and a shape Layer; removing it restores each
-  render byte-for-byte. bash
+  Probe: blur a raster, a text, and a shape Layer; each render differs from
+  the unblurred one and `measure` shows the painted extent grown; removing
+  the blur restores each render byte-for-byte. bash
 - [ ] ISC-50: A Layer can carry more than one effect of the same type.
-  Probe: a title with two shadows and an inner shadow; `measure` reports each
-  effect. bash
-- [ ] ISC-51: A Layer's horizontal and vertical scale are independent.
-  Probe: a radial-filled ellipse scaled 3 by 0.6 fades to transparent with no
-  hard edge. bash
+  Probe: a title with two shadows; both are visible in the render and
+  `measure` reports each. bash
+- [ ] ISC-64: A Layer can carry an inner shadow.
+  Probe: an inner shadow darkens pixels just inside the alpha edge and leaves
+  the painted extent unchanged; removing it restores the render
+  byte-for-byte. bash
+- [ ] ISC-51: Every Layer kind takes independent horizontal and vertical
+  scale; text takes only a uniform scale today.
+  Probe: a text Layer scaled 1.3 by 0.8 renders stretched, and `measure`
+  reports both factors. bash
 - [ ] ISC-52: A Layer's alpha edge can be choked and feathered at paint time.
   Probe: a cutout with a light fringe on saturated blue shows no fringe after
   the choke; removing it restores the render byte-for-byte. bash
@@ -330,11 +341,13 @@ composition and no other image tool is needed.
   Probe: angle 90 and strength 1 on a rectangle leave the left edge unlit. bash
 - [ ] ISC-54: One text Layer can carry runs of different colour, weight, or
   font.
-  Probe: "5 HERDR PLUGINS" with a gradient run renders as one Layer. bash
+  Probe: "5 HERDR PLUGINS" as one Layer; the pixels of each run show its own
+  colour, and `measure` reports each run's weight and font. bash
 - [ ] ISC-55: A text Layer wraps within a width the caller sets.
   Probe: with a width set the text wraps; with none it stays on one line. bash
 - [ ] ISC-56: A text Layer can shrink to fit a box the caller sets.
-  Probe: a long headline fits a 600 px box. bash
+  Probe: a headline wider than a 600 px box; `measure` shows one line inside
+  the box at a reduced font size, with nothing clipped. bash
 - [ ] ISC-57: Anti: a Layer's layout never depends on where it is placed.
   Probe: the same text at x 0, 400, and 640 measures the same content box.
   bash
@@ -357,7 +370,8 @@ composition and no other image tool is needed.
   concrete use; untested.
 - **Relative layout between Layers** (row, align, re-flow when one changes).
   Mixed styles inside one text Layer are ISC-54; layout between separate
-  Layers, such as a logo inside a word, is placed by hand from `measure` today. Sits beside text-dense panels; may share a mechanism with
+  Layers, such as a logo inside a word, is placed by hand from `measure`
+  today. Sits beside text-dense panels; may share a mechanism with
   ISC-36.
 - **Shared-library promotion versus caller-owned library.** ISC-16 assumes
   promoting a Layer to a shared library is an explicit Ply operation, while
@@ -463,6 +477,15 @@ generation. Italic comes from a real italic face or a skew; ADR-0021 still
 holds, and no style is synthesized. Content-repository work from the same test
 (thumbnail brand rules, likeness routing, the asset library) belongs to that
 repository, not to this destination.
+
+**2026-09-23 — ISC-48 and ISC-50 mechanisms deferred.** ISC-50 contradicts
+ADR-0018 and ADR-0019, which make a shadow and an outline one absolute,
+replace-only effect each; a superseding ADR comes when specced. ISC-48 makes
+one Layer's paint depend on another Layer for the first time, which touches
+ADR-0013 (sharing and forks), ADR-0024 (paint order), and ISC-14 (replay); its
+mechanism gets an ADR when specced, as ISC-36's does. A radial Fill already
+stays smooth under non-uniform scale of a shape (`--resize-to WxH`); ISC-51
+names the remaining gap, text.
 
 ## Learning
 
