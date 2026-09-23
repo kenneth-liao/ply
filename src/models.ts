@@ -60,7 +60,7 @@ export interface ModelSpec {
 }
 
   /**
-   * The GPT Image 2 quality tiers (spec #132 US-005, #142).
+   * The GPT Image quality tiers (spec #132 US-005, #142, #270).
    */
 export type ImageQuality = "low" | "medium" | "high";
 
@@ -93,6 +93,39 @@ export const MODELS: Record<string, ModelSpec> = {
       "The rate is the measured text-only plate cost — a reference call bills the image as extra input tokens " +
       "(measured once: $0.016 account-window delta with a ~1 MB reference; the per-generation billing lookup " +
       "was unavailable), not a per-image rate. Slower (~15s)",
+  },
+
+  // GPT Image 2.5 (#270). Every claim below was proven by a real Gateway
+  // request on the production `ply generate` call shape (2026-09-23):
+  // text-only, each tier, a typed identity-anchor Reference at 1024x1536,
+  // and isolated intent. The rate is the billed text-only 1024x1024 call at
+  // the provider default (it billed the same as `low`); a reference call
+  // bills the image as extra input tokens, so it does not cover refs.
+  "gpt-image-flare": {
+    id: "openai/gpt-image-2.5-flare",
+    kind: "image",
+    sizing: "size",
+    supportedQualities: ["low", "medium", "high"],
+    approxCost: 0.005975,
+    costMeasured: true,
+    costCoversRefs: false,
+    supportsRef: true,
+    note:
+      "GPT Image 2.5 Flare — published as the speed variant; qualified for typed References and low/medium/high (#270). " +
+      "Billed $0.0133 at medium and $0.0528 at high (1024x1024), ~4x cheaper than gpt-image at those tiers. ~11-23s",
+  },
+  "gpt-image-sunburst": {
+    id: "openai/gpt-image-2.5-sunburst",
+    kind: "image",
+    sizing: "size",
+    supportedQualities: ["low", "medium", "high"],
+    approxCost: 0.005975,
+    costMeasured: true,
+    costCoversRefs: false,
+    supportsRef: true,
+    note:
+      "GPT Image 2.5 Sunburst — published as the edit-precision variant (unjudged here, #278); qualified for typed References and low/medium/high (#270). " +
+      "Billed the same as Flare per tier; slower at high (~41s)",
   },
 
   // The Gemini models cost 8-30x more per plate. gpt-image also takes typed
@@ -216,16 +249,30 @@ export function validateReferenceCapability(model: string, hasReferences: boolea
 }
 
 /**
+ * The canonical qualified quality-capable list (#270): every registry model
+ * whose spec carries proven tiers. Help and the refusal read this one reader,
+ * so registering a model with tiers updates both — no second list.
+ */
+export function qualityCapableModels(): { key: string; spec: ModelSpec }[] {
+  return Object.entries(MODELS)
+    .filter(([, spec]) => spec.supportedQualities?.length)
+    .map(([key, spec]) => ({ key, spec }));
+}
+
+/**
  * The quality-capability refusal (#142): names the rejected model, states
- * that nothing was sent, and points at the one qualified choice — recovery
- * never requires registry knowledge (the same shape as the reference
- * incompatibility message).
+ * that nothing was sent, and lists every qualified choice derived from the
+ * registry — recovery never requires registry knowledge (the same shape as
+ * the reference incompatibility message).
  */
 export function qualityUnsupportedError(spec: ModelSpec): string {
+  const qualified = qualityCapableModels()
+    .map(({ key, spec: s }) => `${key} (${s.id})`)
+    .join(", ");
   return (
-    `Model "${spec.id}" takes no quality selection — explicit low/medium/high quality control is qualified for ` +
-    `GPT Image 2 only (gpt-image), and no quality tiers are invented for other models (spec #132, DEC-007). ` +
-    `The Job was refused before any provider call and nothing was spent; drop --quality or pass --model gpt-image.`
+    `Model "${spec.id}" takes no quality selection — explicit low/medium/high quality control is qualified only for ` +
+    `${qualified}, and no quality tiers are invented for other models (spec #132, DEC-007). ` +
+    `The Job was refused before any provider call and nothing was spent; drop --quality or pass one of those models.`
   );
 }
 

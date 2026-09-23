@@ -36,7 +36,7 @@ import {
   type UniformSizing,
 } from "./generation.js";
 import { reviewPublishedGeneration } from "./evidence-review.js";
-import { isImageQuality, MODELS, DEFAULT_MODEL } from "./models.js";
+import { isImageQuality, MODELS, DEFAULT_MODEL, qualityCapableModels } from "./models.js";
 import { usageMessage } from "./cli-present.js";
 
 const HELP = `
@@ -74,10 +74,11 @@ options
   --model <name>        Registry key or raw gateway id. Keys:
                         ${Object.keys(MODELS).join(" | ")} (default: ${DEFAULT_MODEL})
   --quality <q>         Explicit output quality — low | medium | high. Qualified for
-                        GPT Image 2 (gpt-image) only; other models acquire no quality
-                        tiers, and an unsupported combination is refused before any
-                        provider call. Omitting it leaves the provider's own default,
-                        and the record gains no quality key (US-005, #142).
+                        ${qualityCapableModels().map(({ key }) => key).join(" | ")} only;
+                        other models acquire no quality tiers, and an unsupported
+                        combination is refused before any provider call. Omitting
+                        it leaves the provider's own default, and the record gains
+                        no quality key (US-005, #142).
   --count <n>           How many outputs to generate (default 1, max 8)
   --temperature <t>     Multimodal models only
   --job <id>            Explicit job id (default: auto gen-<date>-<suffix>)
