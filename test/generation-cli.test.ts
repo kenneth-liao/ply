@@ -599,16 +599,19 @@ async function projectFingerprint(projectDir: string): Promise<Record<string, st
   return out;
 }
 describe("the model registry is the one capability source (DEC-018/DEC-020)", () => {
-  test("GPT Image 2 capability and measured-cost facts reflect the #52 evidence", async () => {
+  test("GPT Image 2 capability and measured-cost facts reflect the #270 receipts", async () => {
     const gpt = MODELS["gpt-image"];
     expect(gpt.supportsRef).toBe(true);
-    // The run-summary rate stays the measured text-only plate figure.
-    expect(gpt.approxCost).toBe(0.0045);
+    // The rate is the billed text-only 1024x1024 receipt at the provider
+    // default (docs/qualification/270/README.md); it does not cover refs.
+    expect(gpt.approxCost).toBe(0.005975);
     expect(gpt.costMeasured).toBe(true);
-    // The reference-call evidence is recorded as an account-window delta with
-    // its basis stated — never presented as a per-image rate or run cost.
-    expect(gpt.note).toMatch(/account-window delta/);
-    expect(gpt.note).toMatch(/not a per-image rate/);
+    expect(gpt.costCoversRefs).toBe(false);
+    // The reference-call figure is the per-request receipt, not the older
+    // account-window delta; and "cheapest" is no longer true at medium/high.
+    expect(gpt.note).toMatch(/\$0\.0166 per request/);
+    expect(gpt.note).not.toMatch(/account-window/);
+    expect(gpt.note).not.toMatch(/cheapest/i);
   });
 
   test("the qualified reference-capable list is derived from the registry, never duplicated", async () => {

@@ -12,6 +12,11 @@
 
 ### Changed
 
+- Changed the `gpt-image` registry rate from $0.0045 to the $0.005975 Gateway
+  receipt, and its note now cites the $0.0166 per-request Reference receipt
+  instead of an account-window delta and no longer calls it the cheapest
+  model (#280).
+
 - Changed the `ply generate` default model from `nano-2` to
   `gpt-image-flare` (breaking) — omitting `--model` now sends a `--size WxH`
   request (default 1024x1024) and accepts `--quality`, while `--aspect` or

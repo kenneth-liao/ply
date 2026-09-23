@@ -30,7 +30,7 @@ import {
   type UniformProvider,
   type UniformSizing,
 } from "../src/generation.js";
-import { resolveModel } from "../src/models.js";
+import { MODELS, resolveModel } from "../src/models.js";
 
 let root: string;
 
@@ -349,7 +349,7 @@ describe("published run cost", () => {
     // One receipt out of two: summing it would understate the run, and calling
     // it the run's charge would be false — so the estimate is recorded, with
     // the missing receipt stated.
-    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: MODELS["gpt-image"].approxCost * 2 });
     expect(job.run.warnings.join("\n")).toMatch(/only 1 of 2 provider responses carried a usable billing receipt/i);
   });
 
@@ -368,7 +368,7 @@ describe("published run cost", () => {
       },
     });
     const job = await runUniformGeneration(jobRoot(), "gen-malformed-receipt", { ...base, count: 2 }, { provider });
-    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: MODELS["gpt-image"].approxCost * 2 });
     expect(job.run.warnings.join("\n")).toMatch(/carried a usable billing receipt/i);
   });
 
@@ -380,7 +380,7 @@ describe("published run cost", () => {
     expect(provider.imageCalls).toHaveLength(2);
     expect(provider.textCalls).toHaveLength(0);
     expect(job.run.outputs).toHaveLength(2);
-    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: MODELS["gpt-image"].approxCost * 2 });
   });
 
   test("a failed run leaves no record and no cost claim — a failure costs nothing recorded", async () => {
@@ -572,7 +572,7 @@ describe("cost basis on read (#126)", () => {
     const job = await runUniformGeneration(jobRoot(), "gen-v2", base, { provider });
     expect(job.schemaVersion).toBe(2);
     const onDisk = JSON.parse(await readFile(path.join(jobRoot(), "gen-v2", "job.json"), "utf8"));
-    expect(onDisk.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 });
+    expect(onDisk.run.cost).toEqual({ basis: "registry-estimate", usd: MODELS["gpt-image"].approxCost });
     expect("costUsd" in onDisk.run).toBe(false);
     expect("costMeasured" in onDisk.run).toBe(false);
   });
@@ -599,7 +599,7 @@ describe("runUniformGeneration", () => {
     expect(job.run.outputs).toHaveLength(2);
     // No provider receipt in this run: the recorded cost is the registry
     // estimate, marked as an estimate — never presented as a measured charge.
-    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: 0.0045 * 2 });
+    expect(job.run.cost).toEqual({ basis: "registry-estimate", usd: MODELS["gpt-image"].approxCost * 2 });
     for (const out of job.run.outputs) {
       expect(out.file).toMatch(/^outputs\/[a-f0-9]{64}\.png$/);
       expect(out.contentHash).toMatch(/^[a-f0-9]{64}$/);
