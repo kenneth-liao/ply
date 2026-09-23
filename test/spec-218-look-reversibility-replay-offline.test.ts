@@ -494,13 +494,13 @@ test("one Composition using every look parameter replays byte-identically after 
   );
   expect(addTxt.code).toBe(0);
 
-  // Raster cutout with visible region, grade (brightness + warmth), and directional glow
+  // Raster cutout with visible region, grade (brightness + saturation + warmth), and directional glow
   const addCut = await invokeOffline(
     [
       "composition", "add", "thumb", "cutout",
       "--image", paddedPng, "--visible-region", "16,16,32,32",
       "--x", "70", "--y", "45",
-      "--brightness", "1.15", "--warmth", "0.3",
+      "--brightness", "1.15", "--saturation", "1.2", "--warmth", "0.3",
       "--glow", "8,3,#38bdf8,90,0.8",
       "-p", proj, "--json",
     ],
@@ -535,10 +535,11 @@ test("one Composition using every look parameter replays byte-identically after 
   await rename(proj, proj2);
 
   const replayedPath = path.join(root, "replayed.png");
+  const replayedManifestPath = path.join(proj2, path.relative(proj, manifest));
   const replay = await invokeOffline(
     [
       "composition", "replay",
-      path.join(proj2, path.relative(proj, manifest)),
+      replayedManifestPath,
       "--out", replayedPath,
       "-p", proj2, "--json",
     ],
@@ -549,6 +550,15 @@ test("one Composition using every look parameter replays byte-identically after 
 
   const replayed = await readFile(replayedPath);
   expect(replayed.equals(png)).toBe(true);
+
+  // Verify that the replayed manifest pinned all four grade controls across layers
+  const manifestDoc = JSON.parse(await readFile(replayedManifestPath, "utf8")) as {
+    layers: Array<{ name: string; layerId: string; revisionId: string }>;
+  };
+  const cutoutEntry = manifestDoc.layers.find((l) => l.name === "cutout")!;
+  const cutoutRevPath = path.join(proj2, "layers", `${cutoutEntry.layerId}.revisions`, `${cutoutEntry.revisionId}.json`);
+  const cutoutRev = JSON.parse(await readFile(cutoutRevPath, "utf8"));
+  expect(cutoutRev.grade).toMatchObject({ brightness: 1.15, saturation: 1.2, warmth: 0.3 });
 });
 
 // ---------------------------------------------------------------------------
