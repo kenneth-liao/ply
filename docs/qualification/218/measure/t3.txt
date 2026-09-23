@@ -1,0 +1,4 @@
+Measured Composition "t3" (1280×720), 3 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1376×768) box (0, 0) 1280×720 painted (0, 0) 1280×720 [scale 0.9302325581395349×/0.9375×]
+  2. "kenny" (image content 994×1241) box (279.5, 60) 720.87×900 painted (219, 12) 844×1018, on-canvas (219, 12) 844×708 — clipped [shadow 0 0 40 #000000cc, grade contrast 1.15, saturation 1.1, glow width 5px, softness 4px, #00e5ff66, from 90° (strength 0.6), scale 0.7252215954875101×]
+  3. "head" (text 985.88×156) box (147.5, 577) 985.88×156 painted (119, 585) 1042×150, on-canvas (119, 585) 1042×135 — clipped [shadow 0 6 10 #000000, outline 5 #000000, fill solid #ffffff]
