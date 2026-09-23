@@ -25,7 +25,7 @@
  * | shared propagation / refusers   | "multi-referrer Layer edit without --in-place fails" | (same seam, both kinds) | test/layer-edit.test.ts |
  * | transform/effect lineage retention | "resizes never touch retained generation lineage" (rotate/flip analogues in their suites) | (same seam) | test/layer-resize.test.ts et al. |
  * | pinned replay / relocation      | "replay survives Project relocation and deletion of external source files" | "capture covers text Layers with their pinned revisions" | test/render-history.test.ts |
- * | nano-2 default / GPT quality (US-005, not this workflow's cells) | — | — | test/generation-cli.test.ts, test/quality-selection.test.ts |
+ * | gpt-image-flare default / GPT quality (US-005, not this workflow's cells) | — | — | test/generation-cli.test.ts, test/quality-selection.test.ts |
  *
  * The combined cells this suite alone owns: resize+anchor+shadow on real
  * retained evidence in one lifecycle, sharing/forked variation across a
@@ -122,7 +122,7 @@ const audit: Array<{ suite: string; markers: string[] }> = [
   },
   {
     suite: "generation-cli.test.ts",
-    markers: ["omitting --model sends nano-2 outbound and retains it as effective provenance"],
+    markers: ["omitting --model sends gpt-image-flare outbound and retains it as effective provenance"],
   },
   {
     suite: "quality-selection.test.ts",

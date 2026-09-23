@@ -171,23 +171,44 @@ describe("ply generate — default model selection (#141, TEST-005)", () => {
     };
   }
 
-  test("omitting --model sends nano-2 outbound and retains it as effective provenance", async () => {
+  test("omitting --model sends gpt-image-flare outbound and retains it as effective provenance", async () => {
     const provider = capturingProvider();
     const res = await run(["a red barn at noon", "--json"], deps(provider));
     expect(res.exitCode).toBe(0);
-    // The outbound request carries nano-2's gateway id, not gpt-image's.
-    expect(provider.textArgs).toHaveLength(1);
-    expect(provider.textArgs[0].model).toBe("google/gemini-3.1-flash-image");
-    expect(provider.imageArgs).toHaveLength(0);
+    // The outbound request carries gpt-image-flare's gateway id on the image seam.
+    expect(provider.imageArgs).toHaveLength(1);
+    expect(provider.imageArgs[0].model).toBe("openai/gpt-image-2.5-flare");
+    expect(provider.textArgs).toHaveLength(0);
     // Provenance: the selected model key and the effective resolved id.
     const json = res.json as Record<string, any>;
-    expect(json.job.request.model).toBe("nano-2");
-    expect(json.job.run.model).toBe("google/gemini-3.1-flash-image");
-    // The default fills the multimodal sizing shape (1:1).
-    expect(json.job.request.sizing).toEqual({ kind: "aspectRatio", ratio: "1:1" });
+    expect(json.job.request.model).toBe("gpt-image-flare");
+    expect(json.job.run.model).toBe("openai/gpt-image-2.5-flare");
+    // The default fills the size-kind sizing shape (1024x1024).
+    expect(json.job.request.sizing).toEqual({ kind: "size", width: 1024, height: 1024 });
   });
 
-  test("an explicit --model keeps precedence over the nano-2 default", async () => {
+  test("omitting --model with --size forwards the caller's size to the default", async () => {
+    const provider = capturingProvider();
+    const res = await run(["a wide plate", "--size", "1536x1024", "--json"], deps(provider));
+    expect(res.exitCode).toBe(0);
+    expect(provider.imageArgs).toHaveLength(1);
+    expect(provider.imageArgs[0].model).toBe("openai/gpt-image-2.5-flare");
+    expect(provider.imageArgs[0].size).toBe("1536x1024");
+    expect((res.json as any).job.request.sizing).toEqual({ kind: "size", width: 1536, height: 1024 });
+  });
+
+  test("omitting --model with --aspect is refused before any provider call, naming --size", async () => {
+    const provider = capturingProvider();
+    const res = await run(["a tall poster", "--aspect", "4:5", "--json"], deps(provider));
+    expect(res.exitCode).toBe(1);
+    expect((res.json as any).ok).toBe(false);
+    expect((res.json as any).error).toContain("--size");
+    expect(provider.imageArgs).toHaveLength(0);
+    expect(provider.textArgs).toHaveLength(0);
+    expect(await publishedIds()).toEqual([]);
+  });
+
+  test("an explicit --model keeps precedence over the gpt-image-flare default", async () => {
     const provider = capturingProvider();
     const res = await run(
       ["a red barn at noon", "--model", "gpt-image", "--json"],
@@ -204,37 +225,37 @@ describe("ply generate — default model selection (#141, TEST-005)", () => {
   });
 
   test("provider failures on the default path surface the error and never switch models", async () => {
-    // The text seam (nano-2's call shape) throws: the provider error surfaces
-    // as {ok:false}, nothing is published, and the image seam is never
+    // The image seam (gpt-image-flare's call shape) throws: the provider error
+    // surfaces as {ok:false}, nothing is published, and the text seam is never
     // touched — a refusal is surfaced, changing models is a caller choice.
     const throwing = capturingProvider();
-    const res = await run(["a barn", "--json"], deps({ ...throwing, text: async () => {
-      throw new Error("gateway 503 on gemini");
+    const res = await run(["a barn", "--json"], deps({ ...throwing, image: async () => {
+      throw new Error("gateway 503 on gpt-image");
     } }));
     expect(res.exitCode).toBe(1);
     expect((res.json as Record<string, unknown>).ok).toBe(false);
     expect((res.json as any).error).toMatch(/gateway 503/);
     expect(res.text).toMatch(/gateway 503/);
-    expect(throwing.imageArgs).toHaveLength(0);
+    expect(throwing.textArgs).toHaveLength(0);
     expect(await publishedIds()).toEqual([]);
 
-    // A text-seam response with no image fails the same way — still no
+    // An image-seam response with no image fails the same way — still no
     // model switch.
     const empty = capturingProvider();
     const res2 = await run(["a barn", "--json"], deps({
       ...empty,
-      text: async () => ({ files: [], text: "", warnings: [] }),
+      image: async () => ({ images: [], warnings: [] }),
     }));
     expect(res2.exitCode).toBe(1);
     expect((res2.json as any).error).toMatch(/returned no image/i);
-    expect(empty.imageArgs).toHaveLength(0);
+    expect(empty.textArgs).toHaveLength(0);
     expect(await publishedIds()).toEqual([]);
   });
 
-  test("--help identifies nano-2 as the default", async () => {
+  test("--help identifies gpt-image-flare as the default", async () => {
     const res = await run(["--help"], { provider: neverProvider, jobsRoot });
     expect(res.exitCode).toBe(0);
-    expect(res.text).toContain("(default: nano-2)");
+    expect(res.text).toContain("(default: gpt-image-flare)");
   });
 });
 
@@ -261,7 +282,7 @@ describe("ply generate — failure contract", () => {
     expect(await publishedIds()).toEqual([]);
   });
 
-  test("domain refusals exit 1: unknown model, sizing/kind mismatch, temperature on image models, implicit-default size refusal", async () => {
+  test("domain refusals exit 1: unknown model, sizing/kind mismatch, temperature on image models, implicit-default temperature refusal", async () => {
     const unknown = await run(["a barn", "--model", "nope", "--json"], deps());
     expect(unknown.exitCode).toBe(1);
     expect((unknown.json as Record<string, any>).ok).toBe(false);
@@ -275,9 +296,9 @@ describe("ply generate — failure contract", () => {
     expect(temp.exitCode).toBe(1);
     expect((temp.json as any).error).toMatch(/temperature/i);
 
-    const sizeOnDefault = await run(["a barn", "--size", "1024x1024", "--json"], deps());
-    expect(sizeOnDefault.exitCode).toBe(1);
-    expect((sizeOnDefault.json as any).error).toMatch(/--aspect/);
+    const tempOnDefault = await run(["a barn", "--temperature", "0.5", "--json"], deps());
+    expect(tempOnDefault.exitCode).toBe(1);
+    expect((tempOnDefault.json as any).error).toMatch(/temperature/i);
     expect(await publishedIds()).toEqual([]);
   });
 

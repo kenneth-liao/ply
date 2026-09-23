@@ -105,7 +105,7 @@ describe("ply generate --quality — explicit GPT Image 2 quality (#142)", () =>
 
   test("an unsupported combination fails before any provider call — no invented nano-2 tiers", async () => {
     const provider = capturingProvider();
-    const res = await run(["a barn", "--quality", "high", "--json"], deps(provider));
+    const res = await run(["a barn", "--model", "nano-2", "--quality", "high", "--json"], deps(provider));
     expect(res.exitCode).toBe(1);
     const json = res.json as Record<string, unknown>;
     expect(json.ok).toBe(false);

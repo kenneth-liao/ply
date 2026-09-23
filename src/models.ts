@@ -195,15 +195,18 @@ export const MODELS: Record<string, ModelSpec> = {
 };
 
 /**
- * The tool-wide default for general generation (DEC-007): omitting an
- * explicit model selects nano-2, per the reviewed comparison (spec #132).
- * This is the one canonical home for that default — the generate CLI applies
- * it at request normalization (`parsed.model ?? DEFAULT_MODEL`), so an
- * explicit --model selection always takes precedence and one change here
- * moves every reader. The Kenny-likeness caller default (GPT Image 2 low) is
- * NOT a tool default: it lives in the caller's own workflow (DEC-007).
+ * The tool-wide default for general generation: omitting an explicit model
+ * selects gpt-image-flare, the cheapest qualified plate/object route (#278
+ * verdict, #281; revisits spec #132 DEC-007's nano-2). This is the one
+ * canonical home for that default — the generate CLI applies it at request
+ * normalization (`parsed.model ?? DEFAULT_MODEL`), so an explicit --model
+ * selection always takes precedence and one change here moves every reader.
+ * The default is size-sized: a defaulted request with --aspect or
+ * --temperature is refused by request validation like any other mismatch,
+ * never remapped. The Kenny-likeness caller default is NOT a tool default:
+ * it lives in the caller's own workflow (DEC-007).
  */
-export const DEFAULT_MODEL = "nano-2";
+export const DEFAULT_MODEL = "gpt-image-flare";
 
 /**
  * The canonical qualified reference-capable list (DEC-018): every registry
