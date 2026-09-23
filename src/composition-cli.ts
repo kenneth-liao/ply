@@ -55,7 +55,7 @@ import {
 } from "./layer-options.js";
 import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
-import { formatFill } from "./fill.js";
+import { formatFill, normalizeStoredTextFill } from "./fill.js";
 import { formatGrade, formatGlow, type LayerGrade, type LayerGlow, type StoredLayerBlendMode } from "./layer.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
@@ -305,7 +305,11 @@ Options:
                         variable fonts — bundled Archivo 62-125 (default
                         100); static faces and files without a wdth axis
                         accept only the implicit width 100
-  --color <hex>         Text color as #RGB or #RRGGBB (default: #ffffff)
+  --color <spec>        Text color or gradient fill (#222): a solid hex
+                        color like #ffffff, #fff, or #ffffff80, or a gradient
+                        like "linear:90deg,#ff0000,#00ff00" or
+                        "radial:#ff0000,#00ff00" (the shared fill grammar,
+                        default: #ffffff)
   --shape <geometry>    Shape geometry for a shape Layer (#208): rectangle
                         or ellipse. Requires --size and --fill.
   --size <W>x<H>        The shape geometry's width and height in canvas px,
@@ -872,7 +876,7 @@ async function run() {
               const rev = res.layer.currentRevision;
               const detail =
                 rev.kind === "text"
-                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
+                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${formatFill(normalizeStoredTextFill(rev.color))}`
                   : rev.kind === "image"
                     ? `${rev.width}×${rev.height} ${rev.format}`
                     : ""; // unreachable: generation ingestion publishes image or text content only
@@ -910,7 +914,7 @@ async function run() {
               const rev = res.layer.currentRevision;
               const detail =
                 rev.kind === "text"
-                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
+                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${formatFill(normalizeStoredTextFill(rev.color))}`
                   : rev.kind === "image"
                     ? `${rev.width}×${rev.height} ${rev.format}`
                     : ""; // unreachable: matte ingestion publishes image or text content only
@@ -1034,7 +1038,7 @@ async function run() {
               if (rev.kind !== "text") return; // unreachable: text ingestion returns a text revision
               console.log(
                 `Added text Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
-                  `[${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
+                  `[${JSON.stringify(rev.text)} ${rev.fontSize}px ${formatFill(normalizeStoredTextFill(rev.color))}]${oneCommandFacts(rev, values.anchor)}${stackPositionNote(stackPosition)}`,
               );
             },
           );
@@ -1251,7 +1255,7 @@ async function run() {
               const rev = layer.revision;
               const detail =
                 rev.kind === "text"
-                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${rev.color}`
+                  ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${formatFill(normalizeStoredTextFill(rev.color))}`
                   : rev.kind === "shape"
                     ? `${rev.shape} ${rev.width}×${rev.height} ${formatFill(rev.fill)}`
                     : `${rev.width}×${rev.height} ${rev.format}`;

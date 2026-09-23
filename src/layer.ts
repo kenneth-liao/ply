@@ -1323,10 +1323,10 @@ export function validateTextContent(text: unknown, fontSize: unknown, color: unk
     );
   }
   if (color === undefined || color === null) {
-    throw new Error(`Invalid color: must be a hex color like #ffffff or #fff, or a gradient fill.`);
+    throw new Error(`Invalid --color: must be a hex color like #ffffff or #fff, or a gradient fill.`);
   }
   if (typeof color !== "string" && (typeof color !== "object" || Array.isArray(color))) {
-    throw new Error(`Invalid color "${String(color)}": must be a hex color like #ffffff or #fff, or a gradient fill.`);
+    throw new Error(`Invalid --color "${String(color)}": must be a hex color like #ffffff or #fff, or a gradient fill.`);
   }
   return normalizeStoredTextFill(color);
 }

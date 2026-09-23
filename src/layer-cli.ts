@@ -133,7 +133,10 @@ Options:
   --width <num>         Text width for a text Layer (#179/#196): variable
                         fonts — Archivo 62-125 (default 100); static faces
                         accept only their implicit width 100
-  --color <hex>         Text color as #RGB or #RRGGBB
+  --color <spec>        Text color or gradient fill (#222): a solid hex
+                        color like #ffffff, #fff, or #ffffff80, or a gradient
+                        like "linear:90deg,#ff0000,#00ff00" or
+                        "radial:#ff0000,#00ff00" (the shared fill grammar)
   --shape <geometry>    Set a shape Layer's geometry to an ABSOLUTE value:
                         rectangle or ellipse (#209). Omitted keeps the
                         current geometry; switching to ellipse drops a

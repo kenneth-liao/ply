@@ -193,7 +193,9 @@ export function parseFillSpec(spec: string, label = "--fill"): LayerFill {
   if (type === "solid") {
     if (!FILL_COLOR_PATTERN.test(value)) {
       throw new Error(
-        `Invalid fill color "${value}": a solid fill takes a hex color like #22c55e, #2c5, or #22c55e80 (got "${spec.trim()}").`,
+        label === "--color"
+          ? `Invalid --color "${value}": must be a hex color like #22c55e, #2c5, or #22c55e80, or a gradient (got "${spec.trim()}").`
+          : `Invalid fill color "${value}": a solid fill takes a hex color like #22c55e, #2c5, or #22c55e80 (got "${spec.trim()}").`,
       );
     }
     return { type: "solid", color: canonicalizeFillColor(value) };

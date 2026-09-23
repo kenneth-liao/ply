@@ -735,6 +735,11 @@ ply composition add poster banded --shape rectangle --size 300x80 \
 # other Layer kind; --resize-to resolves against the shape's --size geometry:
 ply composition add poster hero --shape rectangle --size 100x50 --fill "#1d4ed8" \
   --anchor center,center --rotate 12 --shadow "2,3,4,#000000" -p ~/projects/my-poster
+# Gradient text (#222): a text Layer's --color accepts the same fill grammar,
+# spanning the text ink box and automatically re-spanning across text or typography edits:
+ply composition add poster title --text "HEADLINE" --font "Anton" --font-size 64 \
+  --color "linear:90deg,#ff0000,#00ff00" --x 40 --y 50 -p ~/projects/my-poster
+ply layer edit <layerId> --color "radial:#ff0000,#0000ff" -p ~/projects/my-poster
 ```
 
 Non-positive size, a negative or oversized corner radius (0 to half the

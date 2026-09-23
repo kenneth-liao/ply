@@ -17,6 +17,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { decodePng } from "../src/png.js";
 import { normalizeStoredTextFill } from "../src/fill.js";
+import { computeRevisionHash, type LayerTextRevision } from "../src/layer.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -287,6 +288,99 @@ test("changing font size, tracking, or line height re-spans the gradient", async
   }
 });
 
+test("re-spanning across font, weight, and width edits (INT-3)", async () => {
+  // Start with variable font Archivo with width 100, weight 400
+  const added = await addText("respanAxes", "MMMM", "linear:90deg,#ff0000,#00ff00", [
+    "--font", "Archivo",
+    "--weight", "400",
+    "--width", "100",
+  ]);
+  const layerId = added.layer.id;
+
+  const { png: png1 } = await renderPng("poster");
+  const ink1 = getInkPixels(png1);
+  const minX1 = Math.min(...ink1.map((p) => p.x));
+  const maxX1 = Math.max(...ink1.map((p) => p.x));
+  const width1 = maxX1 - minX1;
+
+  // Edit 1: width 125 (expanded) -> text gets wider, right edge re-spans to green
+  const e1 = await invoke([
+    "layer", "edit", layerId,
+    "--width", "125",
+    "--project", projDir,
+    "--json",
+  ]);
+  expect(e1.code).toBe(0);
+
+  const { png: png2 } = await renderPng("poster");
+  const ink2 = getInkPixels(png2);
+  const minX2 = Math.min(...ink2.map((p) => p.x));
+  const maxX2 = Math.max(...ink2.map((p) => p.x));
+  const width2 = maxX2 - minX2;
+  expect(width2).toBeGreaterThan(width1);
+
+  // Left ink red, right ink green
+  const rightInk2 = ink2.filter((p) => p.x >= maxX2 - 4);
+  expect(rightInk2.length).toBeGreaterThan(0);
+  for (const p of rightInk2) {
+    expect(p.rgba[1]).toBeGreaterThan(160);
+    expect(p.rgba[0]).toBeLessThan(90);
+  }
+
+  // Edit 2: weight 900 (black/heavy) -> ink density/thickness grows, endpoints still red left / green right
+  const e2 = await invoke([
+    "layer", "edit", layerId,
+    "--weight", "900",
+    "--project", projDir,
+    "--json",
+  ]);
+  expect(e2.code).toBe(0);
+
+  const { png: png3 } = await renderPng("poster");
+  const ink3 = getInkPixels(png3);
+  expect(ink3.length).toBeGreaterThan(ink2.length);
+
+  const minX3 = Math.min(...ink3.map((p) => p.x));
+  const maxX3 = Math.max(...ink3.map((p) => p.x));
+  const leftInk3 = ink3.filter((p) => p.x <= minX3 + 4);
+  const rightInk3 = ink3.filter((p) => p.x >= maxX3 - 4);
+  for (const p of leftInk3) {
+    expect(p.rgba[0]).toBeGreaterThan(160);
+    expect(p.rgba[1]).toBeLessThan(90);
+  }
+  for (const p of rightInk3) {
+    expect(p.rgba[1]).toBeGreaterThan(160);
+    expect(p.rgba[0]).toBeLessThan(90);
+  }
+
+  // Edit 3: font Anton (static font, reset axes to weight 400, width 100) -> re-spans across Anton bounds
+  const e3 = await invoke([
+    "layer", "edit", layerId,
+    "--font", "Anton",
+    "--weight", "400",
+    "--width", "100",
+    "--project", projDir,
+    "--json",
+  ]);
+  expect(e3.code).toBe(0);
+
+  const { png: png4 } = await renderPng("poster");
+  const ink4 = getInkPixels(png4);
+  const minX4 = Math.min(...ink4.map((p) => p.x));
+  const maxX4 = Math.max(...ink4.map((p) => p.x));
+  const leftInk4 = ink4.filter((p) => p.x <= minX4 + 4);
+  const rightInk4 = ink4.filter((p) => p.x >= maxX4 - 4);
+  for (const p of leftInk4) {
+    expect(p.rgba[0]).toBeGreaterThan(160);
+    expect(p.rgba[1]).toBeLessThan(90);
+  }
+  for (const p of rightInk4) {
+    expect(p.rgba[1]).toBeGreaterThan(160);
+    expect(p.rgba[0]).toBeLessThan(90);
+  }
+});
+
+
 // ---------------------------------------------------------------------------
 // Outline and shadow work on gradient text as on solid text
 // ---------------------------------------------------------------------------
@@ -326,7 +420,9 @@ test("outline and shadow work on gradient text", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Solid-colour text renders byte-identically to before this change (DEC-010)
+// Solid-colour text renders byte-identically to before this change (DEC-010, INT-2)
+// Provenance: test/fixtures/solid-text-baseline.png was captured from main at commit e19d0ca
+// using a detached worktree with Bun v1.4.0 and Playwright Chromium 151.0.7922.34 at supersample 1.
 // ---------------------------------------------------------------------------
 
 test("an existing solid-colour text Layer renders byte-identically to before this change", async () => {
@@ -370,6 +466,28 @@ test("solid colour text revision stores a plain hex string and revision id is un
     color: "#ff4400",
   });
 });
+
+test("legacy string-color text revision hash is unchanged (INT-4, DEC-010)", () => {
+  const legacyRev: LayerTextRevision = {
+    schemaVersion: 1,
+    layerId: "layer_test123",
+    revisionId: "rev_placeholder",
+    parentRevisionId: null,
+    committedAt: "2026-01-01T00:00:00.000Z",
+    kind: "text",
+    x: 10,
+    y: 20,
+    opacity: 1,
+    text: "Hello World",
+    font: "font_hash_abc",
+    fontSize: 32,
+    color: "#ff0000",
+  };
+  const hash = computeRevisionHash(legacyRev);
+  expect(hash).toBe("rev_775299c96a23683b");
+});
+
+
 
 // ---------------------------------------------------------------------------
 // Single Source of Truth: inspect and measure report one fill for text
@@ -460,7 +578,7 @@ test("malformed gradient fill specs are refused before publication", async () =>
     "layer", "edit", added.layer.id, "--color", "linear:90deg,#ff0000,banana", "--project", projDir, "--json",
   ]);
   expect(r2.code).not.toBe(0);
-  expect(JSON.parse(r2.stdout).error).toContain("banana");
+  expect(JSON.parse(r2.stdout).error).toContain('Invalid linear gradient stop colour "banana"');
 
   // Malformed radial
   const r3 = await invoke([
@@ -472,3 +590,49 @@ test("malformed gradient fill specs are refused before publication", async () =>
   const inspect = await invoke(["layer", "inspect", added.layer.id, "--project", projDir, "--json"]);
   expect(JSON.parse(inspect.stdout).layer.currentRevisionId).toBe(origRevId);
 });
+
+test("CLI text output formats gradient without interpolating [object Object] (INT-6)", async () => {
+  const addRes = await invoke([
+    "composition", "add", "poster", "heading",
+    "--text", "Gradient Heading",
+    "--font", "Anton",
+    "--font-size", "48",
+    "--color", "linear:90deg,#ff0000,#00ff00",
+    "--x", "20",
+    "--y", "30",
+    "--project", projDir,
+  ]);
+  expect(addRes.code).toBe(0);
+  expect(addRes.stdout).not.toContain("[object Object]");
+  expect(addRes.stdout).toContain("linear 90deg #ff0000 0%, #00ff00 100%");
+
+  const inspectRes = await invoke(["composition", "inspect", "poster", "--project", projDir]);
+  expect(inspectRes.code).toBe(0);
+  expect(inspectRes.stdout).not.toContain("[object Object]");
+  expect(inspectRes.stdout).toContain("linear 90deg #ff0000 0%, #00ff00 100%");
+});
+
+test("invalid solid color option names --color on refusal (PROD-2)", async () => {
+  const rAdd = await invoke([
+    "composition", "add", "poster", "bad1",
+    "--text", "Bad",
+    "--font", "Anton",
+    "--color", "banana",
+    "--project", projDir,
+    "--json",
+  ]);
+  expect(rAdd.code).not.toBe(0);
+  expect(JSON.parse(rAdd.stdout).error).toContain('Invalid --color "banana"');
+
+  const added = await addText("good", "Good", "#ff0000");
+  const rEdit = await invoke([
+    "layer", "edit", added.layer.id,
+    "--color", "banana",
+    "--project", projDir,
+    "--json",
+  ]);
+  expect(rEdit.code).not.toBe(0);
+  expect(JSON.parse(rEdit.stdout).error).toContain('Invalid --color "banana"');
+});
+
+
