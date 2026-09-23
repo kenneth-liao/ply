@@ -472,14 +472,15 @@ test("matrix: blend mode applies to raster image, vector image, text, and shape 
     "--project", projDir, "--json",
   ]);
 
-  // 5c. Text: white #ffffff
-  await invoke([
+  // 5c. Text: white #ffffff (added unblended first to verify glyph ink is opaque white)
+  const tAdd = await invoke([
     "composition", "add", "comp-blend", "text",
     "--text", "MM", "--font", "Archivo", "--font-size", "40", "--color", "#ffffff",
     "--x", "10", "--y", "80",
-    "--blend", "multiply",
     "--project", projDir, "--json",
   ]);
+  expect(tAdd.code).toBe(0);
+  const textLayerId = JSON.parse(tAdd.stdout).use.layerId as string;
 
   // 5d. Shape: rectangle 60x60 white #ffffff
   await invoke([
@@ -490,6 +491,18 @@ test("matrix: blend mode applies to raster image, vector image, text, and shape 
     "--project", projDir, "--json",
   ]);
 
+  // Verify unblended text renders opaque white at glyph ink pixel (x=16, y=101 in 'M' stem)
+  const unblended = await render("comp-blend", "blend-unblended.png");
+  expect(pixel(unblended, 16, 101)).toEqual([255, 255, 255, 255]);
+
+  // Now apply --blend multiply to text
+  const tEdit = await invoke([
+    "layer", "edit", textLayerId,
+    "--blend", "multiply",
+    "--project", projDir, "--json",
+  ]);
+  expect(tEdit.code).toBe(0);
+
   // Render: the red backdrop shows through where the foreground fixtures were white
   const rendered = await render("comp-blend", "blend.png");
 
@@ -499,20 +512,20 @@ test("matrix: blend mode applies to raster image, vector image, text, and shape 
   // Vector interior: white multiplied over red backdrop leaves red
   expect(pixel(rendered, 110, 40)).toEqual([255, 0, 0, 255]);
 
-  // Text ink pixel: white text multiplied over red backdrop leaves red
-  // We check a known coordinate in the middle of the "MM" glyph
-  let tFoundRed = false;
+  // Text glyph ink pixel (x=16, y=101): white text multiplied over red backdrop leaves red
+  expect(pixel(rendered, 16, 101)).toEqual([255, 0, 0, 255]);
+
+  // Zero opaque white glyph pixels remain in the text region
+  let remainingWhite = 0;
   for (let y = 85; y < 125; y++) {
-    for (let x = 15; x < 65; x++) {
+    for (let x = 14; x < 65; x++) {
       const px = pixel(rendered, x, y);
-      if (px[0] === 255 && px[1] === 0 && px[2] === 0 && px[3] === 255) {
-        tFoundRed = true;
-        break;
+      if (px[0] === 255 && px[1] === 255 && px[2] === 255 && px[3] === 255) {
+        remainingWhite++;
       }
     }
-    if (tFoundRed) break;
   }
-  expect(tFoundRed).toBe(true);
+  expect(remainingWhite).toBe(0);
 
   // Shape interior: white shape multiplied over red backdrop leaves red
   expect(pixel(rendered, 110, 110)).toEqual([255, 0, 0, 255]);
