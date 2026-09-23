@@ -1,10 +1,10 @@
 ---
 thing: Ply — general-purpose layered image composer
 phase: active
-progress: 19/46
+progress: 34/46
 principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Each layer's look — its shape, framing, colour, light, and how it blends with what is beneath it — is a set of adjustable parameters on the layer, never a change to its source, so one good asset serves every composition and any finished image can be built and tuned inside Ply without reaching for another tool. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
 started: 2026-09-07
-updated: 2026-09-19
+updated: 2026-09-23
 ---
 
 # Ideal State — Ply
@@ -190,14 +190,14 @@ Why: the agent operates the tool; the human only asks for outputs.
   commands. Using one part never requires reading the whole surface.
   Probe: read the help tree. manual
 
-- [ ] ISC-41: A Layer can be created in its final state — content, placement,
+- [x] ISC-41: A Layer can be created in its final state — content, placement,
   transforms, effects, stack position — in one command.
   Probe: build the "Claude Skills" reference thumbnail with one command per
   Layer. bash
-- [ ] ISC-45: A Layer is addressable by Composition and use name wherever a
+- [x] ISC-45: A Layer is addressable by Composition and use name wherever a
   Layer id is accepted.
   Probe: the same build with no Layer id lookups. bash
-- [ ] ISC-42: One command produces a labelled comparison sheet from any set of
+- [x] ISC-42: One command produces a labelled comparison sheet from any set of
   renders or local images.
   Probe: a reference-versus-result sheet for the nine thumbnails. bash
 
@@ -232,29 +232,29 @@ Why: cutting enforcement must not cut correctness or lose hard-won knowledge.
 Why: a Layer's look is tuned by parameter, so one good asset serves every
 composition and no other image tool is needed.
 
-- [ ] ISC-29: A filled geometric region is a Layer whose size, corner radius,
+- [x] ISC-29: A filled geometric region is a Layer whose size, corner radius,
   and fill (solid or gradient) are editable parameters.
   Probe: create a bar, change its width and fill by edit, render — no image
   file involved. bash
-- [ ] ISC-30: The visible region of any Layer is an editable parameter: a
+- [x] ISC-30: The visible region of any Layer is an editable parameter: a
   rectangle with an optional corner radius.
   Probe: crop a padded cutout to the face and round a screenshot's corners;
   `measure` reports the cropped extent. bash
-- [ ] ISC-31: A Layer's colour and light — brightness, contrast, saturation,
+- [x] ISC-31: A Layer's colour and light — brightness, contrast, saturation,
   warmth, edge glow — are editable parameters.
   Probe: one content hash graded warm in Composition A and cool in B. bash
-- [ ] ISC-32: How a Layer combines with what is beneath it (its blend mode) is
+- [x] ISC-32: How a Layer combines with what is beneath it (its blend mode) is
   an editable parameter.
   Probe: a white-background wordmark set to multiply shows no white over a
   grid background. bash
-- [ ] ISC-33: Text can be filled with a gradient.
+- [x] ISC-33: Text can be filled with a gradient.
   Probe: render a two-stop gradient headline. bash
-- [ ] ISC-34: Any local vector file imports as a Layer and renders at full
+- [x] ISC-34: Any local vector file imports as a Layer and renders at full
   fidelity at any scale.
   Probe: one logo SVG at 60px and 600px, both crisp. manual
-- [ ] ISC-44: A single-colour vector Layer takes its colour as a parameter.
+- [x] ISC-44: A single-colour vector Layer takes its colour as a parameter.
   Probe: one `claude.svg` rendered dark, white, and orange. bash
-- [ ] ISC-35: Any local font file the caller supplies works like a bundled
+- [x] ISC-35: Any local font file the caller supplies works like a bundled
   one: retained in the Project, replayable, real axis ranges enforced.
   Probe: a pixel font renders, replays after relocation, and an out-of-range
   weight is refused. bash
@@ -265,20 +265,20 @@ composition and no other image tool is needed.
 - [ ] ISC-37: Every edit property works on every Layer kind, except properties
   that need an intrinsic pixel size.
   Probe: matrix test, property × kind. bash
-- [ ] ISC-38: Anti: no edit operation writes to or replaces a Layer's retained
+- [x] ISC-38: Anti: no edit operation writes to or replaces a Layer's retained
   content bytes; removing every adjustment restores the original render
   byte-for-byte.
   Probe: apply every property, remove each, compare renders. bash
-- [ ] ISC-39: Anti: no edit property calls a model or the network; every edit
+- [x] ISC-39: Anti: no edit property calls a model or the network; every edit
   property is covered by replay. Anything needing inference is generation or
   matting.
   Probe: the edit suite runs with the network disabled; replay is
   byte-identical. bash
-- [ ] ISC-40: Anti: an imported vector never loads anything external or runs
+- [x] ISC-40: Anti: an imported vector never loads anything external or runs
   a script, at import, measure, or render.
   Probe: a crafted SVG with a script and a remote reference — zero requests,
   no execution. bash
-- [ ] ISC-46: A vector file with an external reference is refused at import,
+- [x] ISC-46: A vector file with an external reference is refused at import,
   naming the reference.
   Probe: the same crafted SVG's import error. bash
 
@@ -443,3 +443,25 @@ Not yet specified).
 - ISC-23: [spec #172's acceptance audit](https://github.com/kenneth-liao/ply/issues/172#issuecomment-5724683335) — a supplied region file drives the check and no hardcoded YouTube geometry remains in `src/` (2026-09-17).
 - ISC-24/25/26: `693bc03` — authoring skill, superseding ADRs, and target glossary preparation.
 - ISC-28: #77 acceptance audit DEC-005 — prior logo export retained in the consuming repository's history.
+
+F4/F6 closures below cite the closing audits of
+[spec #207](https://github.com/kenneth-liao/ply/issues/207#issuecomment-5751029096) (2026-09-20, `f854c9e`),
+[spec #226](https://github.com/kenneth-liao/ply/issues/226#issuecomment-5770580468) (2026-09-21, `4280679`), and
+[spec #218](https://github.com/kenneth-liao/ply/issues/218#issuecomment-5797161016) (2026-09-23, `0393110`).
+ISC-36 and ISC-37 remain open; each audit left ISC-37 and ISC-43 open by design.
+
+- ISC-29: `test/shape-layer.test.ts`, `test/layer-shape-edit.test.ts`, `test/gradient-fill.test.ts` — #207 US-001/002.
+- ISC-30: `test/visible-region.test.ts`, `test/visible-region-radius.test.ts` — measure follows the region (#207 US-003).
+- ISC-31: `test/layer-grade.test.ts`, `test/layer-glow.test.ts`; per-Composition look is a fork (`spec-218-look-reversibility-replay-offline` shared-Layer test) — #218 US-001/002.
+- ISC-32: `test/layer-blend.test.ts` TEST-004 — multiply of a white-background fixture leaves the backdrop (#218 US-003).
+- ISC-33: `test/gradient-text.test.ts` — #218 US-004.
+- ISC-34: `test/svg-layer.test.ts` sharpness against an upscaled raster; t2/t7 rebuilds accepted on #217 (2026-09-20).
+- ISC-35: `test/caller-fonts.test.ts`; Press Start 2P in `docs/qualification/226/` — #226 US-005.
+- ISC-38: `test/spec-218-look-reversibility-replay-offline.test.ts`; 2026-09-23 probe on `0393110` — all 16 non-content properties on raster, vector, text, and shape Layers applied then removed: render byte-identical, every `contentHash` unchanged.
+- ISC-39: `test/spec-207-relocation-replay-offline.test.ts`, `test/spec-218-look-reversibility-replay-offline.test.ts` — network denied, byte-identical replay.
+- ISC-40: `test/svg-inertness.test.ts` — zero requests, no script effect across render, measure, review, replay.
+- ISC-41: `docs/qualification/226/` — t2 "Claude Skills" built with seven `add`, zero `layer edit`; accepted on #235 (2026-09-21).
+- ISC-42: `test/comparison-sheet.test.ts`; nine-pair sheet in `docs/qualification/226/` — #226 US-006.
+- ISC-44: `test/vector-color.test.ts`, `test/vector-color-render.test.ts` — #207 US-005.
+- ISC-45: `test/layer-address.test.ts`; the #226 qualification build captures no Layer ids — #226 US-003.
+- ISC-46: `test/svg-inertness.test.ts` — import refusal names each external reference (#207 US-006).
