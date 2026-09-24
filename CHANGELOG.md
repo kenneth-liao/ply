@@ -12,8 +12,9 @@
   the width across edits. The width is stored only when set (the revision
   hash gains `:wrapwidth(<W>)` only then, so pre-#294 revision ids and
   pinned Render history stay byte-identical), validates as a positive
-  finite number at the one shared boundary with identical refusals on both
-  surfaces, and setting one is an edit — a legacy-rule revision becomes
+  finite number up to the shared 8192px per-axis cap at the one shared
+  boundary with identical refusals on both surfaces, and setting one is an
+  edit — a legacy-rule revision becomes
   natural layout (ADR-0017 amendment). It joins the property × kind matrix,
   the add/edit refusal parity tests, and the offline reversibility and
   replay suite (spec #285 US-015, ISC-55, DEC-001/DEC-005, TEST-002) (#294).

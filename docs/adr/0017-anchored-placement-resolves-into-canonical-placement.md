@@ -201,9 +201,12 @@ the Layer.
   `layoutRule: "natural"` with it, exactly like any other text edit
   (ADR-0017's #287 amendment). Retained Renders keep replaying their pinned
   revisions byte-identically.
-- **One shared validation.** The width validates as a positive finite number
-  at the ONE domain boundary (`resolveTextWrapWidthControl`) the add path,
-  the edit path, and both CLI boundaries share, and normalizes at the single
-  ingestion point (`normalizeStoredTextWrapWidth`) beside the typography and
-  layout-rule readers. Refusals are identical on both surfaces, and every
-  refusal fires before anything is published.
+- **One shared validation.** The width validates as a positive finite
+  number up to the shared 8192px per-axis bound (`MAX_DIMENSION`, the same
+  cap as font-size and the resize forms) at the ONE domain boundary
+  (`resolveTextWrapWidthControl`) the add path, the edit path, and both CLI
+  boundaries share, and normalizes at the single ingestion point
+  (`normalizeStoredTextWrapWidth`) beside the typography and layout-rule
+  readers — an over-cap stored field is a malformed document, refused
+  before any render can hang on it. Refusals are identical on both
+  surfaces, and every refusal fires before anything is published.

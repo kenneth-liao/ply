@@ -149,8 +149,34 @@ test("a wrap width soft-wraps a single-line string at spaces; measure reports th
   expect(wrapped.revision.wrapWidth).toBe(220);
 
   // The wrapped width lands in the element's own box (layout px, before the
-  // transform — scale/rotation would apply afterwards).
+  // transform — scale/rotation map the wrapped box afterwards, proven by
+  // the transform tests below).
   expect(close(wrappedBox.content.width, 220, 1)).toBe(true);
+}, 30_000);
+
+test("the wrap width is a LAYOUT-px fact: scale maps the wrapped box, rotation swaps its AABB", async () => {
+  await makeComp("poster", 1200, 900);
+  const scaled = await addText("poster", "scaled", ["--wrap-width", "220", "--scale", "2", "--y", "20"]);
+  const rotated = await addText("poster", "rotated", ["--wrap-width", "220", "--rotate", "90", "--y", "500"]);
+  void scaled;
+  void rotated;
+
+  const scaledBox = (await measure("poster", "scaled"));
+  const rotatedBox = (await measure("poster", "rotated"));
+
+  // Scale 2: the untransformed content box is STILL the 220px wrapped box
+  // (W is a layout-px fact, never painted px); the transformed box is its
+  // 2× projection.
+  expect(close(scaledBox.content.width, 220, 1)).toBe(true);
+  expect(close(scaledBox.box.width, 2 * scaledBox.content.width, 2)).toBe(true);
+  expect(close(scaledBox.box.height, 2 * scaledBox.content.height, 2)).toBe(true);
+
+  // Rotate 90°: the wrapped box's AABB swaps — box width ≈ content height,
+  // box height ≈ content width — proving the wrap happened in layout space
+  // and the transform mapped it afterwards.
+  expect(close(rotatedBox.box.width, rotatedBox.content.height, 2)).toBe(true);
+  expect(close(rotatedBox.box.height, rotatedBox.content.width, 2)).toBe(true);
+  expect(close(rotatedBox.content.width, 220, 1)).toBe(true);
 }, 30_000);
 
 test("written line breaks still break under a wrap width, matching the unwrapped multi-line layout", async () => {
@@ -321,14 +347,28 @@ test("wrap width refuses zero, negatives, and non-text kinds with the establishe
   expect(imgRes.code).toBe(0);
   const imgId = JSON.parse(imgRes.stdout).use.layerId as string;
 
-  // Zero and negative: the absolute setter's range refusal (the parser
-  // accepts the shape; the range validator refuses the value). JSON mode
-  // reports the refusal in the result body, so assert on both streams.
-  for (const bad of ["0", "-5"]) {
+  // Zero, negative, and over-cap: the absolute setter's range refusal (the
+  // parser accepts the shape; the shared validator refuses the value, the
+  // 8192px cap matching font-size and the resize forms). JSON mode reports
+  // the refusal in the result body, so assert on both streams.
+  for (const bad of ["0", "-5", "8193"]) {
     const res = await invoke(["layer", "edit", layerId, "--wrap-width", bad, "--project", projDir, "--json"]);
     expect(res.code).toBe(2);
-    expect(res.stderr + res.stdout).toContain("Wrap width (--wrap-width) must be a positive finite number");
+    expect(res.stderr + res.stdout).toContain(
+      "Wrap width (--wrap-width) must be a finite number between 1 and 8192 layout px",
+    );
   }
+
+  // The same over-cap refusal fires on add, with the identical wording —
+  // the shared cap wording on both surfaces (#294 review PROD-1).
+  const overAdd = await invoke([
+    "composition", "add", "poster", "over", "--text", "hi", "--font", "Archivo",
+    "--wrap-width", "8193", "--project", projDir, "--json",
+  ]);
+  expect(overAdd.code).toBe(2);
+  expect(overAdd.stderr + overAdd.stdout).toContain(
+    "Wrap width (--wrap-width) must be a finite number between 1 and 8192 layout px",
+  );
 
   // Kind stability: refused on an image Layer, naming the kind (JSON mode
   // reports the refusal in the result body).

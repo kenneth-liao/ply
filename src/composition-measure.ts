@@ -317,10 +317,12 @@ const MAX_INK_VIEWPORT_PX = MAX_DIMENSION;
 /** Standalone measurement canvas edge (px): large enough that a legacy
  * text revision's pre-wrap shrink-to-fit line cannot wrap inside it (the
  * containing block width caps the line), while staying inside the bounded
- * ink-capture window with its pad. Modern revisions use position-independent
- * natural layout (ADR-0017 amendment) and never wrap regardless of canvas
- * width. Used by `measureStandaloneLayer` (#138) and the anchored-placement
- * resolver's standalone context, which measures through the same canvas. */
+ * ink-capture window with its pad. Natural-layout revisions are never
+ * constrained by the canvas width (ADR-0017 amendment): without a stored
+ * wrap width they never wrap; with one (#294) they wrap intrinsically at
+ * that width, never at the canvas. Used by `measureStandaloneLayer` (#138)
+ * and the anchored-placement resolver's standalone context, which measures
+ * through the same canvas. */
 export const STANDALONE_CANVAS_PX = MAX_INK_VIEWPORT_PX - 2 * INK_PAD_PX;
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -693,20 +695,23 @@ export async function measureCompositionLayers(
 
 /**
  * Measure one Layer standalone — outside any Composition, at placement
- * (0, 0) on an effectively unwrapped canvas (#138). The read-snapshot
- * pattern is unchanged: the Layer's current revision and verified bytes are
- * resolved once under the Project lock, then measured from that snapshot;
- * nothing is written. The painted box of the (0, 0) copy IS the ink's
- * offset from the placement point, which is what anchored placement
- * (#138) needs for a Layer with no referring Composition.
+ * (0, 0) on a canvas too wide to constrain the line (#138). The
+ * read-snapshot pattern is unchanged: the Layer's current revision and
+ * verified bytes are resolved once under the Project lock, then measured
+ * from that snapshot; nothing is written. The painted box of the (0, 0)
+ * copy IS the ink's offset from the placement point, which is what
+ * anchored placement (#138) needs for a Layer with no referring
+ * Composition.
  *
- * Documented semantics: the standalone line does not wrap (the canvas
- * exceeds any line a Composition could give the Layer while staying inside
- * the bounded ink-capture window), so an unreferenced text Layer resolves
- * against its unwrapped ink; once the Layer is added to a Composition,
- * anchoring there re-resolves against that Composition's wrapping. A Layer
- * whose layout box exceeds the bounded capture window reports `refused`
- * with the actionable refusal message and `painted: null`, exactly as in
+ * Documented semantics: the standalone line is never constrained by the
+ * measurement canvas, so a text Layer without a stored wrap width resolves
+ * against its unwrapped ink; a text Layer WITH a stored wrap width (#294,
+ * ADR-0017 amendment) wraps intrinsically at that width — the width is an
+ * element fact, not a canvas fact — so the standalone measure reports the
+ * wrapped box. Either way, once the Layer is added to a Composition,
+ * anchoring there re-resolves in that Composition's context. A Layer whose
+ * layout box exceeds the bounded capture window reports `refused` with the
+ * actionable refusal message and `painted: null`, exactly as in
  * Composition measurement (#206).
  */
 export async function measureStandaloneLayer(
@@ -727,9 +732,10 @@ export async function measureStandaloneLayer(
  * resolution (the standalone command line resolves under the Project lock;
  * the Layer edit path resolves its snapshot under the lock it already
  * holds, so a lock-taking measurement there would deadlock the file lock).
- * The measured content box IS the text Layer's unwrapped line-box extent —
- * the fact the visible region validates against when it is set on a text
- * Layer.
+ * The measured content box IS the text Layer's line-box extent — the
+ * unwrapped one-line box when no wrap width is stored, the wrapped box at
+ * the stored width when one is (#294, ADR-0017 amendment) — the fact the
+ * visible region validates against when it is set on a text Layer.
  */
 export async function measureStandaloneSnapshot(
   currentRevision: ResolvedLayerRevision,

@@ -431,8 +431,8 @@ Other bounded inputs — shadow offsets ±256 px and blur 0–256 px
 ([Layer shadows](../../README.md#layer-shadows-new-surface)), tracking
 −0.5–1 em and line-height 0.5–3
 ([Text tracking and line height](../../README.md#text-tracking-and-line-height-new-surface)),
-the wrap width (a positive finite number of layout px, unbounded above —
-[Text wrap width](../../README.md#text-wrap-width-new-surface)),
+the wrap width 1–8192 layout px
+([Text wrap width](../../README.md#text-wrap-width-new-surface)),
 font size and resize/scale factor up to 8192
 ([Layer resize](../../README.md#layer-resize-new-surface), cover fit
 included — a cover target that scales the effective size over the cap is

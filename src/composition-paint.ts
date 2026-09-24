@@ -59,6 +59,7 @@ import { createHash } from "node:crypto";
 import {
   normalizeStoredTextAxes,
   normalizeStoredTextTypography,
+  normalizeStoredTextWrapWidth,
   type LayerOutline,
   type LayerVisibleRegion,
   type ResolvedLayerRevision,
@@ -960,7 +961,11 @@ export function buildCompositionHtml(
         // without the fact paint exactly as before. A legacy revision never
         // carries a wrap width.
         const naturalLayout = rev.layoutRule === "natural";
-        const wrapWidth = naturalLayout ? rev.wrapWidth : undefined;
+        // The wrap width projects through the ONE stored-field reader, like
+        // the axes and typography above — a malformed stored field refuses
+        // loudly at the paint boundary instead of interpolating into the
+        // markup (#294 review PROD-2).
+        const wrapWidth = naturalLayout ? normalizeStoredTextWrapWidth(rev) : undefined;
         const layoutCss = naturalLayout
           ? wrapWidth !== undefined
             ? `width:${wrapWidth}px;white-space:pre-wrap;`

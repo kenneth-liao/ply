@@ -1475,7 +1475,11 @@ export function normalizeStoredTextTypography(revision: {
  * #285 US-015, ISC-55, DEC-001/DEC-005, ADR-0017 amendment) — the single
  * home the add path, the edit path, and both CLI boundaries share, so the
  * boundaries never disagree. The width is an ABSOLUTE setter in layout px,
- * font-independent: a positive finite number. `null` clears the stored
+ * font-independent: a positive finite number up to the shared 8192px
+ * per-axis bound (`MAX_DIMENSION` — the same cap as font-size and the
+ * resize/scale forms; a larger value is refused before anything is
+ * published, because the width interpolates into the paint markup and an
+ * over-cap box can only hang or OOM the render). `null` clears the stored
  * width (the documented removal value "none" at the command boundary);
  * `undefined` means not given (an omitted option carries the current
  * value). The resolved form is always storable: the width is stored only
@@ -1486,11 +1490,11 @@ export function normalizeStoredTextTypography(revision: {
 export function resolveTextWrapWidthControl(value: number | null | undefined): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error("Wrap width (--wrap-width) must be a positive finite number of layout px.");
+    throw new Error('Wrap width (--wrap-width) must be a finite number of layout px or "none".');
   }
-  if (value <= 0) {
+  if (value <= 0 || value > MAX_DIMENSION) {
     throw new Error(
-      `Wrap width (--wrap-width) must be a positive finite number of layout px — ${value} is out of range.`,
+      `Wrap width (--wrap-width) must be a finite number between 1 and ${MAX_DIMENSION} layout px — ${value} is out of range.`,
     );
   }
   return value;
@@ -1505,16 +1509,18 @@ export function resolveTextWrapWidthControl(value: number | null | undefined): n
  * default); every downstream reader — revision resolution, the revision
  * hash, paint markup, measurement, and the edit carry path — projects
  * through this function and never re-derives the fact. Present only when
- * set, a positive finite number.
+ * set, a positive finite number inside the shared 8192px per-axis bound —
+ * an over-cap field is a malformed document, refused loudly before the
+ * render can hang on it.
  */
 export function normalizeStoredTextWrapWidth(revision: {
   wrapWidth?: unknown;
 }): number | undefined {
   const value = revision.wrapWidth;
   if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION) {
     throw new Error(
-      `Malformed revision document: text wrap width must be a positive finite number when present (got ${JSON.stringify(value)}).`,
+      `Malformed revision document: text wrap width must be a finite number between 1 and ${MAX_DIMENSION} when present (got ${JSON.stringify(value)}).`,
     );
   }
   return value;

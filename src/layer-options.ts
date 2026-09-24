@@ -688,10 +688,6 @@ export function parseLayerTracking(raw: string | undefined): OptionParse<number 
  * Line height (--line-height): a finite number or the literal "normal"
  * (resolved to `null` — the clear-stored-value form), identical wording
  * everywhere. Range validation is `validateTextTypographyControls`'s job.
-/**
- * Line height (--line-height): a finite number or the literal "normal"
- * (resolved to `null` — the clear-stored-value form), identical wording
- * everywhere. Range validation is `validateTextTypographyControls`'s job.
  */
 export function parseLayerLineHeight(raw: string | undefined): OptionParse<number | null | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
@@ -1966,7 +1962,8 @@ async function applyVisibleRegion(
   }
   // An explicit region validates against the content box of the revision
   // it is set on: a text Layer's measured line-box extent (the unwrapped
-  // standalone line, the same box the edit surface validates against),
+  // one-line box, or the wrapped box at the stored width when a wrap width
+  // is set (#294) — the same box the edit surface validates against),
   // otherwise the intrinsic facts — the fresh content's on add, the stored
   // revision's on edit (a content replacement cannot combine with the
   // region on edit, so the stored box is always the published one). The

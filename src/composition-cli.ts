@@ -319,7 +319,7 @@ Options:
                         setter — with a width set, the text soft-wraps at
                         spaces within it (written line breaks still
                         break); "none" removes the width and restores the
-                        unwrapped one-line layout
+                        unwrapped one-line layout; bounded 1–8192 layout px
   --weight <num>        Text weight for a text Layer (#179, #232):
                         validated against the font's real weight axis —
                         bundled Archivo 100-900 (default 400); static faces

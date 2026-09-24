@@ -142,7 +142,7 @@ Options:
                         box; "none" removes the width and restores the
                         unwrapped one-line render byte-for-byte. Setting
                         a width is an edit, so a legacy-rule revision
-                        becomes natural layout
+                        becomes natural layout; bounded 1–8192 layout px
   --weight <num>        Text weight for a text Layer (#179, #232):
                         validated against the Layer's font's real weight
                         axis — Archivo 100-900 (default 400); static faces

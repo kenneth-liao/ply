@@ -749,8 +749,10 @@ ply layer edit <layerId> --wrap-width none --in-place
 - **Removal restores byte-for-byte.** `--wrap-width none` removes the
   stored width and the unwrapped one-line render comes back byte-for-byte;
   an omitted option carries the current width across any edit. The range
-  is a positive finite number — zero, negative, and non-numeric values are
-  refused before anything is published (exit 2), naming the control.
+  is a positive finite number up to the shared 8192px per-axis bound (the
+  same cap as font-size and the resize forms) — zero, negative, over-cap,
+  and non-numeric values are refused before anything is published
+  (exit 2), naming the control and its allowed range.
 - **Legacy interaction.** A legacy-rule (pre-#287) revision never carries a
   width, and setting one is an edit — the revision becomes natural layout
   like any other text edit.
