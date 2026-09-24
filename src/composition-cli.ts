@@ -8,6 +8,7 @@ import {
   addTextLayerToComposition,
   addGeneratedLayerToComposition,
   addMattedLayerToComposition,
+  deleteComposition,
   importComposition,
   importCompositionCrossProject,
   removeLayerFromComposition,
@@ -119,6 +120,13 @@ composition — Composition authoring and inspection
   ply composition remove <comp> <name> [options]
       Remove a Layer use from a Composition without deleting the Layer,
       retained revisions, or other Compositions' uses
+
+  ply composition delete <name>
+      Delete a Composition from the Project, removing only its document.
+      Layers, retained revisions, and retained Renders are never deleted
+      (Project-scoped sharing and retained Render history): every retained
+      Render keeps replaying from its manifest snapshot, which never reads
+      Composition documents. A later create of the same name starts fresh
 
   ply composition reorder <comp> --order <name1,name2,...> [options]
       Reorder Layer uses within a Composition to change painting order
@@ -615,6 +623,7 @@ export const COMPOSITION_COMMANDS: Record<string, CompositionCommandMeta> = {
   guidelines: { takesExistingComposition: true },
   sheet: { takesExistingComposition: true },
   render: { takesExistingComposition: true },
+  delete: { takesExistingComposition: true },
   replay: { takesExistingComposition: false },
   list: { takesExistingComposition: false },
 };
@@ -1234,6 +1243,26 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
             );
           },
         );
+      } catch (err) {
+        output({ ok: false, error: (err as Error).message }, isJson);
+        process.exitCode = 1;
+      }
+    } else if (command === "delete") {
+      const compName = positionals[1];
+      if (!compName) {
+        output({ ok: false, error: "Usage: ply composition delete <composition>" }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+
+      try {
+        const res = await deleteComposition(targetProj, compName);
+        mutationCommitted = true;
+        output({ ok: true, composition: res.composition }, isJson, () => {
+          console.log(
+            `Deleted Composition "${res.composition}". Layers, retained revisions, and retained Renders are untouched — every retained Render keeps replaying.`,
+          );
+        });
       } catch (err) {
         output({ ok: false, error: (err as Error).message }, isJson);
         process.exitCode = 1;

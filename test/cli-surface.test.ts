@@ -302,6 +302,9 @@ const MISSING_COMPOSITION_ARGS: Record<string, (missing: string, ctx: {
   render: (missing, ctx) => [
     "composition", "render", missing, "--project", ctx.project,
   ],
+  delete: (missing, ctx) => [
+    "composition", "delete", missing, "--project", ctx.project,
+  ],
 };
 
 test("all Composition commands taking a composition name refuse unknown names with existing names and no raw ENOENT (TEST-006, DEC-003)", async () => {

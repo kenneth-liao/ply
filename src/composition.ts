@@ -1215,6 +1215,48 @@ export interface ReorderLayersResult {
   layers: CompositionLayerUse[];
 }
 
+/** Result of deleting a Composition (#290, ISC-3). */
+export interface DeleteCompositionResult {
+  composition: string;
+}
+
+/**
+ * Delete a Composition (#290, ISC-3): remove the Composition document from
+ * the Project under the Project lock. The unknown-name refusal comes from the
+ * one Composition-name resolver (`readCompositionDocument`, #289 DEC-003) —
+ * no second lookup exists here, so boundary containment and the formatted
+ * missing-name listing are enforced by the same gates as every other
+ * Composition command.
+ *
+ * Deliberately retained (ADR-0013 Project-scoped sharing and retained Render
+ * history):
+ * - Layers and their revisions: shared Project-owned identities; deletion of
+ *   one Composition must not remove Layers other state may still reference.
+ * - Retained Renders under renders/: replay paints from the manifest snapshot
+ *   alone (`resolveHistoricalLayers` reads pinned Layer revisions;
+ *   Composition documents are never consulted), so Renders of the deleted
+ *   Composition keep replaying.
+ * - Guidelines views under guidelines/: caller-facing artifacts keyed with a
+ *   fresh random suffix, never read back, so nothing stale is inherited.
+ *
+ * No other per-Composition state exists: the Project keeps no per-Composition
+ * index (compositionsCount is computed by listing), regions are caller-owned
+ * files, and the Project lock is the only lock. A later `composition create`
+ * of the same name therefore starts fresh with an empty use list.
+ */
+export async function deleteComposition(
+  projectPath: string,
+  compName: string,
+): Promise<DeleteCompositionResult> {
+  const sanitizedComp = sanitizeName(compName);
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { compFile } = await readCompositionDocument(resolvedRoot, sanitizedComp);
+    await unlink(compFile);
+    return { composition: sanitizedComp };
+  });
+}
+
 /**
  * Remove a Layer use from a Composition without deleting the Layer, its revisions,
  * or its content blobs (ADR-0013, spec #77 US-002).
