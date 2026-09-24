@@ -331,7 +331,7 @@ composition and no other image tool is needed.
   the painted extent unchanged; removing it restores the render
   byte-for-byte. bash
 - [ ] ISC-51: Every Layer kind takes independent horizontal and vertical
-  scale; text takes only a uniform scale today.
+  scale.
   Probe: a text Layer scaled 1.3 by 0.8 renders stretched, and `measure`
   reports both factors. bash
 - [ ] ISC-52: A Layer's alpha edge can be choked and feathered at paint time.
@@ -468,7 +468,7 @@ Composition as a unit is an architectural choice; it gets an ADR when specced.
 
 **2026-09-23 — refined: second outlier test.** Eight recent outliers were
 rebuilt in three rounds. Most quality misses came from the skills, not the
-tool; the rest graduated to claims. Claims ISC-47 to ISC-63 added. The Goal is
+tool; the rest graduated to claims. Claims ISC-47 to ISC-64 added. The Goal is
 unchanged. The masks fog graduated to ISC-48. Out of Scope narrowed from
 non-rectangular warps to freeform warps. *Dead end:* a line or path shape
 kind; lines arrive as vector files or generated elements, and the no-drawing
