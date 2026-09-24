@@ -21,14 +21,14 @@
  * instead of silently falling back to the layout box. Resolution runs
  * against the Layer's current transform; transform and content edits are
  * separate edits, because the reference ink would otherwise be ambiguous.
- *
- * A text Layer's ink depends on the referring Composition's canvas width
- * (pre-wrap shrink-to-fit), and placement is one shared fact (DEC-002), so
- * resolution measures the Layer in every referring Composition and refuses —
- * naming the affected compositions — when the resolved placements disagree.
- * Unreferenced Layers measure standalone on an unwrapped line (documented);
- * a fork resolves in its target Composition, whose use is about to own the
- * Layer.
+ * For legacy text revisions, a text Layer's ink depends on the referring
+ * Composition's canvas width (pre-wrap shrink-to-fit; modern revisions use
+ * position-independent natural layout per the ADR-0017 amendment). Because
+ * placement is one shared fact (DEC-002), resolution measures the Layer in
+ * every referring Composition and refuses — naming the affected compositions —
+ * when the resolved placements disagree. Unreferenced Layers measure standalone
+ * on an unwrapped line (documented); a fork resolves in its target Composition,
+ * whose use is about to own the Layer.
  */
 import { findLayerReferrers, inspectLayer, type ResolvedLayerRevision } from "./layer.js";
 import {

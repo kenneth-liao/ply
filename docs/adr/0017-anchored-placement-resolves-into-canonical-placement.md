@@ -104,11 +104,18 @@ the Layer.
     boundary (`readLayerInternalFull`) to `layoutRule: "legacy"`.
   - New text revisions created via `ply composition add` or `ply layer edit`
     explicitly write `layoutRule: "natural"`.
-  - Revisions produced by fork/import/relocation copies (`buildCopiedRevision`)
-    carry the source revision's `layoutRule` unchanged (absent stays absent) so
-    copies of pre-change revisions render identically to their source.
-  - An edit of a pre-change text revision moves it to the `"natural"` rule,
-    while retained Renders continue replaying their pinned revisions
+  - A fork is an edit (it publishes a new Layer identity and a new revision
+    through `buildEditedRevision`), so forked text revisions write
+    `layoutRule: "natural"` like any other `layer edit`, migrating pre-change
+    revisions to natural layout. Only cross-Composition and cross-Project import
+    copies (`buildCopiedRevision`) carry the source revision's `layoutRule`
+    unchanged (absent stays absent) so copies of pre-change revisions render
+    identically to their source.
+  - An edit or fork of a pre-change text revision moves it to the `"natural"`
+    rule, while retained Renders continue replaying their pinned revisions
     byte-identically.
   - The revision hash includes `:layoutrule(natural)` only when `layoutRule` is
     `"natural"`, preserving byte-identical revision IDs for pre-change revisions.
+  - Rollback behavior is fail-closed: pre-change code encountering a revision
+    with `layoutRule` refuses it via revision hash verification rather than
+    misrendering.

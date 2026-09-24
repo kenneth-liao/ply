@@ -384,12 +384,14 @@ ply layer edit <layerId> --anchor center,top --x 100 --y 200
   replacement in one edit, because the reference ink would be ambiguous. `--opacity`
   combines freely. A later transform or content edit keeps the resolved
   x/y literally; re-anchor explicitly after changing the geometry.
-- **Resolution contexts:** a text Layer's ink depends on the referring
-  Composition's canvas width (text wraps), and placement is one shared
-  fact, so the resolution measures the Layer in every referring
-  Composition and refuses — naming the affected compositions — when the
-  resolved placements disagree. Unreferenced Layers resolve standalone on
-  an unwrapped line. A fork resolves in its target Composition.
+- **Resolution contexts:** for legacy text revisions, a text Layer's ink
+  depends on the referring Composition's canvas width (canvas-bounded text
+  wrapping; modern revisions use position-independent natural layout per the
+  ADR-0017 amendment). Because placement is one shared fact, resolution
+  measures the Layer in every referring Composition and refuses — naming the
+  affected compositions — when the resolved placements disagree. Unreferenced
+  Layers resolve standalone on an unwrapped line. A fork resolves in its
+  target Composition.
 - **One-shot representation (ADR-0017):** anchored placement is resolved
   once through the paint-identical ink measurement (accurate to its pixel
   grid, ~1px) and written into plain canonical placement (x, y). No anchor

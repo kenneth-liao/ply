@@ -4034,8 +4034,12 @@ export async function editLayerInternal(
       current.contentBytes,
     );
     // An explicit fork always publishes the new identity, even when the
-    // edited revision is field-identical to the current one (documented
-    // no-content-change fork).
+    // edited revision has no other changes (documented no-content-change
+    // fork). Because fork is an edit that publishes a new identity,
+    // forked text revisions write layoutRule: "natural" through
+    // buildEditedRevision, migrating legacy revisions to natural layout
+    // (ADR-0017 amendment); only import copies (buildCopiedRevision)
+    // preserve the source revision's layout rule.
     const forkResult = await publishForkEdit(resolvedRoot, layerId, intent, target, newLayerId, revision, {
       referringCompositions,
       referrersCount,

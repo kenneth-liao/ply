@@ -305,10 +305,12 @@ const INK_PAD_PX = 16;
  */
 const MAX_INK_VIEWPORT_PX = MAX_DIMENSION;
 
-/** Standalone measurement canvas edge (px): large enough that a text Layer's
- * pre-wrap shrink-to-fit line cannot wrap inside it (the containing block
- * width caps the line), while staying inside the bounded ink-capture window
- * with its pad. Used only by `measureStandaloneLayer` (#138). */
+/** Standalone measurement canvas edge (px): large enough that a legacy
+ * text revision's pre-wrap shrink-to-fit line cannot wrap inside it (the
+ * containing block width caps the line), while staying inside the bounded
+ * ink-capture window with its pad. Modern revisions use position-independent
+ * natural layout (ADR-0017 amendment) and never wrap regardless of canvas
+ * width. Used only by `measureStandaloneLayer` (#138). */
 const STANDALONE_CANVAS_PX = MAX_INK_VIEWPORT_PX - 2 * INK_PAD_PX;
 
 type Box = { x: number; y: number; width: number; height: number };
