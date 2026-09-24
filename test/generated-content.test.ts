@@ -29,6 +29,7 @@
  * resolves them through the default `<cwd>/out/generation` root.
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, readFile, readdir, writeFile, rename, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -311,6 +312,114 @@ test("multi-output jobs require an explicit selection and resolve it exactly", a
   ]);
   expect(unknownHash.code).toBe(1);
   expect(await readFile(path.join(projDir, "compositions", "thumb.json"))).toEqual(compBefore);
+});
+
+test("--output accepts the printed short hash and unique prefixes on every surface (#291, DEC-004)", async () => {
+  const job = await createJob([RED, BLUE]);
+  await makeComp("thumb");
+  const [hashA, hashB] = job.run.outputs.map((o) => o.contentHash);
+
+  // The 12-character short hash that the refusal and `generate show` print
+  // is accepted, and a longer unique prefix resolves too.
+  const shortA = await invoke([
+    "composition", "add", "thumb", "p12", "--from-generation", job.jobId, "--output", hashA.slice(0, 12),
+    "--project", projDir, "--json",
+  ]);
+  expect(shortA.code).toBe(0);
+  expect(JSON.parse(shortA.stdout).layer.currentRevision.contentHash).toBe(hashA);
+
+  const longB = await invoke([
+    "composition", "add", "thumb", "p20", "--from-generation", job.jobId, "--output", hashB.slice(0, 20),
+    "--project", projDir, "--json",
+  ]);
+  expect(longB.code).toBe(0);
+  expect(JSON.parse(longB.stdout).layer.currentRevision.contentHash).toBe(hashB);
+
+  // Uppercase hex is normalized to lowercase at the option boundary.
+  const upper = await invoke([
+    "composition", "add", "thumb", "pup", "--from-generation", job.jobId, "--output", hashB.slice(0, 12).toUpperCase(),
+    "--project", projDir, "--json",
+  ]);
+  expect(upper.code).toBe(0);
+  expect(JSON.parse(upper.stdout).layer.currentRevision.contentHash).toBe(hashB);
+
+  // An unknown prefix is refused, naming the candidates.
+  const unknown = await invoke([
+    "composition", "add", "thumb", "punknown", "--from-generation", job.jobId, "--output", "deadbeef0000",
+    "--project", projDir, "--json",
+  ]);
+  expect(unknown.code).toBe(1);
+  const unknownError = JSON.parse(unknown.stdout).error as string;
+  expect(unknownError).toContain("has no output \"deadbeef0000\"");
+  expect(unknownError).toContain(hashA.slice(0, 12));
+  expect(unknownError).toContain(hashB.slice(0, 12));
+
+  // The same prefix grammar on the `layer edit` surface.
+  const image = path.join(root, "plain.png");
+  await writeFile(image, solidPng(GREEN));
+  const imgAdd = await invoke([
+    "composition", "add", "thumb", "img", "--image", image, "--project", projDir, "--json",
+  ]);
+  expect(imgAdd.code).toBe(0);
+  const imgId = JSON.parse(imgAdd.stdout).use.layerId as string;
+  const edit = await invoke([
+    "layer", "edit", imgId, "--from-generation", job.jobId, "--output", hashA.slice(0, 12),
+    "--project", projDir, "--json",
+  ]);
+  expect(edit.code).toBe(0);
+  expect(JSON.parse(edit.stdout).layer.currentRevision.contentHash).toBe(hashA);
+});
+
+test("an ambiguous prefix is refused naming the candidates, and an all-digit 12+ selector is a prefix (#291)", async () => {
+  await makeComp("thumb");
+
+  // Two identical outputs share one content identity: any prefix of that
+  // identity matches both, so the identity's own short hash is ambiguous and
+  // only the index disambiguates.
+  const dup = await createJob([RED, RED]);
+  const dupHash = dup.run.outputs[0]!.contentHash;
+  const dupAmb = await invoke([
+    "composition", "add", "thumb", "dup", "--from-generation", dup.jobId, "--output", dupHash.slice(0, 12),
+    "--project", projDir, "--json",
+  ]);
+  expect(dupAmb.code).toBe(1);
+  const dupError = JSON.parse(dupAmb.stdout).error as string;
+  expect(dupError).toContain("ambiguous");
+  expect(dupError).toContain("1: " + dupHash.slice(0, 12));
+  expect(dupError).toContain("2: " + dupHash.slice(0, 12));
+
+  // The index still resolves exactly against an ambiguous identity.
+  const dupIdx = await invoke([
+    "composition", "add", "thumb", "dup2", "--from-generation", dup.jobId, "--output", "2",
+    "--project", projDir, "--json",
+  ]);
+  expect(dupIdx.code).toBe(0);
+  expect(JSON.parse(dupIdx.stdout).layer.currentRevision.contentHash).toBe(dupHash);
+
+  // The index/prefix separation rule: fewer than 12 characters and all
+  // digits means an index; 12+ hex characters is a prefix even when all
+  // digits. Search deterministic pixels for a PNG whose sha-256 starts with
+  // twelve digits, then resolve it as a prefix — as an index it would be
+  // far out of range and refused.
+  let digitColor: [number, number, number, number] | undefined;
+  let digitHash = "";
+  for (let i = 0; i < 100000; i++) {
+    const candidate: [number, number, number, number] = [i % 256, (i * 7) % 256, (i * 13) % 256, 255];
+    const h = createHash("sha256").update(solidPng(candidate)).digest("hex");
+    if (/^\d{12}/.test(h)) {
+      digitColor = candidate;
+      digitHash = h;
+      break;
+    }
+  }
+  expect(digitColor).toBeDefined();
+  const digitJob = await createJob([BLUE, digitColor!]);
+  const digitSel = await invoke([
+    "composition", "add", "thumb", "digits", "--from-generation", digitJob.jobId, "--output", digitHash.slice(0, 12),
+    "--project", projDir, "--json",
+  ]);
+  expect(digitSel.code).toBe(0);
+  expect(JSON.parse(digitSel.stdout).layer.currentRevision.contentHash).toBe(digitHash);
 });
 
 test("explicit replacement through layer edit keeps earlier retained provenance immutable", async () => {

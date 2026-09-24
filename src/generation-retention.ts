@@ -38,7 +38,7 @@ import { MAX_ENCODED_BYTES } from "./png.js";
 /** The Project subdirectory holding retained Generation Job records. Created on first retention; Projects without it have no retained provenance. */
 export const RETAINED_GENERATION_DIR = "generation";
 
-/** Selection of one generated output: 1-based index or full sha-256, resolved against the record. */
+/** Selection of one generated output: a 1-based index, a sha-256 prefix of at least 12 hex characters, or the full sha-256, resolved against the record (DEC-004). */
 export interface GenerationOutputSelection {
   output?: string;
 }
@@ -157,8 +157,17 @@ export async function selectGenerationOutput(
 /**
  * Resolve one output from a record. With no selection, a single-output
  * record resolves directly and a multi-output record is refused, naming every
- * choice. An index selector is 1-based; otherwise the selector is a full
- * sha-256 identity.
+ * choice. The selector grammar is unambiguous by construction (DEC-004):
+ * fewer than 12 characters and all digits means a 1-based index; 12–64
+ * lowercase hex characters means a sha-256 prefix (the full 64-character
+ * hash is the degenerate exact-match prefix). An all-digit selector of 12+
+ * characters is therefore always a prefix, never an index — no selector can
+ * mean both. The option grammar normalizes uppercase hex at the boundary and
+ * every surface forwards that normalized value; the resolver's own
+ * lowercase is defense in depth, so no future wiring can make case matter.
+ * A prefix must match exactly one output: zero
+ * matches is unknown and more than one is ambiguous, both refused naming the
+ * candidates.
  */
 function chooseOutput(jobId: string, outputs: UniformOutput[], selector: string | undefined): UniformOutput {
   const choices = outputs
@@ -167,18 +176,30 @@ function chooseOutput(jobId: string, outputs: UniformOutput[], selector: string 
   if (selector === undefined) {
     if (outputs.length === 1) return outputs[0]!;
     throw new Error(
-      `Generation Job "${jobId}" has ${outputs.length} outputs — select one with --output <n|sha256>:\n${choices}`,
+      `Generation Job "${jobId}" has ${outputs.length} outputs — select one with --output <n|sha256|prefix>:\n${choices}`,
     );
   }
-  if (/^[1-9][0-9]*$/.test(selector)) {
+  if (/^[1-9][0-9]{0,10}$/.test(selector)) {
     const index = Number(selector);
     if (index <= outputs.length) return outputs[index - 1]!;
-  } else if (/^[0-9a-f]{64}$/.test(selector)) {
-    const match = outputs.find((o) => o.contentHash === selector);
-    if (match) return match;
+  } else if (/^[0-9a-fA-F]{12,64}$/.test(selector)) {
+    const hash = selector.toLowerCase();
+    const matches = outputs.filter((o) => o.contentHash.startsWith(hash));
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length > 1) {
+      // Name the candidates the prefix actually matched, with their original
+      // 1-based indexes — the unknown refusal lists every output, but here
+      // the selector already narrowed the set.
+      const candidates = matches
+        .map((m) => `  ${outputs.indexOf(m) + 1}: ${m.contentHash.slice(0, 12)} (${path.basename(m.file)})`)
+        .join("\n");
+      throw new Error(
+        `Generation Job "${jobId}" --output "${selector}" is ambiguous — ${matches.length} outputs share this prefix — select one with --output <n|sha256|prefix>:\n${candidates}`,
+      );
+    }
   }
   throw new Error(
-    `Generation Job "${jobId}" has no output "${selector}" — select one with --output <n|sha256>:\n${choices}`,
+    `Generation Job "${jobId}" has no output "${selector}" — select one with --output <n|sha256|prefix>:\n${choices}`,
   );
 }
 
