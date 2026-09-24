@@ -1,7 +1,7 @@
 ---
 thing: Ply — general-purpose layered image composer
 phase: active
-progress: 34/46
+progress: 34/64
 principal_stated_goal: "A Photoshop-like image composer where the layer is the only primitive: anything can be a layer, any number of layers, and any composition can be used inside another composition without being flattened — its layers stay separately editable. Every layer can be generated, refined, and reused independently, so changing one never means regenerating the rest. Each layer's look — its shape, framing, colour, light, and how it blends with what is beneath it — is a set of adjustable parameters on the layer, never a change to its source, so one good asset serves every composition and any finished image can be built and tuned inside Ply without reaching for another tool. Built so an AI agent composes by deciding which layers to use and where to put them on the canvas. YouTube thumbnails become one thing it can make, not what it is."
 started: 2026-09-07
 updated: 2026-09-23
@@ -49,7 +49,10 @@ the skills that agent reads.
 - YouTube-specific enforcement in the tool. It becomes caller-supplied data
   and skill knowledge.
 - Hand-driven pixel work: painting, retouching, freeform selections, and
-  non-rectangular warps.
+  freeform warps (mesh, liquify). Whole-Layer skew and perspective are
+  parameters (ISC-47).
+- Simulated 3D lighting effects such as bevel and emboss. Directional
+  relighting is generation.
 - Vector path editing, or a shape-drawing language inside Ply. Arbitrary
   shapes arrive as vector files.
 
@@ -117,8 +120,13 @@ Why: the tool is a set of primitives, not a thumbnail machine.
 - [ ] ISC-43: The nine outlier reference thumbnails are rebuilt with no image
   tool other than Ply. The only outside steps are generation and acquiring
   existing clean assets, imported unmodified.
-  Probe: a rebuild script that invokes only `ply`; renders reviewed against
-  the references. manual
+  Probe: a rebuild script that invokes only `ply`; the principal accepts the
+  renders side by side with the references. manual
+- [ ] ISC-59: The eight outlier thumbnails of the 2026-09-23 test are rebuilt
+  with no image tool other than Ply. The only outside steps are generation and
+  acquiring existing clean assets, imported unmodified.
+  Probe: a rebuild script that invokes only `ply`; the principal accepts the
+  renders side by side with the references. manual
 
 ### F1 · Composition
 
@@ -201,6 +209,28 @@ Why: the agent operates the tool; the human only asks for outputs.
   renders or local images.
   Probe: a reference-versus-result sheet for the nine thumbnails. bash
 
+- [ ] ISC-60: The `ply-operating` and `visual-authoring` skills (Agent Profile
+  Kit Workspace source, installed by `apkit`) teach building a composition
+  from parts:
+  every element is its own Layer, sourced or generated separately, and
+  placed freely.
+  Probe: a fresh agent with only the skills and a reference thumbnail makes
+  separate element Layers without being told to. manual
+- [ ] ISC-61: The same skills teach the asset order local library, then
+  sourced common assets, then generation, as a preference and not a rule.
+  Probe: the same fresh-agent run uses an existing or sourced official mark or
+  product image before it generates one. manual
+- [ ] ISC-62: The same skills teach Reference roles by ordinal: identity,
+  pose and framing, and product.
+  Probe: the same fresh-agent run declares each Reference's role in its
+  generation prompt. manual
+- [ ] ISC-63: The `visual-authoring` skill teaches a likeness retry order
+  within a budget, as authoring practice. The caller's default model and
+  quality for likeness work stay caller policy (ADR-0014).
+  Probe: given a candidate that looks older than its identity Reference, a
+  fresh agent retries with a tighter crop of that Reference before it
+  changes model or quality. manual
+
 ### F5 · Relocation discipline
 
 Why: cutting enforcement must not cut correctness or lose hard-won knowledge.
@@ -281,6 +311,50 @@ composition and no other image tool is needed.
 - [x] ISC-46: A vector file with an external reference is refused at import,
   naming the reference.
   Probe: the same crafted SVG's import error. bash
+- [ ] ISC-47: A Layer can be skewed and put in perspective as parameters.
+  Probe: tilt a tile's far edge inward; the render differs from the untilted
+  one and `measure` shows the far edge shorter than the near edge; removing
+  the parameter restores the untilted render byte-for-byte. bash
+- [ ] ISC-48: A Layer can be clipped by another Layer's alpha, and the mask
+  stays an editable Layer.
+  Probe: a cutout clipped to a shape Layer at a table edge; moving the shape
+  moves the clip; removing the clip restores the render byte-for-byte. bash
+- [ ] ISC-49: A Layer can be blurred as a parameter.
+  Probe: blur a raster, a text, and a shape Layer; each render differs from
+  the unblurred one and `measure` shows the painted extent grown; removing
+  the blur restores each render byte-for-byte. bash
+- [ ] ISC-50: A Layer can carry more than one effect of the same type.
+  Probe: a title with two shadows; both are visible in the render and
+  `measure` reports each. bash
+- [ ] ISC-64: A Layer can carry an inner shadow.
+  Probe: an inner shadow darkens pixels just inside the alpha edge and leaves
+  the painted extent unchanged; removing it restores the render
+  byte-for-byte. bash
+- [ ] ISC-51: Every Layer kind takes independent horizontal and vertical
+  scale.
+  Probe: a text Layer scaled 1.3 by 0.8 renders stretched, and `measure`
+  reports both factors. bash
+- [ ] ISC-52: A Layer's alpha edge can be choked and feathered at paint time.
+  Probe: a cutout with a light fringe on saturated blue shows no fringe after
+  the choke; removing it restores the render byte-for-byte. bash
+- [ ] ISC-53: Edge glow can light one side of a Layer only.
+  Probe: angle 90 and strength 1 on a rectangle leave the left edge unlit. bash
+- [ ] ISC-54: One text Layer can carry runs of different colour, weight, or
+  font.
+  Probe: "5 HERDR PLUGINS" as one Layer; the pixels of each run show its own
+  colour, and `measure` reports each run's weight and font. bash
+- [ ] ISC-55: A text Layer wraps within a width the caller sets.
+  Probe: with a width set the text wraps; with none it stays on one line. bash
+- [ ] ISC-56: A text Layer can shrink to fit a box the caller sets.
+  Probe: a headline wider than a 600 px box; `measure` shows one line inside
+  the box at a reduced font size, with nothing clipped. bash
+- [ ] ISC-57: Anti: a Layer's layout never depends on where it is placed.
+  Probe: the same text at x 0, 400, and 640 measures the same content box.
+  bash
+- [ ] ISC-58: Anti: a placement option means the same thing on add and on
+  edit.
+  Probe: the same `--anchor` on a Layer with a shadow lands at the same
+  placement through `composition add` and through `layer edit`. bash
 
 ## Not yet specified
 
@@ -294,11 +368,10 @@ composition and no other image tool is needed.
 - **Generating into an existing layer** (img2img over a layer's current
   content). Plausibly valuable. Studio relighting of a cutout is the first
   concrete use; untested.
-- **Arbitrary-shape masks** (one Layer's alpha clipping another). Rectangular
-  visible regions are claimed (ISC-30); no evidence yet needs more.
 - **Relative layout between Layers** (row, align, re-flow when one changes).
-  Mixed inline content such as a logo inside a word is placed by hand from
-  `measure` today. Sits beside text-dense panels; may share a mechanism with
+  Mixed styles inside one text Layer are ISC-54; layout between separate
+  Layers, such as a logo inside a word, is placed by hand from `measure`
+  today. Sits beside text-dense panels; may share a mechanism with
   ISC-36.
 - **Shared-library promotion versus caller-owned library.** ISC-16 assumes
   promoting a Layer to a shared library is an explicit Ply operation, while
@@ -393,6 +466,27 @@ content for the caller to approve.
 **2026-09-19 — ISC-36 mechanism deferred.** Group primitive versus nested
 Composition as a unit is an architectural choice; it gets an ADR when specced.
 
+**2026-09-23 — refined: second outlier test.** Eight recent outliers were
+rebuilt in three rounds. Most quality misses came from the skills, not the
+tool; the rest graduated to claims. Claims ISC-47 to ISC-64 added. The Goal is
+unchanged. The masks fog graduated to ISC-48. Out of Scope narrowed from
+non-rectangular warps to freeform warps. *Dead end:* a line or path shape
+kind; lines arrive as vector files or generated elements, and the no-drawing
+exclusion holds. *Dead end:* bevel and emboss; they imitate 3D light, which is
+generation. Italic comes from a real italic face or a skew; ADR-0021 still
+holds, and no style is synthesized. Content-repository work from the same test
+(thumbnail brand rules, likeness routing, the asset library) belongs to that
+repository, not to this destination.
+
+**2026-09-23 — ISC-48 and ISC-50 mechanisms deferred.** ISC-50 contradicts
+ADR-0018 and ADR-0019, which make a shadow and an outline one absolute,
+replace-only effect each; a superseding ADR comes when specced. ISC-48 makes
+one Layer's paint depend on another Layer for the first time, which touches
+ADR-0013 (sharing and forks), ADR-0024 (paint order), and ISC-14 (replay); its
+mechanism gets an ADR when specced, as ISC-36's does. A radial Fill already
+stays smooth under non-uniform scale of a shape (`--resize-to WxH`); ISC-51
+names the remaining gap, text.
+
 ## Learning
 
 Preparation evidence: ISC-24's named skill exists; ADR-0014/0015 supersede the five decisions named by ISC-25; the target
@@ -407,6 +501,20 @@ conjecture: reusing a composition means adopting its render as a flat asset with
 refuted-by: the A/B case — varying one layer of a reused base is impossible once the base is flattened
 learned: reuse must preserve individual layer addressability; a composition is a list of layer references, not a node that gets baked
 criterion-now: ISC-5 (anti-flatten), ISC-7 and ISC-8 (import brings layers in individually and they stay movable)
+```
+
+```
+conjecture: rectangular visible regions cover the clipping real compositions need
+refuted-by: the 2026-09-23 iPhone rebuild — a body behind a table with arms over it needs one subject split across two depths
+learned: depth in a flat Layer stack needs a non-rectangular mask; a rectangle only works when the source already contains the occluder
+criterion-now: ISC-48 (a Layer clipped by another Layer's alpha)
+```
+
+```
+conjecture: output quality is bounded mainly by the tool's features
+refuted-by: the 2026-09-23 round 2 — seven of eight quality misses closed with no tool change, by building from parts, sourcing real assets, and using pose References
+learned: the skills set output quality as much as the features do; how to build from parts is part of the destination
+criterion-now: ISC-60 to ISC-63 (the skills teach decomposition, the asset order, Reference roles, and likeness retries)
 ```
 
 ## Verification
