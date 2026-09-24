@@ -60,6 +60,8 @@ import {
   normalizeStoredTextAxes,
   normalizeStoredTextTypography,
   normalizeStoredTextWrapWidth,
+  normalizeStoredTextFitBox,
+  MIN_FIT_FONT_SIZE,
   type LayerOutline,
   type LayerVisibleRegion,
   type ResolvedLayerRevision,
@@ -333,6 +335,11 @@ export async function paintCompositionHtml(
     // pixel leaves this page — see sizeEffectFilterRegions.
     await sizeEffectFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
+    // Text fit-to-box derivation (#295, spec #285 US-016, DEC-010): the ONE
+    // derivation pass, applied before any pixel leaves this page — see
+    // applyTextFit. Runs after the font gate so the derivation measures the
+    // retained faces, never a fallback.
+    await applyTextFit(page, layers);
     if (options.beforeScreenshot) await options.beforeScreenshot(page);
     const png = await page.screenshot({
       type: "png",
@@ -777,6 +784,136 @@ export async function sizeEffectFilterRegions(page: Page, layers: SnapshotLayer[
 }
 
 /**
+ * The result of the fit-to-box derivation for one Layer (#295): the effective
+ * font size the derivation applied, whether the block fits its box at that
+ * size, and — when the block initially overflowed — the first-ratio estimate
+ * of the size that would fit (the number the below-minimum refusal names).
+ * `neededFontSize` is null when the block never overflowed (the effective
+ * size IS the stored size).
+ */
+export interface TextFitProbe {
+  effectiveFontSize: number;
+  fits: boolean;
+  neededFontSize: number | null;
+}
+
+/**
+ * Text fit-to-box derivation (#295, spec #285 US-016, ISC-56, DEC-010,
+ * DEC-005): the ONE derivation point shared by paint, measurement, and
+ * anchored placement. For every text Layer with a stored fit box, this pass
+ * measures the laid-out text block at the stored font size in the live page
+ * (the same markup painting uses — buildCompositionHtml is the one markup for
+ * paint AND measurement, so the derived size can never drift between
+ * painting and measuring) and shrinks the element's font size until the
+ * block fits the box — shrinking only: it never grows the size and never
+ * touches weight or width (DEC-010). The derived size is applied to the
+ * element that carries the font size, marked `data-ply-fit` in the markup
+ * (emitted only when a box is stored, so pre-#295 markup is byte-identical).
+ *
+ * The derivation is deterministic: unwrapped text scales linearly with the
+ * font size (em tracking, unitless line height), so it converges in one
+ * step; a wrapped block iterates (measure → scale → re-measure, a bounded
+ * fixed-point loop) because the wrapped line count changes with the size.
+ * The effective size is never stored anywhere — it re-derives from the
+ * revision's own facts at every read, so edits to the text, font, tracking,
+ * or wrap width stay correct, and revisions without a box are untouched.
+ *
+ * The minimum is the documented fixed floor MIN_FIT_FONT_SIZE: a block that
+ * still overflows at the floor reports `fits: false` with the needed-size
+ * estimate, which the add/edit paths turn into the shared below-minimum
+ * refusal (textFitRefusal). Must run after the font-resolution gate, so the
+ * derivation measures the retained faces, never a fallback.
+ *
+ * The box is a LAYOUT-px measure (INT-1, #328 review): the derivation reads
+ * the block's UNTRANSFORMED box — it clears the outer element's inline
+ * transform around each rect read and restores it (the same pattern
+ * `sizeEffectFilterRegions` and the geometry probe use — transform removal
+ * never reflows other Layers, they are absolutely positioned), so scale,
+ * rotation, and flip map the FITTED block afterwards and never inflate the
+ * measured layout size. A missing holder fails closed like a missing
+ * element: a markup branch that stores a fit box without emitting the
+ * `data-ply-fit` marker is a markup/derivation drift, refused loudly at the
+ * probe instead of silently validating overflowing text (INT-2, #328
+ * review).
+ */
+export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise<(TextFitProbe | null)[]> {
+  const specs = layers.map((l, index) => {
+    if (l.revision.kind !== "text") return null;
+    const fit = normalizeStoredTextFitBox(l.revision);
+    if (fit === undefined) return null;
+    return {
+      index,
+      fontSize: l.revision.fontSize,
+      fitWidth: fit.width,
+      fitHeight: fit.height,
+      minSize: MIN_FIT_FONT_SIZE,
+    };
+  });
+  if (specs.every((spec) => spec === null)) return specs.map(() => null);
+  return page.evaluate((input) => {
+    const canvasEl = document.getElementById("canvas");
+    if (!canvasEl) throw new Error("text fit pass: #canvas element missing");
+    return input.map((spec): { effectiveFontSize: number; fits: boolean; neededFontSize: number | null } | null => {
+      if (!spec) return null;
+      const outer = canvasEl.children[spec.index] as HTMLElement | undefined;
+      if (!outer) throw new Error(`text fit pass: element ${spec.index} not found in #canvas`);
+      // The derivation sets the font size on the element that CARRIES it —
+      // the text element marked `data-ply-fit` (the outer element itself for
+      // the single-div markup, the inner text div for the region/grade and
+      // gradient structures).
+      const holder = outer.matches("[data-ply-fit]") ? outer : outer.querySelector("[data-ply-fit]");
+      if (!(holder instanceof HTMLElement)) {
+        // Fail closed (INT-2, #328 review): every markup branch that stores a
+        // fit box emits the marker, so reaching this line means the markup
+        // and the derivation have drifted — a silent `fits: true` would
+        // publish overflowing text.
+        throw new Error(`text fit pass: element ${spec.index} carries a fit box but no data-ply-fit holder — refusing to paint or measure unfitted text.`);
+      }
+      const W = spec.fitWidth;
+      const H = spec.fitHeight;
+      const MIN = spec.minSize;
+      const overflow = (r: DOMRect): boolean => r.width > W + 0.01 || r.height > H + 0.01;
+      // The box is a LAYOUT-px measure (INT-1, #328 review): every rect read
+      // below is the UNTRANSFORMED box — clear the outer element's inline
+      // transform around the reads and restore it (the same pattern
+      // `sizeEffectFilterRegions` and the geometry probe use; transform
+      // removal never reflows other Layers, they are absolutely
+      // positioned), so scale/rotation/flip map the FITTED block afterwards
+      // and never inflate the measured layout size.
+      const savedTransform = outer.style.transform;
+      outer.style.transform = "none";
+      try {
+        let size = spec.fontSize;
+        holder.style.fontSize = `${size}px`;
+        let rect = holder.getBoundingClientRect();
+        // Already fits (or exactly fills) the box: shrink-only — the
+        // effective size IS the stored size.
+        if (!overflow(rect)) {
+          return { effectiveFontSize: size, fits: true, neededFontSize: null };
+        }
+        let needed: number | null = null;
+        for (let i = 0; i < 24; i++) {
+          const s = Math.min(W / rect.width, H / rect.height);
+          const candidate = Math.floor(size * s * 100) / 100;
+          if (i === 0) needed = candidate;
+          const next = Math.max(MIN, candidate);
+          if (next >= size) break;
+          size = next;
+          holder.style.fontSize = `${size}px`;
+          rect = holder.getBoundingClientRect();
+          if (!overflow(rect)) {
+            return { effectiveFontSize: size, fits: true, neededFontSize: needed };
+          }
+        }
+        return { effectiveFontSize: size, fits: false, neededFontSize: needed };
+      } finally {
+        outer.style.transform = savedTransform;
+      }
+    });
+  }, specs);
+}
+
+/**
  * The page HTML for one Composition. Layer names never reach the markup;
  * every interpolated value is a validated finite number, a whitelisted MIME
  * type, a hash-derived internal family, or the strict-hex validated color —
@@ -966,6 +1103,14 @@ export function buildCompositionHtml(
         // loudly at the paint boundary instead of interpolating into the
         // markup (#294 review PROD-2).
         const wrapWidth = naturalLayout ? normalizeStoredTextWrapWidth(rev) : undefined;
+        // The fit box (#295): the one stored-field reader again — a malformed
+        // stored pair refuses loudly at the paint boundary. When stored, the
+        // text element is marked `data-ply-fit` so the one in-page fit
+        // derivation can find the element that carries the font size (the
+        // marker is emitted only when a box is stored, so pre-#295 markup is
+        // byte-identical).
+        const fitBox = normalizeStoredTextFitBox(rev);
+        const fitAttr = fitBox !== undefined ? " data-ply-fit" : "";
         const layoutCss = naturalLayout
           ? wrapWidth !== undefined
             ? `width:${wrapWidth}px;white-space:pre-wrap;`
@@ -981,11 +1126,11 @@ export function buildCompositionHtml(
             `font-family:'${internalFontFamily(rev.contentHash)}';` +
             `font-size:${rev.fontSize}px;color:${fill.color};${synthesisCss}${axesCss}${typographyCss}${layoutCss}`;
           if (rev.visibleRegion === undefined && gradeFilter === "") {
-            return `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}${textStyle}">${escapeHtml(rev.text)}</div>`;
+            return `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}${textStyle}"${fitAttr}>${escapeHtml(rev.text)}</div>`;
           }
           return (
             `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
-            `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`
+            `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${escapeHtml(rev.text)}</div></div>`
           );
         }
 
@@ -1005,7 +1150,7 @@ export function buildCompositionHtml(
 
         return (
           `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
-          `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`
+          `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${escapeHtml(rev.text)}</div></div>`
         );
       }
       if (rev.kind === "shape") {

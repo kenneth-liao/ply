@@ -64,6 +64,7 @@ import {
   parseVectorColorSpec,
   resolveTextTypographyControls,
   resolveTextWrapWidthControl,
+  resolveTextFitBoxControl,
   vectorColorKindRefusal,
   validateRectangleCornerRadius,
   validateVisibleRegionAgainstContent,
@@ -166,6 +167,7 @@ export type LayerOptionKey =
   | "tracking"
   | "line-height"
   | "wrap-width"
+  | "fit-box"
   | "shape"
   | "size"
   | "corner-radius"
@@ -259,6 +261,11 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // or the removal value "none". A text style option: text-only, and it
   // joins every text content-kind refusal through TEXT_CONTENT_KEYS.
   { key: "wrap-width", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerWrapWidth },
+  // The fit box (#295, spec #285 US-016, DEC-010/DEC-005): an ABSOLUTE
+  // setter — a "<W>x<H>" pair of layout px or the removal value "none". A
+  // text style option: text-only, and it joins every text content-kind
+  // refusal through TEXT_CONTENT_KEYS.
+  { key: "fit-box", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerFitBox },
   // Placement, transform, and effect options: kind-shared across image,
   // text, and shape Layers (#259) — the shared validators and the paint
   // markup treat a shape's box exactly like an image's content box. Only
@@ -353,6 +360,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   tracking: { type: "string" },
   "line-height": { type: "string" },
   "wrap-width": { type: "string" },
+  "fit-box": { type: "string" },
   x: { type: "string" },
   y: { type: "string" },
   opacity: { type: "string" },
@@ -384,7 +392,7 @@ export type LayerOptionArgs = { [K in LayerOptionKey]?: string };
 /** The `--text` content marker plus the text style options: the option set
  *  the content-kind exclusivity rules treat as "the text content kind". */
 export const TEXT_CONTENT_KEYS: readonly LayerOptionKey[] = [
-  "text", "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width",
+  "text", "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width", "fit-box",
 ];
 
 /** The `--shape` content marker plus the shape's parameter options: the
@@ -581,7 +589,7 @@ export function layerContentKindConflict(
             : "--image and --shape are mutually exclusive content kinds; use one per Layer.";
         }
         return surface === "edit"
-          ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width) are mutually exclusive."
+          ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box) are mutually exclusive."
           : "--image and --text are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
@@ -716,6 +724,26 @@ export function parseLayerWrapWidth(raw: string | undefined): OptionParse<number
 }
 
 /**
+ * Fit box (--fit-box, #295, spec #285 US-016, DEC-010/DEC-005): a
+ * "<W>x<H>" pair of layout px or the literal "none" (resolved to `null` —
+ * the documented removal form), identical wording everywhere. Range
+ * validation (positive, finite, ≤ the shared per-axis cap) is
+ * `resolveTextFitBoxControl`'s job.
+ */
+export function parseLayerFitBox(raw: string | undefined): OptionParse<{ width: number; height: number } | null | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === "none") return { ok: true, value: null };
+  const m = raw.trim().match(/^(-?\d+(?:\.\d+)?)x(-?\d+(?:\.\d+)?)$/);
+  if (!m) {
+    return {
+      ok: false,
+      error: 'Fit box (--fit-box) must be "<W>x<H>" in layout px or "none".',
+    };
+  }
+  return { ok: true, value: { width: Number(m[1]), height: Number(m[2]) } };
+}
+
+/**
  * The one range validation for tracking and line height at a command
  * boundary: the same validator the ingestion paths use, so the boundaries
  * never disagree. Returns the refusal text, or undefined when valid.
@@ -740,6 +768,20 @@ export function validateTextTypographyControls(
 export function validateTextWrapWidth(value: number | null | undefined): string | undefined {
   try {
     resolveTextWrapWidthControl(value);
+    return undefined;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+/**
+ * The one range validation for the fit box (#295) at a command boundary:
+ * the same validator the ingestion paths use, so the boundaries never
+ * disagree. Returns the refusal text, or undefined when valid.
+ */
+export function validateTextFitBox(value: { width: number; height: number } | null | undefined): string | undefined {
+  try {
+    resolveTextFitBoxControl(value);
     return undefined;
   } catch (err) {
     return (err as Error).message;
@@ -1424,6 +1466,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "tracking" },
   { option: "line-height" },
   { option: "wrap-width" },
+  { option: "fit-box" },
   { policy: "text-typography" },
   { policy: "text-font-source" },
   { option: "font-file" },
@@ -1541,6 +1584,14 @@ export function checkEditLayerOptions(values: LayerOptionArgs): EditLayerCheck |
             parsed["wrap-width"] as number | null | undefined,
           );
           if (wrapWidthError !== undefined) return refuse(wrapWidthError);
+          // The fit box's range check rides in the same typography policy
+          // step (#295): the parser accepts the boundary shape ("<W>x<H>" or
+          // "none"); the shared domain validator refuses out-of-range values,
+          // identical wording on both surfaces.
+          const fitBoxError = validateTextFitBox(
+            parsed["fit-box"] as { width: number; height: number } | null | undefined,
+          );
+          if (fitBoxError !== undefined) return refuse(fitBoxError);
           break;
         }
         case "text-font-source": {

@@ -40,6 +40,7 @@ import {
   parseLayerWeight,
   parseLayerWidth,
   parseLayerWrapWidth,
+  parseLayerFitBox,
   parseMatteId,
   parseNumericArgument,
   parseShapeCornerRadius,
@@ -50,6 +51,7 @@ import {
   validateTextFontSource,
   validateTextTypographyControls,
   validateTextWrapWidth,
+  validateTextFitBox,
   SHAPE_CONTENT_KEYS,
   TEXT_CONTENT_KEYS,
   type LayerOptionArgs,
@@ -320,6 +322,15 @@ Options:
                         spaces within it (written line breaks still
                         break); "none" removes the width and restores the
                         unwrapped one-line layout; bounded 1–8192 layout px
+  --fit-box <WxH|none>  Fit box for a text Layer in layout px (#295,
+                        spec #285 US-016, DEC-010): an ABSOLUTE setter —
+                        with a box set, the font size shrinks (only
+                        shrinks; never the weight or width) until the
+                        laid-out text fits the box; text that cannot fit
+                        at the 8px minimum is refused, naming the box
+                        and the size needed. "none" removes the box.
+                        With a wrap width, the box bounds the WRAPPED
+                        block (its width must be at least the wrap width)
   --weight <num>        Text weight for a text Layer (#179, #232):
                         validated against the font's real weight axis —
                         bundled Archivo 100-900 (default 400); static faces
@@ -1103,6 +1114,19 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
             process.exitCode = 2;
             return;
           }
+          const parsedFitBox = parseLayerFitBox(values["fit-box"]);
+          if (!parsedFitBox.ok) {
+            output({ ok: false, error: parsedFitBox.error }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const fitBox = parsedFitBox.value;
+          const fitBoxError = validateTextFitBox(fitBox);
+          if (fitBoxError !== undefined) {
+            output({ ok: false, error: fitBoxError }, isJson);
+            process.exitCode = 2;
+            return;
+          }
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
             {
@@ -1111,6 +1135,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               ...(values["font-file"] !== undefined ? { fontFile: values["font-file"] } : {}),
               color: values.color, weight, width, tracking, lineHeight,
               ...(values["wrap-width"] !== undefined ? { wrapWidth } : {}),
+              ...(values["fit-box"] !== undefined ? { fitBox } : {}),
             },
             { x, y, opacity, fontSize, oneCommand, position: stackPosition },
           );
@@ -1439,6 +1464,15 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               // the fact painting applies (layout px, before the transform).
               if (layer.wrapWidth !== undefined && layer.wrapWidth !== null) {
                 facts.push(`wrap width ${layer.wrapWidth}px`);
+              }
+              // Stored fit box (#295) and the EFFECTIVE font size the ONE
+              // fit derivation derived for this very measurement — reported
+              // only when set; measure reports the size painting applies.
+              if (layer.fit) {
+                facts.push(`fit box ${layer.fit.width}×${layer.fit.height}px`);
+              }
+              if (layer.effectiveFontSize !== null) {
+                facts.push(`effective font size ${layer.effectiveFontSize}px`);
               }
               if (t.scaleX !== 1 || t.scaleY !== 1) {
                 facts.push(`scale ${t.scaleX === t.scaleY ? `${t.scaleX}×` : `${t.scaleX}×/${t.scaleY}×`}`);

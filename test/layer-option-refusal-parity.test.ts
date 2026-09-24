@@ -133,6 +133,7 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "tracking", bad: ["--tracking", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Tracking (--tracking)" },
   { key: "line-height", bad: ["--line-height", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Line height (--line-height)" },
   { key: "wrap-width", bad: ["--wrap-width", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Wrap width (--wrap-width)" },
+  { key: "fit-box", bad: ["--fit-box", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Fit box (--fit-box)" },
   { key: "x", bad: ["--x", "abc"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Placement coordinate (--x)" },
   { key: "y", bad: ["--y", "abc"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Placement coordinate (--y)" },
   { key: "opacity", bad: ["--opacity", "banana"], addContext: ["--text", "hi", "--font", "Archivo"], editContext: [], editId: "textId", names: "Opacity (--opacity)" },

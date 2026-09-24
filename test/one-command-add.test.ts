@@ -142,6 +142,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "warmth": return ["0.5"];
     case "blend": return ["multiply"];
     case "glow": return ["6,2,#ff9900"];
+    case "fit-box": return ["600x200"];
     default: throw new Error(`guard test: no value for option "${key}"`);
   }
 }
@@ -158,7 +159,7 @@ test("the guard table: every edit option is an accepted add option (TEST-003)", 
   const established = [
     "image", "from-generation", "from-matte", "output", "text", "x", "y", "opacity",
     "shape", "size", "corner-radius", "fill",
-    "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width",
+    "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width", "fit-box",
   ];
   for (const key of editOptions) {
     expect(oneCommand.includes(key) || established.includes(key)).toBe(true);
@@ -241,6 +242,10 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
     case "tracking": expect(rev.tracking).toBe(0.1); break;
     case "line-height": expect(rev.lineHeight).toBe(1.4); break;
     case "wrap-width": expect(rev.wrapWidth).toBe(220); break;
+    case "fit-box":
+      expect(rev.fitWidth).toBe(600);
+      expect(rev.fitHeight).toBe(200);
+      break;
     default: throw new Error(`guard test: no applied-fact read-back for option "${key}"`);
   }
 }
@@ -286,7 +291,7 @@ test("every edit option applicable to a text Layer is accepted and APPLIED on a 
     ]);
     expectAppliedFact(key, revision);
   }
-});
+}, 30_000);
 
 test("every edit option applicable to a shape Layer is accepted and APPLIED on a shape add (TEST-003, #259)", async () => {
   // The table's shape applicability is the ONE home for the fact: the guard

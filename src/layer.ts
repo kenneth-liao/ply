@@ -28,7 +28,7 @@ import { escapesDirReal, outsideDir } from "./paths.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
-import { measureStandaloneSnapshot } from "./composition-measure.js";
+import { measureStandaloneSnapshot, measureTextFit } from "./composition-measure.js";
 import { parseCompositionDocument, readMutableComposition, readCompositionInternalFull, type Composition } from "./composition.js";
 import { staticFaceAcceptedAxes, faceByContentHash, callerFontFace, verifyCallerFontResolves, resolveFace, resolveTextAxes, fontAssetBytes, type CallerFontFacts, type FontFace, type TextAxes } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
@@ -358,6 +358,24 @@ export interface LayerTextRevision extends LayerRevisionBase {
    * only when present, so pre-#294 revision ids are byte-identical.
    */
   wrapWidth?: number;
+  /**
+   * The caller-set fit box in layout px (#295, spec #285 US-016, ISC-56,
+   * DEC-010/DEC-005): present ONLY when set — both fields together, and
+   * absence IS the no-box form. With a box set, the ONE in-page fit
+   * derivation (shared by paint, measure, and anchor) shrinks the font size
+   * until the laid-out text block fits the box — shrinking only: it never
+   * grows the size and never changes weight or width (DEC-010). The EFFECTIVE
+   * font size is never stored: it re-derives from the revision's own facts at
+   * every read, so edits to the text, font, tracking, or wrap width stay
+   * correct, and removing the box restores the render byte-for-byte. The box
+   * is a LAYOUT-pixel measure, applied before the canonical transform. A
+   * natural-layout fact: a legacy revision never carries one, and setting one
+   * on a legacy revision is an edit that writes `layoutRule: "natural"`.
+   * Appended to the revision hash only when present, so pre-#295 revision ids
+   * are byte-identical.
+   */
+  fitWidth?: number;
+  fitHeight?: number;
   /**
    * Caller font facts (#232, spec #226 US-005, DEC-006): present if and only
    * if the retained bytes came from a caller-supplied font file. Read ONCE
@@ -1527,6 +1545,111 @@ export function normalizeStoredTextWrapWidth(revision: {
 }
 
 /**
+ * The fit box's minimum font size (#295, spec #285 US-016, DEC-010): a
+ * documented fixed floor. Fit-to-box shrinks the stored font size only, and
+ * never below this floor — text that would need a smaller size to fit is
+ * refused on add and edit, naming the box and the size needed. One home for
+ * the number: the derivation pass, the refusal builder, and the docs all
+ * read it from here.
+ */
+export const MIN_FIT_FONT_SIZE = 8;
+
+/** The stored/normalized shape of a fit box. */
+export interface TextFitBox {
+  width: number;
+  height: number;
+}
+
+/**
+ * The fit box control resolver (#295, spec #285 US-016, DEC-010/DEC-005).
+ * The ONE domain-boundary validation for the `--fit-box <WxH|none>` control:
+ * a set value is a pair of finite numbers in (0, MAX_DIMENSION] layout px —
+ * refused before anything is published, because the box feeds the one
+ * in-page fit derivation that every read runs. `null` clears the stored box
+ * (the documented removal value "none" at the command boundary);
+ * `undefined` means not given (an omitted option carries the current
+ * value). The resolved form is always storable: the box is stored only when
+ * set — absence IS the no-box form. Every refusal names the control, and
+ * fires before anything is published.
+ */
+export function resolveTextFitBoxControl(value: TextFitBox | null | undefined): TextFitBox | undefined {
+  if (value === undefined || value === null) return undefined;
+  const { width, height } = value;
+  if (
+    typeof width !== "number" || !Number.isFinite(width) || width <= 0 || width > MAX_DIMENSION ||
+    typeof height !== "number" || !Number.isFinite(height) || height <= 0 || height > MAX_DIMENSION
+  ) {
+    throw new Error(
+      `Fit box (--fit-box) must be two finite numbers between 1 and ${MAX_DIMENSION} layout px — ${JSON.stringify(value)} is out of range.`,
+    );
+  }
+  return { width, height };
+}
+
+/**
+ * Canonical stored-fit-box validation and normalization (#295, spec #285
+ * US-016, DEC-010/DEC-005). The ONE normalization boundary AND the one
+ * reader for a revision's fit box: documents written before #295 lack the
+ * fields (only a missing field is absent — a present non-number, a partial
+ * pair, or any other shape is a malformed document, never a silent
+ * default); every downstream reader — revision resolution, the revision
+ * hash, paint markup, measurement, and the edit carry path — projects
+ * through this function and never re-derives the fact. Both fields present
+ * together, positive finite numbers inside the shared 8192px per-axis
+ * bound.
+ */
+export function normalizeStoredTextFitBox(revision: {
+  fitWidth?: unknown;
+  fitHeight?: unknown;
+}): TextFitBox | undefined {
+  const { fitWidth, fitHeight } = revision;
+  if (fitWidth === undefined && fitHeight === undefined) return undefined;
+  if (
+    typeof fitWidth !== "number" || !Number.isFinite(fitWidth) || fitWidth <= 0 || fitWidth > MAX_DIMENSION ||
+    typeof fitHeight !== "number" || !Number.isFinite(fitHeight) || fitHeight <= 0 || fitHeight > MAX_DIMENSION
+  ) {
+    throw new Error(
+      `Malformed revision document: text fit box must be a pair of finite numbers between 1 and ${MAX_DIMENSION} when present (got ${JSON.stringify({ fitWidth, fitHeight })}).`,
+    );
+  }
+  return { width: fitWidth, height: fitHeight };
+}
+
+/**
+ * The fit/wrap combination rule (#295, spec #285 US-016): when both a wrap
+ * width and a fit box are set, the box bounds the WRAPPED block — the wrap
+ * width stays the wrapping width and the box height bounds the wrapped
+ * block's height. A fit box NARROWER than the wrap width can therefore
+ * never be satisfied (a wrapped block can be up to its wrap width wide),
+ * so it is refused at the set-time boundary, naming both values and the
+ * fix. One shared wording for both surfaces; the effective values are
+ * compared (an omitted option carries its current value across an edit).
+ */
+export function textFitBoxNarrowerThanWrapRefusal(fitWidth: number, wrapWidth: number): string {
+  return (
+    `Fit box (--fit-box) width ${fitWidth}px is narrower than the wrap width ${wrapWidth}px: a wrapped block can be up to its wrap width wide, so it could never fit — widen the fit box to at least the wrap width.`
+  );
+}
+
+/**
+ * The one below-minimum fit refusal builder (#295, spec #285 US-016):
+ * text that cannot fit its box at the documented minimum font size is
+ * refused on add and edit, naming the box and the size needed. One shared
+ * wording for both surfaces — the add path and the edit path call this
+ * with the same derived facts, so their refusals never disagree.
+ */
+export function textFitRefusal(text: string, fitWidth: number, fitHeight: number, neededFontSize: number): string {
+  const cause =
+    neededFontSize < MIN_FIT_FONT_SIZE
+      ? `fitting needs a ${neededFontSize}px font size, below the ${MIN_FIT_FONT_SIZE}px fit minimum`
+      : `even at the ${MIN_FIT_FONT_SIZE}px fit minimum the block overflows the box`;
+  return (
+    `Text ${JSON.stringify(text)} cannot fit its ${fitWidth}×${fitHeight}px box: ${cause}. ` +
+    `Shorten the text or enlarge the box (--fit-box).`
+  );
+}
+
+/**
  * Canonical stored-text-axes validation and normalization (#179, ADR-0021).
  * The ONE normalization boundary AND the one reader for a revision's text
  * weight/width: documents written before #179 lack the fields (only a
@@ -1792,7 +1915,11 @@ export function computeRevisionHash(rev: LayerRevision): string {
   // #294 keep their exact ids.
   const wrapWidth = rev.kind === "text" ? normalizeStoredTextWrapWidth(rev) : undefined;
   const wrapWidthField = wrapWidth !== undefined ? `:wrapwidth(${wrapWidth})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}`).digest("hex").slice(0, 16)}`;
+  // The fit box (#295) joins the hash only when stored — pre-#295 revision
+  // ids are byte-identical.
+  const fitBox = rev.kind === "text" ? normalizeStoredTextFitBox(rev) : undefined;
+  const fitBoxField = fitBox !== undefined ? `:fitbox(${fitBox.width}x${fitBox.height})` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}${fitBoxField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -2050,6 +2177,16 @@ export async function readRevisionInternalFull(
   // consulted. Absence IS the no-wrap-width form (natural one-line layout).
   const textWrapWidth =
     revision.kind === "text" ? normalizeStoredTextWrapWidth(revision) : undefined;
+  // Canonical text fit box: validated and normalized at this same one
+  // boundary (#295, spec #285 US-016, DEC-010/DEC-005) — a malformed stored
+  // pair is refused loudly before the revision hash is consulted. Absence IS
+  // the no-box form. The fit/wrap combination rule is a stored-document
+  // invariant too: a box narrower than the stored wrap width could never be
+  // satisfied, so it is a malformed document.
+  const textFitBox = revision.kind === "text" ? normalizeStoredTextFitBox(revision) : undefined;
+  if (textFitBox !== undefined && textWrapWidth !== undefined && textFitBox.width < textWrapWidth) {
+    throw new Error(textFitBoxNarrowerThanWrapRefusal(textFitBox.width, textWrapWidth));
+  }
   // Canonical vector colour (#215, DEC-008/010): validated and normalized at
   // this same one boundary — a malformed stored colour is refused loudly
   // before the revision hash is consulted. Absence IS the no-colour form.
@@ -2192,6 +2329,7 @@ export async function readRevisionInternalFull(
           ...(textAxes ?? {}),
           ...(textTypography ?? {}),
           ...(textWrapWidth !== undefined ? { wrapWidth: textWrapWidth } : {}),
+          ...(textFitBox !== undefined ? { fitWidth: textFitBox.width, fitHeight: textFitBox.height } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
           fontBytes: contentBytes!.length,
           layoutRule: layoutRule!,
@@ -2341,6 +2479,22 @@ export interface EditLayerOptions {
    * edit that writes `layoutRule: "natural"` (ADR-0017 amendment).
    */
   wrapWidth?: number | null;
+  /**
+   * The caller-set fit box (#295, spec #285 US-016, ISC-56, DEC-010/
+   * DEC-005): an ABSOLUTE setter — a `{ width, height }` pair in layout px,
+   * validated by `resolveTextFitBoxControl` at the ONE domain boundary.
+   * With a box set, the one in-page fit derivation shrinks the font size —
+   * only shrinking, never the weight or width (DEC-010) — until the laid-out
+   * block fits; `measure` reports the effective font size. Text that cannot
+   * fit at the documented 8px minimum is refused before anything is
+   * published, naming the box and the size needed. `null` clears the stored
+   * box (the documented removal value "none" at the command boundary —
+   * removing it restores the render byte-for-byte); an omitted option
+   * carries the current value across any edit. The fact is stored ONLY when
+   * set (absence IS the no-box form), so revisions written before #295 keep
+   * their exact revision ids.
+   */
+  fitBox?: { width: number; height: number } | null;
   x?: number;
   y?: number;
   opacity?: number;
@@ -2921,6 +3075,19 @@ export function vectorColorKindRefusal(
   );
 }
 
+/**
+ * The fit box equality for the edit path's unchanged check (#295): the
+ * resolved control equals the previous revision's stored pair — both set
+ * with the same values, or both absent.
+ */
+function fitBoxEq(
+  fitBox: TextFitBox | undefined,
+  prevRev: { fitWidth?: number; fitHeight?: number },
+): boolean {
+  if (fitBox === undefined) return prevRev.fitWidth === undefined && prevRev.fitHeight === undefined;
+  return fitBox.width === prevRev.fitWidth && fitBox.height === prevRev.fitHeight;
+}
+
 /** Field-wise shadow equality for the no-op check (#139): the flip
  * precedent — re-issuing an identical shadow is a detected no-op, never a
  * redundant revision. */
@@ -3107,6 +3274,7 @@ const REGION_CONFLICTING_OPTION_PRESENT = (options: EditLayerOptions): boolean =
   options.tracking !== undefined ||
   options.lineHeight !== undefined ||
   options.wrapWidth !== undefined ||
+  options.fitBox !== undefined ||
   options.shape !== undefined ||
   options.size !== undefined ||
   options.cornerRadius !== undefined ||
@@ -3501,7 +3669,8 @@ async function buildEditedRevision(
       options.width !== undefined ||
       options.tracking !== undefined ||
       options.lineHeight !== undefined ||
-      options.wrapWidth !== undefined
+      options.wrapWidth !== undefined ||
+      options.fitBox !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on an image Layer. Layer "${layerId}" is an image Layer.`);
     }
@@ -3669,7 +3838,8 @@ async function buildEditedRevision(
       options.width !== undefined ||
       options.tracking !== undefined ||
       options.lineHeight !== undefined ||
-      options.wrapWidth !== undefined
+      options.wrapWidth !== undefined ||
+      options.fitBox !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on a shape Layer. Layer "${layerId}" is a shape Layer.`);
     }
@@ -3914,6 +4084,26 @@ async function buildEditedRevision(
       options.wrapWidth !== undefined ? options.wrapWidth : prevRev.wrapWidth,
     );
 
+    // The fit box control (#295, spec #285 US-016, DEC-010/DEC-005) resolves
+    // at the same one domain boundary — a refused box publishes nothing,
+    // `null` clears the stored box (removing it restores the render
+    // byte-for-byte), and an omitted option carries the current value. The
+    // box is stored only when set; setting one is an edit, so a legacy-rule
+    // revision below publishes `layoutRule: "natural"` with it. The
+    // fit/wrap combination rule compares the EFFECTIVE values: a box
+    // narrower than the (possibly carried) wrap width could never be
+    // satisfied by shrinking, so it is refused here, naming both.
+    const fitBox = resolveTextFitBoxControl(
+      options.fitBox !== undefined
+        ? options.fitBox
+        : prevRev.fitWidth !== undefined
+          ? { width: prevRev.fitWidth, height: prevRev.fitHeight! }
+          : undefined,
+    );
+    if (fitBox !== undefined && wrapWidth !== undefined && fitBox.width < wrapWidth) {
+      throw new Error(textFitBoxNarrowerThanWrapRefusal(fitBox.width, wrapWidth));
+    }
+
     // The revision's caller font facts (#232, DEC-006): a --font-file edit
     // stores the file's facts; a later edit without a font option keeps the
     // retained caller font verbatim; switching to a bundled family (--font)
@@ -3936,6 +4126,7 @@ async function buildEditedRevision(
       ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
       ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
       ...(wrapWidth !== undefined ? { wrapWidth } : {}),
+      ...(fitBox !== undefined ? { fitWidth: fitBox.width, fitHeight: fitBox.height } : {}),
       ...(resolvedCallerFont !== undefined ? { callerFont: resolvedCallerFont } : {}),
       x,
       y,
@@ -3964,6 +4155,7 @@ async function buildEditedRevision(
       typography.tracking === prevRev.tracking &&
       typography.lineHeight === prevRev.lineHeight &&
       wrapWidth === prevRev.wrapWidth &&
+      fitBoxEq(fitBox, prevRev) &&
       callerFontEq(resolvedCallerFont, prevRev.callerFont) &&
       x === prevRev.x &&
       y === prevRev.y &&
@@ -3993,7 +4185,8 @@ async function buildEditedRevision(
       draft.visibleRegion !== undefined &&
       (options.text !== undefined || options.font !== undefined || options.fontFile !== undefined ||
         options.fontSize !== undefined || options.weight !== undefined || options.width !== undefined ||
-        options.tracking !== undefined || options.lineHeight !== undefined || options.wrapWidth !== undefined)
+        options.tracking !== undefined || options.lineHeight !== undefined ||
+        options.wrapWidth !== undefined || options.fitBox !== undefined)
     ) {
       const standalone = await measureStandaloneSnapshot(
         { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
@@ -4001,6 +4194,33 @@ async function buildEditedRevision(
       );
       validateKeptVisibleRegion(draft.visibleRegion, standalone.content, layerId);
       regionCarried = { visibleRegion: draft.visibleRegion };
+    }
+    // Fit-to-box validation (#295, spec #285 US-016, DEC-010): the fit box
+    // is validated against the RESULTING revision whenever this edit can
+    // change the fit — the text, font, size, axes, typography, wrap width,
+    // or the box itself — before anything is published. The ONE in-page fit
+    // derivation (the same pass paint, measure, and anchor run) derives the
+    // effective size; text that cannot fit at the minimum size is refused,
+    // naming the box and the size needed. Edits that cannot change the fit
+    // (placement, opacity, effects) skip the probe: the published state was
+    // already validated at its own write time.
+    if (revision.fitWidth !== undefined) {
+      const fitRelevant =
+        options.text !== undefined || options.font !== undefined || options.fontFile !== undefined ||
+        options.fontSize !== undefined || options.weight !== undefined || options.width !== undefined ||
+        options.tracking !== undefined || options.lineHeight !== undefined ||
+        options.wrapWidth !== undefined || options.fitBox !== undefined;
+      if (fitRelevant) {
+        const fit = await measureTextFit(
+          { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
+          newTextBytes ?? prevContentBytes,
+        );
+        if (fit !== null && !fit.fits) {
+          throw new Error(
+            textFitRefusal(revision.text, revision.fitWidth, revision.fitHeight!, fit.neededFontSize ?? revision.fontSize),
+          );
+        }
+      }
     }
     return { revision, unchanged, retainedGeneration: null, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }

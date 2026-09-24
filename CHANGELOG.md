@@ -1,6 +1,29 @@
 # Changelog
 
 ## [Unreleased]
+- Added a fit box as a text revision fact: `--fit-box <WxH|none>` on
+  `composition add` and `layer edit` is an ABSOLUTE setter in layout px
+  (before the canonical transform) — with a box set, the font size shrinks
+  until the laid-out text block fits the box, shrinking only: it never
+  grows the size and never changes weight or width (DEC-010). `measure`
+  reports the effective font size (and the stored box); the size is derived
+  at read time by ONE in-page pass shared by paint, measure, and anchored
+  placement — never stored — so edits to the text, font, tracking, or wrap
+  width re-derive it automatically. Text that cannot fit at the documented
+  8px minimum is refused on add and edit before anything is published,
+  naming the box and the size needed, with one shared refusal builder on
+  both surfaces. With a wrap width, the box bounds the wrapped block (the
+  wrap width stays the wrapping width; a fit box narrower than the wrap
+  width is refused). `none` removes the stored box and restores the
+  unfitted render byte-for-byte; an omitted option carries the current box
+  across edits. The box is stored only when set (the revision hash gains
+  `:fitbox(<W>x<H>)` only then, so pre-#295 revision ids and pinned Render
+  history stay byte-identical), and both axes validate as positive finite
+  numbers up to the shared 8192px per-axis cap at the one shared boundary
+  with identical refusals on both surfaces. It joins the property × kind
+  matrix, the add/edit refusal parity tests, and the offline reversibility
+  and replay suite (spec #285 US-016, ISC-56, DEC-010/DEC-005, TEST-002)
+  (#295).
 - Added a wrap width as a text revision fact: `--wrap-width <num|none>` on
   `composition add` and `layer edit` is an ABSOLUTE setter in layout px
   (before the canonical transform) — with a width set, text soft-wraps at
