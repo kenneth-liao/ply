@@ -1,8 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
-### Fixed
+- Made every Composition command that takes a Composition name resolve it
+  through one reader (`readCompositionDocument`), so an unknown name exits
+  nonzero naming the missing Composition and listing the existing ones — the
+  same refusal the Layer name-address already gave — and no raw filesystem
+  error such as `ENOENT` reaches output; boundary escape and symlink
+  containment checks stay as strict as before, whether or not the target
+  exists (#289).
 
 - Anchored placement (`--anchor`) now resolves against the pre-effect painted
   ink on both surfaces it exists on — one-command `composition add` and
@@ -21,8 +26,6 @@
   aborting the measurement call. Previously, one oversized Layer threw an
   unhandled error that blocked measuring the whole Composition, broke region
   checks, and prevented anchoring unrelated sibling Layers (#206).
-
-### Changed
 
 - Changed the `gpt-image` registry rate from $0.0045 to the $0.005975 Gateway
   receipt, and its note now cites the $0.0166 per-request Reference receipt
@@ -46,8 +49,6 @@
   Behaviour-preserving: refusal text, exit statuses, check order, and
   rendered bytes are unchanged (the refusal-parity, one-command parity,
   plumbing-probe, layer-edit, and layer-options suites pin it).
-
-### Added
 
 - Added GPT Image 2.5 Flare and Sunburst as `gpt-image-flare` and
   `gpt-image-sunburst`, each qualified through real Gateway requests for
@@ -428,8 +429,6 @@
   decision recorded on #229). Not included: stack position, absolute scale,
   and caller fonts (sibling tickets).
 
-### Fixed
-
 - The default matting weights directory resolves against the Ply install, not
   the working directory (#205): `modelDir()` in `src/segment.ts` defaulted to
   `path.resolve("models")` relative to `process.cwd()`, causing `ply matte`
@@ -486,8 +485,6 @@
   Fill term now states the shipped union (solid, linear gradient, or radial
   gradient) instead of "a gradient (later)".
 
-### Changed
-
 - Internal refactor, no version-visible behavior change (#228, spec #226
   DEC-001): `ply layer edit` and `composition add` now share one option
   definition and one validation path per Layer option (`src/layer-options.ts`)
@@ -502,8 +499,6 @@
   surfaces are byte-identical to before, and no option is accepted or refused
   differently.
 
-### Added
-
 - Layer name addressing (#227, spec #226 US-003): wherever a Layer id is
   accepted — `ply layer edit`, `ply layer inspect`, `ply layer review` — a
   Composition-plus-use name address `<composition>/<use>` (for example
@@ -517,8 +512,6 @@
   address supplies the target Composition and use, so `--composition`/`--use`
   need not be repeated (repeating them must match the address). Layer ids
   continue to work everywhere (DEC-003)
-
-### Fixed
 
 - Fixed outline-cap check ignoring Layer scale: raster dilation is now computed
   as `outline.width × max(|scaleX|, |scaleY|) × supersample`, preventing silent
@@ -535,15 +528,11 @@
   measurement refusal naming the Layer and the fix, never the raw
   parse-limit error (#185)
 
-### Changed
-
 - Changed render-manifest `output` records: external `--out` destinations are
   now recorded as absolute paths instead of the caller-chosen lexical form
   (in-Project records stay project-relative). The field is informational —
   replay never reads it — and the change lets the guideline view's
   render-output refusal guard compare recorded outputs soundly (#174)
-
-### Added
 
 - One-edit switch from a variable-font text Layer to a static face: `layer
   edit --font` now takes explicit `--weight`/`--width` that replace the
@@ -631,8 +620,6 @@
   loudly with nonzero status. Compact text by default, valid JSON under
   `--json`; local only — no network, no inference weights (#173)
 
-### Changed
-
 - Removed the hardcoded YouTube region baseline from `src/` (#176): the
   legacy Scene machinery (`scene validate`, `scene render`,
   `safeAreaWarnings`, and `scene guidelines`) now reads its rectangles from
@@ -655,8 +642,6 @@
   `library` usage failures move 1 → 2 and module help exits 0 — see README
   for the exit-code contract. The minor bump (4.15.0) is a maintainer
   decision recorded at plan alignment for issue #128.
-
-### Fixed
 
 - The retained CLI surfaces are coherent (#128, from
   `examples/thumbnail-luigi-go/HANDOFF.md` F4/F12–F16/F18, spec #132's
@@ -700,8 +685,6 @@
   the public `ply matte` seam with the source byte-identical and nothing
   published. Still one pinned `uv` process per matte, no second preflight
   process, no CPU/CoreML fallback; the pin is unchanged.
-
-### Added
 
 - Local Matting runs BiRefNet Dynamic on PyTorch/MPS (#162, spec #159
   US-001/US-002/US-005/US-006): the pinned engine behind the MatteEngine
@@ -904,8 +887,6 @@
   query writes no Project state, works offline, and ships compact text,
   valid `--json`, and scoped help.
 
-### Changed
-
 - `ply generate` without `--model` now selects nano-2 (effective
   `google/gemini-3.1-flash-image`) — the tool-wide general-generation
   default (spec #132, DEC-007); explicit `--model` selections keep
@@ -949,8 +930,6 @@
   `(x, y)` top-left placement point when painting. Older revision documents
   keep their original hash/paint meaning.
 
-### Removed
-
 - BREAKING: retired the generated-asset adoption entry points (#115, #102):
   `jobs adopt` and `library adopt` no longer exist — generated or matted
   content enters Projects as ordinary Layers (`ply composition add
@@ -973,8 +952,6 @@
   repositories) per the #103/#110 inventory on #102; the substantive
   input-integrity/provider assertions moved to the replacement coverage
   (generation/matting suites) rather than being deleted.
-
-### Added
 
 - Added offline evidence review for the new workflow (#109, #102):
   `ply generate review <job-id>` builds a self-contained evidence sheet beside
@@ -1035,11 +1012,7 @@
   closed on ambiguous or unreadable retained records. Contract documented in
   docs/project-storage-contract.md and docs/generation-publication-contract.md.
 
-### Changed
-
 - Removed `renderComposition`'s inline canvas-cap checks in favor of the canonical `assertRenderableCanvas` shared with replay; the check now runs at the same earlier position (before Layer resolution and destination staging) with behavior and diagnostics unchanged (#87, #99 review INT-1).
-
-### Added
 
 - Added independent local Matting (#106, #102): `ply matte <image> [--id <id>]`
   mattes a caller-selected local PNG with no Generation Job, no adoption, and
@@ -1104,8 +1077,6 @@
 - Extended `docs/project-storage-contract.md` (§3, §5, §7) with the explicit fork editing protocol, target validation rule, no-content-change fork behavior, and CLI surface (#85).
 - Extended `docs/project-storage-contract.md` (§5, §7) with the cross-Project copy protocol, dual-Project locking order, alias guard, and CLI surface (#86).
 
-### Fixed
-
 - Protect `--out` destinations under Project directories such as `..exports` with separator-aware containment in both output guards; concurrent fresh renders yield one success and one refusal, and existing retained files remain unchanged (#80, #91, RE-1).
 
 - `composition render --out` path classification now protects only reserved Project inputs (manifest, lock, `compositions/`, `layers/`, `content/`, and render history via the existing-path rule); fresh paths with existing parents elsewhere in the Project — including nested paths like `renders/social/poster.png` and sibling directories like `exports/poster.png` — are permitted, with the documented missing-parent refusal preserved (#80, local followup SPEC-1).
@@ -1114,8 +1085,6 @@
 - `composition render --out` replaces the destination by same-directory temp-file rename instead of writing through the target's inode, so an external hardlink alias onto Project state (e.g. `ply.json`) keeps its original bytes; regression test included (#80, local review CRAFT-1).
 - Render export now permits a brand-new file directly under the Project's `renders/` while continuing to refuse every existing in-Project path, canonical storage directories, and symlink aliases (#80, local review SPEC-1).
 - The render snapshot resolves each Layer exactly once through a canonical full resolver (`readCompositionInternalFull`); metadata readers project from it without a second resolution/verification pass (#80, local review CRAFT-2).
-
-### Added
 
 - Added same-Project Composition Layer import with independent membership and shared Layer identities (#84, #77): `ply composition import <target> <source>` imports a source Composition's Layer references into a destination Composition within the same Project as individually addressable uses pointing to the same shared Layer identities, without baking images or creating subscription coupling; local-name collisions fail closed immediately with an actionable error leaving destination references unchanged, empty source import succeeds as a no-op with 0 imported uses, and self-import is rejected; operations execute under `.ply.lock` to coordinate with authoritative referrer discovery and mutations.
 - Extended `docs/project-storage-contract.md` (§3, §5, §7) with the same-Project Composition import protocol, collision handling, and CLI command specification (#84).
@@ -1127,25 +1096,17 @@
 - Extended `docs/project-storage-contract.md` with the discriminated text/image revision schema, content/font identity semantics, text ingestion, and the text render/fallback-rejection contract (#81).
 - Added `ply composition render`, painting a resolved local image Composition to a PNG at its exact canvas dimensions with reference-list paint order, position, opacity, and clipping; the Project lock covers the snapshot of verified retained bytes, the default output is a fresh file under `renders/`, `--out` exports outside the Project with symlink-resolving protection of Project state, and invalid dimensions or unresolved content fail before any output is published (#80, #77).
 
-### Fixed
-
 - Report Composition and Layer CLI browser teardown failures without retrying committed mutations; clarify interrupted-operation recovery guarantees (#90).
-
-### Removed
 
 - Removed the deprecated `thumb` command and its specialized renderer, styles, overlays, tests, and examples. Scene composition is now the only rendering path.
 - Removed the built-in identity/reference catalog, facet search, qualification harness, spent generated outputs, obsolete model exports, and obsolete unapproved trial artifacts. Generation callers now supply reference files directly.
 - Removed personal asset-policy documentation from thumby; project-specific source discovery and likeness policy belong to consuming projects.
-
-### Changed
 
 - BREAKING: renamed the project, repository, checkout, and new render identity to Ply (2.0.0). Environment overrides are now `PLY_LIBRARY_ROOT` and `PLY_MODEL_DIR`; existing command scripts remain supported.
 - Recorded the project-scoped composer destination and superseding content-policy/matting decisions; runtime gates remain unchanged.
 - Breaking: bumped to 1.0.0 after removing the deprecated command and identity catalog.
 - Creator References now reach providers in caller order, matching Plate and Object Jobs. New Creator Job records use schema version 5; a v3 rerun preserves its legacy identity-first/pose-last provider order once, normalizes the recorded request to that exact order, and upgrades atomically so later reruns cannot drift. Thumby records, verifies, and forwards arbitrary caller-supplied reference files without discovering them.
 - Reframed the README, glossary, and agent guidance around the general Scene, Asset, Generation Job, and caller-supplied Reference workflow.
-
-### Added
 
 - Added Composition authoring, local image Layer ingestion into content-addressed storage, immutable revision documents, and project-level locking (#79, #77).
 - Added `ply project <init|inspect>` commands and the self-contained Project storage boundary (#78, #77).
@@ -1161,8 +1122,6 @@
 - Uniform Image-layer tint (US-034–US-035, #55, ADR-0012): `tint` paints one authored color through the resolved Asset's alpha — same semantics for raster and vector Assets — with transparent pixels byte-identical to the untinted render, source bytes and Asset identity untouched (two tinted Layers share one Asset), and fixed composition with crop/fit/opacity/effects; the masked `adjust` composes over the tinted result, and `scene inspect` surfaces it
 - `scene reference import <scene> <file>` (US-001–US-004, #54): normalize a local PNG, JPEG, or WebP image to the exact 1280×720 PNG profile, store the copy inside the Scene bundle, and associate it atomically — `--source` records provenance as `reference.source`
 - Non-16:9 input is refused before anything is written (an unstated subjective crop or a distortion is never chosen); failed imports leave the previous Scene and its associated files untouched
-
-### Fixed
 
 - Scene author geometry edits keep reporting an unreachable session even when the failing field carries a newer unsubmitted value (#61).
 - Scene author numeric geometry edits preserve in-progress values across other fields' commits, stale rejections, and network failures, and resizing is verified from every corner, including nested and rotated Layers (#61).
@@ -1180,23 +1139,15 @@
 - Tint composes with the masked `adjust` instead of being restricted as mutually exclusive (#67, SPEC-1): the named-mask contract is unchanged — tint paints the content, `adjust` blends over the tinted result inside its mask; the 0.29.1 schema restriction is removed
 - Reference Thumbnail import is race-safe and fail-closed: per-Scene locking with bounded contention (no automatic stale-lock stealing — operator cleanup), token-gated release that only ever removes its own lock, owned rollback covering everything after reservation including partial writes, shared by every replacing Scene writer (#54, #66)
 
-### Changed
-
 - The mask-CSS declarations for the masked `adjust` and `tint` overlays build from one shared `maskCss` helper (#67) — markup bytes unchanged
 - Model selection for typed-Reference Jobs reads one registry capability source (#53, #65): gpt-image is qualified reference-capable; an explicitly incompatible selection (registry key or raw gateway id) is refused before any spend and lists every qualified choice; recorded raw gateway ids that name a registered model rerun qualified; a reference run on a text-only rate records its run cost as unknown with a basis warning
 
 - The image-kind Generation Job request shape has one home: `buildImageRequestArgs` in `src/generate.ts`, used by both production generation and the TEST-012 qualification harness (#52, #64). The harness now takes only image-kind models, publishes evidence through a single redacting and field-whitelisting serializer, roots its artifacts at the repo's gitignored `out/`, bounds every billing lookup with partial evidence persisted once the paid call settles, and records only per-generation billing as an exact per-call cost
 - **Plates are flexible: the Plate Job subject is authoritative** (US-025–US-027, #51, ADR-0011): `jobs plates` no longer forces the bare-backdrop prompt — a requested UI surface, product, device, or complex background element survives in the recorded effective prompt with no contradictory prohibition, while the final-text and exact-logo bans stay (ADR-0001). The glossary now defines a Plate as a full-canvas generated background whose contents are intentionally flattened, and agent guidance (README, `jobs` help) documents composability as an authoring policy — prefer independent Assets and Layers when separate control (movement, resizing, recoloring, replacement, reuse, provenance, Variants) has practical value; never a validation rule. The legacy `thumb --cutout` backdrop mode is unchanged
 
-### Added
-
 - The Creator approval gate now covers the deprecated legacy path (REQ-018, #40): `thumb --cutout <id>` refuses a trial Creator Asset with the same error and remedies as the Scene gate (`library approve`, or the explicit `--experimental` override); under the override every output is named `*.trial.png` and a NON-FINAL warning naming the asset rides stdout and `run.json` — and the gate fires before any generation spend. The gate's language (refusal, non-final marker, `.trial` name hint) now has one home in `src/assets.ts`, shared by both render paths
 
-### Fixed
-
 - Browser-backed render paths run on one shared, serialized, self-healing Chromium page per process instead of a context cycle per render — injected pages stay caller-owned and `closeBrowser()` leaves no Chromium process behind (#27, ADR-0010). Bare single-process `bun test` needs Bun ≥ 1.4.0 (upstream oven-sh/bun #15679)
-
-### Changed
 
 - Internal refactor, no version-visible behavior change (#258, spec #226 US-001 bullet 3, DEC-001; acceptance-audit finding A226-002): one-command `composition add` now consumes the shared option definition's normalization and application plumbing wholesale, so a new edit option reaches `add` with no per-option work. The ~9 per-option parse blocks, the `OneCommandOptions` members, the presence check, the option-name mapping, and the per-option application switch in `src/composition-cli.ts` and `src/composition.ts` are gone: the add boundary calls the ONE shared parse (`parseOneCommandOptionValues` in the new `src/one-command.ts` — the same shared validators `layer edit` runs, the resize family's exclusivity rule, and the anchor's explicit-target rule, in the surface's established check order), returning the parsed values keyed by the option table's own keys, and the publication path dispatches through the ONE application case per option (`ONE_COMMAND_OPTION_APPLY`), in the table-derived application order, failing loudly when a table key has no case. A probe test (`test/one-command-plumbing.test.ts`) registers an option through the shared definition alone and shows `add` parsing, validating, and applying it with no add-side code naming it. `--help` output and every refusal text and exit status on both surfaces are byte-identical to before; the documented creation order (content, transforms, anchored placement, effects), the single published revision, and publish-nothing-on-refusal are unchanged, and no option is accepted or refused differently
 

@@ -65,7 +65,7 @@ import { DEFAULT_SHEET_CELL, DEFAULT_SHEET_COLUMNS } from "./composition-sheet.j
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
-const HELP = `
+export const HELP = `
 composition — Composition authoring and inspection
 
   ply composition create <name> --width <w> --height <h> [options]
@@ -592,85 +592,112 @@ function stackPositionNote(position?: StackPosition): string {
   return position ? ` (position: ${stackPositionSpec(position)})` : "";
 }
 
-// Dash-numeric join (#128): the Layer options this surface accepts (the
-// shared definition's dash-numeric subset, DEC-001 — now the full option
-// table's keys, #229) plus --supersample (#184).
-const rawArgs = joinDashLeadingNumericValues(
-  process.argv.slice(2),
-  [...layerDashNumericFlags(COMPOSITION_ADD_OPTION_KEYS), "--supersample"],
-);
-const isJson = rawArgs.includes("--json");
-let values: LayerOptionArgs & {
-  project?: string;
-  height?: string;
-  order?: string;
-  out?: string;
-  "from-project"?: string;
-  supersample?: string;
-  regions?: string;
-  position?: string;
-  columns?: string;
-  cell?: string;
-  pair?: boolean;
-  label?: string[] | string;
-  json?: boolean;
-  help?: boolean;
+/**
+ * The one per-command fact the production surface keeps (#289, review INT-1):
+ * whether the command takes an existing Composition's name. Test-only arg
+ * builders live in test/cli-surface.test.ts, and the table's key set is
+ * pinned against HELP by that test, so a command cannot silently opt out of
+ * the unknown-name refusal seam.
+ */
+export interface CompositionCommandMeta {
+  takesExistingComposition: boolean;
+}
+
+export const COMPOSITION_COMMANDS: Record<string, CompositionCommandMeta> = {
+  create: { takesExistingComposition: false },
+  add: { takesExistingComposition: true },
+  import: { takesExistingComposition: true },
+  remove: { takesExistingComposition: true },
+  reorder: { takesExistingComposition: true },
+  inspect: { takesExistingComposition: true },
+  measure: { takesExistingComposition: true },
+  check: { takesExistingComposition: true },
+  guidelines: { takesExistingComposition: true },
+  sheet: { takesExistingComposition: true },
+  render: { takesExistingComposition: true },
+  replay: { takesExistingComposition: false },
+  list: { takesExistingComposition: false },
 };
-let positionals: string[];
 
-try {
-  const parsed = parseArgs({
-    args: rawArgs,
-    allowPositionals: true,
-    options: {
-      project: { type: "string", short: "p" },
-      height: { type: "string" },
-      order: { type: "string" },
-      out: { type: "string" },
-      "from-project": { type: "string" },
-      supersample: { type: "string" },
-      regions: { type: "string" },
-      // Stack position (#230, US-002, DEC-004): a Composition-level
-      // creation-time argument, NOT a Layer option — deliberately outside
-      // the shared Layer option table (DEC-001). One grammar reader shared
-      // by add and import (composition.parseStackPosition).
-      position: { type: "string" },
-      // Comparison sheet options (#233, spec #226 US-006): a Composition
-      // surface concern, outside the shared Layer option table (DEC-001).
-      columns: { type: "string" },
-      cell: { type: "string" },
-      pair: { type: "boolean", default: false },
-      label: { type: "string", multiple: true },
-      // The one declaration of the add surface's Layer options (DEC-001):
-      // every Layer option this surface accepts, derived from the shared
-      // option table (#229) — the same parseArgs entries layer edit spreads
-      // for these keys. --width is parsed once for the whole module: on
-      // create it is the canvas dimension, on add it is the text width
-      // axis (the same spelling layer edit uses, DEC-001) — the shared
-      // declaration covers both subcommands, and that is the documented
-      // conflation resolved on #229 (no rename, no alias).
-      ...COMPOSITION_ADD_OPTION_PARSE_ARGS,
-      json: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
-    },
-  });
-  values = parsed.values;
-  positionals = parsed.positionals;
-} catch (err) {
-  output({ ok: false, error: usageMessage((err as Error).message, "composition") }, isJson);
-  process.exit(2);
-}
+export async function run(argv: string[] = process.argv.slice(2)): Promise<void> {
+  // Dash-numeric join (#128): the Layer options this surface accepts (the
+  // shared definition's dash-numeric subset, DEC-001 — now the full option
+  // table's keys, #229) plus --supersample (#184).
+  const rawArgs = joinDashLeadingNumericValues(
+    argv,
+    [...layerDashNumericFlags(COMPOSITION_ADD_OPTION_KEYS), "--supersample"],
+  );
+  const isJson = rawArgs.includes("--json");
+  let values: LayerOptionArgs & {
+    project?: string;
+    height?: string;
+    order?: string;
+    out?: string;
+    "from-project"?: string;
+    supersample?: string;
+    regions?: string;
+    position?: string;
+    columns?: string;
+    cell?: string;
+    pair?: boolean;
+    label?: string[] | string;
+    json?: boolean;
+    help?: boolean;
+  };
+  let positionals: string[];
 
-if (values.help || positionals.length === 0) {
-  if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
-  else console.log(HELP);
-  process.exit(0);
-}
+  try {
+    const parsed = parseArgs({
+      args: rawArgs,
+      allowPositionals: true,
+      options: {
+        project: { type: "string", short: "p" },
+        height: { type: "string" },
+        order: { type: "string" },
+        out: { type: "string" },
+        "from-project": { type: "string" },
+        supersample: { type: "string" },
+        regions: { type: "string" },
+        // Stack position (#230, US-002, DEC-004): a Composition-level
+        // creation-time argument, NOT a Layer option — deliberately outside
+        // the shared Layer option table (DEC-001). One grammar reader shared
+        // by add and import (composition.parseStackPosition).
+        position: { type: "string" },
+        // Comparison sheet options (#233, spec #226 US-006): a Composition
+        // surface concern, outside the shared Layer option table (DEC-001).
+        columns: { type: "string" },
+        cell: { type: "string" },
+        pair: { type: "boolean", default: false },
+        label: { type: "string", multiple: true },
+        // The one declaration of the add surface's Layer options (DEC-001):
+        // every Layer option this surface accepts, derived from the shared
+        // option table (#229) — the same parseArgs entries layer edit spreads
+        // for these keys. --width is parsed once for the whole module: on
+        // create it is the canvas dimension, on add it is the text width
+        // axis (the same spelling layer edit uses, DEC-001) — the shared
+        // declaration covers both subcommands, and that is the documented
+        // conflation resolved on #229 (no rename, no alias).
+        ...COMPOSITION_ADD_OPTION_PARSE_ARGS,
+        json: { type: "boolean", default: false },
+        help: { type: "boolean", short: "h", default: false },
+      },
+    });
+    values = parsed.values;
+    positionals = parsed.positionals;
+  } catch (err) {
+    output({ ok: false, error: usageMessage((err as Error).message, "composition") }, isJson);
+    process.exit(2);
+  }
 
-const command = positionals[0]!;
-const targetProj = values.project ?? process.cwd();
+  if (values.help || positionals.length === 0) {
+    if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
+    else console.log(HELP);
+    process.exit(0);
+  }
 
-async function run() {
+  const command = positionals[0]!;
+  const targetProj = values.project ?? process.cwd();
+
   let mutationCommitted = false;
   // Exact published outcome for teardown-failure reporting (render only).
   let teardownOutcome: string | undefined;
@@ -1624,7 +1651,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, measure, check, guidelines, render, replay, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: ${Object.keys(COMPOSITION_COMMANDS).join(", ")}. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }
@@ -1633,7 +1660,9 @@ async function run() {
   }
 }
 
-await run();
+if (import.meta.main) {
+  await run();
+}
 
 /**
  * Render output emission: JSON (success and failure) always goes to stdout

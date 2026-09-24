@@ -10,8 +10,6 @@
  * (letters, digits, dash, underscore, and the slash — no spaces or shell
  * metacharacters). A slash anywhere in the token always means an address.
  */
-import { readdir } from "node:fs/promises";
-import path from "node:path";
 import { resolveProjectRoot } from "./project.js";
 import { readCompositionDocument } from "./composition.js";
 
@@ -80,17 +78,6 @@ export async function resolveLayerToken(
     return { layerId: token };
   }
 
-  const names = await listCompositionNames(projectPath);
-  if (!names.includes(address.composition)) {
-    const listing =
-      names.length === 0
-        ? "No Compositions exist in this Project yet."
-        : `Existing Compositions: ${names.map((n) => `"${n}"`).join(", ")}.`;
-    throw new Error(
-      `Composition "${address.composition}" not found in project. ${listing}`,
-    );
-  }
-
   const resolvedRoot = await resolveProjectRoot(projectPath);
   const { comp } = await readCompositionDocument(resolvedRoot, address.composition);
   const use = comp.layers.find((l) => l.name === address.use);
@@ -104,23 +91,4 @@ export async function resolveLayerToken(
     );
   }
   return { layerId: use.layerId, address };
-}
-
-/**
- * The Project's stored Composition names, in directory order — the "what
- * exists" listing that address refusals name (spec #226). Guidance only:
- * no lock and no Layer resolution.
- */
-async function listCompositionNames(projectPath: string): Promise<string[]> {
-  const resolvedRoot = await resolveProjectRoot(projectPath);
-  let entries: string[];
-  try {
-    entries = await readdir(path.join(resolvedRoot, "compositions"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-  return entries.filter((f) => f.endsWith(".json")).map((f) => path.basename(f, ".json"));
 }
