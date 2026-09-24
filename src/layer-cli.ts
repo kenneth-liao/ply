@@ -2,7 +2,7 @@
 // Layer management CLI: edit, inspect, and list Layers within a Project.
 import { parseArgs } from "node:util";
 import path from "node:path";
-import { inspectLayer, listLayers, editLayer, roundEffective, formatGrade, formatGlow, type ResolvedLayer } from "./layer.js";
+import { inspectLayer, listLayers, editLayer, resolveCoverCanvasTarget, roundEffective, formatGrade, formatGlow, type ResolvedLayer } from "./layer.js";
 import { type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import {
   LAYER_OPTION_PARSE_ARGS,
@@ -17,6 +17,7 @@ import {
   type SharedOptionDraft,
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
+  COVER_TO_HELP_KINDS,
 } from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { formatFill, normalizeStoredTextFill, type LayerFill } from "./fill.js";
@@ -45,7 +46,9 @@ must match the address).
       Resize changes placement, never retained pixels: --resize <factor>
       multiplies the current scale (relative), --resize-to <WxH> sets an
       absolute effective size (image and shape Layers only; one omitted axis
-      preserves the aspect ratio), and --scale <factor> sets the absolute
+      preserves the aspect ratio), --cover-to <WxH|canvas> scales an image
+      Layer to FILL a target box with the aspect preserved (the overflow
+      stays outside the canvas), and --scale <factor> sets the absolute
       scale — the
       same command twice keeps the same scale (never compounding).
       --rotate sets an ABSOLUTE rotation in degrees: the
@@ -241,6 +244,17 @@ Options:
                         and with content-replacement options. The Layer's
                         (x, y) stays its top-left corner: it grows/shrinks
                         right and down.
+  --cover-to <WxH|canvas>  Cover fit (#293): scale the Layer (uniform,
+                        aspect always preserved) so its painted size FILLS
+                        the target box — the scale is the max of the cover
+                        ratios over the intrinsic size, so the overflow
+                        sits outside the canvas and stays editable; the
+                        canvas never clips. Works on ${COVER_TO_HELP_KINDS}. "canvas"
+                        targets the referring Composition's canvas (all
+                        referrers must agree). Centring is a separate
+                        anchored-placement edit (on add, --anchor composes:
+                        transforms apply before the anchor). Mutually
+                        exclusive with --resize, --resize-to, and --scale.
   --scale <factor>      Set the Layer's scale to an ABSOLUTE factor: replaces
                         the current scale (uniform, both axes), so the same
                         command twice keeps the same scale — never compounding
@@ -248,8 +262,8 @@ Options:
                         ${SCALE_HELP_KINDS}, writes the one
                         canonical scale (no
                         second scale field), and never changes retained
-                        pixels. Mutually exclusive with --resize and
-                        --resize-to.
+                        pixels. Mutually exclusive with --resize,
+                        --resize-to, and --cover-to.
   --rotate <deg>        Rotate the Layer to an ABSOLUTE angle in degrees,
                         replacing any previous rotation: --rotate 45 twice is
                         still 45° (never 90° — unlike the relative --resize
@@ -690,6 +704,28 @@ async function run() {
       const parsedAnchor = parsed.anchor as ParsedAnchor | undefined;
 
       try {
+        // Cover fit (#293, spec #285 US-007, DEC-011): the "canvas" target
+        // resolves ONCE at this boundary against the Layer's referring
+        // Composition(s) (read-only, outside the edit's own lock; a --fork
+        // edit resolves against its target Composition), then the concrete
+        // target publishes through the ONE shared scale resolution — the
+        // stored-state resolution never sees the keyword.
+        if (parsed["cover-to"] === "canvas") {
+          try {
+            parsed["cover-to"] = await resolveCoverCanvasTarget(targetProj, layerId, {
+              contextComposition: values.fork ? forkComposition : undefined,
+            });
+          } catch (err) {
+            const errObj = err as Error & { referringCompositions?: string[]; referrersCount?: number };
+            const result: { ok: false; error: string; [key: string]: unknown } = { ok: false, error: errObj.message };
+            if (errObj.referringCompositions !== undefined) result.referringCompositions = errObj.referringCompositions;
+            if (errObj.referrersCount !== undefined) result.referrersCount = errObj.referrersCount;
+            output(result, isJson);
+            process.exitCode = 1;
+            return;
+          }
+        }
+
         // Anchored placement (#138, ADR-0017): resolve ONCE against the
         // live state's painted ink (read-only), through the anchor's ONE
         // shared application case in the live context (the resolution must

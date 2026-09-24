@@ -432,7 +432,9 @@ Other bounded inputs — shadow offsets ±256 px and blur 0–256 px
 −0.5–1 em and line-height 0.5–3
 ([Text tracking and line height](../../README.md#text-tracking-and-line-height-new-surface)),
 font size and resize/scale factor up to 8192
-([Layer resize](../../README.md#layer-resize-new-surface)), text
+([Layer resize](../../README.md#layer-resize-new-surface), cover fit
+included — a cover target that scales the effective size over the cap is
+refused by the same bound), text
 content up to 2000 characters (`MAX_TEXT_LENGTH`), and shape parameters —
 size per axis 0–8192 px, corner radius 0 to half the shorter side of the
 rectangle, and the shared fill grammar (solid hex, linear and radial gradients)

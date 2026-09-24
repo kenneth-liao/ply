@@ -231,7 +231,7 @@ test("the shared parse and apply registries cover every post-content option (the
   // application case; the resize family's parse is the shared exclusivity
   // parse, every other key needs a parse entry in the same order the add
   // boundary checks in. The probe is covered by the same derivation.
-  const trio = new Set<LayerOptionKey>(["resize", "resize-to", "scale"]);
+  const trio = new Set<LayerOptionKey>(["resize", "resize-to", "cover-to", "scale"]);
   for (const key of oneCommandAddOptionKeys()) {
     expect(LAYER_OPTION_DEFS.find((def) => def.key === key)?.apply).toBeDefined();
     if (!trio.has(key)) {

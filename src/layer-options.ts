@@ -173,6 +173,7 @@ export type LayerOptionKey =
   | "anchor"
   | "resize"
   | "resize-to"
+  | "cover-to"
   | "scale"
   | "rotate"
   | "flip"
@@ -267,6 +268,15 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // stored width/height, never a text Layer's (the shared scale resolution
   // refuses it on text, identical wording on both surfaces).
   { key: "resize-to", group: "transform", appliesTo: ["image", "shape"], editOption: true, apply: applyResizeTo },
+  // Cover fit (#293, spec #285 US-007, DEC-011): a sizing option beside
+  // --resize-to on image Layers — the target is covered with the aspect
+  // preserved, the overflow staying outside the canvas. Like --resize-to
+  // it is an input form, never a stored fact: the ONE shared scale
+  // resolution publishes canonical scaleX/scaleY. The "canvas" target
+  // keyword resolves at the command boundary (add: the target
+  // Composition's canvas; edit: the referring Composition's canvas,
+  // agreeing referrers only).
+  { key: "cover-to", group: "transform", appliesTo: ["image"], editOption: true, apply: applyCoverTo },
   { key: "scale", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, apply: applyScale },
   { key: "rotate", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerRotation, apply: applyRotation },
   { key: "flip", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerFlip, apply: applyFlip },
@@ -314,6 +324,7 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
  */
 export const RESIZE_TO_HELP_KINDS = "image and shape Layers only";
 export const SCALE_HELP_KINDS = "image, text, and shape Layers";
+export const COVER_TO_HELP_KINDS = "image Layers only";
 
 export const LAYER_OPTION_PARSE_ARGS = {
   image: { type: "string" },
@@ -339,6 +350,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   anchor: { type: "string" },
   resize: { type: "string" },
   "resize-to": { type: "string" },
+  "cover-to": { type: "string" },
   scale: { type: "string" },
   rotate: { type: "string" },
   flip: { type: "string" },
@@ -858,16 +870,35 @@ export function parseResizeOptions(
   resize: string | undefined,
   resizeTo: string | undefined,
   scale?: string,
-): OptionParse<{ resizeFactor?: number; resizeTo?: { width?: number; height?: number }; scale?: number }> {
-  const supplied = [resize !== undefined, resizeTo !== undefined, scale !== undefined].filter(Boolean).length;
+  coverTo?: string,
+): OptionParse<{ resizeFactor?: number; resizeTo?: { width?: number; height?: number }; scale?: number; coverTo?: CoverTarget }> {
+  const supplied = [resize !== undefined, resizeTo !== undefined, coverTo !== undefined, scale !== undefined].filter(Boolean).length;
   if (supplied > 1) {
     // Pair-specific wording, shared with resolveEditScale's ONE exclusivity
     // rule — the boundary and the publication path refuse with the same
-    // text. With all three forms supplied the first pair names itself.
+    // text. With three or more forms supplied the first pair names itself.
     if (resize !== undefined && resizeTo !== undefined) {
       return {
         ok: false,
         error: "--resize and --resize-to are mutually exclusive resize forms: use one per edit.",
+      };
+    }
+    if (resize !== undefined && coverTo !== undefined) {
+      return {
+        ok: false,
+        error: "--cover-to and --resize are mutually exclusive resize forms: use one per edit.",
+      };
+    }
+    if (resizeTo !== undefined && coverTo !== undefined) {
+      return {
+        ok: false,
+        error: "--cover-to and --resize-to are mutually exclusive resize forms: use one per edit.",
+      };
+    }
+    if (coverTo !== undefined && scale !== undefined) {
+      return {
+        ok: false,
+        error: "--cover-to and --scale are mutually exclusive: use one resize form per edit (--cover-to sets a cover-fit size, --scale sets the absolute scale).",
       };
     }
     if (resize !== undefined && scale !== undefined) {
@@ -908,6 +939,27 @@ export function parseResizeOptions(
       ...(m[2] !== undefined ? { height: Number(m[2]) } : {}),
     };
   }
+  let cover: CoverTarget | undefined;
+  if (coverTo !== undefined) {
+    if (coverTo.trim() === "canvas") {
+      cover = "canvas";
+    } else {
+      const raw = coverTo.trim();
+      const m = raw.match(/^(\d+(?:\.\d+)?)?x(\d+(?:\.\d+)?)?$/);
+      if (!m || (m[1] === undefined && m[2] === undefined)) {
+        return {
+          ok: false,
+          error:
+            `--cover-to takes "canvas", "<W>x<H>" (cover both axes, aspect preserved) or "<W>x" / "x<H>" ` +
+            `(cover one axis), e.g. "800x600", "800x", "x600", "canvas" — got "${coverTo}".`,
+        };
+      }
+      cover = {
+        ...(m[1] !== undefined ? { width: Number(m[1]) } : {}),
+        ...(m[2] !== undefined ? { height: Number(m[2]) } : {}),
+      };
+    }
+  }
   let scaleValue: number | undefined;
   if (scale !== undefined) {
     scaleValue = parseNumericArgument(scale);
@@ -918,7 +970,7 @@ export function parseResizeOptions(
       };
     }
   }
-  return { ok: true, value: { ...(resizeFactor !== undefined ? { resizeFactor } : {}), ...(target !== undefined ? { resizeTo: target } : {}), ...(scaleValue !== undefined ? { scale: scaleValue } : {}) } };
+  return { ok: true, value: { ...(resizeFactor !== undefined ? { resizeFactor } : {}), ...(target !== undefined ? { resizeTo: target } : {}), ...(cover !== undefined ? { coverTo: cover } : {}), ...(scaleValue !== undefined ? { scale: scaleValue } : {}) } };
 }
 
 /** --rotate: a finite number of degrees, clockwise positive. */
@@ -1185,7 +1237,13 @@ export type ParsedLayerOptionValues = Partial<Record<LayerOptionKey, unknown>>;
  *  cross-option exclusivity parse (`parseResizeOptions`), which each
  *  surface's order list dispatches as one step at the family's established
  *  check position. */
-export const RESIZE_FAMILY_KEYS: readonly LayerOptionKey[] = ["resize", "resize-to", "scale"];
+export const RESIZE_FAMILY_KEYS: readonly LayerOptionKey[] = ["resize", "resize-to", "cover-to", "scale"];
+
+/** The parsed `--cover-to` target: a concrete pixel box (the --resize-to
+ *  grammar) or the "canvas" keyword, resolved to the concrete Composition
+ *  canvas at the command boundary — never inside the stored-state
+ *  resolution, which stays Composition-free. */
+export type CoverTarget = { width?: number; height?: number } | "canvas";
 
 /**
  * The ONE boundary parse for the shared option surface (DEC-001, #263): a
@@ -1232,14 +1290,15 @@ export function parseSharedOption(
 export function parseResizeFamilyStep(
   values: LayerOptionArgs,
 ): OptionParse<ParsedLayerOptionValues | undefined> {
-  const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale);
+  const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale, values["cover-to"]);
   if (!resize.ok) return resize;
-  if (resize.value.resizeFactor === undefined && resize.value.resizeTo === undefined && resize.value.scale === undefined) {
+  if (resize.value.resizeFactor === undefined && resize.value.resizeTo === undefined && resize.value.scale === undefined && resize.value.coverTo === undefined) {
     return { ok: true, value: undefined };
   }
   const mapped: ParsedLayerOptionValues = {};
   if (resize.value.resizeFactor !== undefined) mapped.resize = resize.value.resizeFactor;
   if (resize.value.resizeTo !== undefined) mapped["resize-to"] = resize.value.resizeTo;
+  if (resize.value.coverTo !== undefined) mapped["cover-to"] = resize.value.coverTo;
   if (resize.value.scale !== undefined) mapped.scale = resize.value.scale;
   return { ok: true, value: mapped };
 }
@@ -1330,6 +1389,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { policy: "text-font-axes" },
   { option: "resize" },
   { option: "resize-to" },
+  { option: "cover-to" },
   { option: "scale" },
   { option: "rotate" },
   { option: "flip" },
@@ -1362,6 +1422,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
 export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "resize",
   "resize-to",
+  "cover-to",
   "scale",
   "rotate",
   "flip",
@@ -1708,6 +1769,47 @@ function applyResizeTo(
   draft.scaleY = scale.scaleY;
 }
 
+function applyCoverTo(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  let target = value as CoverTarget;
+  if (target === "canvas") {
+    // The "canvas" keyword resolves against the surface's command-boundary
+    // context: add resolves against the target Composition's canvas (every
+    // add dispatcher supplies it); the edit boundary resolves it before
+    // the edit lifecycle runs, so a "canvas" marker never reaches this
+    // case on edit.
+    if (context.canvas === undefined) {
+      throw new Error(
+        `--cover-to canvas needs a Composition whose canvas defines the target: Layer "${draft.layerId}" has none on this surface. Pass an explicit "<W>x<H>" target.`,
+      );
+    }
+    target = { width: context.canvas.width, height: context.canvas.height };
+  }
+  // The kind gates run here, before anything is retained: cover fit is an
+  // image-Layer option (DEC-011) — the same refusal wording the shared
+  // scale resolution publishes on the edit surface, now on both surfaces.
+  if (draft.kind === "text") {
+    throw new Error(
+      `--cover-to needs an intrinsic pixel size: Layer "${draft.layerId}" is a text Layer — use --resize <factor>.`,
+    );
+  }
+  if (draft.kind === "shape") {
+    throw new Error(
+      `--cover-to works on image Layers only: Layer "${draft.layerId}" is a shape Layer — use --resize-to or --scale.`,
+    );
+  }
+  const scale = resolveEditScale(
+    { coverTo: target },
+    context.base as ResolvedLayerRevision,
+    draft.layerId,
+  );
+  draft.scaleX = scale.scaleX;
+  draft.scaleY = scale.scaleY;
+}
+
 function applyScale(
   draft: SharedOptionDraft,
   value: unknown,
@@ -1993,6 +2095,7 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { policy: "resize-forms" },
   { option: "resize" },
   { option: "resize-to" },
+  { option: "cover-to" },
   { option: "scale" },
   { option: "rotate" },
   { option: "flip" },

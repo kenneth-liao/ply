@@ -53,6 +53,7 @@ import {
   type LayerOptionArgs,
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
+  COVER_TO_HELP_KINDS,
 } from "./layer-options.js";
 import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
@@ -425,11 +426,21 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         "800x600" changes the aspect ratio;
                         "800x" or "x600" preserves it. Mutually exclusive
                         with --resize.
+  --cover-to <WxH|canvas>  Cover fit (#293): scale the Layer (uniform, aspect
+                        always preserved) so its painted size FILLS the
+                        target box — the overflow sits outside the canvas
+                        and stays editable; the canvas never clips. Works
+                        on ${COVER_TO_HELP_KINDS}. "canvas" targets this
+                        Composition's canvas. With --anchor, transforms
+                        apply before the anchored placement, so
+                        "--cover-to canvas --anchor center,center" covers
+                        the canvas centred in one command. Mutually
+                        exclusive with --resize, --resize-to, and --scale.
   --scale <factor>      Set the Layer's scale to an ABSOLUTE factor (uniform,
                         both axes): the same command keeps the same scale,
                         never compounding. Works on
                         ${SCALE_HELP_KINDS}; mutually exclusive
-                        with --resize and --resize-to.
+                        with --resize, --resize-to, and --cover-to.
   --rotate <deg>        Rotate to an ABSOLUTE angle in degrees, clockwise
                         positive, about the Layer's (x, y) corner.
   --flip <mode>         Flip to an ABSOLUTE reflection state: horizontal,

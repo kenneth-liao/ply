@@ -29,7 +29,7 @@ import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js"
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { measureStandaloneSnapshot } from "./composition-measure.js";
-import { parseCompositionDocument, readMutableComposition, type Composition } from "./composition.js";
+import { parseCompositionDocument, readMutableComposition, readCompositionInternalFull, type Composition } from "./composition.js";
 import { staticFaceAcceptedAxes, faceByContentHash, callerFontFace, verifyCallerFontResolves, resolveFace, resolveTextAxes, fontAssetBytes, type CallerFontFacts, type FontFace, type TextAxes } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
 import {
@@ -2444,6 +2444,74 @@ export async function findLayerReferrers(projectPath: string, layerId: string): 
   return withProjectLock(resolvedRoot, () => findLayerReferrersInternal(resolvedRoot, layerId));
 }
 
+/** Refusal for `--cover-to canvas` with no unambiguous canvas target: the
+ *  situation is named, and the explicit form is offered. A fork edit names
+ *  its target Composition's canvas as the context instead. */
+function coverCanvasRefusal(layerId: string, detail: string): Error & { referringCompositions?: string[]; referrersCount?: number } {
+  const err = new Error(
+    `--cover-to canvas needs one Composition whose canvas defines the target for Layer "${layerId}": ${detail} ` +
+      `Pass an explicit "<W>x<H>" target, or use --cover-to canvas from a command that names a single Composition.`,
+  ) as Error & { referringCompositions?: string[]; referrersCount?: number };
+  return err;
+}
+
+/** Divergent-canvas refusal for `--cover-to canvas`: the disagreeing
+ *  compositions are named and counted, following the blast-radius
+ *  convention (the anchor's multi-context refusal, #285's shared-fact
+ *  rule). */
+function coverCanvasDivergenceRefusal(layerId: string, contexts: string[]): Error & { referringCompositions: string[]; referrersCount: number } {
+  const names = contexts.map((n) => `"${n}"`).join(", ");
+  const err = new Error(
+    `--cover-to canvas for Layer "${layerId}" resolves to different target canvases across ${contexts.length} Compositions (${names}) — ` +
+      "a shared Layer has one scale fact, and the canvas target differs between them. " +
+      'Pass an explicit "<W>x<H>" target, or fork into one Composition with --fork/--composition/--use.',
+  ) as Error & { referringCompositions: string[]; referrersCount: number };
+  err.referringCompositions = contexts;
+  err.referrersCount = contexts.length;
+  return err;
+}
+
+/**
+ * Resolve the `--cover-to canvas` target for the edit boundary (#293,
+ * spec #285 US-007, DEC-011): the target is the canvas of the Layer's
+ * referring Composition(s) — all referrers must agree on the canvas, a
+ * Layer with no referrer is refused, and a --fork edit resolves against
+ * its target Composition instead. Read-only; the caller substitutes the
+ * concrete target for the "canvas" marker before the edit lifecycle runs,
+ * so the stored-state scale resolution stays Composition-free.
+ */
+export async function resolveCoverCanvasTarget(
+  projectPath: string,
+  layerId: string,
+  options: { contextComposition?: string } = {},
+): Promise<{ width: number; height: number }> {
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  if (options.contextComposition !== undefined) {
+    const comp = await withProjectLock(resolvedRoot, () => readCompositionInternalFull(projectPath, options.contextComposition!));
+    return { width: comp.canvas.width, height: comp.canvas.height };
+  }
+  const contexts = await withProjectLock(resolvedRoot, async () => {
+    const referrers = await findLayerReferrersInternal(resolvedRoot, layerId);
+    return Promise.all(referrers.map(async (name) => {
+      const full = await readCompositionInternalFull(projectPath, name);
+      return { name, canvas: full.canvas };
+    }));
+  });
+  if (contexts.length === 0) {
+    // An unknown Layer id keeps the established unknown-Layer refusal (the
+    // edit path's own validation, which runs after this boundary
+    // resolution) — the cover target is not the story for a missing id.
+    await withProjectLock(resolvedRoot, () => readLayerInternalFull(projectPath, layerId));
+    throw coverCanvasRefusal(layerId, "the Layer is not used by any Composition.");
+  }
+  const first = contexts[0]!.canvas;
+  const diverged = contexts.some((c) => c.canvas.width !== first.width || c.canvas.height !== first.height);
+  if (diverged) {
+    throw coverCanvasDivergenceRefusal(layerId, contexts.map((c) => c.name));
+  }
+  return { width: first.width, height: first.height };
+}
+
 /** Placement values for an edited revision: explicit options win, omitted values preserve the current revision. */
 function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision): { x: number; y: number; opacity: number } {
   const x = options.x !== undefined ? options.x : prevRev.x;
@@ -2974,6 +3042,7 @@ export function roundEffective(px: number): number {
 export interface LayerResizeIntent {
   resizeFactor?: number;
   resizeTo?: { width?: number; height?: number };
+  coverTo?: { width?: number; height?: number } | "canvas";
   scale?: number;
   image?: string;
   fromGeneration?: unknown;
@@ -2987,19 +3056,31 @@ export function resolveEditScale(
 ): LayerTransformScale {
   const hasFactor = options.resizeFactor !== undefined;
   const hasTarget = options.resizeTo !== undefined;
+  const hasCover = options.coverTo !== undefined;
   const hasScale = options.scale !== undefined;
-  if (!hasFactor && !hasTarget && !hasScale) {
+  if (!hasFactor && !hasTarget && !hasCover && !hasScale) {
     return { scaleX: prevRev.scaleX, scaleY: prevRev.scaleY };
   }
 
   // The ONE resize-form exclusivity rule (#133, extended by #231 to the
-  // absolute --scale setter): at most one of the three forms per edit. The
-  // refusal runs before any staging, so a conflicting request never
-  // advances live state.
-  const formCount = [hasFactor, hasTarget, hasScale].filter(Boolean).length;
+  // absolute --scale setter and by #293 to --cover-to): at most one of the
+  // four forms per edit. The refusal runs before any staging, so a
+  // conflicting request never advances live state.
+  const formCount = [hasFactor, hasTarget, hasCover, hasScale].filter(Boolean).length;
   if (formCount > 1) {
     if (hasFactor && hasTarget) {
       throw new Error("--resize and --resize-to are mutually exclusive resize forms: use one per edit.");
+    }
+    if (hasCover && hasFactor) {
+      throw new Error("--cover-to and --resize are mutually exclusive resize forms: use one per edit.");
+    }
+    if (hasCover && hasTarget) {
+      throw new Error("--cover-to and --resize-to are mutually exclusive resize forms: use one per edit.");
+    }
+    if (hasCover && hasScale) {
+      throw new Error(
+        "--cover-to and --scale are mutually exclusive: use one resize form per edit (--cover-to sets a cover-fit size, --scale sets the absolute scale).",
+      );
     }
     throw new Error(
       hasFactor && hasScale
@@ -3038,6 +3119,52 @@ export function resolveEditScale(
       );
     }
     return boundedScale({ scaleX: prevRev.scaleX * factor, scaleY: prevRev.scaleY * factor }, prevRev, layerId);
+  }
+
+  if (hasCover) {
+    // Cover fit (#293, spec #285 US-007, DEC-011): a uniform scale — the
+    // max of the cover ratios over the intrinsic size — fills the target
+    // with the aspect preserved, so the overflow stays outside the canvas
+    // and nothing is clipped. An input form, never a stored fact: the ONE
+    // canonical scale facts carry the result, exactly like --resize-to.
+    const target = options.coverTo;
+    if (target === "canvas") {
+      // The "canvas" keyword resolves at the command boundary (add: the
+      // target Composition's canvas; edit: the agreeing referrers'), so it
+      // never reaches the Composition-free stored-state resolution.
+      throw new Error(
+        `Internal error: --cover-to "canvas" must resolve to a concrete target before scale resolution (Layer "${layerId}").`,
+      );
+    }
+    if (target === undefined || typeof target !== "object") {
+      throw new Error(`Invalid cover target: --cover-to needs a "<W>x<H>" box or "canvas" (Layer "${layerId}").`);
+    }
+    if (prevRev.kind === "text") {
+      throw new Error(
+        `--cover-to needs an intrinsic pixel size: Layer "${layerId}" is a text Layer — use --resize <factor>.`,
+      );
+    }
+    if (prevRev.kind === "shape") {
+      throw new Error(
+        `--cover-to works on image Layers only: Layer "${layerId}" is a shape Layer — use --resize-to or --scale.`,
+      );
+    }
+    const { width, height } = target;
+    for (const [label, value] of [["width", width], ["height", height]] as const) {
+      if (value !== undefined && (!Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION)) {
+        throw new Error(
+          `Invalid cover target ${label} ${value}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+        );
+      }
+    }
+    if (width === undefined && height === undefined) {
+      throw new Error('Invalid cover target: --cover-to needs at least one of width or height, or "canvas".');
+    }
+    const coverScale = Math.max(
+      ...(width !== undefined ? [width / prevRev.width] : []),
+      ...(height !== undefined ? [height / prevRev.height] : []),
+    );
+    return boundedScale({ scaleX: coverScale, scaleY: coverScale }, prevRev, layerId);
   }
 
   if (prevRev.kind === "text") {
@@ -3434,10 +3561,10 @@ async function buildEditedRevision(
     // never advances live state.
     if (
       options.size !== undefined &&
-      (shared.resize !== undefined || shared["resize-to"] !== undefined || shared.scale !== undefined)
+      (shared.resize !== undefined || shared["resize-to"] !== undefined || shared["cover-to"] !== undefined || shared.scale !== undefined)
     ) {
       throw new Error(
-        `--size and the resize forms (--resize, --resize-to, --scale) are separate edits: Layer "${layerId}" cannot set the geometry's intrinsic size and resize in one edit, because the effective-size cap and the resize reference read the geometry's intrinsic size.`,
+        `--size and the resize forms (--resize, --resize-to, --cover-to, --scale) are separate edits: Layer "${layerId}" cannot set the geometry's intrinsic size and resize in one edit, because the effective-size cap and the resize reference read the geometry's intrinsic size.`,
       );
     }
     const mergedGeometry = options.shape ?? prevRev.shape;
@@ -3947,6 +4074,9 @@ export async function editLayerInternal(
             ...(shared["resize-to"] !== undefined
               ? { resizeTo: shared["resize-to"] as { width?: number; height?: number } }
               : {}),
+            ...(shared["cover-to"] !== undefined
+              ? { coverTo: shared["cover-to"] as { width?: number; height?: number } | "canvas" }
+              : {}),
             ...(shared.scale !== undefined ? { scale: shared.scale as number } : {}),
             image: options.image,
             fromGeneration: options.fromGeneration,
@@ -4008,7 +4138,7 @@ export async function editLayerInternal(
         }
       : { scaleX: draft.scaleX, scaleY: draft.scaleY };
   const hasResize =
-    shared.resize !== undefined || shared["resize-to"] !== undefined || shared.scale !== undefined;
+    shared.resize !== undefined || shared["resize-to"] !== undefined || shared["cover-to"] !== undefined || shared.scale !== undefined;
   const hasRotate = shared.rotate !== undefined;
   const rotatedReport = { rotationDeg: draft.rotationDeg };
   // Narrowed once: a defined flip is always a validated literal mode, so the
