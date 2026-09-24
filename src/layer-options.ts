@@ -831,16 +831,20 @@ export function parseGenerationOutputSelector(
   return { ok: true, value: raw };
 }
 
-/** --output selects one output: a 1-based index or the full sha-256
- *  content identity. */
+/** --output selects one output: a 1-based index (all digits, fewer than 12
+ *  characters), a sha-256 prefix of at least 12 hex characters, or the full
+ *  sha-256 identity. The two shapes cannot collide: an all-digit selector of
+ *  12+ characters is a prefix, never an index, so no selector is ambiguous
+ *  by construction (DEC-004). Uppercase hex is normalized to lowercase here,
+ *  so a selector copied in any case resolves identically. */
 export function parseGenerationOutputValue(raw: string): OptionParse<string> {
-  if (!/^([1-9]\d*|[0-9a-f]{64})$/.test(raw)) {
+  if (!/^([1-9]\d{0,10}|[0-9a-fA-F]{12,64})$/.test(raw)) {
     return {
       ok: false,
-      error: `--output takes a 1-based output index or the full sha-256 output identity (got "${raw}")`,
+      error: `--output takes a 1-based output index, a sha-256 prefix of at least 12 hex characters, or the full sha-256 output identity (got "${raw}")`,
     };
   }
-  return { ok: true, value: raw };
+  return { ok: true, value: raw.toLowerCase() };
 }
 
 /**

@@ -370,7 +370,9 @@ function jobText(job: {
   (job.request.references ?? []).forEach((r, i) =>
     lines.push(`  ref ${i + 1}: ${r.path} (${r.contentHash.slice(0, 12)})`),
   );
-  for (const o of job.run.outputs) lines.push(`  output: ${o.file} (${o.contentHash.slice(0, 12)})`);
+  // Each output names its 1-based index beside the 12-character short hash —
+  // the identity `--output` accepts (spec #285 US-004).
+  job.run.outputs.forEach((o, i) => lines.push(`  output ${i + 1}: ${o.file} (${o.contentHash.slice(0, 12)})`));
   for (const w of job.run.warnings) lines.push(`  warning: ${w}`);
   return lines.join("\n");
 }

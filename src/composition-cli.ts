@@ -282,8 +282,13 @@ Options:
                         generated output, that job's provenance is retained
                         too. Mutually exclusive with --image, --text, and
                         --from-generation.
-  --output <n|sha256>   Which output of the --from-generation job to ingest:
-                        a 1-based index or the full sha-256 content identity.
+  --output <n|sha256|prefix>
+                        Which output of the --from-generation job to ingest:
+                        a 1-based index (all digits, fewer than 12
+                        characters), a sha-256 prefix of at least 12 hex
+                        characters, or the full sha-256 content identity.
+                        A prefix must match exactly one output; an ambiguous
+                        or unknown prefix is refused, naming the candidates.
   --text <str>          Text content for a text Layer (mutually exclusive
                         with --image; requires a font — see --font/--font-file)
   --font <family>       Bundled font family name (one font source with --text;
@@ -800,6 +805,9 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         process.exitCode = 2;
         return;
       }
+      // The normalized selector (lowercase hex) is what flows downstream —
+      // the boundary's parse result, not the raw argv string (#291 review).
+      let outputSelectorValue: string | undefined;
       if (values.output !== undefined) {
         const outputValue = parseGenerationOutputValue(values.output);
         if (!outputValue.ok) {
@@ -807,6 +815,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           process.exitCode = 2;
           return;
         }
+        outputSelectorValue = outputValue.value;
       }
       // The text style options (and the canvas --width value this surface's
       // established checks read as the text width axis) require --text.
@@ -905,7 +914,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         if (values["from-generation"] !== undefined) {
           const res = await addGeneratedLayerToComposition(
             targetProj, compName, localName,
-            { jobRoot: path.resolve("out", "generation"), jobId: generationJobId.value!, output: values.output },
+            { jobRoot: path.resolve("out", "generation"), jobId: generationJobId.value!, output: outputSelectorValue },
             { x, y, opacity, oneCommand, position: stackPosition },
           );
           mutationCommitted = true;

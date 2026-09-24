@@ -283,9 +283,24 @@ describe("shared option validators: both surfaces' established texts", () => {
     });
     expect(parseGenerationOutputValue("0")).toEqual({
       ok: false,
-      error: '--output takes a 1-based output index or the full sha-256 output identity (got "0")',
+      error: '--output takes a 1-based output index, a sha-256 prefix of at least 12 hex characters, or the full sha-256 output identity (got "0")',
     });
     expect(parseGenerationOutputValue("2")).toEqual({ ok: true, value: "2" });
+    // Index vs prefix is unambiguous by construction (DEC-004): all digits
+    // and fewer than 12 characters is an index; 12–64 hex characters is a
+    // prefix, even when all digits. Uppercase hex is normalized here.
+    expect(parseGenerationOutputValue("11")).toEqual({ ok: true, value: "11" });
+    expect(parseGenerationOutputValue("123456789012")).toEqual({ ok: true, value: "123456789012" });
+    expect(parseGenerationOutputValue("a".repeat(12))).toEqual({ ok: true, value: "a".repeat(12) });
+    expect(parseGenerationOutputValue(("ab".repeat(12)).toUpperCase())).toEqual({ ok: true, value: "ab".repeat(12) });
+    expect(parseGenerationOutputValue("a".repeat(11))).toEqual({
+      ok: false,
+      error: `--output takes a 1-based output index, a sha-256 prefix of at least 12 hex characters, or the full sha-256 output identity (got "${"a".repeat(11)}")`,
+    });
+    expect(parseGenerationOutputValue("a".repeat(65))).toEqual({
+      ok: false,
+      error: `--output takes a 1-based output index, a sha-256 prefix of at least 12 hex characters, or the full sha-256 output identity (got "${"a".repeat(65)}")`,
+    });
   });
 
   it("resize pair: exclusivity and both forms' texts", () => {

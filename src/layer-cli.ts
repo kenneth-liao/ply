@@ -95,8 +95,13 @@ Options:
                         generate) without generating again; the job's
                         provenance is retained with the Project. Mutually
                         exclusive with --image/--text; invalid on text Layers.
-  --output <n|sha256>   Which output of the --from-generation job to ingest:
-                        a 1-based index or the full sha-256 content identity.
+  --output <n|sha256|prefix>
+                        Which output of the --from-generation job to ingest:
+                        a 1-based index (all digits, fewer than 12
+                        characters), a sha-256 prefix of at least 12 hex
+                        characters, or the full sha-256 content identity.
+                        A prefix must be unique; an ambiguous or unknown
+                        prefix is refused, naming the candidates.
   --from-matte <matteId>
                         Replace an image Layer's content with the verified
                         output of a published matte (see ply matte) without
@@ -744,7 +749,7 @@ async function run() {
           image: values.image,
           fromGeneration:
             values["from-generation"] !== undefined
-              ? { jobRoot: path.resolve("out", "generation"), jobId: parsed["from-generation"] as string, output: values.output }
+              ? { jobRoot: path.resolve("out", "generation"), jobId: parsed["from-generation"] as string, output: parsed.output as string | undefined }
               : undefined,
           fromMatte:
             values["from-matte"] !== undefined

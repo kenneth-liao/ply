@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+- Made `--output` accept the 12-character short hash that the refusal and
+  `generate show` print, any unique longer sha-256 prefix, and uppercase hex
+  (normalized), beside the existing 1-based index and full sha-256, through
+  the one output resolver shared by every `--output` flag (`composition add`
+  and `layer edit` with `--from-generation`). The grammar is unambiguous by
+  construction: fewer than 12 characters and all digits means an index;
+  12–64 hex characters means a prefix, even when all digits. An ambiguous or
+  unknown prefix is refused, naming the candidates (index + short hash).
+  `generate show` now lists each output's index next to its short hash (#291).
 - Added `ply composition delete <name>`, which removes the Composition from
   the Project under the existing Project lock and refuses unknown names
   through the single Composition-name resolver (`readCompositionDocument`),

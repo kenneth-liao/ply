@@ -400,6 +400,24 @@ describe("ply generate show/list — offline inspection", () => {
     expect(res.text).toContain("gen-y");
   });
 
+  test("show lists each output's index next to its short hash (#291, US-004)", async () => {
+    let k = 0;
+    const provider = fakeProvider({
+      image: async () => ({ images: [{ base64: Buffer.from(`gen-idx-${k++}`).toString("base64") }], warnings: [] }),
+    });
+    await run(["a candidate pair", "--job", "gen-idx", "--count", "2", "--json"], deps(provider));
+    const res = await run(["show", "gen-idx"], { provider: neverProvider, jobsRoot });
+    expect(res.exitCode).toBe(0);
+    const outputs = (res.json as any).job.run.outputs as { file: string; contentHash: string }[];
+    expect(outputs).toHaveLength(2);
+    // Each output line names its 1-based index beside the 12-character short
+    // hash — exactly the identity the --output refusal and resolver accept.
+    outputs.forEach((o, i) => {
+      expect(res.text).toContain(`output ${i + 1}: ${o.file} (${o.contentHash.slice(0, 12)})`);
+    });
+    expect(res.text).not.toMatch(/output: /);
+  });
+
   test("--help documents the syntax and runs offline with exit 0", async () => {
     const res = await run(["--help"], { provider: neverProvider, jobsRoot });
     expect(res.exitCode).toBe(0);
