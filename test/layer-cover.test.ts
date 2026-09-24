@@ -420,7 +420,42 @@ test("invalid --cover-to values are refused with the family's usage wording", as
 });
 
 // ---------------------------------------------------------------------------
-// 6. Offline reversibility and replay (TEST-002): the absolute --scale
+// 6. Numeric limit (INT-1): a cover whose effective size exceeds the shared
+//    content-dimension cap is refused through boundedScale — the ONE cap
+//    the resize family shares, never a second constant.
+// ---------------------------------------------------------------------------
+
+test("a cover whose effective size exceeds the per-axis cap is refused with the shared cap message, on add and edit", async () => {
+  await makeComp("poster", 400, 300);
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(100, 60, RED));
+
+  // Cover 8192x8192 with a 100x60 image: both axes are within the target
+  // bound, but the uniform cover scale = 8192/60 = 136.53 makes the
+  // effective size 13653.33×8192 — over the shared 8192px per-axis cap.
+  const add = await addJson("poster", "too-big-cover", img, ["--cover-to", "8192x8192"]);
+  expect(add.code).toBe(1);
+  const addBody = JSON.parse(add.stdout);
+  expect(addBody.ok).toBe(false);
+  expect(addBody.error).toContain("is over the 8192px per-axis limit");
+
+  // The same shared cap on the edit surface, through the ONE resolution.
+  const added = await addJson("poster", "bg", img);
+  expect(added.code).toBe(0);
+  const layerId = JSON.parse(added.stdout).use.layerId as string;
+  const edit = await invoke(["layer", "edit", layerId, "--cover-to", "8192x8192", "--project", projDir, "--json"]);
+  expect(edit.code).toBe(1);
+  const editBody = JSON.parse(edit.stdout);
+  expect(editBody.ok).toBe(false);
+  expect(editBody.error).toContain("is over the 8192px per-axis limit");
+
+  // The refused add staged no content blob and published no Layer.
+  const inspect = await invoke(["composition", "inspect", "poster", "--project", projDir, "--json"]);
+  expect(JSON.parse(inspect.stdout).composition.layers.map((l: { name: string }) => l.name)).toEqual(["bg"]);
+});
+
+// ---------------------------------------------------------------------------
+// 7. Offline reversibility and replay (TEST-002): the absolute --scale
 //    setter reverses a cover fit to a byte-identical render; retained
 //    content bytes never change.
 // ---------------------------------------------------------------------------

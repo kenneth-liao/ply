@@ -67,6 +67,7 @@ import {
   validateRectangleCornerRadius,
   validateVisibleRegionAgainstContent,
   resolveEditScale,
+  coverKindGate,
   resolveEditRotation,
   resolveEditFlip,
   type LayerRevision,
@@ -128,7 +129,7 @@ export interface LayerOptionDef {
   /** The ONE boundary parse for the option (DEC-001, #263): the shared
    *  validator both command boundaries dispatch through, keyed by the
    *  option's own key — no per-option parse block exists on either
-   *  surface. The resize family's three forms are the one cross-option
+   *  surface. The resize family's four forms are the one cross-option
    *  exclusivity parse (`parseResizeOptions`), dispatched as one step by
    *  each surface's order list. An option whose value carries no boundary
    *  shape (the content markers --image/--text, --font, and --color, whose
@@ -259,7 +260,7 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "y", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("y", raw) },
   { key: "opacity", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerOpacity },
   { key: "anchor", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerAnchor, apply: applyAnchor },
-  // The resize family: three mutually exclusive forms through the ONE
+  // The resize family: four mutually exclusive forms through the ONE
   // cross-option exclusivity parse (`parseResizeOptions`) — each surface's
   // order list dispatches it as one step at the family's established check
   // position, and each form has its own ONE application case.
@@ -861,7 +862,8 @@ export function parseGenerationOutputValue(raw: string): OptionParse<string> {
 
 /**
  * The one validation path for the resize/scale family (--resize,
- * --resize-to, --scale): the three forms are mutually exclusive — one
+ * --resize-to, --cover-to, --scale): the four forms are mutually
+ * exclusive — one
  * intent per edit — then each form's shape. Scale semantics, caps, and
  * kind conflicts stay in the ingestion paths (`resolveEditScale`, whose
  * exclusivity rule this mirrors).
@@ -1233,7 +1235,7 @@ export function anchorConflictOptionList(): string {
  *  per-option member exists to name. */
 export type ParsedLayerOptionValues = Partial<Record<LayerOptionKey, unknown>>;
 
-/** The resize family's keys: three mutually exclusive forms through the ONE
+/** The resize family's keys: four mutually exclusive forms through the ONE
  *  cross-option exclusivity parse (`parseResizeOptions`), which each
  *  surface's order list dispatches as one step at the family's established
  *  check position. */
@@ -1250,7 +1252,7 @@ export type CoverTarget = { width?: number; height?: number } | "canvas";
  * single runner both command boundaries dispatch through, driven by the
  * surface's order list and the option table's parse registrations. Each
  * supplied option's value normalizes through its table-carried parse; the
- * resize family's three forms normalize through the shared exclusivity
+ * resize family's four forms normalize through the shared exclusivity
  * parse as one step. Returns the parsed values keyed by the option keys, or
  * `undefined` when no listed option is supplied.
  *
@@ -1282,7 +1284,7 @@ export function parseSharedOption(
 }
 
 /**
- * The resize family's ONE cross-option step (DEC-001): the three mutually
+ * The resize family's ONE cross-option step (DEC-001): the four mutually
  * exclusive forms through the shared exclusivity parse, mapped into the
  * parsed record by the family's own keys. Both check paths run this one
  * step at the family's first check position.
@@ -1316,7 +1318,7 @@ export function parseLayerOptionSteps(
     supplied = true;
     if (RESIZE_FAMILY_KEYS.includes(key)) {
       // The resize family's cross-option exclusivity rule: one parse for the
-      // three forms, run once at the family's first check position.
+      // four forms, run once at the family's first check position.
       if (familyRan) continue;
       familyRan = true;
       const family = parseResizeFamilyStep(values);
@@ -1788,19 +1790,12 @@ function applyCoverTo(
     }
     target = { width: context.canvas.width, height: context.canvas.height };
   }
-  // The kind gates run here, before anything is retained: cover fit is an
-  // image-Layer option (DEC-011) — the same refusal wording the shared
-  // scale resolution publishes on the edit surface, now on both surfaces.
-  if (draft.kind === "text") {
-    throw new Error(
-      `--cover-to needs an intrinsic pixel size: Layer "${draft.layerId}" is a text Layer — use --resize <factor>.`,
-    );
-  }
-  if (draft.kind === "shape") {
-    throw new Error(
-      `--cover-to works on image Layers only: Layer "${draft.layerId}" is a shape Layer — use --resize-to or --scale.`,
-    );
-  }
+  // The kind gate is the ONE shared cover gate (INT-3): the published
+  // draft's kind — the add surface's provisional base carries an image kind
+  // even for a shape/text add, so the gate must read the draft, never the
+  // base — with the same wording the shared scale resolution publishes on
+  // the edit surface, now from one home.
+  coverKindGate(draft.kind, draft.layerId);
   const scale = resolveEditScale(
     { coverTo: target },
     context.base as ResolvedLayerRevision,

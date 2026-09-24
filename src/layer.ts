@@ -2527,6 +2527,31 @@ function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision)
   return { x, y, opacity };
 }
 
+/** The ONE cover-fit kind gate (#293, DEC-011): cover fit works on image
+ *  Layers only — a text Layer has no intrinsic pixel size, and a shape's
+ *  sizing goes through --resize-to/--scale. One home for both refusals:
+ *  the shared scale resolution's cover branch calls it, and the shared
+ *  application case calls it with the PUBLISHED draft's kind (the add
+ *  surface's provisional base carries an image kind even for a shape add,
+ *  so the gate reads the draft, never the provisional base) — the two
+ *  call sites cannot drift, and the wording stays byte-identical across
+ *  the surfaces by construction. */
+export function coverKindGate(
+  kind: "image" | "text" | "shape",
+  layerId: string,
+): asserts kind is "image" {
+  if (kind === "text") {
+    throw new Error(
+      `--cover-to needs an intrinsic pixel size: Layer "${layerId}" is a text Layer — use --resize <factor>.`,
+    );
+  }
+  if (kind === "shape") {
+    throw new Error(
+      `--cover-to works on image Layers only: Layer "${layerId}" is a shape Layer — use --resize-to or --scale.`,
+    );
+  }
+}
+
 /**
  * Canonical rotation normalization (#134, ADR-0016): `--rotate` sets an
  * ABSOLUTE angle in degrees, replacing any previous rotation. Omitted option
@@ -3035,7 +3060,7 @@ export function roundEffective(px: number): number {
  * aspect rules are byte-identical to the edit surface's by construction —
  * including the text-Layer refusal for --resize-to (identical wording).
  */
-/** The resize/scale intent a scale resolution reads: the three mutually
+/** The resize/scale intent a scale resolution reads: the four mutually
  *  exclusive forms plus the content-replacement presence the domain
  *  re-check reads (the shared application cases pass one form; the edit
  *  path's domain re-check passes the content flags too). */
@@ -3139,16 +3164,7 @@ export function resolveEditScale(
     if (target === undefined || typeof target !== "object") {
       throw new Error(`Invalid cover target: --cover-to needs a "<W>x<H>" box or "canvas" (Layer "${layerId}").`);
     }
-    if (prevRev.kind === "text") {
-      throw new Error(
-        `--cover-to needs an intrinsic pixel size: Layer "${layerId}" is a text Layer — use --resize <factor>.`,
-      );
-    }
-    if (prevRev.kind === "shape") {
-      throw new Error(
-        `--cover-to works on image Layers only: Layer "${layerId}" is a shape Layer — use --resize-to or --scale.`,
-      );
-    }
+    coverKindGate(prevRev.kind, layerId);
     const { width, height } = target;
     for (const [label, value] of [["width", width], ["height", height]] as const) {
       if (value !== undefined && (!Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION)) {
