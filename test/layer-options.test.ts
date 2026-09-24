@@ -36,6 +36,7 @@ import {
   parseLayerTracking,
   parseLayerWeight,
   parseLayerWidth,
+  parseLayerWrapWidth,
   parseLayerBrightness,
   parseLayerContrast,
   parseLayerSaturation,
@@ -148,7 +149,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "image", "from-generation", "from-matte", "text", "shape", "size", "corner-radius", "fill",
       "vector-color",
       "font", "font-file", "font-size", "color",
-      "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
+      "weight", "width", "tracking", "line-height", "wrap-width", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "cover-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
       "brightness", "contrast", "saturation", "warmth", "blend", "glow",
     ]);
@@ -161,8 +162,8 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   });
 
   it("the dash-numeric facts come from the table", () => {
-    expect(layerDashNumericFlags(["x", "y", "tracking", "line-height"])).toEqual([
-      "--x", "--y", "--tracking", "--line-height",
+    expect(layerDashNumericFlags(["x", "y", "tracking", "line-height", "wrap-width"])).toEqual([
+      "--x", "--y", "--tracking", "--line-height", "--wrap-width",
     ]);
     // The edit surface's join covers the transform/effect/region numeric
     // options too.
@@ -174,8 +175,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // negative value is legitimate input the ingestion validator refuses
     // with its range); #211 adds --visible-region the same way; #212 adds
     // --visible-region-radius (a negative radius is refused by the parser,
-    // but the boundary still accepts dash-leading values); #219 adds --warmth (-1..1).
-    expect(editFlags).toHaveLength(12);
+    // but the boundary still accepts dash-leading values); #219 adds --warmth (-1..1);
+    // #294 adds --wrap-width (a negative width is refused by the range validator).
+    expect(editFlags).toHaveLength(13);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--warmth");
   });
@@ -191,7 +193,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
 
   it("content-kind membership is derived from the text option set", () => {
     expect(TEXT_CONTENT_KEYS).toContain("text");
-    for (const key of ["font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height"] as LayerOptionKey[]) {
+    for (const key of ["font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width"] as LayerOptionKey[]) {
       expect(TEXT_CONTENT_KEYS).toContain(key);
     }
     expect(layerContentKindConflict({ image: "a.png", tracking: "1" }, "image", "edit")).toBeDefined();
@@ -205,7 +207,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "add")).toBeUndefined();
     // The edit surface reads presence exactly: the exclusivity refusal fires.
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "edit")).toBe(
-      "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive.",
+      "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width) are mutually exclusive.",
     );
     // The other content kinds keep strict presence on both surfaces: a
     // blank --image still conflicts with --from-generation/--from-matte.
@@ -262,6 +264,15 @@ describe("shared option validators: both surfaces' established texts", () => {
     expect(parseLayerLineHeight("abc")).toEqual({
       ok: false,
       error: 'Line height (--line-height) must be a finite number or "normal".',
+    });
+  });
+
+  it("wrap width: number or the none clear-form (#294)", () => {
+    expect(parseLayerWrapWidth("none")).toEqual({ ok: true, value: null });
+    expect(parseLayerWrapWidth("220")).toEqual({ ok: true, value: 220 });
+    expect(parseLayerWrapWidth("abc")).toEqual({
+      ok: false,
+      error: 'Wrap width (--wrap-width) must be a finite number of layout px or "none".',
     });
   });
 

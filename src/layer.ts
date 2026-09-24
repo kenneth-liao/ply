@@ -346,6 +346,19 @@ export interface LayerTextRevision extends LayerRevisionBase {
   tracking?: number;
   lineHeight?: number;
   /**
+   * Selected wrap width in layout px (#294, spec #285 US-015, ISC-55,
+   * DEC-001/DEC-005, ADR-0017 amendment): present ONLY when set — an omitted
+   * field paints exactly as before (natural one-line layout), which is the
+   * only no-width form. Font-independent. With a width set, the text
+   * soft-wraps at spaces within it (`white-space: pre-wrap; width: <W>px`);
+   * written line breaks still break. The width is a LAYOUT-pixel measure,
+   * applied before the canonical transform. A natural-layout fact: a legacy
+   * revision never carries one, and setting one on a legacy revision is an
+   * edit that writes `layoutRule: "natural"`. Appended to the revision hash
+   * only when present, so pre-#294 revision ids are byte-identical.
+   */
+  wrapWidth?: number;
+  /**
    * Caller font facts (#232, spec #226 US-005, DEC-006): present if and only
    * if the retained bytes came from a caller-supplied font file. Read ONCE
    * from the file's own tables at ingestion (`parseCallerFont` in
@@ -1458,6 +1471,62 @@ export function normalizeStoredTextTypography(revision: {
 }
 
 /**
+ * The ONE validator/normalizer for the text WRAP WIDTH control (#294, spec
+ * #285 US-015, ISC-55, DEC-001/DEC-005, ADR-0017 amendment) — the single
+ * home the add path, the edit path, and both CLI boundaries share, so the
+ * boundaries never disagree. The width is an ABSOLUTE setter in layout px,
+ * font-independent: a positive finite number up to the shared 8192px
+ * per-axis bound (`MAX_DIMENSION` — the same cap as font-size and the
+ * resize/scale forms; a larger value is refused before anything is
+ * published, because the width interpolates into the paint markup and an
+ * over-cap box can only hang or OOM the render). `null` clears the stored
+ * width (the documented removal value "none" at the command boundary);
+ * `undefined` means not given (an omitted option carries the current
+ * value). The resolved form is always storable: the width is stored only
+ * when set — absence IS the no-wrap-width form, so the resolved fields are
+ * never 0 or negative. Every refusal names the control, and fires before
+ * anything is published.
+ */
+export function resolveTextWrapWidthControl(value: number | null | undefined): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error('Wrap width (--wrap-width) must be a finite number of layout px or "none".');
+  }
+  if (value <= 0 || value > MAX_DIMENSION) {
+    throw new Error(
+      `Wrap width (--wrap-width) must be a finite number between 1 and ${MAX_DIMENSION} layout px — ${value} is out of range.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Canonical stored-wrap-width validation and normalization (#294, spec
+ * #285 US-015, ISC-55, DEC-001/DEC-005). The ONE normalization boundary AND
+ * the one reader for a revision's wrap width: documents written before
+ * #294 lack the field (only a missing field is absent — a present `null`
+ * or any other non-number is a malformed document, never a silent
+ * default); every downstream reader — revision resolution, the revision
+ * hash, paint markup, measurement, and the edit carry path — projects
+ * through this function and never re-derives the fact. Present only when
+ * set, a positive finite number inside the shared 8192px per-axis bound —
+ * an over-cap field is a malformed document, refused loudly before the
+ * render can hang on it.
+ */
+export function normalizeStoredTextWrapWidth(revision: {
+  wrapWidth?: unknown;
+}): number | undefined {
+  const value = revision.wrapWidth;
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION) {
+    throw new Error(
+      `Malformed revision document: text wrap width must be a finite number between 1 and ${MAX_DIMENSION} when present (got ${JSON.stringify(value)}).`,
+    );
+  }
+  return value;
+}
+
+/**
  * Canonical stored-text-axes validation and normalization (#179, ADR-0021).
  * The ONE normalization boundary AND the one reader for a revision's text
  * weight/width: documents written before #179 lack the fields (only a
@@ -1626,7 +1695,9 @@ export function normalizeStoredTextLayoutRule(revision: { layoutRule?: unknown }
  * is appended only when present (image revisions only), so revisions
  * written before #215 keep their exact ids (#215, DEC-010). The text layout
  * rule is appended only when "natural", so revisions written before #287
- * keep their exact ids (#287, ADR-0017 amendment). */
+ * keep their exact ids (#287, ADR-0017 amendment). The text wrap width is
+ * appended only when present, so revisions written before #294 keep their
+ * exact ids (#294, spec #285 DEC-005, ADR-0017 amendment). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${textFillIdentityString(rev.color)}` : "";
@@ -1716,7 +1787,12 @@ export function computeRevisionHash(rev: LayerRevision): string {
   // exact ids.
   const layoutRule = rev.kind === "text" ? normalizeStoredTextLayoutRule(rev) : undefined;
   const layoutRuleField = layoutRule === "natural" ? `:layoutrule(${layoutRule})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}`).digest("hex").slice(0, 16)}`;
+  // The text wrap width (#294, spec #285 US-015, DEC-001/DEC-005, ADR-0017
+  // amendment): appended only when present, so revisions written before
+  // #294 keep their exact ids.
+  const wrapWidth = rev.kind === "text" ? normalizeStoredTextWrapWidth(rev) : undefined;
+  const wrapWidthField = wrapWidth !== undefined ? `:wrapwidth(${wrapWidth})` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1968,6 +2044,12 @@ export async function readRevisionInternalFull(
   // boundary (#287, spec #285 DEC-001, ADR-0017 amendment) — pre-#287
   // revisions normalize to "legacy", new revisions store "natural".
   const layoutRule = revision.kind === "text" ? normalizeStoredTextLayoutRule(revision) : undefined;
+  // Canonical text wrap width: validated and normalized at this same one
+  // boundary (#294, spec #285 US-015, DEC-001/DEC-005, ADR-0017 amendment)
+  // — a malformed stored field is refused loudly before the revision hash is
+  // consulted. Absence IS the no-wrap-width form (natural one-line layout).
+  const textWrapWidth =
+    revision.kind === "text" ? normalizeStoredTextWrapWidth(revision) : undefined;
   // Canonical vector colour (#215, DEC-008/010): validated and normalized at
   // this same one boundary — a malformed stored colour is refused loudly
   // before the revision hash is consulted. Absence IS the no-colour form.
@@ -2109,6 +2191,7 @@ export async function readRevisionInternalFull(
           color: revision.color,
           ...(textAxes ?? {}),
           ...(textTypography ?? {}),
+          ...(textWrapWidth !== undefined ? { wrapWidth: textWrapWidth } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
           fontBytes: contentBytes!.length,
           layoutRule: layoutRule!,
@@ -2239,6 +2322,25 @@ export interface EditLayerOptions {
    * any edit, including a `--font` switch.
    */
   lineHeight?: number | null;
+  /**
+   * Select the text's wrap width in layout px (#294, spec #285 US-015,
+   * ISC-55, DEC-001/DEC-005, ADR-0017 amendment): an ABSOLUTE setter,
+   * font-independent — a positive finite number of LAYOUT pixels, applied
+   * before the canonical transform (scale and rotation map the wrapped box
+   * afterwards). With a width set, a natural-layout text Layer soft-wraps
+   * at spaces within the width (`white-space: pre-wrap; width: <W>px`);
+   * written line breaks still break and preserved spaces still hold. With
+   * no width, the text stays on one line (natural one-line layout).
+   * `null` clears the stored width (the documented removal value "none" at
+   * the command boundary — removing it restores the unwrapped render
+   * byte-for-byte); an omitted option carries the current value across any
+   * edit. The fact is stored ONLY when set (one stored form per look:
+   * absence IS the no-wrap-width form), so revisions written before #294
+   * keep their exact revision ids. The fact is a natural-layout fact: a
+   * legacy-rule revision never carries one, and any edit setting it is an
+   * edit that writes `layoutRule: "natural"` (ADR-0017 amendment).
+   */
+  wrapWidth?: number | null;
   x?: number;
   y?: number;
   opacity?: number;
@@ -3004,6 +3106,7 @@ const REGION_CONFLICTING_OPTION_PRESENT = (options: EditLayerOptions): boolean =
   options.width !== undefined ||
   options.tracking !== undefined ||
   options.lineHeight !== undefined ||
+  options.wrapWidth !== undefined ||
   options.shape !== undefined ||
   options.size !== undefined ||
   options.cornerRadius !== undefined ||
@@ -3397,7 +3500,8 @@ async function buildEditedRevision(
       options.weight !== undefined ||
       options.width !== undefined ||
       options.tracking !== undefined ||
-      options.lineHeight !== undefined
+      options.lineHeight !== undefined ||
+      options.wrapWidth !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on an image Layer. Layer "${layerId}" is an image Layer.`);
     }
@@ -3564,7 +3668,8 @@ async function buildEditedRevision(
       options.weight !== undefined ||
       options.width !== undefined ||
       options.tracking !== undefined ||
-      options.lineHeight !== undefined
+      options.lineHeight !== undefined ||
+      options.wrapWidth !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on a shape Layer. Layer "${layerId}" is a shape Layer.`);
     }
@@ -3798,6 +3903,17 @@ async function buildEditedRevision(
     const fill = validateTextContent(text, fontSize, rawColor);
     const color = canonicalizeTextFillForStorage(fill);
 
+    // The wrap width control (#294, spec #285 US-015, DEC-001/DEC-005,
+    // ADR-0017 amendment) resolves at the same one domain boundary as the
+    // typography controls — a refused width publishes nothing, `null` clears
+    // the stored width (removing it restores the unwrapped render
+    // byte-for-byte), and an omitted option carries the current value. The
+    // width is stored only when set; setting it is an edit, so a legacy-rule
+    // revision below publishes `layoutRule: "natural"` with it.
+    const wrapWidth = resolveTextWrapWidthControl(
+      options.wrapWidth !== undefined ? options.wrapWidth : prevRev.wrapWidth,
+    );
+
     // The revision's caller font facts (#232, DEC-006): a --font-file edit
     // stores the file's facts; a later edit without a font option keeps the
     // retained caller font verbatim; switching to a bundled family (--font)
@@ -3819,6 +3935,7 @@ async function buildEditedRevision(
       ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
       ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
       ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
+      ...(wrapWidth !== undefined ? { wrapWidth } : {}),
       ...(resolvedCallerFont !== undefined ? { callerFont: resolvedCallerFont } : {}),
       x,
       y,
@@ -3846,6 +3963,7 @@ async function buildEditedRevision(
       axes.width === prevRev.width &&
       typography.tracking === prevRev.tracking &&
       typography.lineHeight === prevRev.lineHeight &&
+      wrapWidth === prevRev.wrapWidth &&
       callerFontEq(resolvedCallerFont, prevRev.callerFont) &&
       x === prevRev.x &&
       y === prevRev.y &&
@@ -3875,7 +3993,7 @@ async function buildEditedRevision(
       draft.visibleRegion !== undefined &&
       (options.text !== undefined || options.font !== undefined || options.fontFile !== undefined ||
         options.fontSize !== undefined || options.weight !== undefined || options.width !== undefined ||
-        options.tracking !== undefined || options.lineHeight !== undefined)
+        options.tracking !== undefined || options.lineHeight !== undefined || options.wrapWidth !== undefined)
     ) {
       const standalone = await measureStandaloneSnapshot(
         { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,

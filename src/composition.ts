@@ -22,6 +22,7 @@ import {
   readLayerInternal,
   readLayerInternalFull,
   resolveTextTypographyControls,
+  resolveTextWrapWidthControl,
   validateShapeContent,
   shapeContentIdentity,
   type LayerShapeGeometry,
@@ -704,6 +705,15 @@ export async function addTextLayerToComposition(
      */
     tracking?: number | null;
     lineHeight?: number | null;
+    /**
+     * Optional text wrap width in layout px (#294, spec #285 US-015,
+     * ISC-55, DEC-001/DEC-005, ADR-0017 amendment): font-independent,
+     * validated as a positive finite number at the ONE domain boundary — a
+     * refused width publishes nothing, and a set value is stored only when
+     * set. `null` is the removal form (meaningless on add — there is no
+     * previous value — and stores nothing).
+     */
+    wrapWidth?: number | null;
   },
   options: AddLayerOptions & { fontSize?: number } = {},
 ): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
@@ -762,6 +772,10 @@ export async function addTextLayerToComposition(
         tracking: input.tracking,
         lineHeight: input.lineHeight,
       });
+      // The wrap width resolves at the same one boundary (#294, DEC-001/
+      // DEC-005) — a refused width publishes nothing, and a set value is
+      // stored only when set.
+      const wrapWidth = resolveTextWrapWidthControl(input.wrapWidth);
       const contentHash = createHash("sha256").update(bytes).digest("hex");
       if (callerFont !== undefined) {
         // The render probe's family-resolution gate applies to caller fonts
@@ -785,6 +799,7 @@ export async function addTextLayerToComposition(
           ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
           ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
           ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
+          ...(wrapWidth !== undefined ? { wrapWidth } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
           x,
           y,
@@ -1424,6 +1439,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ...(source.weight !== undefined ? { weight: source.weight, width: source.width } : {}),
       ...(source.tracking !== undefined ? { tracking: source.tracking } : {}),
       ...(source.lineHeight !== undefined ? { lineHeight: source.lineHeight } : {}),
+      ...(source.wrapWidth !== undefined ? { wrapWidth: source.wrapWidth } : {}),
       ...(source.callerFont !== undefined ? { callerFont: source.callerFont } : {}),
       x: source.x,
       y: source.y,

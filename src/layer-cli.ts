@@ -133,6 +133,16 @@ Options:
                         size (#187, ADR-0021): 0.5 to 3; "normal" removes
                         stored line height (the font's own line height
                         applies)
+  --wrap-width <num|none>
+                        Wrap width for a text Layer in layout px (#294,
+                        spec #285 US-015, DEC-001/DEC-005): an ABSOLUTE
+                        setter — with a width set, the text soft-wraps at
+                        spaces within it (written line breaks still
+                        break), and measure/anchor report the wrapped
+                        box; "none" removes the width and restores the
+                        unwrapped one-line render byte-for-byte. Setting
+                        a width is an edit, so a legacy-rule revision
+                        becomes natural layout; bounded 1–8192 layout px
   --weight <num>        Text weight for a text Layer (#179, #232):
                         validated against the Layer's font's real weight
                         axis — Archivo 100-900 (default 400); static faces
@@ -804,6 +814,7 @@ async function run() {
           width: parsed.width as number | undefined,
           tracking: parsed.tracking as number | null | undefined,
           lineHeight: parsed["line-height"] as number | null | undefined,
+          wrapWidth: parsed["wrap-width"] as number | null | undefined,
           x: editX,
           y: editY,
           opacity: parsed.opacity as number | undefined,
@@ -1011,6 +1022,11 @@ async function run() {
               }
               if (rev.lineHeight !== undefined) {
                 console.log(`  Line height: ${rev.lineHeight}`);
+              }
+              // Selected text wrap width (#294): shown only when set —
+              // absence IS the no-wrap-width (natural one-line) form.
+              if (rev.wrapWidth !== undefined) {
+                console.log(`  Wrap width: ${rev.wrapWidth}px`);
               }
             } else if (rev.kind === "shape") {
               // Shape parameters (#208): the geometry, its size, the corner

@@ -721,6 +721,42 @@ ply layer edit <layerId> --tracking -0.032 --line-height 0.88 --in-place
   `layer inspect` and `composition measure` show both values when they are
   set.
 
+## Text wrap width (new surface)
+
+A text Layer also takes an optional wrap width (#294, spec #285 US-015,
+DEC-001/DEC-005, ADR-0017 amendment) on both `composition add` and
+`layer edit` — an ABSOLUTE setter in layout px, before the canonical
+transform (scale and rotation map the wrapped box afterwards):
+
+```bash
+ply composition add poster blurb --text "A long one-line paragraph goes here" \
+  --font Archivo --font-size 32 --wrap-width 220 -p ~/projects/my-poster
+ply layer edit <layerId> --wrap-width 220 --in-place
+ply layer edit <layerId> --wrap-width none --in-place
+```
+
+- **With a width, text wraps within it.** The text soft-wraps at spaces
+  inside the width (`white-space: pre-wrap; width: <W>px`): written line
+  breaks still break, and preserved spaces still hold. With no width, the
+  text stays on one line (natural one-line layout).
+- **Line-level typography spans the wrap.** Line height and tracking apply
+  across the wrapped lines, and `composition measure` and anchored
+  placement report the wrapped box — measurement renders the exact paint
+  markup, so measured and rendered text agree.
+- **Stored only when set.** The stored field participates in the revision
+  hash only when present, so pre-#294 revisions keep their exact ids and
+  pinned Render history replays byte-identically.
+- **Removal restores byte-for-byte.** `--wrap-width none` removes the
+  stored width and the unwrapped one-line render comes back byte-for-byte;
+  an omitted option carries the current width across any edit. The range
+  is a positive finite number up to the shared 8192px per-axis bound (the
+  same cap as font-size and the resize forms) — zero, negative, over-cap,
+  and non-numeric values are refused before anything is published
+  (exit 2), naming the control and its allowed range.
+- **Legacy interaction.** A legacy-rule (pre-#287) revision never carries a
+  width, and setting one is an edit — the revision becomes natural layout
+  like any other text edit.
+
 ## Shape Layers (new surface)
 
 A shape Layer (#208) is a filled geometric region created from parameters
