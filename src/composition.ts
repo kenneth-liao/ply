@@ -174,12 +174,14 @@ function parsePlacement(options: AddLayerOptions): { x: number; y: number; opaci
 }
 
 /**
- * The Project's stored Composition names, sorted alphabetically — the "what
+ * The Project's stored Composition names, sorted alphabetically (deliberate:
+ * deterministic across filesystems, unlike directory order) — the "what
  * exists" listing that address and Composition command refusals name
  * (spec #226, #289 DEC-003). Guidance only: no lock and no Layer resolution.
+ * Takes the resolved Project root, the same convention as
+ * `readCompositionDocument` (#289 review INT-3).
  */
-export async function listCompositionNames(projectPath: string): Promise<string[]> {
-  const resolvedRoot = await resolveProjectRoot(projectPath);
+export async function listCompositionNames(resolvedRoot: string): Promise<string[]> {
   let entries: string[];
   try {
     entries = await readdir(path.join(resolvedRoot, "compositions"));

@@ -65,7 +65,7 @@ import { DEFAULT_SHEET_CELL, DEFAULT_SHEET_COLUMNS } from "./composition-sheet.j
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
-const HELP = `
+export const HELP = `
 composition — Composition authoring and inspection
 
   ply composition create <name> --width <w> --height <h> [options]
@@ -592,114 +592,31 @@ function stackPositionNote(position?: StackPosition): string {
   return position ? ` (position: ${stackPositionSpec(position)})` : "";
 }
 
+/**
+ * The one per-command fact the production surface keeps (#289, review INT-1):
+ * whether the command takes an existing Composition's name. Test-only arg
+ * builders live in test/cli-surface.test.ts, and the table's key set is
+ * pinned against HELP by that test, so a command cannot silently opt out of
+ * the unknown-name refusal seam.
+ */
 export interface CompositionCommandMeta {
-  name: string;
-  description: string;
   takesExistingComposition: boolean;
-  argsForMissingComposition?: (missing: string, ctx: {
-    project: string;
-    imageFile: string;
-    regionFile: string;
-    existingComp: string;
-  }) => string[];
 }
 
 export const COMPOSITION_COMMANDS: Record<string, CompositionCommandMeta> = {
-  create: {
-    name: "create",
-    description: "Create a new Composition with explicit canvas dimensions",
-    takesExistingComposition: false,
-  },
-  add: {
-    name: "add",
-    description: "Add a local image, text, or shape Layer to a Composition",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "add", missing, "layer1", "--image", ctx.imageFile, "--project", ctx.project,
-    ],
-  },
-  import: {
-    name: "import",
-    description: "Import a Composition's Layer references into another Composition",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "import", missing, ctx.existingComp, "--project", ctx.project,
-    ],
-  },
-  remove: {
-    name: "remove",
-    description: "Remove a Layer use from a Composition",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "remove", missing, "layer1", "--project", ctx.project,
-    ],
-  },
-  reorder: {
-    name: "reorder",
-    description: "Reorder Layer uses within a Composition",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "reorder", missing, "--order", "layer1", "--project", ctx.project,
-    ],
-  },
-  inspect: {
-    name: "inspect",
-    description: "Inspect a Composition's canvas and ordered Layers",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "inspect", missing, "--project", ctx.project,
-    ],
-  },
-  measure: {
-    name: "measure",
-    description: "Measure Layer geometry read-only in Composition coordinates",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "measure", missing, "--project", ctx.project,
-    ],
-  },
-  check: {
-    name: "check",
-    description: "Check a Composition's painted Layer extents against caller-supplied regions",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "check", missing, "--regions", ctx.regionFile, "--project", ctx.project,
-    ],
-  },
-  guidelines: {
-    name: "guidelines",
-    description: "Render a guideline view with regions overlay",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "guidelines", missing, "--regions", ctx.regionFile, "--project", ctx.project,
-    ],
-  },
-  sheet: {
-    name: "sheet",
-    description: "Build a comparison sheet grid",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "sheet", missing, "--project", ctx.project,
-    ],
-  },
-  render: {
-    name: "render",
-    description: "Render a Composition to a PNG",
-    takesExistingComposition: true,
-    argsForMissingComposition: (missing, ctx) => [
-      "composition", "render", missing, "--project", ctx.project,
-    ],
-  },
-  replay: {
-    name: "replay",
-    description: "Replay a retained Render manifest",
-    takesExistingComposition: false,
-  },
-  list: {
-    name: "list",
-    description: "List all Compositions in the Project",
-    takesExistingComposition: false,
-  },
+  create: { takesExistingComposition: false },
+  add: { takesExistingComposition: true },
+  import: { takesExistingComposition: true },
+  remove: { takesExistingComposition: true },
+  reorder: { takesExistingComposition: true },
+  inspect: { takesExistingComposition: true },
+  measure: { takesExistingComposition: true },
+  check: { takesExistingComposition: true },
+  guidelines: { takesExistingComposition: true },
+  sheet: { takesExistingComposition: true },
+  render: { takesExistingComposition: true },
+  replay: { takesExistingComposition: false },
+  list: { takesExistingComposition: false },
 };
 
 export async function run(argv: string[] = process.argv.slice(2)): Promise<void> {
