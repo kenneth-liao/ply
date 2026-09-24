@@ -138,6 +138,35 @@ Checked on 2026-09-24 against spec #285, tickets #289–#316, the ISA, and
 | Line / arrow shape | Ruled out by the ISA (2026-09-23 dead end) |
 | Model range | Exists: `nano-2`, `nano-pro`, `seedream`, `flux`, `recraft` via Gateway |
 
+## Deferred in fog, with new evidence
+
+picture-it lays out text with Satori, a CSS flexbox subset: boxes with
+padding, background and border, holding children in rows or columns with gap
+and alignment. Runs, skew, wrap, fit and moving as a unit are planned (#297,
+#298, #294, #295, #307). What is not planned is **content-driven layout**:
+
+- **Hug:** a pill, badge or name plate that resizes when its text changes. In
+  Ply that is a shape Layer plus a text Layer, re-measured by hand after each
+  text edit.
+- **Flow:** a logo + "Launchpad" + "Tutorials" row, bullets, or labels under
+  bars that keep their spacing when a member changes size. With #307 members
+  move together, but their positions inside the unit stay absolute.
+
+Spec #285 OOS-005 keeps "relative layout between separate Layers" in ISA fog.
+This test adds evidence: t4, t5 and t8 each took one block with no `measure`,
+where outlier test 2 logged a colliding first guess (t4), no helper for
+placing between two points, and hand-computed coordinates.
+
+picture-it's form doesn't fit Ply. Its children are not Layers, so they can't
+be shared, forked, given effects or addressed by name, and a text box with its
+own background is the ISA's 2026-09-19 dead end ("a bar is its own Layer").
+A Ply-shaped form keeps every element a Layer and puts layout rules on the
+unit that #306 is deciding, a nested Composition: flow its members in a row
+or column with a gap and alignment, and let a member hug another with padding.
+It depends on whether the nested Composition's bounds are a fixed canvas or
+derived from its content. #306 can settle that, keeping these rules possible
+later, without building them now.
+
 ## Remaining gaps (not planned)
 1. **A stroke-only shape paints nothing and gives no error.** On `0053ceb`,
    `--fill "#00000000" --outline "6,#39ff5a"` rendered a blank canvas and
