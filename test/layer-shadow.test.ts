@@ -10,8 +10,9 @@
  * - Shadow paints in the Layer's LOCAL coordinate space (before the
  *   rotate∘flip∘scale transform, which maps content+shadow together), then
  *   opacity fades content+shadow; measurement's painted extents and clipping
- *   include the shadow extent, and anchored placement resolves against the
- *   shadow-extended painted ink.
+ *   include the shadow extent, while anchored placement resolves against the
+ *   PRE-EFFECT painted ink (DEC-002, ADR-0017 amendment #288) — a shadow
+ *   never moves a stored placement.
  * - Invalid settings fail before mutation; scoped help, compact output and
  *   JSON expose the effective shadow settings.
  * - Shadow facts survive in-place propagation, forks, cross-Project import,
@@ -351,12 +352,13 @@ test("the shadow transforms with the Layer and fades with its opacity", async ()
   expect(after[3]).toBeLessThan(before[3]!);
 });
 
-/** Tracer 5: anchored placement resolves against the SHADOW-EXTENDED painted
- * ink (one definition of painted ink — the shadow is part of what is
- * visible), and --shadow cannot combine with --anchor in one edit because
- * the reference ink would be ambiguous. A shadow edit never moves an
- * already-resolved placement. */
-test("anchored placement uses the shadow-extended ink; --anchor and --shadow are separate edits", async () => {
+/** Tracer 5: anchored placement resolves against the PRE-EFFECT painted
+ * ink (DEC-002, spec #285 US-002, ADR-0017 amendment #288) — the shadow's
+ * ink is an effect, never part of the anchor basis, so re-anchoring a
+ * shadowed Layer lands where an effect-less twin would — and --shadow
+ * cannot combine with --anchor in one edit because the reference ink would
+ * be ambiguous. A shadow edit never moves an already-resolved placement. */
+test("anchored placement resolves against the pre-effect ink; --anchor and --shadow are separate edits", async () => {
   // Transparent surround with a 40×40 subject at the layer's local origin:
   // ink box = [30, 130) x [30, 130) at placement (30, 30).
   const paddedPng = Buffer.alloc(100 * 100 * 4);
@@ -376,30 +378,32 @@ test("anchored placement uses the shadow-extended ink; --anchor and --shadow are
   const addRes = await addImageLayer("poster", "hero", img, { x: 30, y: 30 });
   const layerId = addRes.use.layerId as string;
 
-  // Shadow dx 10, dy 0, blur 0: subject ink [30,70), shadow ink [40,80) x
-  // [30,70). Shadow-extended ink = [30, 80) wide 50.
-  const setShadow = await invoke(["layer", "edit", layerId, "--shadow", "10,0,0,#000000", "--project", projDir, "--json"]);
+  // Shadow dx -10, dy 0, blur 0: subject ink [30,70), shadow ink [20,60) x
+  // [30,70). The rendered (shadow-extended) ink = [20, 70) wide 50 — but the
+  // anchor's basis is the pre-effect ink [30, 70).
+  const setShadow = await invoke(["layer", "edit", layerId, "--shadow", "-10,0,0,#000000", "--project", projDir, "--json"]);
   expect(setShadow.code).toBe(0);
 
-  // Anchor left edge of the painted ink at x=100: resolves to placement 100.
+  // Anchor left edge of the painted ink at x=100: the pre-effect ink starts
+  // at the placement point (ink offset 0), so left-edge anchoring publishes
+  // x = 100 — the shadow's ink never shifts it.
   const anchorRes = await invoke([
     "layer", "edit", layerId, "--anchor", "left", "--x", "100", "--project", projDir, "--json",
   ]);
   expect(anchorRes.code).toBe(0);
   const anchored = JSON.parse(anchorRes.stdout);
-  // The ink starts at the placement point (ink offset 0), so left-edge
-  // anchoring publishes x = 100. The resolution's measured painted box is
-  // the SHADOW-EXTENDED ink [30, 80) — width 50, not the bare 40-wide
-  // subject ink — measured at the pre-edit placement.
-  expect(anchored.anchored.painted.width).toBe(50);
+  // The resolution's measured painted box is the PRE-EFFECT ink [30, 70) —
+  // the bare 40-wide subject ink, not the shadow-extended 50-wide union —
+  // measured at the pre-edit placement.
+  expect(anchored.anchored.painted.width).toBe(40);
   expect(anchored.anchored.painted.x).toBe(30);
   expect(anchored.anchored.placement.x).toBe(100);
 
-  // After the edit, the shadow-extended ink's left edge sits at x = 100.
+  // After the edit, the shadow-extended ink's left edge sits at x = 90.
   const measure = await invoke(["composition", "measure", "poster", "hero", "--project", projDir, "--json"]);
   expect(measure.code).toBe(0);
   const measured = JSON.parse(measure.stdout).layers[0];
-  expect(measured.painted).toEqual({ x: 100, y: 30, width: 50, height: 40 });
+  expect(measured.painted).toEqual({ x: 90, y: 30, width: 50, height: 40 });
 
   // --anchor + --shadow in one edit refuses (exit 2, live state unchanged).
   const conflict = await invoke([
@@ -409,7 +413,7 @@ test("anchored placement uses the shadow-extended ink; --anchor and --shadow are
   expect(JSON.parse(conflict.stdout).ok).toBe(false);
   const state = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
   expect(state.layer.currentRevision.x).toBe(100);
-  expect(state.layer.currentRevision.shadow).toEqual({ dx: 10, dy: 0, blur: 0, color: "#000000" });
+  expect(state.layer.currentRevision.shadow).toEqual({ dx: -10, dy: 0, blur: 0, color: "#000000" });
 });
 
 /** Tracer 6: invalid shadow settings never advance live state. One parser

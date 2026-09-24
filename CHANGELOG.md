@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Anchored placement (`--anchor`) now resolves against the pre-effect painted
+  ink on both surfaces it exists on — one-command `composition add` and
+  `layer edit` — through one shared resolution, so re-anchoring a Layer that
+  carries a shadow or an outline never moves it and the same `--anchor`
+  publishes the same stored placement through both surfaces; measurement's
+  painted extents and existing retained Renders replay unchanged (#288).
+
 - Unwrapped text layers now lay out at natural width and wrap only at explicit
   line breaks (`\n`), making layout independent of layer placement or canvas
   bounds; pre-change revisions keep their legacy canvas-bounded layout via an

@@ -72,3 +72,15 @@ precedent as transform edits).
   never disagree — nothing invalid reaches the edit path.
 - Outline (#140) extends the same contract: a sibling revision field, the
   same ordering documentation, and a combined effect-extent measurement.
+
+## Amendment: Anchored placement resolves before effects (spec #285 / #288)
+
+The paragraph above stating that "anchored placement resolves against the
+shadow-extended painted ink" is amended by spec #285 ticket #288 (DEC-002),
+recorded as an amendment to ADR-0017: `--anchor` now resolves against the
+**pre-effect painted ink** on both surfaces it exists on, through one shared
+resolution. The shadow's ink is an effect, never part of the anchor basis —
+re-anchoring a shadowed Layer lands where an effect-less twin would, and a
+shadow edit never moves a stored placement. The measurement contract is
+unchanged: `composition measure`'s `painted` extents still include the
+shadow ink. `--anchor` and `--shadow` still refuse to combine in one edit.

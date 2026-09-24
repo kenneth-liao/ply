@@ -396,7 +396,11 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         (alpha > 0 / tight glyph ink), never the layout box;
                         a Layer with no visible ink refuses. Resolved
                         against the content+transform ink before the effects
-                        apply; an unanchored axis keeps its --x/--y value.
+                        apply — the same pre-effect basis (DEC-002, ADR-0017
+                        amendment #288) 'layer edit' resolves re-anchors
+                        through, so the same --anchor publishes the same
+                        stored placement on both surfaces; an unanchored
+                        axis keeps its --x/--y value.
   --resize <factor>     Scale the Layer by a RELATIVE factor (multiplies
                         scale 1 at creation); aspect ratio preserved. For an
                         absolute setter use --scale instead.

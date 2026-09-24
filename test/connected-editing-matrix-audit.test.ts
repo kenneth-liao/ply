@@ -76,7 +76,7 @@ const audit: Array<{ suite: string; markers: string[] }> = [
     markers: [
       "image Layer --shadow paints drop-shadow pixels and keeps content bytes",
       "text Layer --shadow paints at the glyph ink and keeps font bytes",
-      "anchored placement uses the shadow-extended ink",
+      "anchored placement resolves against the pre-effect ink",
     ],
   },
   {

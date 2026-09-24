@@ -782,3 +782,95 @@ test(
   },
   120_000,
 );
+
+/** TEST-004 (spec #285 US-002, DEC-002, ADR-0017 amendment #288): anchored
+ * placement resolves against the PRE-EFFECT painted ink on `layer edit` —
+ * exactly the basis one-command `composition add` resolves on — so a
+ * shadowed Layer re-anchors to the same placement an effect-less twin
+ * would, and effect edits never move a stored placement. */
+test("a shadowed Layer re-anchors against the pre-effect ink, the same basis one-command add resolves on", async () => {
+  // Transparent surround with a 40×40 subject at the layer's local origin:
+  // pre-effect ink = [30, 70) x [30, 70) at placement (30, 30), ink offset 0.
+  const paddedPng = regionPng(100, 100, RED, { x: 0, y: 0, width: 40, height: 40 });
+  const img = path.join(tempDir, "padded.png");
+  await writeFile(img, paddedPng);
+
+  await makeComp("poster", 400, 400);
+  const addRes = await addImageLayer("poster", "hero", img, { x: 30, y: 30 });
+  const layerId = addRes.use.layerId as string;
+
+  // Shadow dx -10, dy 0, blur 0: the shadow ink sits at [20, 60), so the
+  // RENDERED ink is [20, 70) — but the anchor's ink basis is the pre-effect
+  // ink [30, 70), not the shadow-extended ink.
+  const setShadow = await invoke([
+    "layer", "edit", layerId, "--shadow", "-10,0,0,#000000", "--project", projDir, "--json",
+  ]);
+  expect(setShadow.code).toBe(0);
+
+  // Anchor the left ink edge at x=100: against the pre-effect ink (offset 0)
+  // the placement publishes x = 100 — the shadow's ink must not shift it.
+  const anchorRes = await invoke([
+    "layer", "edit", layerId, "--anchor", "left", "--x", "100", "--project", projDir, "--json",
+  ]);
+  expect(anchorRes.code).toBe(0);
+  const anchored = JSON.parse(anchorRes.stdout);
+  // The report's painted evidence is the pre-effect ink box: the bare
+  // 40-wide subject ink, never the shadow-extended 50-wide union.
+  expect(anchored.anchored.painted).toEqual({ x: 30, y: 30, width: 40, height: 40 });
+  expect(anchored.anchored.placement).toEqual({ x: 100, y: 30 });
+  expect(anchored.layer.currentRevision.x).toBe(100);
+  expect(anchored.layer.currentRevision.y).toBe(30);
+
+  // The render's ink stays the shadow-extended fact: measure reports the
+  // effect-ink extents around the resolved placement.
+  const measured = useReport(await measure("poster"), "hero");
+  expect(measured.painted).toEqual({ x: 90, y: 30, width: 50, height: 40 });
+
+  // A further effect edit never moves the stored placement (DEC-002).
+  const replaceShadow = await invoke([
+    "layer", "edit", layerId, "--shadow", "8,6,10,#101010", "--project", projDir, "--json",
+  ]);
+  expect(replaceShadow.code).toBe(0);
+  const state = JSON.parse(
+    (await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout,
+  );
+  expect(state.layer.currentRevision.x).toBe(100);
+  expect(state.layer.currentRevision.y).toBe(30);
+});
+
+/** TEST-004 (spec #285 US-002, DEC-002): outline is an EFFECT (ADR-0019),
+ * not part of the anchor ink — the dilate ring's ink is excluded from the
+ * anchor basis, so an outlined Layer re-anchors against its bare painted
+ * ink, exactly like one-command add resolves. */
+test("an outlined Layer re-anchors against the pre-effect ink; outline is an effect, not part of the anchor ink", async () => {
+  // Pre-effect ink = [30, 70) x [30, 70) at placement (30, 30), ink offset 0.
+  const paddedPng = regionPng(100, 100, RED, { x: 0, y: 0, width: 40, height: 40 });
+  const img = path.join(tempDir, "padded.png");
+  await writeFile(img, paddedPng);
+
+  await makeComp("poster", 400, 400);
+  const addRes = await addImageLayer("poster", "hero", img, { x: 30, y: 30 });
+  const layerId = addRes.use.layerId as string;
+
+  // Outline 10: the outlined ink is [20, 80) x [20, 80) — but the anchor
+  // resolves against the pre-effect ink [30, 70), so left-edge anchoring
+  // publishes x = 100, not 110.
+  const setOutline = await invoke([
+    "layer", "edit", layerId, "--outline", "10,#000000", "--project", projDir, "--json",
+  ]);
+  expect(setOutline.code).toBe(0);
+
+  const anchorRes = await invoke([
+    "layer", "edit", layerId, "--anchor", "left", "--x", "100", "--project", projDir, "--json",
+  ]);
+  expect(anchorRes.code).toBe(0);
+  const anchored = JSON.parse(anchorRes.stdout);
+  expect(anchored.anchored.painted).toEqual({ x: 30, y: 30, width: 40, height: 40 });
+  expect(anchored.anchored.placement).toEqual({ x: 100, y: 30 });
+  expect(anchored.layer.currentRevision.x).toBe(100);
+
+  // The rendered ink keeps the outline-extended extents around the new
+  // placement: [90, 140) x [20, 80).
+  const measured = useReport(await measure("poster"), "hero");
+  expect(measured.painted).toEqual({ x: 90, y: 20, width: 60, height: 60 });
+});

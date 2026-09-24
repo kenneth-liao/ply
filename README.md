@@ -84,7 +84,8 @@ the multi-command sequence, and its Render replays byte-identically. On
 reference ink would be ambiguous); on `add` the combination is defined by the order —
 the anchor resolves the content, colour, transform, and region ink in the
 target Composition's
-canvas, and the effects are then applied to the same single revision. On
+canvas on the same pre-effect basis `layer edit` resolves through (DEC-002,
+ADR-0017 amendment #288), and the effects are then applied to the same single revision. On
 `add`, `--width` is the text width axis (the same spelling `layer edit`
 uses); the canvas dimension meaning of `--width` belongs to `composition
 create` alone.
@@ -368,13 +369,19 @@ ply layer edit <layerId> --anchor center,top --x 100 --y 200
   placement edit, and the report states exactly what publishes. A
   bare `center` is ambiguous and refused — name both, e.g. `center,center`.
 - **The anchor box is the painted ink box** (alpha > 0 for images, tight
-  glyph ink for text — exactly the `painted` extents `ply composition
-  measure` reports, unclipped), never the layout content box: transparent
+  glyph ink for text — the unclipped ink `ply composition measure` reports),
+  never the layout content box: transparent
   padding does not count. A padded image's visible subject lands at the
   target while its layout box extends into the padding side; a centered
   headline centers its glyph ink. A Layer with no visible ink (fully
   transparent content, opacity 0) refuses instead of falling back to the
-  layout box.
+  layout box. The ink basis is the **pre-effect** painted ink (DEC-002,
+  ADR-0017 amendment #288): the ink-extending effect facts (shadow, outline)
+  are stripped inside the one shared resolution both `composition add` and
+  `layer edit` call, so re-anchoring a shadowed or outlined Layer lands
+  where an effect-less twin would, and an effect edit never moves a stored
+  placement. `measure`'s reported `painted` extents still include effect
+  ink; only the anchor's basis strips it.
 - **Transform interaction:** resolution runs against the Layer's CURRENT
   scale/rotation/reflection (the rotated ink box is what gets anchored),
   and anchored placement is its own edit — it cannot be combined with
@@ -425,12 +432,13 @@ ply layer edit <layerId> --shadow none                 # remove (its own edit)
   Layer's shadow rotates with it.
 - **Painted bounds include the shadow:** `ply composition measure` reports
   the shadow-extended ink in `painted`/`paintedOnCanvas`/`clipped` and the
-  effective shadow settings in the `effects` facts; anchored placement
-  (`--anchor`) resolves against the same shadow-extended painted ink — one
-  definition of painted ink. Because anchoring is one-shot, a shadow edit
-  never moves an already-resolved placement; anchoring with a shadow
-  centers the composite (content + shadow). `--anchor` and `--shadow`
-  cannot combine in one edit — make the effect edit first, then anchor.
+  effective shadow settings in the `effects` facts. Anchored placement
+  (`--anchor`) resolves against the **pre-effect** painted ink (DEC-002,
+  ADR-0017 amendment #288) — the shadow's ink is an effect, not part of the
+  anchor basis — so a shadow edit never moves a stored placement, and
+  re-anchoring a shadowed Layer lands where an effect-less twin would.
+  `--anchor` and `--shadow` cannot combine in one edit — make the effect
+  edit first, then anchor.
 - **Revision fact (DEC-002):** the shadow is shared as a whole like
   placement and transform — in-place edits propagate it, forks isolate it,
   cross-Project copies preserve it verbatim, and it participates in the

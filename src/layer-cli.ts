@@ -198,7 +198,13 @@ Options:
                         each Composition's canvas width; disagreement across
                         Compositions refuses — modern revisions use
                         position-independent natural layout per the ADR-0017
-                        amendment). Resolved through the
+                        amendment). The ink basis is the PRE-EFFECT painted
+                        ink (DEC-002, ADR-0017 amendment #288): the
+                        ink-extending effect facts (shadow, outline) never
+                        shift a re-anchoring edit — the same shared basis
+                        one-command 'composition add' resolves on, so the
+                        same --anchor publishes the same stored placement
+                        through both surfaces. Resolved through the
                         paint-identical ink measurement, accurate to its
                         pixel grid (~1px).
 
@@ -274,8 +280,9 @@ Options:
                         own edit. Never changes retained pixels. Combines
                         with --resize/--rotate/--flip and content
                         replacement; cannot combine with --anchor (the
-                        anchor would resolve different ink than the edit
-                        publishes — anchor first, then add the shadow).
+                        anchor resolves the pre-effect ink — the shadow's
+                        ink never moves a stored placement; make the effect
+                        edits separate).
   --outline <spec>      Apply an outline to the Layer's content (#140), on
                         image alpha and text glyphs alike: an ABSOLUTE setter
                         "<width>,<color>" — e.g. "4,#000000" — that replaces
@@ -291,7 +298,9 @@ Options:
                         removal is its own edit. Never changes retained
                         pixels. Combines with --resize/--rotate/--flip and
                         content replacement; cannot combine with --anchor
-                        (anchor first, then add the outline).
+                        (the anchor resolves the pre-effect ink — the
+                        outline's ring is an effect, not anchor ink; make
+                        the effect edits separate).
   --vector-color <hex|none>
                         Paint a vector image Layer's shape in one colour
                         (#215, spec #207 US-005): an ABSOLUTE setter taking

@@ -328,3 +328,84 @@ test("a pre-existing manifest replays byte-identically after later edits", async
   const replayed = (replay.replay as { output: string }).output;
   expect(await readFile(replayed)).toEqual(await readFile((rendered.render as { output: string }).output));
 });
+/** TEST-004 (spec #285 US-002, DEC-002, ADR-0017 amendment #288): the same
+ * --anchor with an effect present publishes the SAME stored placement
+ * through one-command `composition add` and through a later re-anchoring
+ * `layer edit` — both surfaces resolve through the ONE shared pre-effect
+ * ink resolution, so re-anchoring a shadowed (or outlined) Layer never
+ * moves it. */
+test("anchor parity: the same --anchor with an effect lands the same stored placement through add and through edit", async () => {
+  await createComposition("parity-shadow-one");
+  await createComposition("parity-shadow-multi");
+
+  // One-command route: content + anchored placement + effect in ONE add.
+  // The anchor resolves the pre-effect ink (subject ink offset (20, 10) from
+  // the placement point), so left,top at (100, 100) publishes (80, 90).
+  const oneShadow = await json([
+    "composition", "add", "parity-shadow-one", "hero",
+    "--image", padImagePath,
+    "--anchor", "left,top", "--x", "100", "--y", "100",
+    "--shadow", "-10,0,0,#000000",
+  ]);
+  const oneShadowId = (oneShadow.layer as { id: string }).id;
+  expect(await revisionCount(oneShadowId)).toBe(1);
+  const oneShadowState = (oneShadow.layer as { currentRevision: { x: number; y: number } }).currentRevision;
+  expect(oneShadowState.x).toBe(80);
+  expect(oneShadowState.y).toBe(90);
+
+  // Multi-command route: content placed plainly, then the shadow (the
+  // rendered ink grows), then the SAME anchor — the re-anchoring scenario.
+  // The anchor edit resolves the SAME pre-effect ink basis, so the stored
+  // placement equals the one-command route's: the shadow never moves it.
+  const added = await json([
+    "composition", "add", "parity-shadow-multi", "hero", "--image", padImagePath, "--x", "100", "--y", "100",
+  ]);
+  const multiShadowId = (added.layer as { id: string }).id;
+  await json(["layer", "edit", multiShadowId, "--shadow", "-10,0,0,#000000"]);
+  await json(["layer", "edit", multiShadowId, "--anchor", "left,top", "--x", "100", "--y", "100"]);
+  const multiShadowState = (await json(["layer", "inspect", multiShadowId])) as {
+    layer: { currentRevision: { x: number; y: number } };
+  };
+  expect(multiShadowState.layer.currentRevision.x).toBe(80);
+  expect(multiShadowState.layer.currentRevision.y).toBe(90);
+  expect(await revisionCount(multiShadowId)).toBe(3);
+
+  // Both routes publish the same measured geometry: the effect-ink extents
+  // around the same placement.
+  const oneMeasure = await measure("parity-shadow-one", "hero");
+  const multiMeasure = await measure("parity-shadow-multi", "hero");
+  expect(geometry(oneMeasure)).toEqual(geometry(multiMeasure));
+  expect(oneMeasure.painted).toEqual({ x: 90, y: 100, width: 34, height: 28 });
+
+  // The outline variant (DEC-002: outline is an effect, not anchor ink):
+  // the same parity through both surfaces.
+  await createComposition("parity-outline-one");
+  await createComposition("parity-outline-multi");
+  const oneOutline = await json([
+    "composition", "add", "parity-outline-one", "hero",
+    "--image", padImagePath,
+    "--anchor", "left,top", "--x", "100", "--y", "100",
+    "--outline", "6,#000000",
+  ]);
+  const oneOutlineId = (oneOutline.layer as { id: string }).id;
+  expect(await revisionCount(oneOutlineId)).toBe(1);
+  const oneOutlineState = (oneOutline.layer as { currentRevision: { x: number; y: number } }).currentRevision;
+  expect(oneOutlineState.x).toBe(80);
+  expect(oneOutlineState.y).toBe(90);
+
+  const addedOutline = await json([
+    "composition", "add", "parity-outline-multi", "hero", "--image", padImagePath, "--x", "100", "--y", "100",
+  ]);
+  const multiOutlineId = (addedOutline.layer as { id: string }).id;
+  await json(["layer", "edit", multiOutlineId, "--outline", "6,#000000"]);
+  await json(["layer", "edit", multiOutlineId, "--anchor", "left,top", "--x", "100", "--y", "100"]);
+  const multiOutlineState = (await json(["layer", "inspect", multiOutlineId])) as {
+    layer: { currentRevision: { x: number; y: number } };
+  };
+  expect(multiOutlineState.layer.currentRevision.x).toBe(80);
+  expect(multiOutlineState.layer.currentRevision.y).toBe(90);
+  const oneOutlineMeasure = await measure("parity-outline-one", "hero");
+  const multiOutlineMeasure = await measure("parity-outline-multi", "hero");
+  expect(geometry(oneOutlineMeasure)).toEqual(geometry(multiOutlineMeasure));
+  expect(oneOutlineMeasure.painted).toEqual({ x: 94, y: 94, width: 36, height: 40 });
+}, 120_000);
