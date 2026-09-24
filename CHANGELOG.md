@@ -1,6 +1,28 @@
 # Changelog
 
 ## [Unreleased]
+- Made `composition sheet --cell` accept a `WxH` box as well as a single
+  size (which stays square), through one cell-spec parser shared by the CLI
+  and the module API; the geometry limits — the per-axis render cap and the
+  total-pixel cap — apply to both axes, each named in the refusal. Breaking:
+  the `--json` result's `cell` field changed shape — it was a number (the
+  square cell size in px), it is now `{"width": <px>, "height": <px>}` —
+  machine-readable consumers reading `cell` must migrate (#292).
+- Changed the default label of a Generation Job output in a comparison sheet
+  to `<job id> #<output index>` (the 1-based record index, through one shared
+  label function beside the #291 output resolver) instead of the
+  64-character content hash. A file inside a job's `outputs/` directory whose
+  record is missing, unreadable, or does not list the file is refused
+  clearly, never silently degraded to a bare file name (#292).
+- Made a comparison sheet whose inputs are all local image files run without
+  a Project when `--out` names the destination: the Project is resolved
+  lazily, exactly when a Composition-name token, a Render manifest input, or
+  the default in-Project destination needs it, and each refusal names what
+  the Project was needed for. Outside a Project, `--out` is the plain
+  destination with the same existing-target refusals, and a recorded Render
+  output beside it is still never overwritten. Sheet invocations that do not
+  include a Generation Job output render byte-identically to before (PR
+  evidence) (#292).
 - Made `--output` accept the 12-character short hash that the refusal and
   `generate show` print, any unique longer sha-256 prefix, and uppercase hex
   (normalized), beside the existing 1-based index and full sha-256, through
