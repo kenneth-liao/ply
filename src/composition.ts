@@ -23,12 +23,16 @@ import {
   readLayerInternalFull,
   resolveTextTypographyControls,
   resolveTextWrapWidthControl,
+  resolveTextFitBoxControl,
+  textFitBoxNarrowerThanWrapRefusal,
+  textFitRefusal,
   validateShapeContent,
   shapeContentIdentity,
   type LayerShapeGeometry,
 } from "./layer.js";
 import { resolveFace, resolveTextAxes, fontAssetBytes, callerFontFace, verifyCallerFontResolves, type CallerFontFacts } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
+import { measureTextFit } from "./composition-measure.js";
 import { type LayerFill, canonicalizeTextFillForStorage } from "./fill.js";
 import {
   oneCommandApplicationOrder,
@@ -714,6 +718,14 @@ export async function addTextLayerToComposition(
      * previous value — and stores nothing).
      */
     wrapWidth?: number | null;
+    /**
+     * Optional text fit box in layout px (#295, spec #285 US-016, ISC-56,
+     * DEC-010/DEC-005): validated as a pair of positive finite numbers at
+     * the ONE domain boundary — a refused box publishes nothing, and a set
+     * value is stored only when set. `null` is the removal form (meaningless
+     * on add — there is no previous value — and stores nothing).
+     */
+    fitBox?: { width: number; height: number } | null;
   },
   options: AddLayerOptions & { fontSize?: number } = {},
 ): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
@@ -776,6 +788,15 @@ export async function addTextLayerToComposition(
       // DEC-005) — a refused width publishes nothing, and a set value is
       // stored only when set.
       const wrapWidth = resolveTextWrapWidthControl(input.wrapWidth);
+      // The fit box resolves at the same one boundary (#295, DEC-010/
+      // DEC-005) — a refused box publishes nothing, and a set value is
+      // stored only when set. The fit/wrap combination rule compares the
+      // resolved values: a box narrower than the wrap width could never be
+      // satisfied by shrinking, so it is refused here.
+      const fitBox = resolveTextFitBoxControl(input.fitBox);
+      if (fitBox !== undefined && wrapWidth !== undefined && fitBox.width < wrapWidth) {
+        throw new Error(textFitBoxNarrowerThanWrapRefusal(fitBox.width, wrapWidth));
+      }
       const contentHash = createHash("sha256").update(bytes).digest("hex");
       if (callerFont !== undefined) {
         // The render probe's family-resolution gate applies to caller fonts
@@ -800,6 +821,7 @@ export async function addTextLayerToComposition(
           ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
           ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
           ...(wrapWidth !== undefined ? { wrapWidth } : {}),
+          ...(fitBox !== undefined ? { fitWidth: fitBox.width, fitHeight: fitBox.height } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
           x,
           y,
@@ -817,6 +839,20 @@ export async function addTextLayerToComposition(
           contentBytes: bytes,
         },
       );
+      // Fit-to-box validation (#295, spec #285 US-016, DEC-010): the box is
+      // validated against the FINAL revision before anything is retained or
+      // published — the ONE in-page fit derivation (the same pass paint,
+      // measure, and anchor run) derives the effective size, and text that
+      // cannot fit at the minimum size is refused, naming the box and the
+      // size needed. A refused add leaves no Layer, no use, and no content.
+      if (revision.kind === "text" && revision.fitWidth !== undefined) {
+        const fit = await measureTextFit({ ...revision, x: 0, y: 0 } as ResolvedLayerRevision, bytes);
+        if (fit !== null && !fit.fits) {
+          throw new Error(
+            textFitRefusal(revision.text, revision.fitWidth, revision.fitHeight!, fit.neededFontSize ?? revision.fontSize),
+          );
+        }
+      }
       await storeContentBlob(projectPath, contentHash, bytes);
       return revision;
     }, options.position).then(({ layerId, layer }) => ({
@@ -1440,6 +1476,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ...(source.tracking !== undefined ? { tracking: source.tracking } : {}),
       ...(source.lineHeight !== undefined ? { lineHeight: source.lineHeight } : {}),
       ...(source.wrapWidth !== undefined ? { wrapWidth: source.wrapWidth } : {}),
+      ...(source.fitWidth !== undefined ? { fitWidth: source.fitWidth, fitHeight: source.fitHeight } : {}),
       ...(source.callerFont !== undefined ? { callerFont: source.callerFont } : {}),
       x: source.x,
       y: source.y,

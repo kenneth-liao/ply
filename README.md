@@ -757,6 +757,52 @@ ply layer edit <layerId> --wrap-width none --in-place
   width, and setting one is an edit — the revision becomes natural layout
   like any other text edit.
 
+## Text fit box (new surface)
+
+A text Layer also takes an optional fit box (#295, spec #285 US-016,
+DEC-010/DEC-005, ADR-0017 amendment) on both `composition add` and
+`layer edit` — an ABSOLUTE setter in layout px, before the canonical
+transform:
+
+```bash
+ply composition add poster headline --text "THE QUICK BROWN FOX" \
+  --font Archivo --font-size 120 --fit-box 600x200 -p ~/projects/my-poster
+ply layer edit <layerId> --fit-box 600x200 --in-place
+ply layer edit <layerId> --fit-box none --in-place
+```
+
+- **Fit shrinks the font size only (DEC-010).** With a box set, the font
+  size shrinks until the laid-out text block fits the box — it never grows
+  the size, and it never changes weight or width. Text that already fits
+  keeps its stored size and renders byte-identically to the boxless
+  revision.
+- **`measure` reports the effective font size.** The size is derived at
+  read time by ONE derivation pass shared by paint, measure, and anchored
+  placement — it is never stored, so edits to the text, font, tracking, or
+  wrap width re-derive it automatically, and `composition measure` reports
+  it as `effectiveFontSize` beside the stored `fit` box.
+- **The below-minimum refusal.** Text that cannot fit at the documented
+  8px minimum is refused on add and edit before anything is published,
+  naming the box and the size needed.
+- **Fit and wrap width combine.** The box bounds the block as laid out:
+  with a wrap width, the text still wraps at the wrap width and the box
+  height bounds the wrapped block's height. A fit box narrower than the
+  wrap width is refused — a wrapped block can be up to its wrap width
+  wide, so a narrower box could never be satisfied.
+- **Stored only when set.** The stored fields participate in the revision
+  hash only when present (`:fitbox(<W>x<H>)`), so pre-#295 revisions keep
+  their exact ids and pinned Render history replays byte-identically.
+- **Removal restores byte-for-byte.** `--fit-box none` removes the stored
+  box and the unfitted render comes back byte-for-byte; an omitted option
+  carries the current box across any edit. Each axis is a positive finite
+  number up to the shared 8192px per-axis bound (the same cap as
+  font-size and the resize forms) — malformed, zero, negative, and
+  over-cap values are refused before anything is published (exit 2),
+  naming the control and its allowed range.
+- **Legacy interaction.** A legacy-rule (pre-#287) revision never carries
+  a fit box, and setting one is an edit — the revision becomes natural
+  layout like any other text edit.
+
 ## Shape Layers (new surface)
 
 A shape Layer (#208) is a filled geometric region created from parameters

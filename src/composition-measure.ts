@@ -92,16 +92,19 @@ import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
 import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
 import {
+  applyTextFit,
   buildCompositionHtml,
   layerMaxScale,
   rejectUnresolvedFonts,
   sizeEffectFilterRegions,
   type SnapshotLayer,
+  type TextFitProbe,
 } from "./composition-paint.js";
 import {
   normalizeStoredTextAxes,
   normalizeStoredTextTypography,
   normalizeStoredTextWrapWidth,
+  normalizeStoredTextFitBox,
   type LayerOutline,
   type LayerShadow,
   type LayerTextTypography,
@@ -194,6 +197,17 @@ export interface MeasuredLayerBounds {
    * the wrapped box: measurement renders the exact paint markup, which lays
    * the text out at this width before the canonical transform applies. */
   wrapWidth: number | null;
+  /** The stored fit box (#295), reported like the wrap width for
+   *  auditability — the box the ONE fit derivation shrinks the font size
+   *  against (layout px, before the transform), or null when the text Layer
+   *  carries none. Text Layers only; every other kind reports null. */
+  fit: { width: number; height: number } | null;
+  /** The EFFECTIVE font size (#295): the size the ONE in-page fit
+   *  derivation paints and measures at — the stored font size when no fit
+   *  box is stored or the block already fits, a smaller size when the box
+   *  shrank it (DEC-010: shrink-only). Derived at read time, never stored.
+   *  Text Layers only; every other kind reports null. */
+  effectiveFontSize: number | null;
 }
 
 export interface MeasureCompositionResult {
@@ -371,9 +385,9 @@ function roundBox(box: Box | null): Box | null {
  * geometry — refused loudly with the caller's named error.
  */
 function projectMeasuredGeometry(
-  measured: { content: { width: number; height: number }; box: Box; painted: Box | null; refused?: string | null } | undefined,
+  measured: { content: { width: number; height: number }; box: Box; painted: Box | null; refused?: string | null; fit?: TextFitProbe | null } | undefined,
   missingError: string,
-): { painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null } {
+): { painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null; fit: TextFitProbe | null } {
   if (!measured) {
     throw new Error(missingError);
   }
@@ -388,6 +402,7 @@ function projectMeasuredGeometry(
     },
     content: { width: round2(measured.content.width), height: round2(measured.content.height) },
     refused: measured.refused ?? null,
+    fit: measured.fit ?? null,
   };
 }
 
@@ -429,8 +444,8 @@ function inkBounds(png: { width: number; height: number; rgba: Uint8Array }, off
 async function measureSnapshot(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
-  options: { page?: Page; captureUseName?: string } = {},
-): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null; refused: string | null }[]> {
+  options: { page?: Page; captureUseName?: string; layoutOnly?: boolean } = {},
+): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null; refused: string | null; fit: TextFitProbe | null }[]> {
   const run = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
     await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
@@ -442,6 +457,12 @@ async function measureSnapshot(
     // The same retained-font gate as painting: an unresolved face is a
     // loud failure, never a fallback measurement.
     await rejectUnresolvedFonts(page, layers);
+    // Text fit-to-box derivation (#295): the paint path's exact pass, after
+    // the same font gate — the ONE derivation point shared with painting, so
+    // measured and rendered text agree on the effective font size and the
+    // fitted box. Runs BEFORE the geometry probe, so every reported box is
+    // the fitted one.
+    const fitProbes = await applyTextFit(page, layers);
     const measured = await page.evaluate(
       MEASURE_PROBE,
       layers.map((l) => (l.revision.visibleRegion !== undefined ? { ...l.revision.visibleRegion } : null)),
@@ -560,7 +581,12 @@ async function measureSnapshot(
       }
     }
 
-    return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null, refused: refused[i] ?? null }));
+    // The painted-ink pass is skippable (#295): the fit-refusal probe needs
+    // only the layout derivation, never the per-Layer ink screenshots.
+    if (options.layoutOnly === true) {
+      return measured.map((m, i) => ({ ...m, painted: null, refused: null, fit: fitProbes[i] ?? null }));
+    }
+    return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null, refused: refused[i] ?? null, fit: fitProbes[i] ?? null }));
   };
   return options.page ? run(options.page) : withRenderPage(run);
 }
@@ -676,6 +702,15 @@ export async function measureCompositionLayers(
         // auditability — the same fact paint lays the wrapped box out at.
         wrapWidth:
           rev.kind === "text" ? normalizeStoredTextWrapWidth(rev) ?? null : null,
+        // The stored fit box (#295) and the EFFECTIVE font size the ONE
+        // derivation derived for this very measurement — measure reports the
+        // size painting applies.
+        fit:
+          rev.kind === "text" ? normalizeStoredTextFitBox(rev) ?? null : null,
+        effectiveFontSize:
+          rev.kind === "text"
+            ? m.fit?.effectiveFontSize ?? rev.fontSize
+            : null,
       };
     });
 
@@ -741,7 +776,7 @@ export async function measureStandaloneSnapshot(
   currentRevision: ResolvedLayerRevision,
   contentBytes: Buffer,
   options: { page?: Page } = {},
-): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null }> {
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null; fit: TextFitProbe | null }> {
   const standalone: SnapshotLayer = {
     name: currentRevision.layerId,
     layerId: currentRevision.layerId,
@@ -760,6 +795,7 @@ export async function measureStandaloneSnapshot(
   );
   return {
     ...projected,
+    fit: projected.fit,
     content: {
       width:
         currentRevision.kind === "text"
@@ -771,6 +807,36 @@ export async function measureStandaloneSnapshot(
           : currentRevision.height,
     },
   };
+}
+
+/**
+ * Derive ONE text Layer's fit result standalone — the fit-refusal probe
+ * (#295, spec #285 US-016, DEC-010): the add and edit paths call this with
+ * the would-be revision and its (possibly not-yet-retained) font bytes
+ * before anything is published. The read-snapshot pattern applies: no
+ * Project state is consulted, no lock is taken, and nothing is written —
+ * the caller owns resolution (and holds the Project lock). The derivation
+ * is the paint path's exact in-page pass over the paint path's exact
+ * markup, so the derived size is the size every later read re-derives.
+ * Layout-only: the geometry derivation needs no painted-ink screenshots.
+ * Returns null when the revision is not text or carries no fit box.
+ */
+export async function measureTextFit(
+  currentRevision: ResolvedLayerRevision,
+  contentBytes: Buffer,
+  options: { page?: Page } = {},
+): Promise<TextFitProbe | null> {
+  if (currentRevision.kind !== "text") return null;
+  if (normalizeStoredTextFitBox(currentRevision) === undefined) return null;
+  const standalone: SnapshotLayer = {
+    name: currentRevision.layerId,
+    layerId: currentRevision.layerId,
+    revision: { ...currentRevision, x: 0, y: 0 },
+    contentBytes,
+  };
+  const canvas = { width: STANDALONE_CANVAS_PX, height: STANDALONE_CANVAS_PX };
+  const [measured] = await measureSnapshot(canvas, [standalone], { ...options, layoutOnly: true });
+  return measured.fit;
 }
 
 /**
@@ -793,7 +859,7 @@ export async function measureStandaloneSnapshot(
 export async function measureProvisionalLayer(
   canvas: { width: number; height: number },
   provisional: SnapshotLayer,
-): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null }> {
+): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null; fit: TextFitProbe | null }> {
   const [measured] = await measureSnapshot(canvas, [provisional]);
   // The same shared rounding projection the standalone line uses
   // (review INT-apply-1): the two lines' rounded output can never drift.

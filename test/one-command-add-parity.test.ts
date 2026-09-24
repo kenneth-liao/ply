@@ -298,6 +298,42 @@ test("wrap width parity (#294, DEC-001/DEC-005): the one-command --wrap-width ad
   expect(await renderBytes("one-w")).toEqual(await renderBytes("multi-w"));
 });
 
+test("fit box parity (#295, DEC-010/DEC-005): the one-command --fit-box add equals the multi-command sequence", async () => {
+  await createComposition("one-f");
+  await createComposition("multi-f");
+
+  const headline = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG";
+  // One command: the fit box in the text-content stage of a single add.
+  const one = await json([
+    "composition", "add", "one-f", "headline",
+    "--text", headline, "--font", "Archivo", "--font-size", "120", "--color", "#ffcc00",
+    "--fit-box", "600x200",
+  ]);
+  const oneLayerId = (one.layer as { id: string }).id;
+  // Multi-command: content add, then the fit box as its own text-style edit.
+  const multiLayerId = await multiCommandBuild(
+    "multi-f", "headline",
+    ["--text", headline, "--font", "Archivo", "--font-size", "120", "--color", "#ffcc00"],
+    ["--fit-box", "600x200"], [], [],
+  );
+
+  expect(await revisionCount(oneLayerId)).toBe(1);
+  expect(await revisionCount(multiLayerId)).toBe(2);
+
+  // The fact is stored on both routes, the effective size re-derives to the
+  // same fitted look, and the fitted boxes agree.
+  const oneMeasure = await measure("one-f", "headline");
+  const multiMeasure = await measure("multi-f", "headline");
+  expect((oneMeasure as unknown as { fit: { width: number; height: number } }).fit).toEqual({ width: 600, height: 200 });
+  expect((multiMeasure as unknown as { fit: { width: number; height: number } }).fit).toEqual({ width: 600, height: 200 });
+  expect(oneMeasure.content.width).toBeLessThanOrEqual(602);
+  expect(multiMeasure.content.width).toBeLessThanOrEqual(602);
+  expect(oneMeasure.effectiveFontSize).toBe(multiMeasure.effectiveFontSize);
+  expect(geometry(oneMeasure)).toEqual(geometry(multiMeasure));
+
+  expect(await renderBytes("one-f")).toEqual(await renderBytes("multi-f"));
+});
+
 test("text Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one-t");
   await createComposition("multi-t");

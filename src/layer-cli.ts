@@ -143,6 +143,17 @@ Options:
                         unwrapped one-line render byte-for-byte. Setting
                         a width is an edit, so a legacy-rule revision
                         becomes natural layout; bounded 1–8192 layout px
+  --fit-box <WxH|none>  Fit box for a text Layer in layout px (#295,
+                        spec #285 US-016, DEC-010): an ABSOLUTE setter —
+                        with a box set, the font size shrinks (only
+                        shrinks; never the weight or width) until the
+                        laid-out text fits the box, and measure reports
+                        the effective font size; text that cannot fit at
+                        the 8px minimum is refused, naming the box and
+                        the size needed. "none" removes the box and
+                        restores the unfitted render byte-for-byte. With
+                        a wrap width, the box bounds the WRAPPED block
+                        (its width must be at least the wrap width)
   --weight <num>        Text weight for a text Layer (#179, #232):
                         validated against the Layer's font's real weight
                         axis — Archivo 100-900 (default 400); static faces
@@ -815,6 +826,7 @@ async function run() {
           tracking: parsed.tracking as number | null | undefined,
           lineHeight: parsed["line-height"] as number | null | undefined,
           wrapWidth: parsed["wrap-width"] as number | null | undefined,
+          fitBox: parsed["fit-box"] as { width: number; height: number } | null | undefined,
           x: editX,
           y: editY,
           opacity: parsed.opacity as number | undefined,
@@ -1027,6 +1039,12 @@ async function run() {
               // absence IS the no-wrap-width (natural one-line) form.
               if (rev.wrapWidth !== undefined) {
                 console.log(`  Wrap width: ${rev.wrapWidth}px`);
+              }
+              // The stored fit box (#295): shown only when set — absence IS
+              // the no-box form. The effective font size is derived at read
+              // time (measure reports it), never stored.
+              if (rev.fitWidth !== undefined) {
+                console.log(`  Fit box: ${rev.fitWidth}×${rev.fitHeight}px`);
               }
             } else if (rev.kind === "shape") {
               // Shape parameters (#208): the geometry, its size, the corner

@@ -857,3 +857,63 @@ test("matrix: wrap width (--wrap-width) applies to text Layers, refuses image an
   expect(rowsWithInk.length).toBeGreaterThan(2.5 * 24); // more than one 24px line
   expect(inkAt(150, 60)).toBe(false); // right of the wrap width: no ink
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// Fit box property × kind matrix (#295, spec #285 US-016, DEC-010/DEC-005,
+// TEST-002)
+// ---------------------------------------------------------------------------
+
+test("matrix: fit box (--fit-box) applies to text Layers, refuses image and shape", async () => {
+  await makeComp("comp-fit", 800, 400);
+
+  // Text Layer: the fact stores, and a wide headline shrinks to one line
+  // INSIDE the box — the ink's columns stop at the box's right edge.
+  const tAdd = await invoke([
+    "composition", "add", "comp-fit", "fitted",
+    "--text", "THE QUICK BROWN FOX JUMPS",
+    "--font", "Archivo", "--font-size", "64", "--color", "#000000",
+    "--fit-box", "300x120", "--x", "20", "--y", "40",
+    "--project", projDir, "--json",
+  ]);
+  expect(tAdd.code).toBe(0);
+  const tRev = JSON.parse(tAdd.stdout).layer.currentRevision;
+  expect(tRev.fitWidth).toBe(300);
+  expect(tRev.fitHeight).toBe(120);
+
+  // Raster image Layer: refused — a fit box is a text layout fact, so the
+  // image/text content-kind exclusivity fires first on add.
+  const raster = path.join(tempDir, "fit-red.png");
+  await writeFile(raster, solidPng(60, 40, [255, 0, 0, 255]));
+  const iAdd = await invoke([
+    "composition", "add", "comp-fit", "img",
+    "--image", raster, "--fit-box", "300x120",
+    "--project", projDir, "--json",
+  ]);
+  expect(iAdd.code).toBe(2);
+  expect(JSON.parse(iAdd.stdout).error).toContain("--image and --text are mutually exclusive content kinds");
+
+  // Shape Layer: refused the same way (--fit-box is a text content kind).
+  const sAdd = await invoke([
+    "composition", "add", "comp-fit", "shape-fit",
+    "--shape", "rectangle", "--size", "40x20", "--fill", "#ff0000", "--fit-box", "300x120",
+    "--project", projDir, "--json",
+  ]);
+  expect(sAdd.code).toBe(2);
+  expect(JSON.parse(sAdd.stdout).error).toContain("--shape and --image/--from-generation/--from-matte/--text are mutually exclusive content kinds");
+
+  // The fitted text paints as ONE line inside the 300px-wide box: ink in the
+  // box's rows, and the column just right of the box stays blank.
+  const png = await render("comp-fit", "fit-matrix.png");
+  const inkAt = (x: number, y: number): boolean => pixel(png, x, y)[3]! > 0;
+  let rowsWithInk = 0;
+  for (let y = 40; y < 200; y++) {
+    let rowHasInk = false;
+    for (let x = 20; x < 340; x++) {
+      if (inkAt(x, y)) { rowHasInk = true; break; }
+    }
+    if (rowHasInk) rowsWithInk++;
+  }
+  expect(rowsWithInk).toBeGreaterThan(10); // one line of fitted ink
+  expect(rowsWithInk).toBeLessThan(120); // never taller than the box
+  expect(inkAt(340, 80)).toBe(false); // right of the box: no ink
+}, 30_000);

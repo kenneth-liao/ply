@@ -149,7 +149,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "image", "from-generation", "from-matte", "text", "shape", "size", "corner-radius", "fill",
       "vector-color",
       "font", "font-file", "font-size", "color",
-      "weight", "width", "tracking", "line-height", "wrap-width", "x", "y", "opacity", "anchor",
+      "weight", "width", "tracking", "line-height", "wrap-width", "fit-box", "x", "y", "opacity", "anchor",
       "resize", "resize-to", "cover-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
       "brightness", "contrast", "saturation", "warmth", "blend", "glow",
     ]);
@@ -162,8 +162,8 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
   });
 
   it("the dash-numeric facts come from the table", () => {
-    expect(layerDashNumericFlags(["x", "y", "tracking", "line-height", "wrap-width"])).toEqual([
-      "--x", "--y", "--tracking", "--line-height", "--wrap-width",
+    expect(layerDashNumericFlags(["x", "y", "tracking", "line-height", "wrap-width", "fit-box"])).toEqual([
+      "--x", "--y", "--tracking", "--line-height", "--wrap-width", "--fit-box",
     ]);
     // The edit surface's join covers the transform/effect/region numeric
     // options too.
@@ -176,8 +176,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // with its range); #211 adds --visible-region the same way; #212 adds
     // --visible-region-radius (a negative radius is refused by the parser,
     // but the boundary still accepts dash-leading values); #219 adds --warmth (-1..1);
-    // #294 adds --wrap-width (a negative width is refused by the range validator).
-    expect(editFlags).toHaveLength(13);
+    // #294 adds --wrap-width (a negative width is refused by the range validator);
+    // #295 adds --fit-box the same way (a negative axis is refused by the range validator).
+    expect(editFlags).toHaveLength(14);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--warmth");
   });
@@ -207,7 +208,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "add")).toBeUndefined();
     // The edit surface reads presence exactly: the exclusivity refusal fires.
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "edit")).toBe(
-      "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width) are mutually exclusive.",
+      "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box) are mutually exclusive.",
     );
     // The other content kinds keep strict presence on both surfaces: a
     // blank --image still conflicts with --from-generation/--from-matte.

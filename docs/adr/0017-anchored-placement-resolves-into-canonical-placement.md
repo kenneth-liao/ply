@@ -210,3 +210,54 @@ the Layer.
   readers — an over-cap stored field is a malformed document, refused
   before any render can hang on it. Refusals are identical on both
   surfaces, and every refusal fires before anything is published.
+
+## Amendment: Fit-to-box shrinks the font size only (spec #285 / #295)
+
+- **The fit box (US-016/ISC-56, DEC-010, DEC-005).** A text Layer takes an
+  optional `fitWidth`/`fitHeight` pair of revision facts — an ABSOLUTE setter
+  in layout pixels, applied before the canonical transform. With a box set,
+  the font size shrinks until the laid-out text block fits the box. The fit
+  SHRINKS ONLY: it never grows the size, and it never changes weight or
+  width (DEC-010) — text that already fits keeps its stored size and renders
+  byte-identically to the boxless revision.
+- **One derivation point, nothing stored.** The effective font size is never
+  stored and never hashed: it is derived at read time by ONE in-page pass
+  (`applyTextFit` in src/composition-paint.ts) run against the one shared
+  markup builder, called by the paint flow and by the shared measurement
+  snapshot — so paint, `composition measure`/`layer measure`, anchored
+  placement, and the add/edit validation probes all re-derive the same size.
+  Edits to the text, font, tracking, or wrap width re-derive automatically;
+  there is no second copy of the effective size to go stale. `measure`
+  reports the derived size as `effectiveFontSize`.
+- **The below-minimum refusal.** The fit has a documented fixed floor,
+  `MIN_FIT_FONT_SIZE` (8px). Text that cannot fit its box at the minimum is
+  refused on add and edit BEFORE anything is published, naming the box and
+  the size needed — one shared refusal builder (`textFitRefusal`) serves
+  both surfaces, so their refusals never disagree. The refusal probe is
+  layout-only (the same derivation pass, no ink screenshots), and an edit
+  that cannot change the fit (placement, opacity, effects) skips it: the
+  published state was validated at its own write time.
+- **How fit and wrap width combine.** The box bounds the block AS LAID OUT
+  by its layout rule: with a wrap width, the block is the wrapped block at
+  that width — the wrap width stays the wrapping width and the box HEIGHT
+  bounds the wrapped block's height. A fit box narrower than the wrap width
+  could never be satisfied (a wrapped block can be up to its wrap width
+  wide), so it is refused at the set-time boundary on both surfaces and in
+  the stored-document reader.
+- **Stored only when set; removal restores byte-for-byte (DEC-005).** The
+  hash appends `:fitbox(<W>x<H>)` only when present, so pre-#295 revision
+  ids are byte-identical. The documented removal value at the command
+  boundary is `"none"` (`--fit-box none`); removing the box re-derives the
+  stored font size and restores the unfitted render byte-for-byte. An
+  omitted option carries the current box across any edit. The range is a
+  pair of positive finite numbers up to the shared 8192px per-axis bound at
+  the ONE domain boundary (`resolveTextFitBoxControl`), normalized at the
+  single ingestion point (`normalizeStoredTextFitBox`) beside the other
+  text readers.
+- **Legacy interaction.** A legacy-rule revision never carries a fit box,
+  and setting one is an edit — the revision publishes
+  `layoutRule: "natural"` with it, exactly like any other text edit
+  (ADR-0017's #287 amendment). Retained Renders keep replaying their pinned
+  revisions byte-identically: revisions without the box take the exact
+  pre-#295 markup, and a boxed revision's derivation is a deterministic
+  function of the revision facts and the retained font bytes.
