@@ -62,7 +62,7 @@ import { measureCompositionLayers, type MeasuredLayerBounds } from "./compositio
 import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
 import { renderComparisonSheet, parseLabelOverrides } from "./composition-sheet.js";
-import { DEFAULT_SHEET_CELL, DEFAULT_SHEET_COLUMNS } from "./composition-sheet.js";
+import { DEFAULT_SHEET_CELL, DEFAULT_SHEET_COLUMNS, parseSheetCellSpec, type SheetCell } from "./composition-sheet.js";
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
@@ -221,7 +221,8 @@ composition — Composition authoring and inspection
       Labels default to the input's name (the Composition name, the file's
       base name, or the manifest's Composition) and can be overridden with
       --label <1-based index>=<text>. --columns (default 2) and --cell
-      (default 512, square) size the grid; mixed aspect ratios are fitted
+      (default 512, a square box per cell, or WxH for a rectangular box) size
+      the grid; mixed aspect ratios are fitted
       inside their cells without distortion. --pair lays the inputs out as
       reference-beside-result rows (an even number of inputs, in
       reference-then-result order). A missing or undecodable input is
@@ -347,9 +348,10 @@ Options:
                         anything is published. Required with --shape.
   --order <names>       Comma-separated permutation of use names (required for reorder)
   --columns <int>       Sheet grid width in cells (default: 2)
-  --cell <px>           Sheet cell size in px — a square content box per cell
-                        (default: 512); content is fitted inside without
-                        distortion
+  --cell <px>|<WxH>     Sheet cell content box — one size (a square box) or
+                        WxH (a rectangular box, e.g. 640x360 for 16:9 work);
+                        geometry limits apply to both axes (default: 512);
+                        content is fitted inside without distortion
   --pair                Pairing mode: inputs are reference,result pairs, one
                         pair per row (an even number of inputs, reference
                         immediately before its result); conflicts with
@@ -1527,7 +1529,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
       // contract are shaped here too, so a malformed caller argument
       // exits 2; the module re-runs the same parses as its API fail-fast.
       let columns: number | undefined;
-      let cellSize: number | undefined;
+      let cellSpec: SheetCell | undefined;
       if (values.columns !== undefined) {
         columns = parseNumericArgument(values.columns);
         if (!Number.isInteger(columns) || columns < 1) {
@@ -1536,10 +1538,14 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           return;
         }
       }
+      // One cell-spec boundary (#292): the CLI and the module share
+      // parseSheetCellSpec, so a malformed --cell is the same refusal at both
+      // seams — a usage error, exit 2.
       if (values.cell !== undefined) {
-        cellSize = parseNumericArgument(values.cell);
-        if (!Number.isInteger(cellSize) || cellSize < 1) {
-          output({ ok: false, error: "--cell must be an integer of at least 1." }, isJson);
+        try {
+          cellSpec = parseSheetCellSpec(values.cell);
+        } catch (err) {
+          output({ ok: false, error: (err as Error).message }, isJson);
           process.exitCode = 2;
           return;
         }
@@ -1579,9 +1585,12 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         const sheet = await renderComparisonSheet(targetProj, inputs, {
           out: values.out,
           columns,
-          cell: cellSize,
+          cell: cellSpec,
           pair: values.pair,
           labels: labelSpecs,
+          // An explicit --project is a caller statement that a Project is
+          // involved — required, never lazily skipped (review SPEC-1).
+          requireProject: values.project !== undefined,
         });
         teardownOutcome = `The comparison sheet PNG was already written to ${sheet.output}. Do not re-render to recover it.`;
         emitRender(
@@ -1590,7 +1599,8 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           () => {
             const rows = Math.ceil(inputs.length / sheet.columns);
             console.log(
-              `Comparison sheet: ${inputs.length} input(s), ${sheet.columns}×${rows} grid of ${sheet.cell}px cells → ${sheet.output} ` +
+              `Comparison sheet: ${inputs.length} input(s), ${sheet.columns}×${rows} grid of ` +
+                `${sheet.cell.width}×${sheet.cell.height}px cells → ${sheet.output} ` +
                 `(${sheet.width}×${sheet.height} PNG; review artifact; no Render manifest)`,
             );
           },

@@ -43,6 +43,17 @@ export interface GenerationOutputSelection {
   output?: string;
 }
 
+/**
+ * The default label for one Generation Job output (#292): the Job id and the
+ * output's 1-based record index — the index/short-hash vocabulary #291
+ * established, spoken through this one shared function so no surface invents
+ * a second spelling. The 64-character content hash stays a file fact, never
+ * a caller-facing label.
+ */
+export function generationOutputLabel(jobId: string, outputIndex: number): string {
+  return `${jobId} #${outputIndex}`;
+}
+
 export interface SelectedGenerationOutput {
   job: GenerationJobRecord;
   output: UniformOutput;
@@ -201,6 +212,93 @@ function chooseOutput(jobId: string, outputs: UniformOutput[], selector: string 
   throw new Error(
     `Generation Job "${jobId}" has no output "${selector}" — select one with --output <n|sha256|prefix>:\n${choices}`,
   );
+}
+
+/** One existing file resolved as a Generation Job output (#292). */
+export interface ResolvedGenerationOutputFile {
+  jobId: string;
+  /** The output's 1-based index in the record's outputs. */
+  outputIndex: number;
+  output: UniformOutput;
+}
+
+/**
+ * Resolve one existing file as a Generation Job output, purely by shape: the
+ * file's parent directory is named `outputs` and its grandparent is a
+ * job-id-shaped directory holding `job.json`. Anything else returns
+ * `undefined` — the caller treats it as a plain local file, no refusal. A
+ * job-id-shaped directory is a commitment, though: a missing or unreadable
+ * record there is a broken Generation Job input, refused clearly naming the
+ * job (#292), never silently degraded to a bare file-name label. And the
+ * label is provenance: the caller's bytes are verified against the record's
+ * sha-256 identity, and the recorded path is checked for job-directory
+ * containment before matching — the same discipline readVerifiedJobOutput
+ * applies at ingestion and review, so replaced or arbitrary bytes can never
+ * ride under a Job's label (review CRAFT-1).
+ */
+export async function resolveGenerationOutputFile(
+  filePath: string,
+  bytes: Buffer,
+): Promise<ResolvedGenerationOutputFile | undefined> {
+  const outputsDir = path.dirname(filePath);
+  if (path.basename(outputsDir) !== "outputs") return undefined;
+  const jobDir = path.dirname(outputsDir);
+  const jobId = path.basename(jobDir);
+  if (!JOB_ID_PATTERN.test(jobId)) return undefined;
+  let raw: string;
+  try {
+    raw = await readFile(path.join(jobDir, "job.json"), "utf8");
+  } catch {
+    throw new Error(
+      `Generation Job output "${filePath}" sits in job directory "${jobId}", but its job record ` +
+        `${path.join(jobDir, "job.json")} is missing or unreadable — a Generation Job output is labelled from ` +
+        `its record, so a broken one is refused. Move the file out of outputs/ (or restore the record) to use it as a plain image.`,
+    );
+  }
+  const job = parseGenerationJobRecord(raw, jobId);
+  // Containment before matching — lexical (where the path would land) AND
+  // real (where an in-job symlink points, review PROD-2), the same pair
+  // readVerifiedJobOutput applies at ingestion and review. A recorded path
+  // that no longer exists cannot be matched anyway, so its ENOENT is
+  // tolerated here — matching and the byte check still gate the label.
+  for (const o of job.run.outputs) {
+    const recordedFile = path.join(jobDir, o.file);
+    if (outsideDir(jobDir, recordedFile)) {
+      throw new Error(
+        `Generation Job "${jobId}" output path "${o.file}" escapes the job directory — the record cannot be trusted`,
+      );
+    }
+    try {
+      if (await escapesDirReal(jobDir, recordedFile)) {
+        throw new Error(
+          `Generation Job "${jobId}" output path "${o.file}" escapes the job directory (through a symlink) — the record cannot be trusted`,
+        );
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+  }
+  const resolved = path.resolve(filePath);
+  const index = job.run.outputs.findIndex((o) => path.resolve(path.join(jobDir, o.file)) === resolved);
+  if (index < 0) {
+    const choices = job.run.outputs
+      .map((o, i) => `  ${i + 1}: ${o.contentHash.slice(0, 12)} (${path.basename(o.file)})`)
+      .join("\n");
+    throw new Error(
+      `"${filePath}" is not a recorded output of Generation Job "${jobId}" — the record lists:\n${choices}`,
+    );
+  }
+  const output = job.run.outputs[index]!;
+  const actualHash = createHash("sha256").update(bytes).digest("hex");
+  if (actualHash !== output.contentHash) {
+    throw new Error(
+      `Generation Job output "${filePath}" does not match Generation Job "${jobId}" output ${index + 1} — ` +
+        `its bytes hash to ${actualHash.slice(0, 12)}, but the record's identity is ${output.contentHash.slice(0, 12)} — ` +
+        `the file was replaced or corrupted, and it will not be labelled with the Job's provenance`,
+    );
+  }
+  return { jobId, outputIndex: index + 1, output };
 }
 
 /**

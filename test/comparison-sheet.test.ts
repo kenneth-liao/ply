@@ -21,7 +21,8 @@
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
-import { mkdtemp, rm, writeFile, readFile, readdir, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import {
@@ -31,12 +32,15 @@ import {
   SHEET_LABEL_GAP,
   DEFAULT_SHEET_COLUMNS,
   DEFAULT_SHEET_CELL,
+  parseSheetCellSpec,
   sheetGeometry,
   sheetCellRect,
   sheetLabelRect,
   buildSheetPageHtml,
   renderComparisonSheet,
+  type SheetCell,
 } from "../src/composition-sheet.js";
+import { generationOutputLabel } from "../src/generation-retention.js";
 import { getBrowser, closeBrowser } from "../src/browser.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
@@ -145,8 +149,10 @@ const INK_IN = (png: Buffer, rect: { x: number; y: number; width: number; height
   return n;
 };
 
+const SQUARE: SheetCell = { width: 512, height: 512 };
+
 test("sheetGeometry: deterministic layout with pad, gutter, and label strips; over-limit sheets refused", () => {
-  const g = sheetGeometry(2, 512, 3);
+  const g = sheetGeometry(2, SQUARE, 3);
   expect(g.columns).toBe(2);
   expect(g.rows).toBe(2);
   expect(g.width).toBe(SHEET_PAD * 2 + 2 * 512 + SHEET_GUTTER);
@@ -161,12 +167,12 @@ test("sheetGeometry: deterministic layout with pad, gutter, and label strips; ov
   expect(label.y).toBe(SHEET_PAD + 512 + SHEET_LABEL_GAP);
   expect(label.height).toBeGreaterThan(0);
 
-  expect(() => sheetGeometry(2, 8193, 1)).toThrow(/per-axis/);
-  expect(() => sheetGeometry(10, 2000, 100)).toThrow(/render limit|pixels/i);
+  expect(() => sheetGeometry(2, { width: 8193, height: 1 }, 1)).toThrow(/per-axis/);
+  expect(() => sheetGeometry(10, { width: 2000, height: 2000 }, 100)).toThrow(/render limit|pixels/i);
 });
 
 test("buildSheetPageHtml embeds each cell's image and the escaped labels", () => {
-  const g = sheetGeometry(2, 100, 2);
+  const g = sheetGeometry(2, { width: 100, height: 100 }, 2);
   const html = buildSheetPageHtml(g, [
     { src: "data:image/png;base64,AAA", label: 'a "quoted" <label>' },
     { src: "data:image/png;base64,BBB", label: "b" },
@@ -203,7 +209,7 @@ test("a mixed sheet of all three input kinds: count, order, default labels, and 
   ]);
 
   const png = await readFile(json.output);
-  const g = sheetGeometry(DEFAULT_SHEET_COLUMNS, DEFAULT_SHEET_CELL, 3);
+  const g = sheetGeometry(DEFAULT_SHEET_COLUMNS, { width: DEFAULT_SHEET_CELL, height: DEFAULT_SHEET_CELL }, 3);
   expect(decodePng(png).width).toBe(g.width);
   expect(decodePng(png).height).toBe(g.height);
   // Order: cell 0 = red composition, cell 1 = green file, cell 2 = blue
@@ -230,10 +236,11 @@ test("--columns and --cell are honoured; overridden labels appear in the result 
     "--label", "4=custom label",
   ]);
   expect(res.code).toBe(0);
-  const g = sheetGeometry(3, 100, 4);
+  const g = sheetGeometry(3, { width: 100, height: 100 }, 4);
   expect(decodePng(await readFile(json.output)).width).toBe(g.width);
   expect(json.columns).toBe(3);
-  expect(json.cell).toBe(100);
+  // A single size is a square cell.
+  expect(json.cell).toEqual({ width: 100, height: 100 });
   expect(json.inputs[3]!.label).toBe("custom label");
   expect(json.inputs[0]!.label).toBe("img0");
   const png = await readFile(json.output);
@@ -250,7 +257,7 @@ test("mixed aspect ratios fit inside cells without distortion", async () => {
   await writeFile(wide, solidPng(200, 100, RED));
   const { res, json } = await sheet([wide, "--cell", "100", "--columns", "1"]);
   expect(res.code).toBe(0);
-  const g = sheetGeometry(1, 100, 1);
+  const g = sheetGeometry(1, { width: 100, height: 100 }, 1);
   const png = await readFile(json.output);
   const decoded = decodePng(png);
   const fittedW = 100, fittedH = 50;
@@ -281,7 +288,7 @@ test("pairing mode lays reference-beside-result rows; an odd count and --columns
   expect(res.code).toBe(0);
   expect(json.paired).toBe(true);
   expect(json.columns).toBe(2);
-  const g = sheetGeometry(2, 100, 2);
+  const g = sheetGeometry(2, { width: 100, height: 100 }, 2);
   const png = await readFile(json.output);
   expect(decodePng(png).width).toBe(g.width);
   expect(PIXEL_AT(png, sheetCellRect(g, 0).x + 50, sheetCellRect(g, 0).y + 50, g.width)).toEqual(GREEN);
@@ -430,7 +437,7 @@ test("a Composition cell is rendered CURRENT — current-state edits show, pinne
 
   const { res, json } = await sheet(["mutated", rendered.manifest, "--cell", "100", "--columns", "2"]);
   expect(res.code).toBe(0);
-  const g = sheetGeometry(2, 100, 2);
+  const g = sheetGeometry(2, { width: 100, height: 100 }, 2);
   const png = await readFile(json.output);
   expect(PIXEL_AT(png, sheetCellRect(g, 0).x + 50, sheetCellRect(g, 0).y + 50, g.width)).toEqual([0, 170, 0, 255]);
   // The manifest cell keeps the pinned pre-edit pixels.
@@ -476,11 +483,11 @@ test("the sheet completes with every browser network route aborted (offline evid
     const result = await renderComparisonSheet(projDir, ["offline", file], {
       page,
       out: path.join(tempDir, "offline-sheet.png"),
-      cell: 100,
+      cell: { width: 100, height: 100 },
     });
     expect(result.inputs).toHaveLength(2);
     const png = await readFile(result.output);
-    const g = sheetGeometry(2, 100, 2);
+    const g = sheetGeometry(2, { width: 100, height: 100 }, 2);
     expect(decodePng(png).width).toBe(g.width);
   } finally {
     await ctx.close();
@@ -523,13 +530,13 @@ test("two painted cells on one caller-owned page never race — cell paints run 
     const result = await renderComparisonSheet(projDir, ["first", "second", file], {
       page: tracked as typeof page,
       out: path.join(tempDir, "sequenced.png"),
-      cell: 100,
+      cell: { width: 100, height: 100 },
       columns: 2,
     });
     expect(raced).toBe(false);
     // Both painted cells still carry their own pixels (a race would
     // contaminate at least one cell's viewport/content).
-    const g = sheetGeometry(2, 100, 3);
+    const g = sheetGeometry(2, { width: 100, height: 100 }, 3);
     const png = await readFile(result.output);
     expect(PIXEL_AT(png, sheetCellRect(g, 0).x + 50, sheetCellRect(g, 0).y + 50, g.width)).toEqual([255, 0, 0, 255]);
     expect(PIXEL_AT(png, sheetCellRect(g, 1).x + 50, sheetCellRect(g, 1).y + 50, g.width)).toEqual([0, 0, 255, 255]);
@@ -538,4 +545,329 @@ test("two painted cells on one caller-owned page never race — cell paints run 
     await ctx.close();
     await closeBrowser();
   }
+});
+
+/**
+ * A published Generation Job fixture, written offline (no generation runs):
+ * content-addressed outputs beside a v2 record in the exact shape
+ * parseGenerationJobRecord accepts. Returns each output's absolute path with
+ * its 1-based record index.
+ */
+async function makeGenerationJob(jobId: string, tiles: { bytes: Buffer }[]) {
+  const jobDir = path.join(tempDir, "out", "generation", jobId);
+  const outputs: { contentHash: string; file: string; mediaType: string }[] = [];
+  const paths: { path: string; index: number }[] = [];
+  for (const tile of tiles) {
+    const hash = createHash("sha256").update(tile.bytes).digest("hex");
+    const relFile = `outputs/${hash}.png`;
+    const abs = path.join(jobDir, relFile);
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(abs, tile.bytes);
+    outputs.push({ contentHash: hash, file: relFile, mediaType: "image/png" });
+    paths.push({ path: abs, index: outputs.length });
+  }
+  const record = {
+    schemaVersion: 2,
+    jobId,
+    kind: "generation",
+    createdAt: "2026-09-24T00:00:00.000Z",
+    request: {
+      prompt: "solid tiles for a review sheet",
+      intent: "full-canvas",
+      model: "test-model",
+      sizing: { kind: "size", width: 64, height: 64 },
+      count: tiles.length,
+    },
+    run: {
+      ranAt: "2026-09-24T00:00:00.000Z",
+      model: "test-model",
+      fullPrompt: "solid tiles for a review sheet",
+      cost: { basis: "unknown" },
+      warnings: [],
+      outputs,
+    },
+  };
+  await writeFile(path.join(jobDir, "job.json"), JSON.stringify(record, null, 2));
+  return paths;
+}
+
+test("--cell takes WxH as well as a single size; geometry limits apply to both axes", async () => {
+  const wide = path.join(tempDir, "wide169.png");
+  await writeFile(wide, solidPng(320, 180, RED));
+  const { res, json } = await sheet([wide, "--cell", "640x360", "--columns", "1"]);
+  expect(res.code).toBe(0);
+  expect(json.cell).toEqual({ width: 640, height: 360 });
+  const g = sheetGeometry(1, { width: 640, height: 360 }, 1);
+  const png = await readFile(json.output);
+  const decoded = decodePng(png);
+  expect(decoded.width).toBe(g.width);
+  expect(decoded.height).toBe(g.height);
+  // A 16:9 cell keeps 16:9: the 320x180 input is fitted (never upscaled —
+  // max-width/max-height) and centred in the 640x360 box, white margin
+  // around it, no distortion.
+  const c = sheetCellRect(g, 0);
+  expect(PIXEL_AT(png, c.x + 320, c.y + 180, decoded.width)).toEqual(RED);
+  expect(PIXEL_AT(png, c.x + 320, c.y + 40, decoded.width)).toEqual([255, 255, 255, 255]);
+  expect(PIXEL_AT(png, c.x + 320, c.y + 320, decoded.width)).toEqual([255, 255, 255, 255]);
+
+  // One parser serves the API and the CLI: a single size is square, every
+  // malformed spec is refused (the CLI surfaces the same refusal as exit 2).
+  expect(parseSheetCellSpec("512")).toEqual({ width: 512, height: 512 });
+  expect(parseSheetCellSpec("640x360")).toEqual({ width: 640, height: 360 });
+  expect(() => parseSheetCellSpec("0")).toThrow();
+  expect(() => parseSheetCellSpec("64x0")).toThrow();
+  expect(() => parseSheetCellSpec("64x")).toThrow();
+  expect(() => parseSheetCellSpec("abc")).toThrow();
+  expect(() => parseSheetCellSpec("100.5x200")).toThrow();
+
+  // Per-axis geometry limits apply to BOTH axes, each named in the refusal.
+  expect(() => sheetGeometry(1, { width: 8193, height: 100 }, 1)).toThrow(/per-axis/);
+  expect(() => sheetGeometry(1, { width: 100, height: 8193 }, 1)).toThrow(/per-axis/);
+  const tooWide = await sheet([wide, "--cell", "8193x100", "--columns", "1"]);
+  expect(tooWide.res.code).toBe(1);
+  expect(JSON.parse(tooWide.res.stdout).error).toMatch(/per-axis/);
+  const tooTall = await sheet([wide, "--cell", "100x8193", "--columns", "1"]);
+  expect(tooTall.res.code).toBe(1);
+  expect(JSON.parse(tooTall.res.stdout).error).toMatch(/per-axis/);
+
+  // The total-pixel limit still applies when both axes are inside it.
+  // Two 4000x4000 cells: 8024x4044 ≈ 32.4M pixels over the 16.7M cap.
+  expect(() => sheetGeometry(2, { width: 4000, height: 4000 }, 2)).toThrow(/render limit|pixels/i);
+  const second = path.join(tempDir, "second169.png");
+  await writeFile(second, solidPng(320, 180, GREEN));
+  const total = await sheet([wide, second, "--cell", "4000x4000", "--columns", "2"]);
+  expect(total.res.code).toBe(1);
+  expect(JSON.parse(total.res.stdout).error).toMatch(/render limit|pixels/i);
+
+  // Malformed --cell at the CLI: a usage error, exit 2.
+  for (const bad of ["0", "64x0", "64x", "abc"]) {
+    const badCell = await invoke(["composition", "sheet", wide, "--cell", bad, "--project", projDir, "--json"]);
+    expect(badCell.code).toBe(2);
+    expect(JSON.parse(badCell.stdout).error).toContain("--cell");
+  }
+});
+
+test("a Generation Job output's default label is '<job id> #<output index>'", async () => {
+  const [first, second] = await makeGenerationJob("thumb-run", [
+    { bytes: solidPng(64, 64, RED) },
+    { bytes: solidPng(64, 64, GREEN) },
+  ]);
+  expect(generationOutputLabel("thumb-run", 2)).toBe("thumb-run #2");
+
+  const { res, json } = await sheet([
+    first.path, second.path,
+    "--out", path.join(tempDir, "gen-sheet.png"),
+  ]);
+  expect(res.code).toBe(0);
+  // The Job id and the 1-based record index — not the 64-character hash.
+  expect(json.inputs.map((i: { label: string }) => i.label)).toEqual(["thumb-run #1", "thumb-run #2"]);
+  expect(json.inputs.map((i: { kind: string }) => i.kind)).toEqual(["generation", "generation"]);
+  // The label ink is actually painted in the strips.
+  const png = await readFile(json.output);
+  const g = sheetGeometry(2, { width: DEFAULT_SHEET_CELL, height: DEFAULT_SHEET_CELL }, 2);
+  for (let i = 0; i < 2; i++) {
+    expect(INK_IN(png, sheetLabelRect(g, i))).toBeGreaterThan(20);
+  }
+
+  // An explicit --label still wins over the default.
+  const overridden = await sheet([first.path, "--label", "1=reference", "--out", path.join(tempDir, "gen-override.png")]);
+  expect(overridden.res.code).toBe(0);
+  expect(overridden.json.inputs[0]!.label).toBe("reference");
+
+  // A file under outputs/ with NO record beside it is a broken Generation
+  // Job input — refused clearly, not silently degraded to a file name.
+  const orphanHash = createHash("sha256").update(Buffer.from("orphan")).digest("hex");
+  const orphanDir = path.join(tempDir, "out", "generation", "orphan-run");
+  await mkdir(path.join(orphanDir, "outputs"), { recursive: true });
+  const orphan = path.join(orphanDir, "outputs", `${orphanHash}.png`);
+  await writeFile(orphan, solidPng(64, 64, BLUE));
+  const noRecord = await sheet([orphan, "--out", path.join(tempDir, "orphan.png")]);
+  expect(noRecord.res.code).toBe(1);
+  const noRecordError = JSON.parse(noRecord.res.stdout).error;
+  expect(noRecordError).toContain("orphan-run");
+  expect(noRecordError).toMatch(/job record|Generation Job/i);
+
+  // An unreadable record is refused too.
+  const brokenDir = path.join(tempDir, "out", "generation", "broken-run");
+  await mkdir(path.join(brokenDir, "outputs"), { recursive: true });
+  const brokenFile = path.join(brokenDir, "outputs", `${createHash("sha256").update(Buffer.from("broken")).digest("hex")}.png`);
+  await writeFile(brokenFile, solidPng(64, 64, BLUE));
+  await writeFile(path.join(brokenDir, "job.json"), "{ not a record");
+  const broken = await sheet([brokenFile, "--out", path.join(tempDir, "broken.png")]);
+  expect(broken.res.code).toBe(1);
+  expect(JSON.parse(broken.res.stdout).error).toContain("broken-run");
+
+  // A file in outputs/ that the record does not list is refused too.
+  const [recorded] = await makeGenerationJob("strict-run", [{ bytes: solidPng(64, 64, BLUE) }]);
+  const unrecorded = path.join(
+    path.dirname(recorded.path),
+    `${createHash("sha256").update(Buffer.from("unrecorded")).digest("hex")}.png`,
+  );
+  await writeFile(unrecorded, solidPng(64, 64, GREEN));
+  const notListed = await sheet([unrecorded, "--out", path.join(tempDir, "unrecorded.png")]);
+  expect(notListed.res.code).toBe(1);
+  const notListedError = JSON.parse(notListed.res.stdout).error;
+  expect(notListedError).toContain("strict-run");
+  expect(notListedError).toMatch(/recorded output/i);
+
+  // The label is provenance: bytes that no longer match the record's sha-256
+  // identity are refused, never labelled with the Job's provenance.
+  const [tamperTarget] = await makeGenerationJob("tamper-run", [{ bytes: solidPng(64, 64, GREEN) }]);
+  await writeFile(tamperTarget.path, solidPng(64, 64, RED));
+  const tamperedRes = await sheet([tamperTarget.path, "--out", path.join(tempDir, "tampered.png")]);
+  expect(tamperedRes.res.code).toBe(1);
+  const tamperedError = JSON.parse(tamperedRes.res.stdout).error;
+  expect(tamperedError).toContain("tamper-run");
+  expect(tamperedError).toMatch(/identity|replaced or corrupted/i);
+
+  // A record whose output path escapes the job directory cannot be trusted —
+  // refused before any matching, so a Job's provenance label can never stamp
+  // a file outside the job directory (review CRAFT-7).
+  const [escapeTarget] = await makeGenerationJob("escape-run", [{ bytes: solidPng(64, 64, BLUE) }]);
+  const escapeRecord = JSON.parse(await readFile(path.join(path.dirname(path.dirname(escapeTarget.path)), "job.json"), "utf8"));
+  escapeRecord.run.outputs[0]!.file = "../escape.png";
+  await writeFile(
+    path.join(path.dirname(path.dirname(escapeTarget.path)), "job.json"),
+    JSON.stringify(escapeRecord, null, 2),
+  );
+  const escapeRes = await sheet([escapeTarget.path, "--out", path.join(tempDir, "escape.png")]);
+  expect(escapeRes.res.code).toBe(1);
+  const escapeError = JSON.parse(escapeRes.res.stdout).error;
+  expect(escapeError).toContain("escape-run");
+  expect(escapeError).toMatch(/escapes the job directory/);
+
+  // The real-location containment check has the same teeth (review PROD-2):
+  // an in-job symlink whose target sits outside the job directory is
+  // refused, even though the recorded path is lexically inside it.
+  const [linkTarget] = await makeGenerationJob("link-run", [{ bytes: solidPng(64, 64, GREEN) }]);
+  const outside = path.join(tempDir, "outside-job.png");
+  await writeFile(outside, solidPng(64, 64, GREEN));
+  const insideLink = path.join(path.dirname(linkTarget.path), "linked.png");
+  await symlink(outside, insideLink);
+  const linkRecord = JSON.parse(await readFile(path.join(path.dirname(path.dirname(linkTarget.path)), "job.json"), "utf8"));
+  linkRecord.run.outputs[0]!.file = "outputs/linked.png";
+  await writeFile(
+    path.join(path.dirname(path.dirname(linkTarget.path)), "job.json"),
+    JSON.stringify(linkRecord, null, 2),
+  );
+  const linkRes = await sheet([insideLink, "--out", path.join(tempDir, "linked-sheet.png")]);
+  expect(linkRes.res.code).toBe(1);
+  const linkError = JSON.parse(linkRes.res.stdout).error;
+  expect(linkError).toContain("link-run");
+  expect(linkError).toMatch(/escapes the job directory/);
+});
+
+test("a sheet of local files only runs without a Project when --out is given; Project-dependent inputs still refuse clearly", async () => {
+  const a = path.join(tempDir, "a.png");
+  await writeFile(a, solidPng(320, 180, RED));
+  const b = path.join(tempDir, "b.png");
+  await writeFile(b, solidPng(320, 180, GREEN));
+
+  // tempDir itself is not a Project (only projDir under it is). With --out
+  // and local-file inputs only, no Project is touched or required.
+  const plain = await invoke(
+    ["composition", "sheet", a, b, "--out", path.join(tempDir, "plain.png"), "--json"],
+    tempDir,
+  );
+  expect(plain.code).toBe(0);
+  const plainJson = JSON.parse(plain.stdout);
+  expect(plainJson.ok).toBe(true);
+  expect(plainJson.output).toBe(path.resolve(tempDir, "plain.png"));
+  expect(await readFile(plainJson.output)).toBeTruthy();
+
+  // A Generation Job output input works the same way without a Project.
+  const [gen] = await makeGenerationJob("no-proj-run", [{ bytes: solidPng(64, 64, BLUE) }]);
+  const genRes = await invoke(
+    ["composition", "sheet", gen.path, "--out", path.join(tempDir, "gen.png"), "--json"],
+    tempDir,
+  );
+  expect(genRes.code).toBe(0);
+  expect(JSON.parse(genRes.stdout).inputs[0]!.label).toBe("no-proj-run #1");
+
+  // Without --out the default destination lives inside the Project's
+  // guidelines/ — refused clearly when there is no Project.
+  const noOut = await invoke(["composition", "sheet", a, "--json"], tempDir);
+  expect(noOut.code).toBe(1);
+  const noOutError = JSON.parse(noOut.stdout).error;
+  expect(noOutError).toMatch(/--out|guidelines/i);
+  expect(noOutError).toMatch(/Project|ply\.json/i);
+
+  // A Composition-name token is a Project input — it refuses, naming the
+  // token and the Project it needs.
+  const token = await invoke(
+    ["composition", "sheet", a, "some-composition", "--out", path.join(tempDir, "t.png"), "--json"],
+    tempDir,
+  );
+  expect(token.code).toBe(1);
+  const tokenError = JSON.parse(token.stdout).error;
+  expect(tokenError).toContain("some-composition");
+  expect(tokenError).toMatch(/Project/i);
+
+  // A manifest-shaped file replays Project history — refused clearly too.
+  const fakeManifest = path.join(tempDir, "fake.manifest.json");
+  await writeFile(fakeManifest, "{ not a manifest");
+  const manifestInput = await invoke(
+    ["composition", "sheet", a, fakeManifest, "--out", path.join(tempDir, "m.png"), "--json"],
+    tempDir,
+  );
+  expect(manifestInput.code).toBe(1);
+  const manifestError = JSON.parse(manifestInput.stdout).error;
+  expect(manifestError).toContain("fake.manifest.json");
+  expect(manifestError).toMatch(/Project/i);
+
+  // With a Project present, the same refusals keep their exact old shape.
+  const withProject = await sheet([a, "some-composition"]);
+  expect(withProject.res.code).toBe(1);
+  expect(JSON.parse(withProject.res.stdout).error).toContain("neither an existing local file nor a Composition");
+
+  // The plain route's own destination refusals (#292 review CRAFT-2): the
+  // same existing-target rules as the export boundary, no Project needed.
+  const dirOut = await invoke(["composition", "sheet", a, "--out", tempDir, "--json"], tempDir);
+  expect(dirOut.code).toBe(1);
+  expect(JSON.parse(dirOut.stdout).error).toMatch(/is a directory/);
+  const noParent = await invoke(
+    ["composition", "sheet", a, "--out", path.join(tempDir, "gone", "sheet.png"), "--json"],
+    tempDir,
+  );
+  expect(noParent.code).toBe(1);
+  expect(JSON.parse(noParent.stdout).error).toMatch(/parent directory does not exist/);
+  // A recorded Render output beside the target is refused on the plain route
+  // too — the guard is Project-independent, and a manifest that cannot be
+  // read fails closed (renderOutputConflict).
+  await writeFile(path.join(tempDir, "junk.manifest.json"), "{ not a manifest");
+  const guarded = await invoke(["composition", "sheet", a, "--out", path.join(tempDir, "guarded.png"), "--json"], tempDir);
+  expect(guarded.code).toBe(1);
+  expect(JSON.parse(guarded.stdout).error).toMatch(/Render output|manifest/);
+
+  // A destination inside a Project is never written through the plain route
+  // (#292 review SPEC-1): reserved Project state is refused through the
+  // Project boundary, and a bogus explicit --project is never ignored.
+  const intoProject = await invoke(
+    ["composition", "sheet", a, "--out", path.join(projDir, "ply.json"), "--json"],
+    tempDir,
+  );
+  expect(intoProject.code).toBe(1);
+  const intoProjectError = JSON.parse(intoProject.stdout).error;
+  expect(intoProjectError).toMatch(/ply\.json|Project/i);
+  const bogus = await invoke(
+    ["composition", "sheet", a, "--out", path.join(tempDir, "bogus.png"), "--project", path.join(tempDir, "no-such-project"), "--json"],
+    tempDir,
+  );
+  expect(bogus.code).toBe(1);
+  expect(JSON.parse(bogus.stdout).error).toMatch(/--project|Project directory not found/);
+
+  // A symlinked --out parent resolves to its real location before the
+  // enclosing-Project walk (review PROD-1): --out through a symlink into a
+  // Project is published through that Project's boundary, so reserved state
+  // is refused and never written — the lexical walk alone would miss it.
+  await symlink(projDir, path.join(tempDir, "into-proj"));
+  const throughLink = await invoke(
+    ["composition", "sheet", a, "--out", path.join(tempDir, "into-proj", "ply.json"), "--json"],
+    tempDir,
+  );
+  expect(throughLink.code).toBe(1);
+  const throughLinkError = JSON.parse(throughLink.stdout).error;
+  expect(throughLinkError).toMatch(/reserved|Project state|ply\.json/i);
+  // The Project manifest itself is untouched.
+  expect(JSON.parse(await readFile(path.join(projDir, "ply.json"), "utf8")).name).toBe("sheet-proj");
 });
