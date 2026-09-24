@@ -475,3 +475,62 @@ test("--out protects existing retained files under ..exports including symlink a
   }
   expect(await readdir(directory)).toEqual(["poster.png"]);
 });
+
+test("deleting a Composition leaves its retained Renders replayable (TEST-006, #290)", async () => {
+  // Replay reads the retained manifest snapshot alone — pinned Layer revision
+  // bytes resolved by resolveHistoricalLayers; Composition documents are never
+  // consulted (src/composition-render.ts contract). Deleting the Composition
+  // must therefore not invalidate any retained Render, including Renders of
+  // the deleted Composition itself.
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(64, 48, RED));
+  await makeComposition("doomed", 64, 48, [{ local: "bg", file: img, x: 8, y: 4 }]);
+  const other = path.join(tempDir, "blue.png");
+  await writeFile(other, solidPng(64, 48, BLUE));
+  await makeComposition("keeper", 64, 48, [{ local: "bg", file: other, x: 8, y: 4 }]);
+
+  const renderDoomed = await invoke(["composition", "render", "doomed", "--project", projDir, "--json"]);
+  expect(renderDoomed.code).toBe(0);
+  const doomedManifest = JSON.parse(renderDoomed.stdout).render.manifest as string;
+  const doomedOriginal = await readFile(JSON.parse(renderDoomed.stdout).render.output);
+
+  const renderKeeper = await invoke(["composition", "render", "keeper", "--project", projDir, "--json"]);
+  expect(renderKeeper.code).toBe(0);
+  const keeperManifest = JSON.parse(renderKeeper.stdout).render.manifest as string;
+
+  // Delete both Compositions via the CLI seam.
+  for (const name of ["doomed", "keeper"]) {
+    const del = await invoke(["composition", "delete", name, "--project", projDir, "--json"]);
+    expect(del.code).toBe(0);
+  }
+  const compDocs = (await readdir(path.join(projDir, "compositions"))).filter((f) => f.endsWith(".json"));
+  expect(compDocs).toEqual([]);
+
+  // Retained Renders are kept (ADR-0013): both manifests and their PNGs
+  // survive delete — the pinned history replay paints from is untouched.
+  for (const manifest of [doomedManifest, keeperManifest]) {
+    await expect(readFile(manifest)).resolves.toBeInstanceOf(Buffer);
+    await expect(readFile(manifest.replace(/\.manifest\.json$/, ".png"))).resolves.toBeInstanceOf(Buffer);
+  }
+
+  // Layers and their revisions are retained (ADR-0013): the pinned revision
+  // bytes replay paints from still resolve.
+  const layerFiles = (await readdir(path.join(projDir, "layers"))).filter((f) => f.endsWith(".json"));
+  expect(layerFiles.length).toBeGreaterThan(0);
+
+  // Both retained Renders — including those of the deleted Compositions —
+  // replay byte-identically from their manifest snapshots alone.
+  let doomedReplayOutput: string | undefined;
+  for (const [manifest, setOutput] of [[doomedManifest, true], [keeperManifest, false]] as const) {
+    const replay = await invoke(["composition", "replay", manifest, "--project", projDir, "--json"]);
+    expect(replay.code).toBe(0);
+    const parsed = JSON.parse(replay.stdout);
+    expect(parsed.ok).toBe(true);
+    const replayed = await readFile(parsed.replay.output);
+    expect<Buffer>(replayed).toEqual(await readFile(manifest.replace(/\.manifest\.json$/, ".png")));
+    if (setOutput) doomedReplayOutput = parsed.replay.output as string;
+  }
+  // The replay of the deleted Composition regenerates the same pixels the
+  // original render produced.
+  expect<Buffer>(await readFile(doomedReplayOutput!)).toEqual(doomedOriginal);
+});

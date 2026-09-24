@@ -1,6 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+- Added `ply composition delete <name>`, which removes the Composition from
+  the Project under the existing Project lock and refuses unknown names
+  through the single Composition-name resolver (`readCompositionDocument`),
+  so an unknown name exits nonzero naming the missing Composition and listing
+  the existing ones. Deleting removes only the Composition document: Layers
+  and their retained revisions are never deleted (Project-scoped sharing),
+  and every retained Render keeps replaying because replay paints from its
+  manifest snapshot — pinned Layer revisions, never Composition documents —
+  so Renders of the deleted Composition replay unchanged, and a later create
+  of the same name starts fresh with no inherited state (#290).
 - Made every Composition command that takes a Composition name resolve it
   through one reader (`readCompositionDocument`), so an unknown name exits
   nonzero naming the missing Composition and listing the existing ones — the

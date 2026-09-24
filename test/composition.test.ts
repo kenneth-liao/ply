@@ -986,3 +986,60 @@ test("readCompositionDocument refuses boundary-escaping names whether or not the
   await symlink(path.join(tempDir, "dangling-target.json"), path.join(projDir, "compositions", "dang.json"));
   await expect(readCompositionDocument(projDir, "dang")).rejects.toThrow("escapes project boundary");
 });
+
+test("composition delete removes the Composition under the Project lock, never Layers or history (#290, ISC-3)", async () => {
+  const projDir = path.join(tempDir, "del-proj");
+  await invoke(["project", "init", projDir, "--name", "del-proj", "--json"]);
+  await invoke(["composition", "create", "alpha", "--width", "400", "--height", "300", "--project", projDir, "--json"]);
+  await invoke(["composition", "create", "beta", "--width", "300", "--height", "150", "--project", projDir, "--json"]);
+
+  const imgPath = path.join(tempDir, "hero.png");
+  await writeFile(imgPath, createSolidPng(100, 80));
+  const addRes = await invoke(["composition", "add", "alpha", "hero", "--image", imgPath, "--project", projDir, "--json"]);
+  expect(addRes.code).toBe(0);
+  const layerId = JSON.parse(addRes.stdout).use.layerId as string;
+
+  // Unknown name is refused through the single Composition-name resolver
+  // (readCompositionDocument/missingCompositionError, #289): formatted listing,
+  // nonzero exit, no raw ENOENT.
+  const missing = await invoke(["composition", "delete", "non-existent-comp", "--project", projDir, "--json"]);
+  expect(missing.code).toBe(1);
+  const missingJson = JSON.parse(missing.stdout);
+  expect(missingJson.ok).toBe(false);
+  expect(missingJson.error).toContain("non-existent-comp");
+  expect(missingJson.error).toContain("alpha");
+  expect(missingJson.error).toContain("beta");
+  expect(missingJson.error).not.toContain("ENOENT");
+
+  // Deleting removes only the Composition document.
+  const delRes = await invoke(["composition", "delete", "alpha", "--project", projDir, "--json"]);
+  expect(delRes.code).toBe(0);
+  expect(JSON.parse(delRes.stdout).ok).toBe(true);
+  await expect(readFile(path.join(projDir, "compositions", "alpha.json"))).rejects.toThrow();
+
+  // Layers and their retained revisions are never deleted (ADR-0013).
+  const layerInspect = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(layerInspect.code).toBe(0);
+  const layerFiles = (await readdir(path.join(projDir, "layers"))).filter((f) => f.endsWith(".json"));
+  expect(layerFiles.length).toBeGreaterThan(0);
+
+  // The Layer name-address reader (layer-address → readCompositionDocument,
+  // the one resolver) reports the formatted refusal, never a raw error.
+  const addr = await invoke(["layer", "inspect", "alpha/hero", "--project", projDir, "--json"]);
+  expect(addr.code).not.toBe(0);
+  const addrText = `${addr.stdout}\n${addr.stderr}`;
+  expect(addrText).toContain("alpha");
+  expect(addrText).toContain("not found in project");
+  expect(addrText).not.toContain("ENOENT");
+
+  // Deleting a Composition that shared its Layer leaves the other referrers intact.
+  const referrerRes = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(referrerRes.code).toBe(0);
+
+  // A later 'composition create' of the same name starts fresh — nothing is
+  // inherited from the deleted Composition (no stale per-Composition state).
+  const recreate = await invoke(["composition", "create", "alpha", "--width", "400", "--height", "300", "--project", projDir, "--json"]);
+  expect(recreate.code).toBe(0);
+  const fresh = JSON.parse(await invoke(["composition", "inspect", "alpha", "--project", projDir, "--json"]).then((r) => r.stdout));
+  expect(fresh.composition.layers).toEqual([]);
+});
