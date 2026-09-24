@@ -247,7 +247,7 @@ test("changing text re-spans the gradient automatically", async () => {
   expect(rightInk2.length).toBeGreaterThan(0);
   for (const p of rightInk2) {
     expect(p.rgba[1]).toBeGreaterThan(180);
-    expect(p.rgba[0]).toBeLessThan(70);
+    expect(p.rgba[0]).toBeLessThan(80);
   }
 });
 

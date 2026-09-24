@@ -86,3 +86,29 @@ the Layer.
 - Effects that extend painted bounds (shadow, outline) do not affect already
   resolved placements; whether anchored resolution should account for
   effect-extended ink remains #139/#140's contract to define.
+
+## Amendment: Text layout is position-independent (spec #285 / #287)
+
+- **Position-independent layout (DEC-001):** The premise above that "a text
+  Layer's ink depends on the referring Composition's canvas width (pre-wrap
+  shrink-to-fit)" was amended in spec #285 ticket #287. Unwrapped text now lays
+  out at its natural width (`white-space: pre`, `width: max-content`) and wraps
+  only at explicit line breaks (`\n`). Text layout no longer depends on where
+  the Layer is placed or on the canvas boundaries.
+- **Stored layout rule & pre-change retention (DEC-001, DEC-006):** Pre-change
+  text Layer revisions keep their legacy canvas-bounded layout
+  (`white-space: pre-wrap`) so every retained Render replays byte-identically
+  (TEST-003). This is achieved via an optional `layoutRule?: "natural"` fact on
+  `LayerTextRevision`.
+  - Stored revisions lacking `layoutRule` are normalized at the single ingestion
+    boundary (`readLayerInternalFull`) to `layoutRule: "legacy"`.
+  - New text revisions created via `ply composition add` or `ply layer edit`
+    explicitly write `layoutRule: "natural"`.
+  - Revisions produced by fork/import/relocation copies (`buildCopiedRevision`)
+    carry the source revision's `layoutRule` unchanged (absent stays absent) so
+    copies of pre-change revisions render identically to their source.
+  - An edit of a pre-change text revision moves it to the `"natural"` rule,
+    while retained Renders continue replaying their pinned revisions
+    byte-identically.
+  - The revision hash includes `:layoutrule(natural)` only when `layoutRule` is
+    `"natural"`, preserving byte-identical revision IDs for pre-change revisions.

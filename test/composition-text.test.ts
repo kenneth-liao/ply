@@ -431,3 +431,32 @@ test("help documents the text surface and --json failures stay valid JSON", asyn
   expect(parsed.ok).toBe(false);
   expect(typeof parsed.error).toBe("string");
 });
+
+test("unwrapped text lays out at natural width and wraps only at written line breaks (#287)", async () => {
+  await makeComposition("natural-text", 1000, 500);
+  const text = "A very long headline that will definitely wrap if placed near the edge";
+  // Add at x=640 (only 360px left on canvas)
+  const res1 = await addText("natural-text", "t1", { text, fontSize: 40, x: 640, y: 100 });
+  expect(res1.code).toBe(0);
+  const layerId1 = JSON.parse(res1.stdout).use.layerId as string;
+  const { revision: rev1 } = await readStoredTextRevision(layerId1);
+  expect(rev1.layoutRule).toBe("natural");
+
+  // Measure the composition: the content width must exceed remaining canvas width (360px)
+  // because it lays out at natural width on a single line (not wrapped into multiple lines)
+  const measureRes = await invoke(["composition", "measure", "natural-text", "--project", projDir, "--json"]);
+  expect(measureRes.code).toBe(0);
+  const measureJson = JSON.parse(measureRes.stdout);
+  const t1Measured = measureJson.layers.find((l: { name: string }) => l.name === "t1");
+  expect(t1Measured.content.height).toBeLessThan(70);
+  expect(t1Measured.content.width).toBeGreaterThan(900);
+
+  // Written line breaks (\n) wrap to multiple lines
+  const multilineText = "Line One\nLine Two is longer";
+  const res2 = await addText("natural-text", "t2", { text: multilineText, fontSize: 40, x: 100, y: 300 });
+  expect(res2.code).toBe(0);
+  const measureRes2 = await invoke(["composition", "measure", "natural-text", "--project", projDir, "--json"]);
+  const t2Measured = JSON.parse(measureRes2.stdout).layers.find((l: { name: string }) => l.name === "t2");
+  // Two lines: height is ~120px (at least 100px)
+  expect(t2Measured.content.height).toBeGreaterThanOrEqual(100);
+});

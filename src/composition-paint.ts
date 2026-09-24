@@ -944,15 +944,22 @@ export function buildCompositionHtml(
         // so pinned history paints byte-identically.
         const synthesisCss = rev.callerFont !== undefined ? "font-synthesis:none;" : "";
         const fill = normalizeStoredTextFill(rev.color);
+        // Text layout rule (#287, spec #285 DEC-001, ADR-0017 amendment):
+        // "natural" lays out text at its natural width, wrapping only at written
+        // line breaks. "legacy" keeps the pre-#287 canvas-bounded pre-wrap behavior
+        // so retained Renders replay byte-identically.
+        const naturalLayout = rev.layoutRule === "natural";
+        const layoutCss = naturalLayout ? "width:max-content;white-space:pre;" : "white-space:pre-wrap;";
+        const outerLayoutCss = naturalLayout ? "width:max-content;" : "";
         if (fill.type === "solid") {
           const textStyle =
             `font-family:'${internalFontFamily(rev.contentHash)}';` +
-            `font-size:${rev.fontSize}px;color:${fill.color};${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;`;
+            `font-size:${rev.fontSize}px;color:${fill.color};${synthesisCss}${axesCss}${typographyCss}${layoutCss}`;
           if (rev.visibleRegion === undefined && gradeFilter === "") {
-            return `<div style="${base}${transformed}${effectsFilter}${blendCss}${textStyle}">${escapeHtml(rev.text)}</div>`;
+            return `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}${textStyle}">${escapeHtml(rev.text)}</div>`;
           }
           return (
-            `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
+            `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
             `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`
           );
         }
@@ -968,11 +975,11 @@ export function buildCompositionHtml(
           `-webkit-text-fill-color:transparent;color:transparent;`;
         const textStyle =
           `font-family:'${internalFontFamily(rev.contentHash)}';` +
-          `font-size:${rev.fontSize}px;${synthesisCss}${axesCss}${typographyCss}white-space:pre-wrap;` +
+          `font-size:${rev.fontSize}px;${synthesisCss}${axesCss}${typographyCss}${layoutCss}` +
           gradientCss;
 
         return (
-          `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
+          `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
           `<div style="${textStyle}${regionClip}${gradeFilter}">${escapeHtml(rev.text)}</div></div>`
         );
       }

@@ -111,6 +111,7 @@ function pre187RevisionHash(rev: {
   scaleX?: number; scaleY?: number; rotationDeg?: number; flipX?: boolean; flipY?: boolean;
   shadow?: { dx: number; dy: number; blur: number; color: string };
   outline?: { width: number; color: string };
+  layoutRule?: string;
 }): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = `:${rev.text}:${rev.fontSize}:${rev.color}`;
@@ -127,7 +128,8 @@ function pre187RevisionHash(rev: {
       : "";
   const outlineField =
     rev.outline !== undefined ? `:outline(${rev.outline.width},${rev.outline.color})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxes}`).digest("hex").slice(0, 16)}`;
+  const layoutRuleField = rev.layoutRule === "natural" ? ":layoutrule(natural)" : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${textAxes}${layoutRuleField}`).digest("hex").slice(0, 16)}`;
 }
 
 describe("stored form and revision hash (#187, ADR-0021)", () => {
@@ -460,6 +462,21 @@ describe("paint, measure, and inspect (#187, ADR-0021)", () => {
     await makeComposition("poster", 600, 400);
     const res = await addText("poster", "head", { text: "Hello", font: "Anton", fontSize: 96, color: "#ff0000" });
     const layerId = JSON.parse(res.stdout).use.layerId as string;
+    const revId = JSON.parse(res.stdout).layer.currentRevisionId as string;
+
+    // A pre-#187 text revision has no typography fields and no layoutRule. Strip
+    // layoutRule to simulate an authentic pre-#187 stored revision document.
+    const revPath = path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`);
+    const revJson = JSON.parse(await readFile(revPath, "utf8"));
+    delete revJson.layoutRule;
+    const legacyRevId = computeRevisionHash(revJson);
+    await rm(revPath);
+    await writeFile(path.join(projDir, "layers", `${layerId}.revisions`, `${legacyRevId}.json`), JSON.stringify(revJson, null, 2) + "\n");
+    const idPath = path.join(projDir, "layers", `${layerId}.json`);
+    const idJson = JSON.parse(await readFile(idPath, "utf8"));
+    idJson.currentRevision = legacyRevId;
+    await writeFile(idPath, JSON.stringify(idJson, null, 2) + "\n");
+
     const { revision, revHash } = await readStoredTextRevision(layerId);
 
     // The stored document IS the pre-#187 shape: no typography fields, id

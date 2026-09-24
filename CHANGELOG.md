@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Unwrapped text layers now lay out at natural width and wrap only at explicit
+  line breaks (`\n`), making layout independent of layer placement or canvas
+  bounds; pre-change revisions keep their legacy canvas-bounded layout via an
+  omitted `layoutRule` fact (#287).
+
 - Oversized Layers exceeding the capture bound are now refused per-Layer in the
   measurement result (`refused: string | null`) with exit status 1 rather than
   aborting the measurement call. Previously, one oversized Layer threw an

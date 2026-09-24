@@ -359,6 +359,13 @@ export interface LayerTextRevision extends LayerRevisionBase {
    * to the revision hash only when present).
    */
   callerFont?: CallerFontFacts;
+  /**
+   * Text layout rule (#287, spec #285 DEC-001, ADR-0017 amendment):
+   * "natural" lays out text at its natural width, wrapping only at written
+   * line breaks. Omitted for revisions written before #287, which normalize
+   * to "legacy" (canvas-bounded wrapping).
+   */
+  layoutRule?: StoredTextLayoutRule;
 }
 
 /**
@@ -1101,7 +1108,7 @@ export function formatGlow(glow: LayerGlow): string {
 
 export type ResolvedLayerRevision =
   | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
-  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
+  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; layoutRule: NormalizedTextLayoutRule })
   | (LayerShapeRevision & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean });
 
 export interface ResolvedLayer {
@@ -1567,6 +1574,33 @@ export function normalizeStoredCallerFont(revision: { callerFont?: unknown }): C
   };
 }
 
+/** Allowed stored text layout rule values (#287, spec #285 DEC-001, ADR-0017 amendment). */
+export const TEXT_LAYOUT_RULES = ["natural"] as const;
+export type StoredTextLayoutRule = (typeof TEXT_LAYOUT_RULES)[number];
+export type NormalizedTextLayoutRule = StoredTextLayoutRule | "legacy";
+
+/**
+ * Canonical stored text layout rule validation and normalization (#287,
+ * spec #285 DEC-001, ADR-0017 amendment). The ONE normalization boundary
+ * for the text layout rule: documents written before #287 lack the field
+ * and normalize to "legacy" (canvas-bounded shrink-to-fit wrapping) here;
+ * every downstream reader projects through this function and never
+ * re-derives a default. A present field must be "natural" — anything else
+ * is a malformed document, refused loudly before the revision hash is
+ * consulted.
+ */
+export function normalizeStoredTextLayoutRule(revision: { layoutRule?: unknown }): NormalizedTextLayoutRule {
+  if (revision.layoutRule === undefined) {
+    return "legacy";
+  }
+  if (revision.layoutRule === "natural") {
+    return "natural";
+  }
+  throw new Error(
+    `Malformed revision document: layoutRule must be "natural" when present (got ${JSON.stringify(revision.layoutRule)}).`,
+  );
+}
+
 /**
  * Compute content-derived revision hash for an immutable revision record.
  * The scale fields are appended only when present, so revisions written
@@ -1590,7 +1624,9 @@ export function normalizeStoredCallerFont(revision: { callerFont?: unknown }): C
  * appended only when present, so revisions written before #232 — bundled
  * faces and legacy blobs — keep their exact ids (#232). The vector colour
  * is appended only when present (image revisions only), so revisions
- * written before #215 keep their exact ids (#215, DEC-010). */
+ * written before #215 keep their exact ids (#215, DEC-010). The text layout
+ * rule is appended only when "natural", so revisions written before #287
+ * keep their exact ids (#287, ADR-0017 amendment). */
 export function computeRevisionHash(rev: LayerRevision): string {
   const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${textFillIdentityString(rev.color)}` : "";
@@ -1675,7 +1711,12 @@ export function computeRevisionHash(rev: LayerRevision): string {
         (glow.angle !== undefined ? `,a${glow.angle},s${glow.strength}` : "") +
         `)`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}`).digest("hex").slice(0, 16)}`;
+  // The text layout rule (#287, spec #285 DEC-001, ADR-0017 amendment):
+  // appended only when "natural", so revisions written before #287 keep their
+  // exact ids.
+  const layoutRule = rev.kind === "text" ? normalizeStoredTextLayoutRule(rev) : undefined;
+  const layoutRuleField = layoutRule === "natural" ? `:layoutrule(${layoutRule})` : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1923,6 +1964,10 @@ export async function readRevisionInternalFull(
   // loudly before the revision hash is consulted. Absence IS the
   // bundled-or-legacy form.
   const callerFont = revision.kind === "text" ? normalizeStoredCallerFont(revision) : undefined;
+  // Canonical text layout rule: validated and normalized at this same one
+  // boundary (#287, spec #285 DEC-001, ADR-0017 amendment) — pre-#287
+  // revisions normalize to "legacy", new revisions store "natural".
+  const layoutRule = revision.kind === "text" ? normalizeStoredTextLayoutRule(revision) : undefined;
   // Canonical vector colour (#215, DEC-008/010): validated and normalized at
   // this same one boundary — a malformed stored colour is refused loudly
   // before the revision hash is consulted. Absence IS the no-colour form.
@@ -2066,6 +2111,7 @@ export async function readRevisionInternalFull(
           ...(textTypography ?? {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
           fontBytes: contentBytes!.length,
+          layoutRule: layoutRule!,
         }
       : {
           // Shape revision (#208): the parameter facts ride in the document;
@@ -3626,6 +3672,7 @@ async function buildEditedRevision(
       text,
       fontSize,
       color,
+      layoutRule: "natural",
       ...(axes.weight !== undefined ? { weight: axes.weight, width: axes.width } : {}),
       ...(typography.tracking !== undefined ? { tracking: typography.tracking } : {}),
       ...(typography.lineHeight !== undefined ? { lineHeight: typography.lineHeight } : {}),
@@ -3647,6 +3694,7 @@ async function buildEditedRevision(
       ...carried,
     };
     const unchanged =
+      prevRev.layoutRule === "natural" &&
       contentHash === prevRev.contentHash &&
       text === prevRev.text &&
       fontSize === prevRev.fontSize &&

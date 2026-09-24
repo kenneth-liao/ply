@@ -1005,3 +1005,38 @@ test("a window at exactly the decoder's bounds measures; one pixel over is refus
   expect(out.layers[0].refused).toContain("edge");
   expect(out.layers[0].refused).not.toMatch(/parse limit/i);
 }, 120000);
+
+test("text layout does not depend on position x=0, 400, 640 (TEST-005, ISC-57, #287)", async () => {
+  await makeComp("pos-indep", 1200, 600);
+  const title = "A very long headline title that spans well across the canvas";
+  await addTextLayer("pos-indep", "t0", title, { fontSize: 40, x: 0, y: 50 });
+  await addTextLayer("pos-indep", "t400", title, { fontSize: 40, x: 400, y: 150 });
+  await addTextLayer("pos-indep", "t640", title, { fontSize: 40, x: 640, y: 250 });
+
+  const { json } = await measure("pos-indep");
+  const t0 = json.layers.find((l: { name: string }) => l.name === "t0");
+  const t400 = json.layers.find((l: { name: string }) => l.name === "t400");
+  const t640 = json.layers.find((l: { name: string }) => l.name === "t640");
+
+  expect(t0).toBeDefined();
+  expect(t400).toBeDefined();
+  expect(t640).toBeDefined();
+
+  // Content width and height must match exactly across all positions
+  expect(t400.content.width).toBe(t0.content.width);
+  expect(t400.content.height).toBe(t0.content.height);
+  expect(t640.content.width).toBe(t0.content.width);
+  expect(t640.content.height).toBe(t0.content.height);
+
+  // Box dimensions (width and height) must also match exactly
+  expect(t400.box.width).toBe(t0.box.width);
+  expect(t400.box.height).toBe(t0.box.height);
+  expect(t640.box.width).toBe(t0.box.width);
+  expect(t640.box.height).toBe(t0.box.height);
+
+  // Placements reflect the respective x and y
+  expect(t0.box.x).toBe(0);
+  expect(t400.box.x).toBe(400);
+  expect(t640.box.x).toBe(640);
+});
+
