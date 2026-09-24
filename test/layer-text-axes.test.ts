@@ -589,6 +589,21 @@ test("hash compatibility: a pre-#179 text revision keeps its id, stores no axes,
   await makeComposition("poster", 600, 400);
   const res = await addText("poster", "head", { text: "Hello", font: "Anton", fontSize: 96, color: "#ff0000" });
   const layerId = JSON.parse(res.stdout).use.layerId as string;
+  const revId = JSON.parse(res.stdout).layer.currentRevisionId as string;
+
+  // A pre-#179 text revision has no axis fields and no layoutRule. Strip
+  // layoutRule to simulate an authentic pre-#179 stored revision document.
+  const revPath = path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`);
+  const revJson = JSON.parse(await readFile(revPath, "utf8"));
+  delete revJson.layoutRule;
+  const legacyRevId = computeRevisionHash(revJson);
+  await rm(revPath);
+  await writeFile(path.join(projDir, "layers", `${layerId}.revisions`, `${legacyRevId}.json`), JSON.stringify(revJson, null, 2) + "\n");
+  const idPath = path.join(projDir, "layers", `${layerId}.json`);
+  const idJson = JSON.parse(await readFile(idPath, "utf8"));
+  idJson.currentRevision = legacyRevId;
+  await writeFile(idPath, JSON.stringify(idJson, null, 2) + "\n");
+
   const { revision, revHash } = await readStoredTextRevision(layerId);
 
   // The stored document IS the pre-#179 shape: no axis fields, id derived

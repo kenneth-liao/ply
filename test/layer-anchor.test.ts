@@ -25,6 +25,7 @@ import { mkdtemp, rm, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { encodePngRgba, decodePng } from "../src/png.js";
 import { getBrowser, closeBrowser } from "../src/browser.js";
+import { computeRevisionHash } from "../src/layer.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -575,12 +576,27 @@ test(
     expect(addRes.code).toBe(0);
     const layerId = JSON.parse(addRes.stdout).use.layerId as string;
     const revId = JSON.parse(addRes.stdout).layer.currentRevisionId as string;
+
+    // Simulate a pre-#287 legacy revision (lacking layoutRule) to test that
+    // pre-change revisions keep their legacy canvas-bounded wrapping and still
+    // trigger divergent-geometry refusal when shared across different canvas sizes.
+    const revPath = path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`);
+    const revJson = JSON.parse(await readFile(revPath, "utf8"));
+    delete revJson.layoutRule;
+    const legacyRevId = computeRevisionHash(revJson);
+    await rm(revPath);
+    await writeFile(path.join(projDir, "layers", `${layerId}.revisions`, `${legacyRevId}.json`), JSON.stringify(revJson, null, 2) + "\n");
+    const idPath = path.join(projDir, "layers", `${layerId}.json`);
+    const idJson = JSON.parse(await readFile(idPath, "utf8"));
+    idJson.currentRevision = legacyRevId;
+    await writeFile(idPath, JSON.stringify(idJson, null, 2) + "\n");
+
     const before = useReport(await measure("narrow"), "banner");
     expect(before.painted).not.toBeNull();
 
     await makeComp("wide", 800, 300);
     await invoke(["composition", "import", "wide", "narrow", "--project", projDir, "--json"]);
-    // Sanity: the shared text wraps in the narrow canvas, not in the wide one.
+    // Sanity: the shared legacy text wraps in the narrow canvas, not in the wide one.
     const wide = useReport(await measure("wide"), "banner");
     expect(wide.painted!.width).toBeGreaterThan(before.painted!.width);
 
@@ -599,7 +615,7 @@ test(
     // Live state untouched.
     const inspectRes = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
     const layer = JSON.parse(inspectRes.stdout).layer;
-    expect(layer.currentRevisionId).toBe(revId);
+    expect(layer.currentRevisionId).toBe(legacyRevId);
     expect(layer.currentRevision.x).toBe(0);
   },
   120_000,

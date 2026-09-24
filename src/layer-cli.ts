@@ -194,9 +194,11 @@ Options:
                         against the Layer's CURRENT transform and the
                         rendering geometry of the referring Composition(s) —
                         or standalone on an unwrapped line when the Layer is
-                        unreferenced (a text Layer's ink depends on each
-                        Composition's canvas width; disagreement across
-                        Compositions refuses). Resolved through the
+                        unreferenced (legacy text revisions' ink depends on
+                        each Composition's canvas width; disagreement across
+                        Compositions refuses — modern revisions use
+                        position-independent natural layout per the ADR-0017
+                        amendment). Resolved through the
                         paint-identical ink measurement, accurate to its
                         pixel grid (~1px).
 
