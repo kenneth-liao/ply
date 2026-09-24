@@ -119,3 +119,52 @@ the Layer.
   - Rollback behavior is fail-closed: pre-change code encountering a revision
     with `layoutRule` refuses it via revision hash verification rather than
     misrendering.
+## Amendment: Anchored placement resolves before effects on both surfaces (spec #285 / #288)
+
+- **The ink basis is the pre-effect painted ink (DEC-002).** The Consequences
+  section above left "whether anchored resolution should account for
+  effect-extended ink" to the #139/#140 contracts. Spec #285 ticket #288
+  resolves it: anchored placement resolves against the Layer's painted ink
+  **before the effects** on both surfaces it exists on — one-command
+  `composition add` and `layer edit` — so re-anchoring a Layer that carries a
+  shadow or an outline never moves it, and an effect edit never moves a
+  stored placement (the intent of this ADR's one-shot shape, now explicit).
+- **The exact stripped facts.** The resolution strips exactly the two
+  ink-extending effect revision facts this ADR's Consequences named:
+  `shadow` (#139, ADR-0018) and `outline` (#140, ADR-0019) — the outline's
+  dilate ring is effect ink, not part of the anchor ink. No other facts are
+  stripped, and none need to be: grade, edge glow, and blend cannot change
+  the ink (they preserve alpha coverage — ADR-0024 DEC-005, "painted extents
+  are unchanged by grade" and "alpha coverage is never altered" for glow),
+  and the visible region is paint (ADR-0023), not an effect — the anchor
+  still resolves against the region-clipped ink. The effect facts never
+  reach the measurement, so the capture window is sized from the bare ink
+  and an oversized effect can no longer refuse an anchor resolution.
+- **One shared resolution, not two (TEST-004).** The strip lives inside the
+  ONE shared pre-effect ink resolution in `src/layer-anchor.ts`
+  (`resolvePreEffectAnchor`); both surfaces call it — the provisional add
+  path through `resolveProvisionalAnchoredPlacement`, the edit path through
+  `resolveAnchoredPlacement` — so parity holds by construction and no caller
+  can forget or misuse a stripping flag. Parity is pinned at the CLI seam:
+  the same `--anchor` with an effect present publishes the same stored
+  placement through `composition add` and through a later re-anchoring
+  `layer edit` (test/one-command-add-parity.test.ts), and shadow- and
+  outline-carrying re-anchors land where an effect-less twin would
+  (test/layer-anchor.test.ts; the pre-effect report evidence is the bare
+  ink box).
+- **The audit report's `painted` evidence changes basis.** The edit report's
+  `anchored.painted` box is now the pre-effect ink (previously the
+  effect-extended ink). `composition measure`'s `painted` extents are
+  unchanged: effects' ink stays part of the measured painted contract
+  (#139/#140) — only the anchor's basis strips it.
+- **Existing retained state replays unchanged.** Anchored resolution is a
+  read-only command-boundary query: no paint markup, revision schema,
+  revision hash, or replay machinery changes, so every retained Render and
+  revision — including ones whose placements were resolved under the
+  effect-extended basis — replays byte-identically (TEST-003). A placement
+  is a plain x/y fact; this amendment changes how a *future* anchor edit
+  computes x/y, never how a stored one renders.
+- **The exclusivity rule is unchanged.** `--anchor` still cannot combine
+  with `--shadow`/`--outline` (or any non-placement option) in one edit: the
+  measured basis must be the live state's ink, and the edit's new effect
+  facts publish in a separate revision.

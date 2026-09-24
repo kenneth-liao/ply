@@ -1758,10 +1758,12 @@ async function applyAnchor(
 ): Promise<AnchorResolution | void> {
   if (context.live !== undefined) {
     // Edit: the anchored placement resolves ONCE against the live state's
-    // painted ink (read-only, outside the edit's own lock); the caller
-    // publishes plain x/y through the ordinary edit lifecycle — the edit
-    // path never sees an anchor, so no alternate placement representation
-    // can exist.
+    // PRE-EFFECT painted ink (read-only, outside the edit's own lock)
+    // through the ONE shared resolution the add path also uses (DEC-002,
+    // ADR-0017 amendment #288) — a stored shadow or outline never shifts a
+    // re-anchoring edit; the caller publishes plain x/y through the
+    // ordinary edit lifecycle — the edit path never sees an anchor, so no
+    // alternate placement representation can exist.
     return resolveAnchoredPlacement(context.live.projectPath, draft.layerId, {
       anchor: value as ParsedAnchor,
       targetX: context.live.x,
@@ -1772,7 +1774,10 @@ async function applyAnchor(
   }
   // Add: anchored placement (ADR-0017) resolves against the content+
   // transform ink BEFORE the effects apply (the documented order),
-  // measuring the provisional revision in the target Composition's canvas;
+  // through the ONE shared pre-effect ink resolution (DEC-002, ADR-0017
+  // amendment #288) whose basis strips the ink-extending effect facts, so
+  // the two surfaces cannot drift — measuring the provisional revision in
+  // the target Composition's canvas;
   // the resolved placement publishes as plain canonical (x, y) in the SAME
   // single revision.
   const resolved = await resolveProvisionalAnchoredPlacement(

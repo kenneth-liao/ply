@@ -126,3 +126,15 @@ the anchor would resolve different ink than the edit publishes.
   byte-identically before switching binaries. Non-current revisions
   with outlines stay pinned history: they refuse the same way and are
   recoverable by re-upgrading, so no data is lost.
+
+## Amendment: Anchored placement resolves before effects (spec #285 / #288)
+
+The paragraph above stating that "anchored placement resolves against the
+effect-extended painted ink" is amended by spec #285 ticket #288 (DEC-002),
+recorded as an amendment to ADR-0017: `--anchor` resolves against the
+**pre-effect painted ink** — the outline dilate ring is an effect, not part
+of the anchor ink — through the one shared resolution both anchored surfaces
+call. Re-anchoring an outlined Layer lands where an effect-less twin would,
+and an outline edit never moves a stored placement. The measurement contract
+is unchanged: `painted` extents still include the outline ink. `--anchor`
+and `--outline` still refuse to combine in one edit.

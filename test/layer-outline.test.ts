@@ -643,10 +643,13 @@ test("measure includes the scale-amplified combined outline+shadow extent: paint
   expect({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 }).toEqual(layer.painted);
 });
 
-/** Anchored placement resolves against the OUTLINE-EXTENDED painted ink and
- * --anchor cannot combine with --outline in one edit (the reference ink
- * would be ambiguous) — the shadow precedent (ADR-0017). */
-test("anchored placement uses the outline-extended ink; --anchor and --outline are separate edits", async () => {
+/** Anchored placement resolves against the PRE-EFFECT painted ink (DEC-002,
+ * spec #285 US-002, ADR-0017 amendment #288) — the outline dilate ring is an
+ * EFFECT (ADR-0019), never part of the anchor ink, so re-anchoring an
+ * outlined Layer lands where an effect-less twin would — and --anchor
+ * cannot combine with --outline in one edit (the reference ink would be
+ * ambiguous) — the shadow precedent (ADR-0017). */
+test("anchored placement resolves against the pre-effect ink; --anchor and --outline are separate edits", async () => {
   // Transparent surround with a 40×40 subject at the layer's local origin:
   // ink box = [30, 130) x [30, 130) at placement (30, 30).
   const paddedPng = Buffer.alloc(100 * 100 * 4);
@@ -671,24 +674,24 @@ test("anchored placement uses the outline-extended ink; --anchor and --outline a
   const setOutline = await invoke(["layer", "edit", layerId, "--outline", "10,#000000", "--project", projDir, "--json"]);
   expect(setOutline.code).toBe(0);
 
-  // Anchor left edge of the painted ink at x=100: the outlined ink starts
-  // 10px before the placement point, so left-edge anchoring publishes
-  // x = 110 against the OUTLINE-EXTENDED ink [20, 80) — width 60, not the
-  // bare 40-wide subject ink — measured at the pre-edit placement.
+  // Anchor left edge of the painted ink at x=100: the pre-effect ink starts
+  // at the placement point, so left-edge anchoring publishes x = 100 against
+  // the PRE-EFFECT ink [30, 70) — the bare 40-wide subject ink, not the
+  // outline-extended 60-wide union — measured at the pre-edit placement.
   const anchorRes = await invoke([
     "layer", "edit", layerId, "--anchor", "left", "--x", "100", "--project", projDir, "--json",
   ]);
   expect(anchorRes.code).toBe(0);
   const anchored = JSON.parse(anchorRes.stdout);
-  expect(anchored.anchored.painted.width).toBe(60);
-  expect(anchored.anchored.painted.x).toBe(20);
-  expect(anchored.anchored.placement.x).toBe(110);
+  expect(anchored.anchored.painted.width).toBe(40);
+  expect(anchored.anchored.painted.x).toBe(30);
+  expect(anchored.anchored.placement.x).toBe(100);
 
-  // After the edit, the outline-extended ink's left edge sits at x = 100.
+  // After the edit, the outline-extended ink's left edge sits at x = 90.
   const measure = await invoke(["composition", "measure", "poster", "hero", "--project", projDir, "--json"]);
   expect(measure.code).toBe(0);
   const measured = JSON.parse(measure.stdout).layers[0];
-  expect(measured.painted).toEqual({ x: 100, y: 20, width: 60, height: 60 });
+  expect(measured.painted).toEqual({ x: 90, y: 20, width: 60, height: 60 });
 
   // --anchor + --outline in one edit refuses (exit 2, live state unchanged).
   const conflict = await invoke([
@@ -697,7 +700,7 @@ test("anchored placement uses the outline-extended ink; --anchor and --outline a
   expect(conflict.code).toBe(2);
   expect(JSON.parse(conflict.stdout).ok).toBe(false);
   const state = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
-  expect(state.layer.currentRevision.x).toBe(110);
+  expect(state.layer.currentRevision.x).toBe(100);
   expect(state.layer.currentRevision.outline).toEqual({ width: 10, color: "#000000" });
 });
 

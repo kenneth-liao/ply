@@ -21,7 +21,11 @@
  * instead of silently falling back to the layout box. Resolution runs
  * against the Layer's current transform; transform and content edits are
  * separate edits, because the reference ink would otherwise be ambiguous.
- * For legacy text revisions, a text Layer's ink depends on the referring
+ * The ink basis is the PRE-EFFECT painted ink (DEC-002, ADR-0017 amendment
+ * #288): the ink-extending effect facts (shadow #139, outline #140) are
+ * stripped inside the ONE shared resolution both anchored surfaces call, so
+ * re-anchoring an effected Layer never moves it and the two surfaces cannot
+ * drift. For legacy text revisions, a text Layer's ink depends on the referring
  * Composition's canvas width (pre-wrap shrink-to-fit; modern revisions use
  * position-independent natural layout per the ADR-0017 amendment). Because
  * placement is one shared fact (DEC-002), resolution measures the Layer in
@@ -30,15 +34,15 @@
  * on an unwrapped line (documented); a fork resolves in its target Composition,
  * whose use is about to own the Layer.
  */
-import { findLayerReferrers, inspectLayer, type ResolvedLayerRevision } from "./layer.js";
+import { findLayerReferrers, readLayerInternalFull, type ResolvedLayerRevision } from "./layer.js";
 import {
-  measureCompositionLayers,
   measureProvisionalLayer,
-  measureStandaloneLayer,
+  STANDALONE_CANVAS_PX,
 } from "./composition-measure.js";
 import type { SnapshotLayer } from "./composition-paint.js";
-import { readCompositionDocument } from "./composition.js";
+import { readCompositionInternalFull } from "./composition.js";
 import { resolveProjectRoot } from "./project.js";
+import { withProjectLock } from "./project-lock.js";
 
 /** The axes of one anchored placement: each present component anchors the
  * corresponding coordinate as the target for that ink edge/center. */
@@ -133,7 +137,100 @@ function resolveAxis(
 
 /** Resolve an anchored placement for `layerId` into plain canonical (x, y).
  * Read-only: it measures the live state and mutates nothing; the caller
+/** The pre-effect ink basis (DEC-002, spec #285 US-002, ADR-0017 amendment
+ * #288): the exact revision facts stripped before anchor ink is measured.
+ * ADR-0017's consequences named the ink-extending effects — the shadow
+ * (#139, ADR-0018) and the outline (#140, ADR-0019) — and left the question
+ * of effect-extended ink to their contracts; the amendment resolves it as
+ * exactly these two facts. Grade, edge glow, and blend cannot change the
+ * ink (they preserve alpha coverage — ADR-0024 DEC-005), and the visible
+ * region is paint (ADR-0023), not an effect — both stay part of the basis.
+ * One home: both anchored surfaces resolve through the function below, so
+ * the basis cannot drift between `composition add` and `layer edit`. */
+function preEffectInkBasis(revision: ResolvedLayerRevision): ResolvedLayerRevision {
+  const { shadow: _shadow, outline: _outline, ...rest } = revision;
+  return rest as ResolvedLayerRevision;
+}
+
+/** The result of the shared pre-effect resolution: the resolved placement,
+ * the measured ink box the resolution anchored against, and the ink's
+ * offset from the placement point. */
+interface PreEffectAnchor {
+  placement: { x: number; y: number };
+  painted: { x: number; y: number; width: number; height: number };
+}
+
+/** The ONE pre-effect anchored-ink resolution both anchored surfaces share
+ * (DEC-002, TEST-004, ADR-0017 amendment #288): measure the supplied
+ * snapshot's painted ink in `canvas` with the ink-extending effect facts
+ * stripped (the basis lives here, never as a caller-supplied flag), then
+ * resolve the anchored axes against it. The anchored axes' targets are
+ * required (validated here, the ONE home); an unanchored axis keeps
+ * `fallbackX`/`fallbackY` — the Layer's current placement (edit) or its
+ * would-be --x/--y (add). `revision.x`/`.y` are the ink-offset base: the
+ * snapshot may be placed at (0, 0) (standalone), where the painted box IS
+ * the offset. `name` is the snapshot's paint identity (the use name in a
+ * Composition, the layer id provisionally/standalone) — the name refusals
+ * and reports carry. Read-only: nothing is staged or stored. */
+async function resolvePreEffectAnchor(options: {
+  canvas: { width: number; height: number };
+  layerId: string;
+  name?: string;
+  revision: ResolvedLayerRevision;
+  contentBytes: Buffer;
+  anchor: ParsedAnchor;
+  targetX?: number;
+  targetY?: number;
+  fallbackX: number;
+  fallbackY: number;
+  context: string;
+}): Promise<PreEffectAnchor> {
+  const { canvas, layerId, anchor, targetX, targetY, fallbackX, fallbackY, context } = options;
+  if (anchor.horizontal !== undefined && targetX === undefined) {
+    throw new Error(
+      `--x <target> is required to anchor horizontally: the ${anchor.horizontal} ink edge/center lands at the requested x.`,
+    );
+  }
+  if (anchor.vertical !== undefined && targetY === undefined) {
+    throw new Error(
+      `--y <target> is required to anchor vertically: the ${anchor.vertical} ink edge/center lands at the requested y.`,
+    );
+  }
+  // The pre-effect ink basis: the effect facts never reach the measurement.
+  const revision = preEffectInkBasis(options.revision);
+  const snapshot: SnapshotLayer = { name: options.name ?? layerId, layerId, revision, contentBytes: options.contentBytes };
+  const measured = await measureProvisionalLayer(canvas, snapshot);
+  if (measured.refused) {
+    throw new Error(measured.refused);
+  }
+  if (!measured.painted) {
+    throw noInkRefusal(layerId, context);
+  }
+  const painted = measured.painted;
+
+  // Per-axis resolution: the ink offset anchors the requested edge/center to
+  // the target; an unanchored axis keeps the fallback placement.
+  const placement = {
+    x:
+      anchor.horizontal !== undefined
+        ? round2(resolveAxis(anchor.horizontal, targetX!, painted.x, painted.width, revision.x))
+        : fallbackX,
+    y:
+      anchor.vertical !== undefined
+        ? round2(resolveAxis(anchor.vertical, targetY!, painted.y, painted.height, revision.y))
+        : fallbackY,
+  };
+  return { placement, painted };
+}
+
+/** Resolve an anchored placement for `layerId` into plain canonical (x, y).
+ * Read-only: it measures the live state and mutates nothing; the caller
  * publishes the resolved placement through the ordinary edit lifecycle.
+ *
+ * The reference ink is the PRE-EFFECT painted ink through the ONE shared
+ * resolution `composition add` also resolves through (DEC-002, ADR-0017
+ * amendment #288): a stored shadow or outline never shifts a re-anchoring
+ * edit, and an effect edit never moves a stored placement.
  *
  * `contextComposition` (fork intent) resolves in that one Composition;
  * otherwise every referring Composition is measured (an unreferenced Layer
@@ -146,92 +243,90 @@ export async function resolveAnchoredPlacement(
   options: { anchor: ParsedAnchor; targetX?: number; targetY?: number; contextComposition?: string; contextUse?: string },
 ): Promise<AnchorResolution> {
   const { anchor, targetX, targetY, contextComposition } = options;
-  if (anchor.horizontal !== undefined && targetX === undefined) {
-    throw new Error(
-      `--x <target> is required to anchor horizontally: the ${anchor.horizontal} ink edge/center lands at the requested x.`,
-    );
-  }
-  if (anchor.vertical !== undefined && targetY === undefined) {
-    throw new Error(
-      `--y <target> is required to anchor vertically: the ${anchor.vertical} ink edge/center lands at the requested y.`,
-    );
-  }
-
   const contexts =
     contextComposition !== undefined ? [contextComposition] : await findLayerReferrers(projectPath, layerId);
-
-  // The painted ink box and its offset from the placement point, measured
-  // through the paint-identical authority. Placement is one shared revision
-  // fact, so every context measures the same ink offsets when they agree.
-  let painted: { x: number; y: number; width: number; height: number } | undefined;
-  let inkOffset = { x: 0, y: 0 };
   const resolvedRoot = await resolveProjectRoot(projectPath);
-  for (const comp of contexts) {
-    const { comp: compDoc } = await readCompositionDocument(resolvedRoot, comp);
-    const use =
-      (options.contextUse !== undefined ? compDoc.layers.find((l) => l.name === options.contextUse && l.layerId === layerId) : undefined) ??
-      compDoc.layers.find((l) => l.layerId === layerId);
-    if (!use) {
-      throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
+
+  // The read-snapshot pattern (renderComposition, measureCompositionLayers):
+  // every context's canvas plus the target use's verified revision and
+  // content bytes, resolved exactly once under the Project lock, then
+  // measured outside the lock — resolution writes nothing.
+  const snapshots = await withProjectLock(resolvedRoot, async () => {
+    const contextSnapshots: { name: string; canvas: { width: number; height: number }; revision: ResolvedLayerRevision; contentBytes: Buffer }[] = [];
+    for (const comp of contexts) {
+      const full = await readCompositionInternalFull(projectPath, comp);
+      const use =
+        (options.contextUse !== undefined
+          ? full.layers.find((l) => l.name === options.contextUse && l.layerId === layerId)
+          : undefined) ?? full.layers.find((l) => l.layerId === layerId);
+      if (!use) {
+        throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
+      }
+      contextSnapshots.push({ name: use.name, canvas: full.canvas, revision: use.revision, contentBytes: use.contentBytes });
     }
-    // Measure only this Layer's own use (#206): an oversized sibling never
-    // blocks anchoring an unrelated Layer.
-    const measured = await measureCompositionLayers(projectPath, comp, use.name);
-    const entry = measured.layers.find((l) => l.name === use.name);
-    if (!entry) {
-      throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
-    }
-    if (entry.refused) {
-      throw new Error(entry.refused);
-    }
-    if (!entry.painted) {
-      throw noInkRefusal(layerId, comp);
-    }
-    if (painted === undefined) {
-      painted = entry.painted;
-      inkOffset = {
-        x: entry.painted.x - entry.placement.x,
-        y: entry.painted.y - entry.placement.y,
-      };
+    // The Layer's current revision and verified bytes: the unanchored axes'
+    // fallback placement, and the standalone snapshot when no context reads.
+    const layer = await readLayerInternalFull(resolvedRoot, layerId);
+    return { contextSnapshots, current: layer.currentRevision, contentBytes: layer.contentBytes };
+  });
+
+  if (snapshots.contextSnapshots.length === 0) {
+    // No referring Composition: the Layer is measured standalone at
+    // placement (0, 0) on the unwrapped standalone canvas, so the painted
+    // box IS the ink offset — the same measurement the pre-change edit path
+    // used, now through the shared pre-effect resolution.
+    const resolved = await resolvePreEffectAnchor({
+      canvas: { width: STANDALONE_CANVAS_PX, height: STANDALONE_CANVAS_PX },
+      layerId,
+      revision: { ...snapshots.current, x: 0, y: 0 },
+      contentBytes: snapshots.contentBytes,
+      anchor,
+      targetX,
+      targetY,
+      fallbackX: snapshots.current.x,
+      fallbackY: snapshots.current.y,
+      context: "standalone",
+    });
+    return {
+      anchor,
+      target: {
+        ...(anchor.horizontal !== undefined ? { x: targetX } : {}),
+        ...(anchor.vertical !== undefined ? { y: targetY } : {}),
+      },
+      placement: resolved.placement,
+      painted: resolved.painted,
+      contexts: ["standalone"],
+    };
+  }
+
+  // Measure each context through the shared pre-effect resolution. Placement
+  // is one shared revision fact, so every context measures the same ink
+  // offsets when they agree.
+  let resolution: PreEffectAnchor | undefined;
+  for (const snap of snapshots.contextSnapshots) {
+    const resolved = await resolvePreEffectAnchor({
+      canvas: snap.canvas,
+      layerId,
+      name: snap.name,
+      revision: snap.revision,
+      contentBytes: snap.contentBytes,
+      anchor,
+      targetX,
+      targetY,
+      fallbackX: snapshots.current.x,
+      fallbackY: snapshots.current.y,
+      context: snap.name,
+    });
+    if (resolution === undefined) {
+      resolution = resolved;
     } else if (
-      painted.x !== entry.painted.x || painted.y !== entry.painted.y ||
-      painted.width !== entry.painted.width || painted.height !== entry.painted.height
+      resolution.painted.x !== resolved.painted.x || resolution.painted.y !== resolved.painted.y ||
+      resolution.painted.width !== resolved.painted.width || resolution.painted.height !== resolved.painted.height
     ) {
       throw divergentRefusal(layerId, contexts);
     }
   }
-
-  if (painted === undefined) {
-    // No referring Composition: the Layer is measured standalone at
-    // placement (0, 0), so the painted box IS the ink offset.
-    const standalone = await measureStandaloneLayer(projectPath, layerId);
-    if (standalone.refused) {
-      throw new Error(standalone.refused);
-    }
-    if (!standalone.painted) {
-      throw noInkRefusal(layerId, "standalone");
-    }
-    painted = standalone.painted;
-    inkOffset = { x: standalone.painted.x, y: standalone.painted.y };
-  }
-
-  // Per-axis resolution: the ink offset anchors the requested edge/center to
-  // the target; an unanchored axis keeps the Layer's current placement.
-  const current = (await inspectLayer(projectPath, layerId)).currentRevision;
-  const placement = {
-    x:
-      anchor.horizontal !== undefined
-        ? round2(
-            resolveAxis(anchor.horizontal, targetX!, painted.x, painted.width, painted.x - inkOffset.x),
-          )
-        : current.x,
-    y:
-      anchor.vertical !== undefined
-        ? round2(
-            resolveAxis(anchor.vertical, targetY!, painted.y, painted.height, painted.y - inkOffset.y),
-          )
-        : current.y,
-  };
+  const first = resolution!;
 
   return {
     anchor,
@@ -239,9 +334,9 @@ export async function resolveAnchoredPlacement(
       ...(anchor.horizontal !== undefined ? { x: targetX } : {}),
       ...(anchor.vertical !== undefined ? { y: targetY } : {}),
     },
-    placement,
-    painted,
-    contexts: contexts.length > 0 ? contexts : ["standalone"],
+    placement: first.placement,
+    painted: first.painted,
+    contexts,
   };
 }
 
@@ -278,15 +373,16 @@ function divergentRefusal(layerId: string, contexts: string[]): Error & { referr
  * wrapping and canvas are what the ink obeys.
  *
  * The provisional revision carries the transforms (the documented
- * one-command order applies transforms BEFORE the anchor resolves) and NO
- * effects yet (effects are applied after the anchor, so the resolved
- * placement anchors the content+transform ink — exactly the ink the
- * multi-command sequence's anchor edit would resolve against). Read-only:
- * it mutates nothing; the caller publishes the resolved placement inside
- * the SAME single revision. The anchored axes' targets are the would-be
- * placement coordinates, which the add boundary requires to be explicit
- * (the same requirement `layer edit` states, so a missing target refuses
- * there, before anything is measured).
+ * one-command order applies transforms BEFORE the anchor resolves) and, by
+ * that order, no effect facts yet — but parity with `layer edit` does not
+ * rely on that ordering alone: the resolution flows through the ONE shared
+ * pre-effect ink resolution (DEC-002, ADR-0017 amendment #288), whose basis
+ * strips the ink-extending effect facts, so the two surfaces cannot drift.
+ * Read-only: it mutates nothing; the caller publishes the resolved
+ * placement inside the SAME single revision. The anchored axes' targets are
+ * the would-be placement coordinates, which the add boundary requires to be
+ * explicit (the same requirement `layer edit` states, so a missing target
+ * refuses there, before anything is measured).
  */
 export async function resolveProvisionalAnchoredPlacement(
   canvas: { width: number; height: number },
@@ -295,41 +391,21 @@ export async function resolveProvisionalAnchoredPlacement(
 ): Promise<AnchorResolution> {
   const { anchor } = options;
   const { layerId, contentBytes } = provisional;
-  const revision: ResolvedLayerRevision = { ...provisional.revision };
-  const targetX = revision.x;
-  const targetY = revision.y;
+  const targetX = provisional.revision.x;
+  const targetY = provisional.revision.y;
 
-  const snapshot: SnapshotLayer = {
-    name: layerId,
+  const resolved = await resolvePreEffectAnchor({
+    canvas,
     layerId,
-    revision,
+    revision: provisional.revision,
     contentBytes,
-  };
-  const measured = await measureProvisionalLayer(canvas, snapshot);
-  if (measured.refused) {
-    throw new Error(measured.refused);
-  }
-  if (!measured.painted) {
-    throw noInkRefusal(layerId, options.contextComposition);
-  }
-  const painted = measured.painted;
-  // The painted box of the placement-point copy: the ink's offset from the
-  // placement point, the same fact the edit-path resolution measures.
-  const inkOffset = {
-    x: painted.x - revision.x,
-    y: painted.y - revision.y,
-  };
-
-  const placement = {
-    x:
-      anchor.horizontal !== undefined
-        ? round2(resolveAxis(anchor.horizontal, targetX, painted.x, painted.width, painted.x - inkOffset.x))
-        : revision.x,
-    y:
-      anchor.vertical !== undefined
-        ? round2(resolveAxis(anchor.vertical, targetY, painted.y, painted.height, painted.y - inkOffset.y))
-        : revision.y,
-  };
+    anchor,
+    targetX,
+    targetY,
+    fallbackX: targetX,
+    fallbackY: targetY,
+    context: options.contextComposition,
+  });
 
   return {
     anchor,
@@ -337,8 +413,8 @@ export async function resolveProvisionalAnchoredPlacement(
       ...(anchor.horizontal !== undefined ? { x: targetX } : {}),
       ...(anchor.vertical !== undefined ? { y: targetY } : {}),
     },
-    placement,
-    painted,
+    placement: resolved.placement,
+    painted: resolved.painted,
     contexts: [options.contextComposition],
   };
 }

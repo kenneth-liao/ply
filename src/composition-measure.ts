@@ -310,8 +310,9 @@ const MAX_INK_VIEWPORT_PX = MAX_DIMENSION;
  * containing block width caps the line), while staying inside the bounded
  * ink-capture window with its pad. Modern revisions use position-independent
  * natural layout (ADR-0017 amendment) and never wrap regardless of canvas
- * width. Used only by `measureStandaloneLayer` (#138). */
-const STANDALONE_CANVAS_PX = MAX_INK_VIEWPORT_PX - 2 * INK_PAD_PX;
+ * width. Used by `measureStandaloneLayer` (#138) and the anchored-placement
+ * resolver's standalone context, which measures through the same canvas. */
+export const STANDALONE_CANVAS_PX = MAX_INK_VIEWPORT_PX - 2 * INK_PAD_PX;
 
 type Box = { x: number; y: number; width: number; height: number };
 
