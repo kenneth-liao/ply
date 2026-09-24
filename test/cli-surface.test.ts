@@ -10,9 +10,10 @@
  * verified behavior.
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { encodePngRgba } from "../src/png.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -256,4 +257,129 @@ test("add and layer edit help name the same Layer kinds for the resize forms (#2
     expect(text).toContain(`Works on ${SCALE_HELP_KINDS}`);
     expect(text).not.toContain("(image Layers only");
   }
+});
+
+test("all Composition commands taking a composition name refuse unknown names with existing names and no raw ENOENT (TEST-006, DEC-003)", async () => {
+  const { COMPOSITION_COMMANDS } = await import("../src/composition-cli.js");
+
+  const projDir = path.join(tempDir, "proj");
+  await invoke(["project", "init", projDir, "--name", "test-proj"]);
+  await invoke(["composition", "create", "alpha", "--width", "200", "--height", "100", "--project", projDir]);
+  await invoke(["composition", "create", "beta", "--width", "300", "--height", "150", "--project", projDir]);
+
+  const imgPath = path.join(tempDir, "dummy.png");
+  const redPng = encodePngRgba(10, 10, Buffer.alloc(10 * 10 * 4, 255));
+  await writeFile(imgPath, redPng);
+
+  const regionPath = path.join(tempDir, "regions.json");
+  await writeFile(
+    regionPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      canvas: { width: 200, height: 100 },
+      regions: [{ id: "r1", label: "R1", reason: "test", "box": { x: 0, y: 0, width: 50, height: 50 } }],
+    }),
+  );
+
+  const ctx = {
+    project: projDir,
+    imageFile: imgPath,
+    regionFile: regionPath,
+    existingComp: "alpha",
+  };
+
+  const commandsTakingComp = Object.values(COMPOSITION_COMMANDS).filter((c) => c.takesExistingComposition);
+  expect(commandsTakingComp.length).toBeGreaterThanOrEqual(10);
+
+  const missingComp = "non-existent-comp";
+
+  for (const cmd of commandsTakingComp) {
+    expect(cmd.argsForMissingComposition).toBeDefined();
+    const args = cmd.argsForMissingComposition!(missingComp, ctx);
+
+    // Text presentation: nonzero exit, missing name, existing names, no raw ENOENT
+    const resText = await invoke(args);
+    expect(resText.code).not.toBe(0);
+    const combinedText = `${resText.stdout}\n${resText.stderr}`;
+    expect(combinedText).toContain(missingComp);
+    expect(combinedText).toContain("alpha");
+    expect(combinedText).toContain("beta");
+    expect(combinedText).not.toContain("ENOENT");
+
+    // JSON presentation: one valid structured JSON result with ok: false, no raw ENOENT
+    const resJson = await invoke([...args, "--json"]);
+    expect(resJson.code).not.toBe(0);
+    expect(resJson.stderr).toBe("");
+    const parsed = JSON.parse(resJson.stdout);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error).toContain(missingComp);
+    expect(parsed.error).toContain("alpha");
+    expect(parsed.error).toContain("beta");
+    expect(parsed.error).not.toContain("ENOENT");
+  }
+});
+
+test("Composition commands report no Compositions exist in an empty project without raw ENOENT (DEC-003)", async () => {
+  const projDir = path.join(tempDir, "empty-proj");
+  await invoke(["project", "init", projDir, "--name", "empty-proj"]);
+
+  const res = await invoke(["composition", "inspect", "missing-comp", "--project", projDir, "--json"]);
+  expect(res.code).toBe(1);
+  const parsed = JSON.parse(res.stdout);
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error).toContain("No Compositions exist in this Project yet");
+  expect(parsed.error).not.toContain("ENOENT");
+});
+
+test("Composition commands reject names escaping project boundary whether or not target exists (DEC-003)", async () => {
+  const projDir = path.join(tempDir, "sec-proj");
+  await invoke(["project", "init", projDir, "--name", "sec-proj"]);
+  await invoke(["composition", "create", "base", "--width", "100", "--height", "100", "--project", projDir]);
+
+  // 1. Lexical escape when target does NOT exist. At the CLI seam the name
+  // sanitizer refuses first (invalid characters); the reader's own lexical
+  // gate is unit-tested directly in test/composition.test.ts (#289).
+  const resLexNonexistent = await invoke([
+    "composition", "inspect", "../../non-existent-file", "--project", projDir, "--json",
+  ]);
+  expect(resLexNonexistent.code).not.toBe(0);
+  const parsedLex = JSON.parse(resLexNonexistent.stdout);
+  expect(parsedLex.ok).toBe(false);
+  expect(parsedLex.error).toContain("invalid characters");
+  expect(parsedLex.error).not.toContain("ENOENT");
+
+  // 2. Lexical escape when target exists outside project — same sanitizer
+  // refusal, whether or not the target exists (#289).
+  const outsideFile = path.join(tempDir, "outside.json");
+  await writeFile(outsideFile, JSON.stringify({ schemaVersion: 1, name: "outside", canvas: { width: 100, height: 100 }, layers: [] }));
+  const resLexExist = await invoke([
+    "composition", "inspect", "../../outside", "--project", projDir, "--json",
+  ]);
+  expect(resLexExist.code).not.toBe(0);
+  const parsedLexExist = JSON.parse(resLexExist.stdout);
+  expect(parsedLexExist.ok).toBe(false);
+  expect(parsedLexExist.error).toContain("invalid characters");
+  expect(parsedLexExist.error).not.toContain("ENOENT");
+
+  // 3. Symlink inside compositions escaping root when target exists
+  const extCompDir = path.join(tempDir, "ext-dir");
+  await mkdir(extCompDir, { recursive: true });
+  await writeFile(path.join(extCompDir, "ext.json"), JSON.stringify({ schemaVersion: 1, name: "ext", canvas: { width: 100, height: 100 }, layers: [] }));
+  await symlink(path.join(extCompDir, "ext.json"), path.join(projDir, "compositions", "esc-symlink.json"));
+
+  const resSym = await invoke(["composition", "inspect", "esc-symlink", "--project", projDir, "--json"]);
+  expect(resSym.code).not.toBe(0);
+  const parsedSym = JSON.parse(resSym.stdout);
+  expect(parsedSym.ok).toBe(false);
+  expect(parsedSym.error).toContain("escapes project boundary");
+
+  // 4. Dangling symlink inside compositions escaping root when target does NOT exist
+  await symlink(path.join(extCompDir, "nonexistent.json"), path.join(projDir, "compositions", "dangling-symlink.json"));
+
+  const resDangling = await invoke(["composition", "inspect", "dangling-symlink", "--project", projDir, "--json"]);
+  expect(resDangling.code).not.toBe(0);
+  const parsedDangling = JSON.parse(resDangling.stdout);
+  expect(parsedDangling.ok).toBe(false);
+  expect(parsedDangling.error).toContain("escapes project boundary");
+  expect(parsedDangling.error).not.toContain("ENOENT");
 });

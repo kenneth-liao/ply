@@ -1,7 +1,7 @@
 /**
  * Composition authoring, layer reference management, and inspection (ADR-0013, ADR-0014, DEC-001–006).
  */
-import { readFile, readdir, lstat, mkdir, unlink, rmdir, realpath } from "node:fs/promises";
+import { readFile, readdir, lstat, mkdir, unlink, rmdir, realpath, readlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { outsideDir, escapesDirReal } from "./paths.js";
@@ -174,29 +174,114 @@ function parsePlacement(options: AddLayerOptions): { x: number; y: number; opaci
 }
 
 /**
+ * The Project's stored Composition names, sorted alphabetically — the "what
+ * exists" listing that address and Composition command refusals name
+ * (spec #226, #289 DEC-003). Guidance only: no lock and no Layer resolution.
+ */
+export async function listCompositionNames(projectPath: string): Promise<string[]> {
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  let entries: string[];
+  try {
+    entries = await readdir(path.join(resolvedRoot, "compositions"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+  return entries.filter((f) => f.endsWith(".json")).map((f) => path.basename(f, ".json")).sort();
+}
+
+/**
+ * The one missing-Composition refusal (DEC-003): names the missing
+ * Composition and lists what exists, so no raw filesystem error such as
+ * ENOENT reaches output.
+ */
+async function missingCompositionError(
+  resolvedRoot: string,
+  compName: string,
+): Promise<Error> {
+  const names = await listCompositionNames(resolvedRoot);
+  const listing =
+    names.length === 0
+      ? "No Compositions exist in this Project yet."
+      : `Existing Compositions: ${names.map((n) => `"${n}"`).join(", ")}.`;
+  return new Error(`Composition "${compName}" not found in project. ${listing}`);
+}
+
+/**
  * Unlocked internal reader for stored Composition JSON documents.
  * Verifies Project boundary containment and parses the stored document through
  * the canonical parser.
  *
  * Exported as the ONE read-only document reader for Layer name-address
- * resolution (spec #226 US-003): the address boundary resolves an address
- * through this parser and never a second one.
+ * resolution and all Composition commands (spec #226 US-003, spec #285 DEC-003):
+ * every command resolves Composition documents through this single reader.
+ * Refuses missing compositions with a formatted listing of what exists, and
+ * enforces boundary containment whether or not the target exists.
  */
 export async function readCompositionDocument(
   resolvedRoot: string,
   compName: string,
 ): Promise<{ comp: Composition; compFile: string }> {
-  const compFile = path.join(resolvedRoot, "compositions", `${compName}.json`);
+  const compDir = path.join(resolvedRoot, "compositions");
+  const compFile = path.join(compDir, `${compName}.json`);
 
-  if (await escapesDirReal(resolvedRoot, compFile)) {
+  // 1. Lexical boundary containment check: cannot escape compositions/ or project root,
+  // whether or not the target exists.
+  if (outsideDir(compDir, compFile) || outsideDir(resolvedRoot, compFile)) {
     throw new Error(`Security error: composition "${compName}" escapes project boundary.`);
   }
 
+  // 2. Check existence / symlink via lstat
+  let st;
+  try {
+    st = await lstat(compFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw await missingCompositionError(resolvedRoot, compName);
+    }
+    throw err;
+  }
+
+  // 3. Symlink / realpath containment check
+  if (st.isSymbolicLink()) {
+    try {
+      if (await escapesDirReal(resolvedRoot, compFile)) {
+        throw new Error(`Security error: composition "${compName}" escapes project boundary.`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        // Dangling symlink: verify where the link points
+        const linkTarget = await readlink(compFile);
+        const realRoot = await realpath(resolvedRoot).catch(() => resolvedRoot);
+        const realDirname = await realpath(path.dirname(compFile)).catch(() => path.dirname(compFile));
+        const resolvedTarget = path.resolve(realDirname, linkTarget);
+        // Either signal refuses: the resolved target may not leave the real
+        // Project root, and it may not leave it lexically either (the same
+        // strictness whether or not the target exists, #289).
+        if (outsideDir(realRoot, resolvedTarget) || outsideDir(resolvedRoot, path.resolve(path.dirname(compFile), linkTarget))) {
+          throw new Error(`Security error: composition "${compName}" escapes project boundary.`);
+        }
+        throw await missingCompositionError(resolvedRoot, compName);
+      }
+      throw err;
+    }
+  } else {
+    if (await escapesDirReal(resolvedRoot, compFile)) {
+      throw new Error(`Security error: composition "${compName}" escapes project boundary.`);
+    }
+  }
+
+  // 4. File exists and is contained: read and parse
   let compRaw: string;
   try {
     compRaw = await readFile(compFile, "utf8");
-  } catch {
-    throw new Error(`Composition "${compName}" not found in project.`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw await missingCompositionError(resolvedRoot, compName);
+    }
+    throw err;
   }
 
   const comp = parseCompositionDocument(compRaw, compName);

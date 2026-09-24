@@ -592,85 +592,195 @@ function stackPositionNote(position?: StackPosition): string {
   return position ? ` (position: ${stackPositionSpec(position)})` : "";
 }
 
-// Dash-numeric join (#128): the Layer options this surface accepts (the
-// shared definition's dash-numeric subset, DEC-001 — now the full option
-// table's keys, #229) plus --supersample (#184).
-const rawArgs = joinDashLeadingNumericValues(
-  process.argv.slice(2),
-  [...layerDashNumericFlags(COMPOSITION_ADD_OPTION_KEYS), "--supersample"],
-);
-const isJson = rawArgs.includes("--json");
-let values: LayerOptionArgs & {
-  project?: string;
-  height?: string;
-  order?: string;
-  out?: string;
-  "from-project"?: string;
-  supersample?: string;
-  regions?: string;
-  position?: string;
-  columns?: string;
-  cell?: string;
-  pair?: boolean;
-  label?: string[] | string;
-  json?: boolean;
-  help?: boolean;
+export interface CompositionCommandMeta {
+  name: string;
+  description: string;
+  takesExistingComposition: boolean;
+  argsForMissingComposition?: (missing: string, ctx: {
+    project: string;
+    imageFile: string;
+    regionFile: string;
+    existingComp: string;
+  }) => string[];
+}
+
+export const COMPOSITION_COMMANDS: Record<string, CompositionCommandMeta> = {
+  create: {
+    name: "create",
+    description: "Create a new Composition with explicit canvas dimensions",
+    takesExistingComposition: false,
+  },
+  add: {
+    name: "add",
+    description: "Add a local image, text, or shape Layer to a Composition",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "add", missing, "layer1", "--image", ctx.imageFile, "--project", ctx.project,
+    ],
+  },
+  import: {
+    name: "import",
+    description: "Import a Composition's Layer references into another Composition",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "import", missing, ctx.existingComp, "--project", ctx.project,
+    ],
+  },
+  remove: {
+    name: "remove",
+    description: "Remove a Layer use from a Composition",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "remove", missing, "layer1", "--project", ctx.project,
+    ],
+  },
+  reorder: {
+    name: "reorder",
+    description: "Reorder Layer uses within a Composition",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "reorder", missing, "--order", "layer1", "--project", ctx.project,
+    ],
+  },
+  inspect: {
+    name: "inspect",
+    description: "Inspect a Composition's canvas and ordered Layers",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "inspect", missing, "--project", ctx.project,
+    ],
+  },
+  measure: {
+    name: "measure",
+    description: "Measure Layer geometry read-only in Composition coordinates",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "measure", missing, "--project", ctx.project,
+    ],
+  },
+  check: {
+    name: "check",
+    description: "Check a Composition's painted Layer extents against caller-supplied regions",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "check", missing, "--regions", ctx.regionFile, "--project", ctx.project,
+    ],
+  },
+  guidelines: {
+    name: "guidelines",
+    description: "Render a guideline view with regions overlay",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "guidelines", missing, "--regions", ctx.regionFile, "--project", ctx.project,
+    ],
+  },
+  sheet: {
+    name: "sheet",
+    description: "Build a comparison sheet grid",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "sheet", missing, "--project", ctx.project,
+    ],
+  },
+  render: {
+    name: "render",
+    description: "Render a Composition to a PNG",
+    takesExistingComposition: true,
+    argsForMissingComposition: (missing, ctx) => [
+      "composition", "render", missing, "--project", ctx.project,
+    ],
+  },
+  replay: {
+    name: "replay",
+    description: "Replay a retained Render manifest",
+    takesExistingComposition: false,
+  },
+  list: {
+    name: "list",
+    description: "List all Compositions in the Project",
+    takesExistingComposition: false,
+  },
 };
-let positionals: string[];
 
-try {
-  const parsed = parseArgs({
-    args: rawArgs,
-    allowPositionals: true,
-    options: {
-      project: { type: "string", short: "p" },
-      height: { type: "string" },
-      order: { type: "string" },
-      out: { type: "string" },
-      "from-project": { type: "string" },
-      supersample: { type: "string" },
-      regions: { type: "string" },
-      // Stack position (#230, US-002, DEC-004): a Composition-level
-      // creation-time argument, NOT a Layer option — deliberately outside
-      // the shared Layer option table (DEC-001). One grammar reader shared
-      // by add and import (composition.parseStackPosition).
-      position: { type: "string" },
-      // Comparison sheet options (#233, spec #226 US-006): a Composition
-      // surface concern, outside the shared Layer option table (DEC-001).
-      columns: { type: "string" },
-      cell: { type: "string" },
-      pair: { type: "boolean", default: false },
-      label: { type: "string", multiple: true },
-      // The one declaration of the add surface's Layer options (DEC-001):
-      // every Layer option this surface accepts, derived from the shared
-      // option table (#229) — the same parseArgs entries layer edit spreads
-      // for these keys. --width is parsed once for the whole module: on
-      // create it is the canvas dimension, on add it is the text width
-      // axis (the same spelling layer edit uses, DEC-001) — the shared
-      // declaration covers both subcommands, and that is the documented
-      // conflation resolved on #229 (no rename, no alias).
-      ...COMPOSITION_ADD_OPTION_PARSE_ARGS,
-      json: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
-    },
-  });
-  values = parsed.values;
-  positionals = parsed.positionals;
-} catch (err) {
-  output({ ok: false, error: usageMessage((err as Error).message, "composition") }, isJson);
-  process.exit(2);
-}
+export async function run(argv: string[] = process.argv.slice(2)): Promise<void> {
+  // Dash-numeric join (#128): the Layer options this surface accepts (the
+  // shared definition's dash-numeric subset, DEC-001 — now the full option
+  // table's keys, #229) plus --supersample (#184).
+  const rawArgs = joinDashLeadingNumericValues(
+    argv,
+    [...layerDashNumericFlags(COMPOSITION_ADD_OPTION_KEYS), "--supersample"],
+  );
+  const isJson = rawArgs.includes("--json");
+  let values: LayerOptionArgs & {
+    project?: string;
+    height?: string;
+    order?: string;
+    out?: string;
+    "from-project"?: string;
+    supersample?: string;
+    regions?: string;
+    position?: string;
+    columns?: string;
+    cell?: string;
+    pair?: boolean;
+    label?: string[] | string;
+    json?: boolean;
+    help?: boolean;
+  };
+  let positionals: string[];
 
-if (values.help || positionals.length === 0) {
-  if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
-  else console.log(HELP);
-  process.exit(0);
-}
+  try {
+    const parsed = parseArgs({
+      args: rawArgs,
+      allowPositionals: true,
+      options: {
+        project: { type: "string", short: "p" },
+        height: { type: "string" },
+        order: { type: "string" },
+        out: { type: "string" },
+        "from-project": { type: "string" },
+        supersample: { type: "string" },
+        regions: { type: "string" },
+        // Stack position (#230, US-002, DEC-004): a Composition-level
+        // creation-time argument, NOT a Layer option — deliberately outside
+        // the shared Layer option table (DEC-001). One grammar reader shared
+        // by add and import (composition.parseStackPosition).
+        position: { type: "string" },
+        // Comparison sheet options (#233, spec #226 US-006): a Composition
+        // surface concern, outside the shared Layer option table (DEC-001).
+        columns: { type: "string" },
+        cell: { type: "string" },
+        pair: { type: "boolean", default: false },
+        label: { type: "string", multiple: true },
+        // The one declaration of the add surface's Layer options (DEC-001):
+        // every Layer option this surface accepts, derived from the shared
+        // option table (#229) — the same parseArgs entries layer edit spreads
+        // for these keys. --width is parsed once for the whole module: on
+        // create it is the canvas dimension, on add it is the text width
+        // axis (the same spelling layer edit uses, DEC-001) — the shared
+        // declaration covers both subcommands, and that is the documented
+        // conflation resolved on #229 (no rename, no alias).
+        ...COMPOSITION_ADD_OPTION_PARSE_ARGS,
+        json: { type: "boolean", default: false },
+        help: { type: "boolean", short: "h", default: false },
+      },
+    });
+    values = parsed.values;
+    positionals = parsed.positionals;
+  } catch (err) {
+    output({ ok: false, error: usageMessage((err as Error).message, "composition") }, isJson);
+    process.exit(2);
+  }
 
-const command = positionals[0]!;
-const targetProj = values.project ?? process.cwd();
+  if (values.help || positionals.length === 0) {
+    if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
+    else console.log(HELP);
+    process.exit(0);
+  }
 
-async function run() {
+  const command = positionals[0]!;
+  const targetProj = values.project ?? process.cwd();
+
   let mutationCommitted = false;
   // Exact published outcome for teardown-failure reporting (render only).
   let teardownOutcome: string | undefined;
@@ -1624,7 +1734,7 @@ async function run() {
         process.exitCode = 1;
       }
     } else {
-      const msg = `Unknown command "${command}". Available commands: create, add, import, remove, reorder, inspect, measure, check, guidelines, render, replay, list. See ply composition --help.`;
+      const msg = `Unknown command "${command}". Available commands: ${Object.keys(COMPOSITION_COMMANDS).join(", ")}. See ply composition --help.`;
       output({ ok: false, error: msg }, isJson);
       process.exitCode = 2;
     }
@@ -1633,7 +1743,9 @@ async function run() {
   }
 }
 
-await run();
+if (import.meta.main) {
+  await run();
+}
 
 /**
  * Render output emission: JSON (success and failure) always goes to stdout

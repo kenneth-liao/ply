@@ -961,3 +961,28 @@ test("CLI teardown failure reports operational failure without retrying committe
   expect(textResult.stdout).toContain('Created Composition "text"');
   expect(textResult.stderr).toMatch(/already committed/i);
 }, 15000);
+
+// The reader's own boundary gates (#289): lexical escape is refused whether
+// or not the target exists, and a dangling symlink that resolves outside the
+// Project gets the security verdict, not a not-found or raw-ENOENT error.
+test("readCompositionDocument refuses boundary-escaping names whether or not the target exists (#289)", async () => {
+  const { readCompositionDocument } = await import("../src/composition.js");
+  const projDir = path.join(tempDir, "gate-proj");
+  await invoke(["project", "init", projDir, "--name", "gate-proj", "--json"]);
+  await invoke(["composition", "create", "real", "--width", "100", "--height", "100", "--project", projDir, "--json"]);
+
+  // Positive control: an existing contained composition reads through the gate.
+  const ok = await readCompositionDocument(projDir, "real");
+  expect(ok.comp.name).toBe("real");
+
+  // Lexical escape, target does not exist.
+  await expect(readCompositionDocument(projDir, "../../non-existent")).rejects.toThrow("escapes project boundary");
+
+  // Lexical escape, target exists outside the Project.
+  await writeFile(path.join(tempDir, "outside.json"), JSON.stringify({ name: "outside" }));
+  await expect(readCompositionDocument(projDir, "../../outside")).rejects.toThrow("escapes project boundary");
+
+  // Dangling symlink inside compositions/ resolving outside the Project.
+  await symlink(path.join(tempDir, "dangling-target.json"), path.join(projDir, "compositions", "dang.json"));
+  await expect(readCompositionDocument(projDir, "dang")).rejects.toThrow("escapes project boundary");
+});
