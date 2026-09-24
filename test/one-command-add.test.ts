@@ -121,6 +121,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "width": return ["122"];
     case "tracking": return ["0.1"];
     case "line-height": return ["1.4"];
+    case "wrap-width": return ["220"];
     case "x": case "y": return ["40"];
     case "opacity": return ["0.8"];
     case "anchor": return ["right"];
@@ -157,7 +158,7 @@ test("the guard table: every edit option is an accepted add option (TEST-003)", 
   const established = [
     "image", "from-generation", "from-matte", "output", "text", "x", "y", "opacity",
     "shape", "size", "corner-radius", "fill",
-    "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height",
+    "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width",
   ];
   for (const key of editOptions) {
     expect(oneCommand.includes(key) || established.includes(key)).toBe(true);
@@ -239,6 +240,7 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
     case "width": expect(rev.width).toBe(122); break;
     case "tracking": expect(rev.tracking).toBe(0.1); break;
     case "line-height": expect(rev.lineHeight).toBe(1.4); break;
+    case "wrap-width": expect(rev.wrapWidth).toBe(220); break;
     default: throw new Error(`guard test: no applied-fact read-back for option "${key}"`);
   }
 }

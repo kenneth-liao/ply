@@ -63,6 +63,7 @@ import {
   parseVisibleRegionRadiusSpec,
   parseVectorColorSpec,
   resolveTextTypographyControls,
+  resolveTextWrapWidthControl,
   vectorColorKindRefusal,
   validateRectangleCornerRadius,
   validateVisibleRegionAgainstContent,
@@ -164,6 +165,7 @@ export type LayerOptionKey =
   | "width"
   | "tracking"
   | "line-height"
+  | "wrap-width"
   | "shape"
   | "size"
   | "corner-radius"
@@ -252,6 +254,11 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "width", group: "text", appliesTo: ["text"], editOption: true, parse: parseLayerWidth },
   { key: "tracking", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerTracking },
   { key: "line-height", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerLineHeight },
+  // The wrap width (#294, spec #285 US-015, DEC-001/DEC-005, ADR-0017
+  // amendment): an ABSOLUTE setter in layout px — a positive finite number
+  // or the removal value "none". A text style option: text-only, and it
+  // joins every text content-kind refusal through TEXT_CONTENT_KEYS.
+  { key: "wrap-width", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerWrapWidth },
   // Placement, transform, and effect options: kind-shared across image,
   // text, and shape Layers (#259) — the shared validators and the paint
   // markup treat a shape's box exactly like an image's content box. Only
@@ -345,6 +352,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   width: { type: "string" },
   tracking: { type: "string" },
   "line-height": { type: "string" },
+  "wrap-width": { type: "string" },
   x: { type: "string" },
   y: { type: "string" },
   opacity: { type: "string" },
@@ -376,7 +384,7 @@ export type LayerOptionArgs = { [K in LayerOptionKey]?: string };
 /** The `--text` content marker plus the text style options: the option set
  *  the content-kind exclusivity rules treat as "the text content kind". */
 export const TEXT_CONTENT_KEYS: readonly LayerOptionKey[] = [
-  "text", "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height",
+  "text", "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width",
 ];
 
 /** The `--shape` content marker plus the shape's parameter options: the
@@ -573,7 +581,7 @@ export function layerContentKindConflict(
             : "--image and --shape are mutually exclusive content kinds; use one per Layer.";
         }
         return surface === "edit"
-          ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height) are mutually exclusive."
+          ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width) are mutually exclusive."
           : "--image and --text are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
@@ -680,6 +688,10 @@ export function parseLayerTracking(raw: string | undefined): OptionParse<number 
  * Line height (--line-height): a finite number or the literal "normal"
  * (resolved to `null` — the clear-stored-value form), identical wording
  * everywhere. Range validation is `validateTextTypographyControls`'s job.
+/**
+ * Line height (--line-height): a finite number or the literal "normal"
+ * (resolved to `null` — the clear-stored-value form), identical wording
+ * everywhere. Range validation is `validateTextTypographyControls`'s job.
  */
 export function parseLayerLineHeight(raw: string | undefined): OptionParse<number | null | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
@@ -687,6 +699,22 @@ export function parseLayerLineHeight(raw: string | undefined): OptionParse<numbe
   const value = parseNumericArgument(raw);
   if (!Number.isFinite(value)) {
     return { ok: false, error: 'Line height (--line-height) must be a finite number or "normal".' };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Wrap width (--wrap-width, #294, spec #285 US-015, DEC-001/DEC-005):
+ * a finite number (layout px) or the literal "none" (resolved to `null` —
+ * the documented removal form), identical wording everywhere. Range
+ * validation (positive, finite) is `validateTextWrapWidth`'s job.
+ */
+export function parseLayerWrapWidth(raw: string | undefined): OptionParse<number | null | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === "none") return { ok: true, value: null };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: 'Wrap width (--wrap-width) must be a finite number of layout px or "none".' };
   }
   return { ok: true, value };
 }
@@ -702,6 +730,20 @@ export function validateTextTypographyControls(
 ): string | undefined {
   try {
     resolveTextTypographyControls({ tracking, lineHeight });
+    return undefined;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+/**
+ * The one range validation for the wrap width (#294) at a command boundary:
+ * the same validator the ingestion paths use, so the boundaries never
+ * disagree. Returns the refusal text, or undefined when valid.
+ */
+export function validateTextWrapWidth(value: number | null | undefined): string | undefined {
+  try {
+    resolveTextWrapWidthControl(value);
     return undefined;
   } catch (err) {
     return (err as Error).message;
@@ -1385,6 +1427,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "width" },
   { option: "tracking" },
   { option: "line-height" },
+  { option: "wrap-width" },
   { policy: "text-typography" },
   { policy: "text-font-source" },
   { option: "font-file" },
@@ -1494,6 +1537,14 @@ export function checkEditLayerOptions(values: LayerOptionArgs): EditLayerCheck |
             parsed["line-height"] as number | null | undefined,
           );
           if (typographyError !== undefined) return refuse(typographyError);
+          // The wrap width's range check rides in the same typography policy
+          // step (#294): the parser accepts the boundary shape (finite number
+          // or "none"); the shared domain validator refuses non-positive
+          // values, identical wording on both surfaces.
+          const wrapWidthError = validateTextWrapWidth(
+            parsed["wrap-width"] as number | null | undefined,
+          );
+          if (wrapWidthError !== undefined) return refuse(wrapWidthError);
           break;
         }
         case "text-font-source": {

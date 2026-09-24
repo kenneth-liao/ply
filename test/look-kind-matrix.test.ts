@@ -797,3 +797,63 @@ test("matrix: cover fit (--cover-to) applies to raster and vector image Layers, 
   expect(pixel(png, 199, 99)).toEqual([0, 0, 255, 255]);
   expect(pixel(png, 100, 50)).toEqual([255, 0, 0, 255]);
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// Wrap width property × kind matrix (#294, spec #285 US-015, DEC-001/DEC-005,
+// TEST-002)
+// ---------------------------------------------------------------------------
+
+test("matrix: wrap width (--wrap-width) applies to text Layers, refuses image and shape", async () => {
+  await makeComp("comp-wrap", 400, 300);
+
+  // Text Layer: the fact stores, and a long single-line string soft-wraps
+  // at spaces within the width — the wrapped ink occupies two vertical
+  // bands of line boxes, never one wide line.
+  const tAdd = await invoke([
+    "composition", "add", "comp-wrap", "wrapped",
+    "--text", "The quick brown fox jumps over the lazy dog again and again",
+    "--font", "Archivo", "--font-size", "24", "--color", "#000000",
+    "--wrap-width", "120", "--x", "20", "--y", "20",
+    "--project", projDir, "--json",
+  ]);
+  expect(tAdd.code).toBe(0);
+  const tRev = JSON.parse(tAdd.stdout).layer.currentRevision;
+  expect(tRev.wrapWidth).toBe(120);
+
+  // Raster image Layer: refused — a wrap width is a text layout fact, so
+  // the image/text content-kind exclusivity fires first on add.
+  const raster = path.join(tempDir, "wrap-red.png");
+  await writeFile(raster, solidPng(60, 40, [255, 0, 0, 255]));
+  const iAdd = await invoke([
+    "composition", "add", "comp-wrap", "img",
+    "--image", raster, "--wrap-width", "120",
+    "--project", projDir, "--json",
+  ]);
+  expect(iAdd.code).toBe(2);
+  expect(JSON.parse(iAdd.stdout).error).toContain("--image and --text are mutually exclusive content kinds");
+
+  // Shape Layer: refused the same way (--wrap-width is a text content kind).
+  const sAdd = await invoke([
+    "composition", "add", "comp-wrap", "shape-wrap",
+    "--shape", "rectangle", "--size", "40x20", "--fill", "#ff0000", "--wrap-width", "120",
+    "--project", projDir, "--json",
+  ]);
+  expect(sAdd.code).toBe(2);
+  expect(JSON.parse(sAdd.stdout).error).toContain("--shape and --image/--from-generation/--from-matte/--text are mutually exclusive content kinds");
+
+  // The wrapped text paints several stacked lines inside the width: ink
+  // appears in both the upper and lower halves of the wrapped box, and the
+  // columns just outside the width stay blank.
+  const png = await render("comp-wrap", "wrap-matrix.png");
+  const inkAt = (x: number, y: number): boolean => pixel(png, x, y)[3]! > 0;
+  const rowsWithInk: number[] = [];
+  for (let y = 20; y < 200; y++) {
+    let rowHasInk = false;
+    for (let x = 20; x < 140; x++) {
+      if (inkAt(x, y)) { rowHasInk = true; break; }
+    }
+    if (rowHasInk) rowsWithInk.push(y);
+  }
+  expect(rowsWithInk.length).toBeGreaterThan(2.5 * 24); // more than one 24px line
+  expect(inkAt(150, 60)).toBe(false); // right of the wrap width: no ink
+}, 30_000);

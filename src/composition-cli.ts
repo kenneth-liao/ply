@@ -39,6 +39,7 @@ import {
   parseLayerTracking,
   parseLayerWeight,
   parseLayerWidth,
+  parseLayerWrapWidth,
   parseMatteId,
   parseNumericArgument,
   parseShapeCornerRadius,
@@ -48,6 +49,7 @@ import {
   validateTextFaceAxes,
   validateTextFontSource,
   validateTextTypographyControls,
+  validateTextWrapWidth,
   SHAPE_CONTENT_KEYS,
   TEXT_CONTENT_KEYS,
   type LayerOptionArgs,
@@ -311,6 +313,13 @@ Options:
                         Line height as a unitless multiplier of the font
                         size (#187, ADR-0021): 0.5 to 3; "normal" (or
                         omission) uses the font's own line height
+  --wrap-width <num|none>
+                        Wrap width for a text Layer in layout px (#294,
+                        spec #285 US-015, DEC-001/DEC-005): an ABSOLUTE
+                        setter — with a width set, the text soft-wraps at
+                        spaces within it (written line breaks still
+                        break); "none" removes the width and restores the
+                        unwrapped one-line layout
   --weight <num>        Text weight for a text Layer (#179, #232):
                         validated against the font's real weight axis —
                         bundled Archivo 100-900 (default 400); static faces
@@ -833,7 +842,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
       // The text style options (and the canvas --width value this surface's
       // established checks read as the text width axis) require --text.
       if (values.text === undefined && someLayerOptionProvided(values, TEXT_CONTENT_KEYS.filter((key) => key !== "text"))) {
-        output({ ok: false, error: "--font, --font-file, --font-size, --color, --weight, --width, --tracking, and --line-height require --text <str>." }, isJson);
+        output({ ok: false, error: "--font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, and --wrap-width require --text <str>." }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -1081,6 +1090,19 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
             process.exitCode = 2;
             return;
           }
+          const parsedWrapWidth = parseLayerWrapWidth(values["wrap-width"]);
+          if (!parsedWrapWidth.ok) {
+            output({ ok: false, error: parsedWrapWidth.error }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const wrapWidth = parsedWrapWidth.value;
+          const wrapWidthError = validateTextWrapWidth(wrapWidth);
+          if (wrapWidthError !== undefined) {
+            output({ ok: false, error: wrapWidthError }, isJson);
+            process.exitCode = 2;
+            return;
+          }
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
             {
@@ -1088,6 +1110,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               ...(values.font !== undefined ? { font: values.font } : {}),
               ...(values["font-file"] !== undefined ? { fontFile: values["font-file"] } : {}),
               color: values.color, weight, width, tracking, lineHeight,
+              ...(values["wrap-width"] !== undefined ? { wrapWidth } : {}),
             },
             { x, y, opacity, fontSize, oneCommand, position: stackPosition },
           );
@@ -1411,6 +1434,11 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               }
               if (layer.typography.lineHeight !== undefined) {
                 facts.push(`line height ${layer.typography.lineHeight}`);
+              }
+              // Stored text wrap width (#294), reported only when set —
+              // the fact painting applies (layout px, before the transform).
+              if (layer.wrapWidth !== undefined && layer.wrapWidth !== null) {
+                facts.push(`wrap width ${layer.wrapWidth}px`);
               }
               if (t.scaleX !== 1 || t.scaleY !== 1) {
                 facts.push(`scale ${t.scaleX === t.scaleY ? `${t.scaleX}×` : `${t.scaleX}×/${t.scaleY}×`}`);

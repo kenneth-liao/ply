@@ -948,9 +948,29 @@ export function buildCompositionHtml(
         // "natural" lays out text at its natural width, wrapping only at written
         // line breaks. "legacy" keeps the pre-#287 canvas-bounded pre-wrap behavior
         // so retained Renders replay byte-identically.
+        //
+        // The wrap width (#294, spec #285 US-015, DEC-001/DEC-005, ADR-0017
+        // amendment) is a natural-layout fact: when stored, the text
+        // soft-wraps at spaces within it — `width: <W>px; white-space:
+        // pre-wrap` (written line breaks still break; preserved spaces
+        // still hold; `pre` never wraps at spaces, so the width form needs
+        // pre-wrap). With no width, the exact pre-#294 natural markup
+        // applies (`white-space: pre; width: max-content`), so removing the
+        // width restores the unwrapped render byte-for-byte and revisions
+        // without the fact paint exactly as before. A legacy revision never
+        // carries a wrap width.
         const naturalLayout = rev.layoutRule === "natural";
-        const layoutCss = naturalLayout ? "width:max-content;white-space:pre;" : "white-space:pre-wrap;";
-        const outerLayoutCss = naturalLayout ? "width:max-content;" : "";
+        const wrapWidth = naturalLayout ? rev.wrapWidth : undefined;
+        const layoutCss = naturalLayout
+          ? wrapWidth !== undefined
+            ? `width:${wrapWidth}px;white-space:pre-wrap;`
+            : "width:max-content;white-space:pre;"
+          : "white-space:pre-wrap;";
+        const outerLayoutCss = naturalLayout
+          ? wrapWidth !== undefined
+            ? `width:${wrapWidth}px;`
+            : "width:max-content;"
+          : "";
         if (fill.type === "solid") {
           const textStyle =
             `font-family:'${internalFontFamily(rev.contentHash)}';` +

@@ -265,6 +265,39 @@ test("cover fit parity (#293, DEC-011): the one-command --cover-to add equals th
   expect(await renderBytes("one-c")).toEqual(await renderBytes("multi-c"));
 });
 
+test("wrap width parity (#294, DEC-001/DEC-005): the one-command --wrap-width add equals the multi-command sequence", async () => {
+  await createComposition("one-w");
+  await createComposition("multi-w");
+
+  const longLine = "The quick brown fox jumps over the lazy dog and keeps running on";
+  // One command: the wrap width in the text-content stage of a single add.
+  const one = await json([
+    "composition", "add", "one-w", "banner",
+    "--text", longLine, "--font", "Archivo", "--font-size", "32", "--color", "#ffcc00",
+    "--wrap-width", "220",
+  ]);
+  const oneLayerId = (one.layer as { id: string }).id;
+  // Multi-command: content add, then the wrap width as its own text-style edit.
+  const multiLayerId = await multiCommandBuild(
+    "multi-w", "banner",
+    ["--text", longLine, "--font", "Archivo", "--font-size", "32", "--color", "#ffcc00"],
+    ["--wrap-width", "220"], [], [],
+  );
+
+  expect(await revisionCount(oneLayerId)).toBe(1);
+  expect(await revisionCount(multiLayerId)).toBe(2);
+
+  // The fact is stored on both routes, and the wrapped box agrees.
+  const oneMeasure = await measure("one-w", "banner");
+  const multiMeasure = await measure("multi-w", "banner");
+  expect((oneMeasure as unknown as { wrapWidth: number }).wrapWidth).toBe(220);
+  expect((multiMeasure as unknown as { wrapWidth: number }).wrapWidth).toBe(220);
+  expect(oneMeasure.content.height).toBeGreaterThan(2.5 * 32); // soft-wrapped at spaces
+  expect(geometry(oneMeasure)).toEqual(geometry(multiMeasure));
+
+  expect(await renderBytes("one-w")).toEqual(await renderBytes("multi-w"));
+});
+
 test("text Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one-t");
   await createComposition("multi-t");

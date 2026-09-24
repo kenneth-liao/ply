@@ -1,6 +1,22 @@
 # Changelog
 
 ## [Unreleased]
+- Added a wrap width as a text revision fact: `--wrap-width <num|none>` on
+  `composition add` and `layer edit` is an ABSOLUTE setter in layout px
+  (before the canonical transform) — with a width set, text soft-wraps at
+  spaces within it (`white-space: pre-wrap; width: <W>px`; written line
+  breaks still break), line height and tracking apply across the wrapped
+  lines, and measure and anchored placement report the wrapped box; with
+  none, text stays on one line. `none` removes the stored width and
+  restores the unwrapped render byte-for-byte; an omitted option carries
+  the width across edits. The width is stored only when set (the revision
+  hash gains `:wrapwidth(<W>)` only then, so pre-#294 revision ids and
+  pinned Render history stay byte-identical), validates as a positive
+  finite number at the one shared boundary with identical refusals on both
+  surfaces, and setting one is an edit — a legacy-rule revision becomes
+  natural layout (ADR-0017 amendment). It joins the property × kind matrix,
+  the add/edit refusal parity tests, and the offline reversibility and
+  replay suite (spec #285 US-015, ISC-55, DEC-001/DEC-005, TEST-002) (#294).
 - Added cover fit as a sizing option on image Layers beside `--resize-to`:
   `--cover-to <WxH|canvas>` on `composition add` and `layer edit` scales the Layer uniformly — the max
   of the cover ratios over the intrinsic size — so its painted size fills

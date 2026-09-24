@@ -101,6 +101,7 @@ import {
 import {
   normalizeStoredTextAxes,
   normalizeStoredTextTypography,
+  normalizeStoredTextWrapWidth,
   type LayerOutline,
   type LayerShadow,
   type LayerTextTypography,
@@ -185,6 +186,14 @@ export interface MeasuredLayerBounds {
    * only when set (an omitted control paints as normal spacing / the font's
    * own line height), `{}` when neither is stored. */
   typography: LayerTextTypography;
+  /** The revision's selected wrap width in layout px (#294, spec #285
+   * US-015, DEC-001/DEC-005, ADR-0017 amendment): the stored width the text
+   * soft-wraps within (written line breaks still break), or null when the
+   * text Layer carries none (natural one-line layout). Text Layers only;
+   * every other kind reports null. The measured `content` box already IS
+   * the wrapped box: measurement renders the exact paint markup, which lays
+   * the text out at this width before the canonical transform applies. */
+  wrapWidth: number | null;
 }
 
 export interface MeasureCompositionResult {
@@ -661,6 +670,10 @@ export async function measureCompositionLayers(
           rev.kind === "text"
             ? normalizeStoredTextTypography(rev)
             : ({} as LayerTextTypography),
+        // The stored wrap width (#294), reported like the typography for
+        // auditability — the same fact paint lays the wrapped box out at.
+        wrapWidth:
+          rev.kind === "text" ? normalizeStoredTextWrapWidth(rev) ?? null : null,
       };
     });
 

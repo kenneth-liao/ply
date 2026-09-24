@@ -168,3 +168,42 @@ the Layer.
   with `--shadow`/`--outline` (or any non-placement option) in one edit: the
   measured basis must be the live state's ink, and the edit's new effect
   facts publish in a separate revision.
+
+## Amendment: Wrap width is a text revision fact (spec #285 / #294)
+
+- **The wrap width (DEC-001, DEC-005, US-015/ISC-55).** A text Layer takes an
+  optional `wrapWidth?: number` revision fact — an ABSOLUTE setter in layout
+  pixels, applied before the canonical transform (scale and rotation map the
+  wrapped box afterwards). With a width set, a natural-layout text Layer
+  soft-wraps at spaces within it (`width: <W>px; white-space: pre-wrap`):
+  written line breaks still break and preserved spaces still hold, and
+  `pre-wrap` is required because `pre` never wraps at spaces (a width with
+  `pre` would overflow on one line, not wrap). With no width, the exact
+  pre-#294 natural markup applies (`width: max-content; white-space: pre`) —
+  natural one-line layout.
+- **Stored only when set; removal restores byte-for-byte (DEC-005).** The
+  fact is stored only when set (absence IS the no-width form), so revisions
+  written before #294 keep their exact revision ids: the hash appends
+  `:wrapwidth(<W>)` only when present, the same pattern as
+  `:layoutrule(natural)`. The documented removal value at the command
+  boundary is `"none"` (`--wrap-width none`); removing the width restores
+  the unwrapped render byte-for-byte, and an omitted option carries the
+  current width across any edit.
+- **Line-level typography spans the wrap.** Line height and tracking apply
+  across the wrapped lines (they paint through the same shared markup the
+  unwrapped layout uses), and `measure`/anchor report the wrapped box —
+  measurement renders the exact paint markup, so the measured `content` box
+  is the wrapped box by construction. The standalone measure context now
+  wraps at the stored width too (the width is intrinsic to the element, not
+  the canvas).
+- **Legacy interaction.** A legacy-rule revision never carries a wrap width,
+  and setting one is an edit — so the revision publishes
+  `layoutRule: "natural"` with it, exactly like any other text edit
+  (ADR-0017's #287 amendment). Retained Renders keep replaying their pinned
+  revisions byte-identically.
+- **One shared validation.** The width validates as a positive finite number
+  at the ONE domain boundary (`resolveTextWrapWidthControl`) the add path,
+  the edit path, and both CLI boundaries share, and normalizes at the single
+  ingestion point (`normalizeStoredTextWrapWidth`) beside the typography and
+  layout-rule readers. Refusals are identical on both surfaces, and every
+  refusal fires before anything is published.
