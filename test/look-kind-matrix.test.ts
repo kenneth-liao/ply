@@ -731,3 +731,69 @@ test("vector Layer colour parameter (--vector-color) applies before its grade", 
   expect(targetGreenPx[0]).toBe(0);
   expect(targetGreenPx[2]).toBe(0);
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// Cover fit property × kind matrix (#293, spec #285 US-007, DEC-011, TEST-002)
+// ---------------------------------------------------------------------------
+
+test("matrix: cover fit (--cover-to) applies to raster and vector image Layers, refuses text and shape", async () => {
+  await makeComp("comp-cover", 200, 100);
+
+  // Raster image: 100x60 red, cover the 200x100 canvas → scale = max(2, 100/60) = 2.
+  const raster = path.join(tempDir, "cover-red.png");
+  await writeFile(raster, solidPng(100, 60, [255, 0, 0, 255]));
+  const rAdd = await invoke([
+    "composition", "add", "comp-cover", "raster-cover",
+    "--image", raster, "--cover-to", "200x100",
+    "--project", projDir, "--json",
+  ]);
+  expect(rAdd.code).toBe(0);
+  const rRev = JSON.parse(rAdd.stdout).layer.currentRevision;
+  expect(rRev.scaleX).toBe(2);
+  expect(rRev.scaleY).toBe(2);
+
+  // Vector image (kind image, format svg): 80x40 blue, cover 200x100 →
+  // scale = max(2.5, 2.5) = 2.5.
+  const vector = path.join(tempDir, "cover-blue.svg");
+  await writeFile(vector, solidSvg(80, 40, "#0000ff"));
+  const vAdd = await invoke([
+    "composition", "add", "comp-cover", "vector-cover",
+    "--image", vector, "--cover-to", "200x100", "--y", "80",
+    "--project", projDir, "--json",
+  ]);
+  expect(vAdd.code).toBe(0);
+  const vRev = JSON.parse(vAdd.stdout).layer.currentRevision;
+  expect(vRev.scaleX).toBe(2.5);
+  expect(vRev.scaleY).toBe(2.5);
+
+  // Text Layer: refused — a text Layer has no intrinsic pixel size.
+  const tAdd = await invoke([
+    "composition", "add", "comp-cover", "text-cover",
+    "--text", "Groundline", "--font", "Archivo", "--cover-to", "200x100",
+    "--project", projDir, "--json",
+  ]);
+  expect(tAdd.code).toBe(1);
+  expect(JSON.parse(tAdd.stdout).error).toContain("--cover-to");
+  expect(JSON.parse(tAdd.stdout).error).toContain("text Layer");
+
+  // Shape Layer: refused — a shape's sizing goes through --resize-to/--scale.
+  const sAdd = await invoke([
+    "composition", "add", "comp-cover", "shape-cover",
+    "--shape", "rectangle", "--size", "40x20", "--fill", "#ff0000", "--cover-to", "200x100",
+    "--project", projDir, "--json",
+  ]);
+  expect(sAdd.code).toBe(1);
+  expect(JSON.parse(sAdd.stdout).error).toContain("--cover-to");
+  expect(JSON.parse(sAdd.stdout).error).toContain("shape Layer");
+
+  // The canvas is fully covered: the raster cover Layer fills every corner
+  // (top corners red), and the vector cover Layer paints over the bottom
+  // band (blue, painted after the raster in use order) — the overflow sits
+  // outside the canvas, nothing is clipped.
+  const png = await render("comp-cover", "cover-matrix.png");
+  expect(pixel(png, 0, 0)).toEqual([255, 0, 0, 255]);
+  expect(pixel(png, 199, 0)).toEqual([255, 0, 0, 255]);
+  expect(pixel(png, 0, 99)).toEqual([0, 0, 255, 255]);
+  expect(pixel(png, 199, 99)).toEqual([0, 0, 255, 255]);
+  expect(pixel(png, 100, 50)).toEqual([255, 0, 0, 255]);
+}, 30_000);

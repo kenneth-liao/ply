@@ -126,6 +126,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "anchor": return ["right"];
     case "resize": return ["1.25"];
     case "resize-to": return ["96x"];
+    case "cover-to": return ["canvas"];
     case "scale": return ["2"];
     case "rotate": return ["12"];
     case "flip": return ["horizontal"];
@@ -194,6 +195,12 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
       expect(rev.scaleX).toBe(1.5);
       expect(rev.scaleY).toBe(1.5);
       break;
+    case "cover-to":
+      // "canvas" on a 64x48 image in the 400x300 poster: the uniform cover
+      // scale = max(400/64, 300/48) = 6.25 (#293, DEC-011).
+      expect(rev.scaleX).toBe(6.25);
+      expect(rev.scaleY).toBe(6.25);
+      break;
     case "scale":
       // The absolute scale setter writes the canonical scale directly.
       expect(rev.scaleX).toBe(2);
@@ -239,6 +246,7 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
 test("every edit option applicable to an image Layer is accepted and APPLIED on an image add (TEST-003)", async () => {
   const applicable = layerOptionsApplicableTo("image");
   expect(applicable).toContain("resize-to");
+  expect(applicable).toContain("cover-to");
   let n = 0;
   for (const key of applicable) {
     if (["image", "from-generation", "from-matte", "output"].includes(key)) continue; // content/selector options: their own adds
@@ -261,6 +269,7 @@ test("every edit option applicable to an image Layer is accepted and APPLIED on 
 test("every edit option applicable to a text Layer is accepted and APPLIED on a text add (TEST-003)", async () => {
   const applicable = layerOptionsApplicableTo("text");
   expect(applicable).not.toContain("resize-to");
+  expect(applicable).not.toContain("cover-to");
   let n = 0;
   for (const key of applicable) {
     if (["image", "from-generation", "from-matte", "output", "text", "font", "font-file"].includes(key)) continue;
@@ -286,6 +295,7 @@ test("every edit option applicable to a shape Layer is accepted and APPLIED on a
   expect(applicable).toContain("anchor");
   expect(applicable).toContain("resize");
   expect(applicable).toContain("resize-to");
+  expect(applicable).not.toContain("cover-to");
   expect(applicable).toContain("scale");
   expect(applicable).toContain("rotate");
   expect(applicable).toContain("flip");
@@ -450,6 +460,6 @@ test("composition add: --anchor requires explicit targets for the anchored axes"
 
 test("the one-command application order comes from the option table (transform, anchor, effect)", () => {
   expect(
-    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", scale: "1", outline: "1", flip: "1", "visible-region": "1", "visible-region-radius": "1" }),
-  ).toEqual(["resize", "resize-to", "scale", "rotate", "flip", "visible-region", "visible-region-radius", "anchor", "shadow", "outline"]);
+    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", "cover-to": "1", scale: "1", outline: "1", flip: "1", "visible-region": "1", "visible-region-radius": "1" }),
+  ).toEqual(["resize", "resize-to", "cover-to", "scale", "rotate", "flip", "visible-region", "visible-region-radius", "anchor", "shadow", "outline"]);
 });

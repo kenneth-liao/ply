@@ -635,3 +635,59 @@ test("shared Layer refuses bare look edit and obeys --in-place and --fork", asyn
   expect(revForkedC1.glow?.color).toBe("#ec4899");
   expect(revUnforkedC2.glow).toBeUndefined();
 });
+
+// ---------------------------------------------------------------------------
+// 7. Cover fit reversibility and replay (#293, spec #285 US-007, DEC-011,
+//    DEC-005, TEST-002): cover fit is an input form into the ONE canonical
+//    scale facts, so the absolute --scale setter reverses it to a
+//    byte-identical render, retained content bytes never change, and the
+//    pinned Render replays offline.
+// ---------------------------------------------------------------------------
+
+test("reversibility and lineage: cover fit reverses through the absolute scale setter; replay stays byte-identical", async () => {
+  const proj = path.join(tempDir, "proj");
+  await invoke(["project", "init", proj, "--json"]);
+  await invoke(["composition", "create", "testcomp", "--width", "200", "--height", "100", "-p", proj, "--json"]);
+
+  const imgPath = path.join(tempDir, "sample.png");
+  await writeFile(imgPath, solidPng(100, 60, [180, 90, 45, 255]));
+
+  const addRes = await invoke([
+    "composition", "add", "testcomp", "bg", "--image", imgPath, "-p", proj, "--json",
+  ]);
+  expect(addRes.code).toBe(0);
+  const layerId = JSON.parse(addRes.stdout).use.layerId as string;
+
+  const renderInit = await invoke(["composition", "render", "testcomp", "-p", proj, "--json"]);
+  expect(renderInit.code).toBe(0);
+  const initPng = await readFile(JSON.parse(renderInit.stdout).render.output as string);
+  const initContentHash = JSON.parse(addRes.stdout).layer.currentRevision.contentHash as string;
+
+  // Cover the canvas: uniform scale = max(200/100, 100/60) = 2, and the
+  // render changes (the canvas is now fully covered).
+  const coverRes = await invoke(["layer", "edit", layerId, "--cover-to", "canvas", "-p", proj, "--json"]);
+  expect(coverRes.code).toBe(0);
+  const coveredRev = JSON.parse(coverRes.stdout).layer.currentRevision;
+  expect(coveredRev.scaleX).toBe(2);
+  expect(coveredRev.scaleY).toBe(2);
+  expect(coveredRev.contentHash).toBe(initContentHash);
+
+  const renderCovered = await invoke(["composition", "render", "testcomp", "-p", proj, "--json"]);
+  expect(renderCovered.code).toBe(0);
+  const coveredPng = await readFile(JSON.parse(renderCovered.stdout).render.output as string);
+  expect(coveredPng.equals(initPng)).toBe(false);
+
+  // The documented removal: the absolute --scale setter restores scale 1.
+  const revertRes = await invoke(["layer", "edit", layerId, "--scale", "1", "-p", proj, "--json"]);
+  expect(revertRes.code).toBe(0);
+  const revertedRev = JSON.parse(revertRes.stdout).layer.currentRevision;
+  expect(revertedRev.scaleX).toBe(1);
+  expect(revertedRev.scaleY).toBe(1);
+  expect(revertedRev.contentHash).toBe(initContentHash);
+
+  // Byte-identical replay of the pre-cover render, offline.
+  const renderReverted = await invokeOffline(["composition", "render", "testcomp", "-p", proj, "--json"], path.resolve(import.meta.dir, ".."));
+  expect(renderReverted.code).toBe(0);
+  const revertedPng = await readFile(JSON.parse(renderReverted.stdout).render.output as string);
+  expect(revertedPng.equals(initPng)).toBe(true);
+});

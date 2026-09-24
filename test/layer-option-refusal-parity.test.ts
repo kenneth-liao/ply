@@ -138,6 +138,7 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "anchor", bad: ["--anchor", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid anchor "banana"' },
   { key: "resize", bad: ["--resize", "0"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Resize factor (--resize)" },
   { key: "resize-to", bad: ["--resize-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--resize-to takes" },
+  { key: "cover-to", bad: ["--cover-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--cover-to takes" },
   { key: "scale", bad: ["--scale", "0"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Scale (--scale)" },
   { key: "rotate", bad: ["--rotate", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Rotation (--rotate)" },
   { key: "flip", bad: ["--flip", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Flip (--flip)" },

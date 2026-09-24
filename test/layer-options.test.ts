@@ -86,6 +86,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "anchor",
       "resize",
       "resize-to",
+      "cover-to",
       "scale",
       "rotate",
       "flip",
@@ -117,6 +118,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize-to")!.appliesTo).toEqual(["image", "shape"]);
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize")!.appliesTo).toEqual(["image", "text", "shape"]);
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "scale")!.appliesTo).toEqual(["image", "text", "shape"]);
+    // Cover fit (#293, DEC-011) is an image-Layer option: no intrinsic pixel
+    // fact on text, and a shape's sizing goes through --resize-to/--scale.
+    expect(LAYER_OPTION_DEFS.find((def) => def.key === "cover-to")!.appliesTo).toEqual(["image"]);
     expect(forKind("image")).toContain("image");
     expect(forKind("text")).toContain("text");
     // The shape applicability (#259, A226-004): the kind-shared placement,
@@ -145,7 +149,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "vector-color",
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "x", "y", "opacity", "anchor",
-      "resize", "resize-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
+      "resize", "resize-to", "cover-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
       "brightness", "contrast", "saturation", "warmth", "blend", "glow",
     ]);
   });

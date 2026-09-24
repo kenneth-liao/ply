@@ -1,6 +1,22 @@
 # Changelog
 
 ## [Unreleased]
+- Added cover fit as a sizing option on image Layers beside `--resize-to`:
+  `--cover-to <WxH|canvas>` on `composition add` and `layer edit` scales the Layer uniformly — the max
+  of the cover ratios over the intrinsic size — so its painted size fills
+  the target box with the aspect always preserved; the overflow sits
+  outside the canvas, nothing is clipped, and the covered Layer stays
+  editable. `canvas` targets the referring Composition's canvas (on edit,
+  all referrers must agree — disagreement is refused naming them; a fork
+  edit targets its destination Composition). Cover fit is an input form,
+  never a stored fact: it resolves through the ONE shared scale resolution
+  into the canonical scaleX/scaleY, so the absolute `--scale` setter
+  reverses it to a byte-identical render. It joins the resize family's
+  exclusivity rule (mutually exclusive with --resize, --resize-to, and
+  --scale, the same refusal on add and edit), is refused on text and shape
+  Layers, and joins the property × kind matrix, the add/edit refusal
+  parity tests, and the offline reversibility and replay suite
+  (spec #285 US-007, DEC-011, TEST-002) (#293).
 - Made `composition sheet --cell` accept a `WxH` box as well as a single
   size (which stays square), through one cell-spec parser shared by the CLI
   and the module API; the geometry limits — the per-axis render cap and the

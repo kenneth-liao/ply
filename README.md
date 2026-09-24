@@ -238,6 +238,22 @@ ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
   ratio — a deliberate aspect change survives later one-axis resizes;
   supplying both deliberately changes it. Repeating an absolute target is
   idempotent.
+- `--cover-to <WxH|canvas>` (#293, DEC-011) is the image-Layer cover fit:
+  a uniform scale — the max of the cover ratios over the intrinsic size —
+  so the Layer's painted size FILLS the target box with the aspect always
+  preserved, like a Photoshop "cover" placement. The overflow sits outside
+  the canvas (the canvas never clips) and the covered Layer stays
+  editable. `--cover-to canvas` targets the referring Composition's canvas
+  — on `layer edit`, every referrer must agree on the canvas (disagreeing
+  canvases are refused naming them; an unreferenced Layer is refused), and
+  a `--fork` edit targets its destination Composition. Cover fit writes
+  the one canonical scale facts — no second sizing representation — so
+  `--scale` reverses it exactly (byte-identical replay of the pre-cover
+  render). Placement is a separate concern: on `composition add`,
+  `--cover-to canvas --anchor center,center` covers the canvas centred in
+  one command (transforms apply before the anchored placement); on
+  `layer edit`, cover fit and `--anchor` are separate edits. Mutually
+  exclusive with `--resize`, `--resize-to`, and `--scale`.
 - The Layer's `(x, y)` stays its top-left corner: it grows/shrinks right and
   down. Scale is a Layer revision fact shared as a whole (in-place edits
   propagate, forks isolate), survives sharing and cross-Project import, and

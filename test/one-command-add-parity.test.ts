@@ -236,6 +236,35 @@ test("image Layer: one-command add equals the multi-command sequence (render, me
   expect(await readFile(replayed)).toEqual(await readFile(renderedOutput));
 });
 
+test("cover fit parity (#293, DEC-011): the one-command --cover-to add equals the multi-command sequence", async () => {
+  await createComposition("one-c");
+  await createComposition("multi-c");
+
+  // One command: cover fit in the transform stage of a single add.
+  const one = await json([
+    "composition", "add", "one-c", "bg",
+    "--image", padImagePath, "--cover-to", "300x",
+  ]);
+  const oneLayerId = (one.layer as { id: string }).id;
+  // Multi-command: content add, then the cover fit as its own transform edit.
+  const multiLayerId = await multiCommandBuild(
+    "multi-c", "bg", ["--image", padImagePath], ["--cover-to", "300x"], [], [],
+  );
+
+  expect(await revisionCount(oneLayerId)).toBe(1);
+  expect(await revisionCount(multiLayerId)).toBe(2);
+
+  // The uniform cover scale = 300/64 — identical on both routes, aspect
+  // preserved from the intrinsic size.
+  const oneMeasure = await measure("one-c", "bg");
+  const multiMeasure = await measure("multi-c", "bg");
+  expect(oneMeasure.transform.scaleX).toBe(300 / 64);
+  expect(oneMeasure.transform.scaleY).toBe(300 / 64);
+  expect(geometry(oneMeasure)).toEqual(geometry(multiMeasure));
+
+  expect(await renderBytes("one-c")).toEqual(await renderBytes("multi-c"));
+});
+
 test("text Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one-t");
   await createComposition("multi-t");
