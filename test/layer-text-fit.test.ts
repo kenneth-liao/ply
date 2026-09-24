@@ -221,6 +221,44 @@ test("fit only shrinks: text that already fits keeps its stored size and renders
   expect(fitted.equals(plainPng)).toBe(true);
 }, 60_000);
 
+test("the box is a LAYOUT-px measure: scale and rotation map the fitted block afterwards, never inflating the derivation (review INT-1)", async () => {
+  await makeComp("poster", 1200, 900);
+  // Three identical Layers — same text, font, size, box — differing only in
+  // the canonical transform: none, scale 2, rotate 90.
+  const mk = (name: string, extra: string[]) =>
+    invoke([
+      "composition", "add", "poster", name,
+      "--text", HEADLINE, "--font", "Archivo", "--font-size", "120", "--color", "#000000",
+      "--fit-box", "600x200", ...extra, "--project", projDir, "--json",
+    ]);
+  const plain = await mk("plain", ["--x", "20", "--y", "20"]);
+  const scaled = await mk("scaled", ["--x", "20", "--y", "300", "--scale", "2"]);
+  const rotated = await mk("rotated", ["--x", "700", "--y", "620", "--rotate", "90"]);
+  expect(plain.code).toBe(0);
+  expect(scaled.code).toBe(0);
+  expect(rotated.code).toBe(0);
+
+  const plainM = await measure("poster", "plain");
+  const scaledM = await measure("poster", "scaled");
+  const rotatedM = await measure("poster", "rotated");
+
+  // The derivation measures the UNTRANSFORMED layout box: the effective size
+  // is exactly the identity-transform derivation for all three.
+  expect(scaledM.effectiveFontSize).toBe(plainM.effectiveFontSize);
+  expect(rotatedM.effectiveFontSize).toBe(plainM.effectiveFontSize);
+  // The untransformed content box fits the box in all three cases.
+  for (const m of [plainM, scaledM, rotatedM]) {
+    expect(m.content.width as number).toBeLessThanOrEqual(602);
+    expect(m.content.height as number).toBeLessThanOrEqual(202);
+  }
+  // And the canonical transform maps the fitted block afterwards: scale 2
+  // doubles the transformed box, rotation 90° swaps its AABB.
+  expect(close(scaledM.box.width as number, 2 * (plainM.content.width as number), 3)).toBe(true);
+  expect(close(scaledM.box.height as number, 2 * (plainM.content.height as number), 3)).toBe(true);
+  expect(close(rotatedM.box.width as number, rotatedM.content.height as number, 2)).toBe(true);
+  expect(close(rotatedM.box.height as number, rotatedM.content.width as number, 2)).toBe(true);
+}, 60_000);
+
 test("fit derives through the nested gradient markup too: a gradient headline shrinks inside its box", async () => {
   await makeComp("poster");
   const res = await invoke([

@@ -328,7 +328,8 @@ test("fit box parity (#295, DEC-010/DEC-005): the one-command --fit-box add equa
   expect((multiMeasure as unknown as { fit: { width: number; height: number } }).fit).toEqual({ width: 600, height: 200 });
   expect(oneMeasure.content.width).toBeLessThanOrEqual(602);
   expect(multiMeasure.content.width).toBeLessThanOrEqual(602);
-  expect(oneMeasure.effectiveFontSize).toBe(multiMeasure.effectiveFontSize);
+  expect((oneMeasure as unknown as { effectiveFontSize: number }).effectiveFontSize)
+    .toBe((multiMeasure as unknown as { effectiveFontSize: number }).effectiveFontSize);
   expect(geometry(oneMeasure)).toEqual(geometry(multiMeasure));
 
   expect(await renderBytes("one-f")).toEqual(await renderBytes("multi-f"));

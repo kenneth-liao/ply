@@ -823,6 +823,18 @@ export interface TextFitProbe {
  * estimate, which the add/edit paths turn into the shared below-minimum
  * refusal (textFitRefusal). Must run after the font-resolution gate, so the
  * derivation measures the retained faces, never a fallback.
+ *
+ * The box is a LAYOUT-px measure (INT-1, #328 review): the derivation reads
+ * the block's UNTRANSFORMED box — it clears the outer element's inline
+ * transform around each rect read and restores it (the same pattern
+ * `sizeEffectFilterRegions` and the geometry probe use — transform removal
+ * never reflows other Layers, they are absolutely positioned), so scale,
+ * rotation, and flip map the FITTED block afterwards and never inflate the
+ * measured layout size. A missing holder fails closed like a missing
+ * element: a markup branch that stores a fit box without emitting the
+ * `data-ply-fit` marker is a markup/derivation drift, refused loudly at the
+ * probe instead of silently validating overflowing text (INT-2, #328
+ * review).
  */
 export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise<(TextFitProbe | null)[]> {
   const specs = layers.map((l, index) => {
@@ -851,35 +863,52 @@ export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise
       // gradient structures).
       const holder = outer.matches("[data-ply-fit]") ? outer : outer.querySelector("[data-ply-fit]");
       if (!(holder instanceof HTMLElement)) {
-        return { effectiveFontSize: spec.fontSize, fits: true, neededFontSize: null };
+        // Fail closed (INT-2, #328 review): every markup branch that stores a
+        // fit box emits the marker, so reaching this line means the markup
+        // and the derivation have drifted — a silent `fits: true` would
+        // publish overflowing text.
+        throw new Error(`text fit pass: element ${spec.index} carries a fit box but no data-ply-fit holder — refusing to paint or measure unfitted text.`);
       }
       const W = spec.fitWidth;
       const H = spec.fitHeight;
       const MIN = spec.minSize;
       const overflow = (r: DOMRect): boolean => r.width > W + 0.01 || r.height > H + 0.01;
-      let size = spec.fontSize;
-      holder.style.fontSize = `${size}px`;
-      let rect = holder.getBoundingClientRect();
-      // Already fits (or exactly fills) the box: shrink-only — the effective
-      // size IS the stored size.
-      if (!overflow(rect)) {
-        return { effectiveFontSize: size, fits: true, neededFontSize: null };
-      }
-      let needed: number | null = null;
-      for (let i = 0; i < 24; i++) {
-        const s = Math.min(W / rect.width, H / rect.height);
-        const candidate = Math.floor(size * s * 100) / 100;
-        if (i === 0) needed = candidate;
-        const next = Math.max(MIN, candidate);
-        if (next >= size) break;
-        size = next;
+      // The box is a LAYOUT-px measure (INT-1, #328 review): every rect read
+      // below is the UNTRANSFORMED box — clear the outer element's inline
+      // transform around the reads and restore it (the same pattern
+      // `sizeEffectFilterRegions` and the geometry probe use; transform
+      // removal never reflows other Layers, they are absolutely
+      // positioned), so scale/rotation/flip map the FITTED block afterwards
+      // and never inflate the measured layout size.
+      const savedTransform = outer.style.transform;
+      outer.style.transform = "none";
+      try {
+        let size = spec.fontSize;
         holder.style.fontSize = `${size}px`;
-        rect = holder.getBoundingClientRect();
+        let rect = holder.getBoundingClientRect();
+        // Already fits (or exactly fills) the box: shrink-only — the
+        // effective size IS the stored size.
         if (!overflow(rect)) {
-          return { effectiveFontSize: size, fits: true, neededFontSize: needed };
+          return { effectiveFontSize: size, fits: true, neededFontSize: null };
         }
+        let needed: number | null = null;
+        for (let i = 0; i < 24; i++) {
+          const s = Math.min(W / rect.width, H / rect.height);
+          const candidate = Math.floor(size * s * 100) / 100;
+          if (i === 0) needed = candidate;
+          const next = Math.max(MIN, candidate);
+          if (next >= size) break;
+          size = next;
+          holder.style.fontSize = `${size}px`;
+          rect = holder.getBoundingClientRect();
+          if (!overflow(rect)) {
+            return { effectiveFontSize: size, fits: true, neededFontSize: needed };
+          }
+        }
+        return { effectiveFontSize: size, fits: false, neededFontSize: needed };
+      } finally {
+        outer.style.transform = savedTransform;
       }
-      return { effectiveFontSize: size, fits: false, neededFontSize: needed };
     });
   }, specs);
 }
