@@ -1042,8 +1042,4 @@ test("composition delete removes the Composition under the Project lock, never L
   expect(recreate.code).toBe(0);
   const fresh = JSON.parse(await invoke(["composition", "inspect", "alpha", "--project", projDir, "--json"]).then((r) => r.stdout));
   expect(fresh.composition.layers).toEqual([]);
-
-  // Retained Renders are kept too: the renders/ directory is untouched by delete.
-  const renders = await readdir(path.join(projDir, "renders")).catch(() => [] as string[]);
-  expect(renders).toEqual([]);
 });

@@ -506,6 +506,13 @@ test("deleting a Composition leaves its retained Renders replayable (TEST-006, #
   const compDocs = (await readdir(path.join(projDir, "compositions"))).filter((f) => f.endsWith(".json"));
   expect(compDocs).toEqual([]);
 
+  // Retained Renders are kept (ADR-0013): both manifests and their PNGs
+  // survive delete — the pinned history replay paints from is untouched.
+  for (const manifest of [doomedManifest, keeperManifest]) {
+    await expect(readFile(manifest)).resolves.toBeInstanceOf(Buffer);
+    await expect(readFile(manifest.replace(/\.manifest\.json$/, ".png"))).resolves.toBeInstanceOf(Buffer);
+  }
+
   // Layers and their revisions are retained (ADR-0013): the pinned revision
   // bytes replay paints from still resolve.
   const layerFiles = (await readdir(path.join(projDir, "layers"))).filter((f) => f.endsWith(".json"));
