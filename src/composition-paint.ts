@@ -400,8 +400,9 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
     const family = internalFontFamily(l.revision.contentHash);
     byFamily.set(family, [...(byFamily.get(family) ?? []), l.name]);
     // Run font overrides (#297): every run's own face is a declared family
-    // the glyphs actually use, gated exactly like the layer's.
-    for (const run of l.revision.runs ?? []) {
+    // the glyphs actually use, gated exactly like the layer's — through the
+    // ONE stored-runs reader (INT-paint-3).
+    for (const run of normalizeStoredTextRuns(l.revision) ?? []) {
       if (run.contentHash === undefined) continue;
       const runFamily = internalFontFamily(run.contentHash);
       byFamily.set(runFamily, [...(byFamily.get(runFamily) ?? []), l.name]);
@@ -1023,28 +1024,33 @@ export function buildCompositionHtml(
   }
   const faces = new Map<string, { bytes: Buffer; caller?: CallerFontFacts }>();
   for (const l of layers) {
-    if (l.revision.kind === "text" && !faces.has(l.revision.contentHash)) {
+    if (l.revision.kind !== "text") continue;
+    // Each run's font face registers INDEPENDENTLY of the Layer font
+    // (INT-paint-1): a second Layer sharing the Layer font still registers
+    // its own run fonts — the loop is per-Layer, only the map dedupes by
+    // hash.
+    if (!faces.has(l.revision.contentHash)) {
       faces.set(l.revision.contentHash, {
         bytes: l.contentBytes,
         ...(l.revision.callerFont !== undefined ? { caller: l.revision.callerFont } : {}),
       });
-      // Run font overrides (#297): each run's own face is a declared family
-      // the glyphs actually use, resolved from the caller-verified run font
-      // bytes — a missing entry is a resolution gap, never a silent fall
-      // back to the layer font.
-      for (const run of l.revision.runs ?? []) {
-        if (run.contentHash === undefined || faces.has(run.contentHash)) continue;
-        const bytes = l.runFonts?.find((f) => f.contentHash === run.contentHash);
-        if (bytes === undefined) {
-          throw new Error(
-            `Run font "${run.contentHash}" for layer "${l.layerId}" has no verified bytes — refusing to paint text with an undeclared font.`,
-          );
-        }
-        faces.set(run.contentHash, {
-          bytes: bytes.bytes,
-          ...(bytes.caller !== undefined ? { caller: bytes.caller } : {}),
-        });
+    }
+    // Run font overrides (#297): each run's own face is a declared family
+    // the glyphs actually use, resolved from the caller-verified run font
+    // bytes — a missing entry is a resolution gap, never a silent fall
+    // back to the layer font.
+    for (const run of normalizeStoredTextRuns(l.revision) ?? []) {
+      if (run.contentHash === undefined || faces.has(run.contentHash)) continue;
+      const bytes = l.runFonts?.find((f) => f.contentHash === run.contentHash);
+      if (bytes === undefined) {
+        throw new Error(
+          `Run font "${run.contentHash}" for layer "${l.layerId}" has no verified bytes — refusing to paint text with an undeclared font.`,
+        );
       }
+      faces.set(run.contentHash, {
+        bytes: bytes.bytes,
+        ...(bytes.caller !== undefined ? { caller: bytes.caller } : {}),
+      });
     }
   }
   const fontCss = [...faces]

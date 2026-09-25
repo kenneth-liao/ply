@@ -21,7 +21,12 @@ import path from "node:path";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { encodePngRgba } from "../src/png.js";
-import { computeRevisionHash, type LayerTextRevision } from "../src/layer.js";
+import {
+  computeRevisionHash,
+  normalizeStoredTextRuns,
+  type LayerRevision,
+  type LayerTextRevision,
+} from "../src/layer.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/fonts");
@@ -195,6 +200,33 @@ test("multi-run style overrides hash into the revision id; removing the override
   expect(cleared.runs![1]).toEqual({ start: 2 });
 });
 
+test("a pre-#297 revision's exact id is pinned by a golden fixture (TEST-003)", () => {
+  // The pre-#297 text revision shape — every fact #297 found, no runs field.
+  // The exact revision id below was computed at #297 review (the hash
+  // algorithm WITHOUT the runs field); the append-only-hash contract says
+  // this id never moves, so any future drift in the pre-#297 hash inputs
+  // fails here even if every current revision still round-trips.
+  const pre297Revision = {
+    schemaVersion: 1,
+    layerId: "layer_golden0000000",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    kind: "text",
+    contentHash: "0e094a7d3c7c4c25cf1310c4b30014f1dae9332220b1c2c88f4fa996f0b05053",
+    text: "Groundline",
+    fontSize: 64,
+    color: "#111827",
+    weight: 400,
+    width: 100,
+    tracking: 0.1,
+    lineHeight: 1.4,
+    wrapWidth: 220,
+    x: 10, y: 20, opacity: 1,
+    scaleX: 1, scaleY: 1, rotationDeg: 0, flipX: false, flipY: false,
+    layoutRule: "natural",
+  } as unknown as LayerRevision;
+  expect(computeRevisionHash(pre297Revision)).toBe("rev_79405a21c9bcb2a5");
+});
+
 // ---------------------------------------------------------------------------
 // Editing runs
 // ---------------------------------------------------------------------------
@@ -236,6 +268,59 @@ test("layer edit --run appends a run; --runs none collapses to the single-run sh
   const collapsed = revOf(collapseRes.body) as RunsRev;
   expect(collapsed.text).toBe("5 HERDR PLUGINS!");
   expect(collapsed.runs).toBeUndefined();
+});
+
+test("one edit with an append and setters gates on the post-append shape (INT-storage-2)", async () => {
+  const added = await addLayer("solo", ["--text", "A", "--font", "Archivo", "--font-size", "64"]);
+  const layerId = layerIdOf(added);
+  const res = await editLayer(layerId, ["--run", "B", "--run-color", "2=#ef4444"]);
+  expect(res.code).toBe(0);
+  const rev = revOf(res.body) as RunsRev;
+  expect(rev.text).toBe("AB");
+  expect(rev.runs).toHaveLength(2);
+  expect(rev.runs![1]).toEqual({ start: 1, color: "#ef4444" });
+  // The same with --run-text: the append lands first, then the rewrite
+  // replaces run 2's slice ("B" -> "BC").
+  const res2 = await editLayer(layerId, ["--run", "C", "--run-text", "2=BC"]);
+  expect(res2.code).toBe(0);
+  const rev2 = revOf(res2.body) as RunsRev;
+  expect(rev2.text).toBe("ABCC");
+  expect(rev2.runs![2]!.start).toBe(3);
+});
+
+test("re-editing a run's gradient to an equal fill is a no-op (canonical runs equality, INT-storage-3)", async () => {
+  const added = await addRunsLayer("headline", ["A ", "B"], ["--font", "Archivo", "--font-size", "64"]);
+  const first = await editLayer(layerIdOf(added), ["--run-color", "2=linear:90deg,#ff0000,#00ff00"]);
+  expect(first.code).toBe(0);
+  const idAfterFirst = (first.body as { layer: { currentRevisionId: string } }).layer.currentRevisionId;
+  // An identical re-edit — a NEW fill object, equal by value — publishes no
+  // new revision (the no-op check compares canonical values, not references).
+  const second = await editLayer(layerIdOf(added), ["--run-color", "2=linear:90deg,#ff0000,#00ff00"]);
+  expect(second.code).toBe(0);
+  expect((second.body as { layer: { currentRevisionId: string } }).layer.currentRevisionId).toBe(
+    (first.body as { layer: { currentRevisionId: string } }).layer.currentRevisionId,
+  );
+});
+
+test("a run boundary cannot split a surrogate pair (INT-storage-5)", () => {
+  // The ONE stored-reader guard: a boundary between the two code units of
+  // one astral character is a malformed document, in storage and on edit.
+  const text = "\u{1F600}x"; // one astral character (2 code units) + x
+  expect(() =>
+    normalizeStoredTextRuns({ text, runs: [{}, { start: 1 }] }),
+  ).toThrow(/split a surrogate pair/);
+  // A boundary at a character edge is fine.
+  expect(normalizeStoredTextRuns({ text, runs: [{}, { start: 2 }] })).toHaveLength(2);
+});
+
+test("a run text edit that grows a run shifts later boundaries (growth and unicode, INT-verify-5)", async () => {
+  const layerId = await seededRunsLayer();
+  const res = await editLayer(layerId, ["--run-text", "1=55 \u2014 "]);
+  expect(res.code).toBe(0);
+  const rev = revOf(res.body) as RunsRev;
+  expect(rev.text).toBe("55 \u2014 HERDR PLUGINS");
+  expect(rev.runs![1]!.start).toBe(5);
+  expect(rev.runs![2]!.start).toBe(11);
 });
 
 test("a run style override lands only on its run; other runs keep the layer defaults", async () => {
@@ -445,6 +530,78 @@ test("a fit box applies across runs: measure reports the effective font size", a
   const layer = await measureLayer("fitted");
   expect(layer.fit).toEqual({ width: 150, height: 50 });
   expect(layer.effectiveFontSize).toBeLessThan(96);
+});
+
+// ---------------------------------------------------------------------------
+// Carries: fork, cross-Project import, anchored placement (INT-verify-2)
+// ---------------------------------------------------------------------------
+
+test("a fork carries the runs verbatim (INT-verify-2)", async () => {
+  const layerId = await seededRunsLayer();
+  await invoke(["composition", "create", "other", "--width", "600", "--height", "240", "--project", projDir]);
+  // The layer joins "other" as a shared reference first; the fork then
+  // retargets that use to a new independent identity.
+  await invoke(["composition", "import", "other", "poster", "--project", projDir]);
+  const fork = await invoke([
+    "layer", "edit", layerId, "--fork", "--composition", "other", "--use", "headline",
+    "--project", projDir, "--json",
+  ]);
+  expect(fork.code).toBe(0);
+  const inspected = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(inspected.code).toBe(0);
+  const source = revOf(JSON.parse(inspected.stdout) as Record<string, unknown>);
+  const forked = revOf(JSON.parse(fork.stdout) as Record<string, unknown>);
+  expect(forked.runs).toEqual(source.runs);
+  expect(forked.text).toBe(source.text);
+});
+
+test("anchored placement resolves across runs (INT-verify-2)", async () => {
+  const layerId = await seededRunsLayer();
+  const res = await invoke([
+    "layer", "edit", layerId, "--anchor", "center,center", "--x", "300", "--y", "120",
+    "--project", projDir, "--json",
+  ]);
+  expect(res.code).toBe(0);
+  const body = JSON.parse(res.stdout) as { layer: { currentRevision: { x: number; y: number } } };
+  // The anchor resolved to concrete placement facts (not the fallback 0).
+  expect(body.layer.currentRevision.x).not.toBe(0);
+  expect(body.layer.currentRevision.y).not.toBe(0);
+});
+
+test("a second Layer sharing the Layer font still registers its own run fonts (INT-paint-1)", async () => {
+  await addRunsLayer("first", ["a ", "b"], ["--font", "Archivo", "--run-font", "2=Archivo Black"]);
+  // Same Layer font as "first": the shared-font nesting bug skipped this
+  // Layer's run fonts at paint.
+  await addRunsLayer("second", ["c ", "d"], ["--font", "Archivo", "--run-font", "2=Archivo Black"]);
+  const render = await invoke(["composition", "render", "poster", "--project", projDir, "--supersample", "1", "--json"]);
+  expect(render.code).toBe(0);
+});
+
+test("a cross-Project import copies the runs and every run font blob (INT-paint-2, INT-verify-2)", async () => {
+  const otherProj = path.join(tempDir, "other-proj");
+  await invoke(["project", "init", otherProj, "--name", "text-runs-other"]);
+  await invoke(["composition", "create", "poster", "--width", "600", "--height", "240", "--project", otherProj]);
+  const added = await addRunsLayer("headline", ["5 ", "HERDR ", "PLUGINS"], [
+    "--font", "Archivo", "--font-size", "64",
+    "--run-font", "2=Archivo Black",
+    "--run-font-file", `3=${HANDJET}`,
+    "--x", "40", "--y", "60",
+  ]);
+  const rev = revOf(added) as RunsRev;
+  const runHashes = rev.runs!.map((r) => r.contentHash).filter((h): h is string => typeof h === "string");
+  expect(runHashes.length).toBeGreaterThan(0);
+
+  const imp = await invoke([
+    "composition", "import", "poster", "poster", "--from-project", otherProj, "--project", projDir, "--json",
+  ]);
+  expect(imp.code).toBe(0);
+  // The imported Layer's run font blobs exist in the destination store.
+  for (const hash of runHashes) {
+    await expect(readFile(path.join(projDir, "content", hash))).resolves.toBeInstanceOf(Buffer);
+  }
+  // The imported Layer renders in the destination Project.
+  const render = await invoke(["composition", "render", "poster", "--project", projDir, "--supersample", "1", "--json"]);
+  expect(render.code).toBe(0);
 });
 
 // ---------------------------------------------------------------------------

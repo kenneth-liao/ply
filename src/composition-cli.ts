@@ -59,10 +59,13 @@ import {
   parseLayerRunFont,
   parseLayerRunFontFile,
   parseLayerRunWeight,
+  parseLayerRun,
   parseLayerRunText,
   parseLayerRuns,
   parseLayerRunWidth,
+  buildRunStyleEdits,
   type LayerRunStyleEdit,
+  type ParsedLayerOptionValues,
   type LayerOptionArgs,
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
@@ -71,7 +74,7 @@ import {
 import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill, normalizeStoredTextFill } from "./fill.js";
-import { formatGrade, formatGlow, type LayerGrade, type LayerGlow, type StoredLayerBlendMode } from "./layer.js";
+import { formatGrade, formatGlow, runRemovalOnAddRefusal, type LayerGrade, type LayerGlow, type StoredLayerBlendMode } from "./layer.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -901,21 +904,55 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         process.exitCode = 2;
         return;
       }
-      // The runs edit forms are edit-only (#297) — checked AFTER the shared
-      // boundary parse, so a malformed value refuses with the same shared
-      // wording on both surfaces and only a well-formed edit-only option
-      // names the surface rule.
+      // Every runs option's boundary parse runs FIRST (the ONE shared
+      // registration — the same validators `layer edit` dispatches), then
+      // the surface rules: so a malformed value refuses with the shared
+      // wording on both surfaces, and only a well-formed edit-only option
+      // names the surface rule (INT-cli-2). The parsed lists feed the text
+      // branch below — parsed once, never twice (INT-cli-6).
+      const parsedRunColor = parseLayerRunColor(values["run-color"]);
+      if (!parsedRunColor.ok) { output({ ok: false, error: parsedRunColor.error }, isJson); process.exitCode = 2; return; }
+      const parsedRunFont = parseLayerRunFont(values["run-font"]);
+      if (!parsedRunFont.ok) { output({ ok: false, error: parsedRunFont.error }, isJson); process.exitCode = 2; return; }
+      const parsedRunFontFile = parseLayerRunFontFile(values["run-font-file"]);
+      if (!parsedRunFontFile.ok) { output({ ok: false, error: parsedRunFontFile.error }, isJson); process.exitCode = 2; return; }
+      const parsedRunWeight = parseLayerRunWeight(values["run-weight"]);
+      if (!parsedRunWeight.ok) { output({ ok: false, error: parsedRunWeight.error }, isJson); process.exitCode = 2; return; }
+      const parsedRunWidth = parseLayerRunWidth(values["run-width"]);
+      if (!parsedRunWidth.ok) { output({ ok: false, error: parsedRunWidth.error }, isJson); process.exitCode = 2; return; }
+      // The --run occurrences' own parse (emptiness is a boundary refusal,
+      // exit 2, shared with the edit surface's registration).
+      const parsedRunOccurrences = parseLayerRun(values.run);
+      if (!parsedRunOccurrences.ok) { output({ ok: false, error: parsedRunOccurrences.error }, isJson); process.exitCode = 2; return; }
       const parsedRunTextAdd = parseLayerRunText(values["run-text"]);
-      if (!parsedRunTextAdd.ok) {
-        output({ ok: false, error: parsedRunTextAdd.error }, isJson);
-        process.exitCode = 2;
-        return;
-      }
+      if (!parsedRunTextAdd.ok) { output({ ok: false, error: parsedRunTextAdd.error }, isJson); process.exitCode = 2; return; }
       const parsedRunsAdd = parseLayerRuns(values.runs);
-      if (!parsedRunsAdd.ok) {
-        output({ ok: false, error: parsedRunsAdd.error }, isJson);
-        process.exitCode = 2;
-        return;
+      if (!parsedRunsAdd.ok) { output({ ok: false, error: parsedRunsAdd.error }, isJson); process.exitCode = 2; return; }
+      // The add-side merge is the SAME merge `layer edit` uses —
+      // `buildRunStyleEdits`, one parser, `none` handled identically
+      // (INT-cli-1). On add a `none` names an override no run has yet: the
+      // boundary refuses with the shared removal-form wording (INT-cli-1).
+      const parsedRunMap: Record<string, unknown> = {};
+      if (parsedRunColor.value !== undefined) parsedRunMap["run-color"] = parsedRunColor.value;
+      if (parsedRunFont.value !== undefined) parsedRunMap["run-font"] = parsedRunFont.value;
+      if (parsedRunFontFile.value !== undefined) parsedRunMap["run-font-file"] = parsedRunFontFile.value;
+      if (parsedRunWeight.value !== undefined) parsedRunMap["run-weight"] = parsedRunWeight.value;
+      if (parsedRunWidth.value !== undefined) parsedRunMap["run-width"] = parsedRunWidth.value;
+      const addRunStyles = buildRunStyleEdits(parsedRunMap as ParsedLayerOptionValues);
+      for (const style of addRunStyles) {
+        for (const [option, removal] of [
+          ["--run-color", style.colorSpec === null],
+          ["--run-font", style.font === null],
+          ["--run-font-file", style.fontFile === null],
+          ["--run-weight", style.weight === null],
+          ["--run-width", style.width === null],
+        ] as const) {
+          if (removal) {
+            output({ ok: false, error: runRemovalOnAddRefusal(option) }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+        }
       }
       if (parsedRunTextAdd.value !== undefined || parsedRunsAdd.value !== undefined) {
         output({ ok: false, error: "--run-text and --runs are edit-only options: they name runs an existing Layer carries. Author runs with --run <text> on add." }, isJson);
@@ -929,7 +966,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         return;
       }
       if (!values.image && values.text === undefined && !hasRunContent && values["from-generation"] === undefined && values["from-matte"] === undefined && values.shape === undefined) {
-        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
+        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --run <text> (repeatable, with a font), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -1080,7 +1117,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         const runTexts = values.run as string[] | undefined;
         if (values.text !== undefined || runTexts !== undefined) {
           if (!values.font && !values["font-file"]) {
-            output({ ok: false, error: "Missing required option: a font — --font <family> (bundled) or --font-file <path> (caller-supplied) — is required with --text" }, isJson);
+            output({ ok: false, error: "Missing required option: a font — --font <family> (bundled) or --font-file <path> (caller-supplied) — is required with --text or --run" }, isJson);
             process.exitCode = 2;
             return;
           }
@@ -1193,72 +1230,17 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
             process.exitCode = 2;
             return;
           }
-          // The runs facts (#297): each per-run style option's boundary parse
-          // is the shared registration; the per-run setters merge per index
-          // here (a later occurrence wins, like a repeated setter), and the
-          // semantic resolutions — colour grammar, font resolution, run
-          // axes, index range — run in the ONE ingestion point before
-          // anything is retained.
-          const runStyles: LayerRunStyleEdit[] = [];
-          // The five per-run setters' boundary parses: each repeatable,
-          // each refusing its malformed occurrence at this boundary (exit
-          // 2) before anything reaches the ingestion path. The parsed
-          // lists merge per 1-based index here (a later occurrence wins,
-          // like a repeated layer-level setter); the semantic resolutions
-          // — colour grammar, font resolution, run axes, index range —
-          // run in the ONE ingestion point before anything is retained.
-          const runColorParsed = parseLayerRunColor(values["run-color"]);
-          if (!runColorParsed.ok) { output({ ok: false, error: runColorParsed.error }, isJson); process.exitCode = 2; return; }
-          const runFontParsed = parseLayerRunFont(values["run-font"]);
-          if (!runFontParsed.ok) { output({ ok: false, error: runFontParsed.error }, isJson); process.exitCode = 2; return; }
-          const runFontFileParsed = parseLayerRunFontFile(values["run-font-file"]);
-          if (!runFontFileParsed.ok) { output({ ok: false, error: runFontFileParsed.error }, isJson); process.exitCode = 2; return; }
-          const runWeightParsed = parseLayerRunWeight(values["run-weight"]);
-          if (!runWeightParsed.ok) { output({ ok: false, error: runWeightParsed.error }, isJson); process.exitCode = 2; return; }
-          const runWidthParsed = parseLayerRunWidth(values["run-width"]);
-          if (!runWidthParsed.ok) { output({ ok: false, error: runWidthParsed.error }, isJson); process.exitCode = 2; return; }
-          const applyList = (
-            list: Array<{ index: number; value: string }> | undefined,
-            field: "colorSpec" | "font" | "fontFile",
-          ) => {
-            for (const entry of list ?? []) {
-              const existing = runStyles.find((style) => style.index === entry.index);
-              const style = existing ?? { index: entry.index };
-              (style as unknown as Record<string, unknown>)[field] = entry.value;
-              if (existing === undefined) runStyles.push(style);
-            }
-          };
-          applyList(runColorParsed.value, "colorSpec");
-          applyList(runFontParsed.value, "font");
-          applyList(runFontFileParsed.value, "fontFile");
-          for (const entry of runWeightParsed.value ?? []) {
-            const existing = runStyles.find((style) => style.index === entry.index);
-            const style = existing ?? { index: entry.index };
-            style.weight = entry.value;
-            if (existing === undefined) runStyles.push(style);
-          }
-          for (const entry of runWidthParsed.value ?? []) {
-            const existing = runStyles.find((style) => style.index === entry.index);
-            const style = existing ?? { index: entry.index };
-            style.width = entry.value;
-            if (existing === undefined) runStyles.push(style);
-          }
-          // A run text's emptiness is a boundary refusal (exit 2), shared
-          // with the edit surface's parse (#297).
-          if (runTexts !== undefined) {
-            for (const occurrence of runTexts) {
-              if (occurrence.length === 0) {
-                output({ ok: false, error: "--run takes the run's text (a nonempty string); a run cannot be empty." }, isJson);
-                process.exitCode = 2;
-                return;
-              }
-            }
-          }
+          // The runs facts (#297): the parsed lists from the boundary above
+          // merged once through `buildRunStyleEdits` (the SAME merge the
+          // edit surface uses — one parser, INT-cli-1/6); the semantic
+          // resolutions — colour grammar, font resolution, run axes, index
+          // range, the single-run fold — run in the ONE ingestion point
+          // before anything is retained.
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
             {
               ...(values.text !== undefined ? { text: values.text } : {}),
-              ...(runTexts !== undefined ? { runs: { runTexts, ...(runStyles.length > 0 ? { styles: runStyles } : {}) } } : {}),
+              ...(runTexts !== undefined ? { runs: { runTexts, ...(addRunStyles.length > 0 ? { styles: addRunStyles } : {}) } } : {}),
               ...(values.font !== undefined ? { font: values.font } : {}),
               ...(values["font-file"] !== undefined ? { fontFile: values["font-file"] } : {}),
               color: values.color, weight, width, tracking, lineHeight,

@@ -831,6 +831,7 @@ async function run() {
           };
         }
 
+        const buildRunStyleEditsOnce = buildRunStyleEdits(parsed); // parsed once (INT-cli-6)
         const res = await editLayer(targetProj, layerId, {
           inPlace: values["in-place"],
           fork: values.fork,
@@ -866,7 +867,7 @@ async function run() {
           ...(parsed["run-text"] !== undefined
             ? { runText: parsed["run-text"] as Array<{ index: number; text: string }> }
             : {}),
-          ...(buildRunStyleEdits(parsed).length > 0 ? { runStyles: buildRunStyleEdits(parsed) } : {}),
+          ...(buildRunStyleEditsOnce.length > 0 ? { runStyles: buildRunStyleEditsOnce } : {}),
           ...(parsed.runs === null ? { runsNone: true } : {}),
           x: editX,
           y: editY,

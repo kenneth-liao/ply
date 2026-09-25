@@ -1697,6 +1697,24 @@ export function textFitRefusal(text: string, fitWidth: number, fitHeight: number
 }
 
 /**
+ * The one run-boundary guard (#297): a boundary is a character index into
+ * `text` that must not split a surrogate pair — a boundary between the two
+ * code units of one astral character would store a corrupt slice (half a
+ * glyph). Shared by the stored-document reader and the edit application, so
+ * both ingestion paths refuse identically.
+ */
+export function assertRunBoundary(text: string, start: number, what: string): void {
+  if (start < 1 || start > text.length) return; // range rules own these cases
+  const prev = text.charCodeAt(start - 1);
+  const next = start < text.length ? text.charCodeAt(start) : 0;
+  if (prev >= 0xd800 && prev <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    throw new Error(
+      `${what} ${start} would split a surrogate pair — a run boundary cannot fall between the two code units of one character.`,
+    );
+  }
+}
+
+/**
  * Canonical stored-text-run validation and normalization (#297, spec #285
  * US-017, ISC-54, ADR-0021 amendment). The ONE reader for a revision's
  * `runs`: documents written before #297 lack the field, and absence IS the
@@ -1756,6 +1774,7 @@ export function normalizeStoredTextRuns(revision: {
           `Malformed revision document: text run ${i + 1} start ${value} is out of order or would make a run empty (text is ${text.length} characters).`,
         );
       }
+      assertRunBoundary(text, value, `Malformed revision document: text run ${i + 1} start`);
       start = value;
       prevStart = value;
     }
@@ -1883,24 +1902,53 @@ export interface TextInputRuns {
   styles?: LayerRunStyleEdit[];
 }
 
-/** The resolved runs facts of a text ingestion (#297): the canonical stored
- *  entries (absent for a single run) plus every run font's retained bytes
- *  (retained by the caller once everything else has resolved). */
+/**
+ * The resolved runs facts of a text ingestion (#297): the canonical stored
+ * entries (absent for a single run), the Layer font resolved AFTER the
+ * single-run fold, the fold facts when one applies, and every run font's
+ * retained bytes (retained by the caller once everything else has
+ * resolved).
+ */
 export interface ResolvedTextInputRuns {
+  /** The Layer font resolved through the ONE ingestion path, AFTER the
+   *  single-run fold — a run-1 font override IS the Layer font. */
+  layerFont: {
+    face: FontFace;
+    bytes: Buffer;
+    callerFont?: CallerFontFacts;
+    contentHash: string;
+  };
+  /** The effective Layer font input after the single-run fold. */
+  layerFontInput: { font?: string; fontFile?: string };
+  /** Single-run fold facts (#297): per-run style edits that leave a single
+   *  run ARE the Layer's own style, folded here at the ONE ingestion point —
+   *  never dropped, never pre-handled by the CLI. The colour is CANONICAL
+   *  (exactly the Layer colour path's stored form); the axes are the raw
+   *  explicit controls for the caller's ONE axes resolution against the
+   *  folded face. */
+  folded?: { color?: string | LayerFill; weight?: number; width?: number };
+  /** The stored run entries — absent for a single run (today's revision
+   *  shape). */
   runs?: LayerTextRun[];
+  /** Run font bytes to retain (hash → bytes), resolved but NOT retained:
+   *  the caller retains after every validation has passed. */
   runFonts: SnapshotRunFont[];
 }
 
 /**
  * Resolve authored text runs into their canonical stored form (#297, spec
  * #285 US-017, ISC-54, ADR-0021 amendment) — the ONE ingestion point for
- * run facts. Validations and resolutions all run BEFORE any retention, so a
- * refused run publishes nothing:
+ * run facts, including the single-run fold: per-run style edits that leave
+ * a single run fold into the Layer-level facts here (a single-run Layer IS
+ * today's text Layer — the fold is storage's fact, never the CLI's). All
+ * validations and resolutions run BEFORE any retention, so a refused run
+ * publishes nothing:
  * - the run texts' concatenation must equal the Layer text, and each run
  *   must be nonempty (an empty run would collapse boundaries);
- * - a style edit names an existing 1-based run;
+ * - a style edit names an existing 1-based run (validated before the fold,
+ *   so a single-run input with a run-2 setter refuses, never drops);
  * - a run colour parses through the ONE colour grammar and canonicalizes
- *   like the layer colour;
+ *   exactly like the Layer colour path's stored form;
  * - a run font resolves once (bundled face or caller file read and parsed
  *   once), one font source per run, and a caller font must pass the same
  *   browser-resolution gate the layer font passes;
@@ -1911,21 +1959,30 @@ export interface ResolvedTextInputRuns {
  *   face without explicit axes inherits the layer axes;
  * - a run font whose bytes equal the Layer font's is deduped: the override
  *   disappears and the run keeps the layer font (one home per fact).
- *
- * Returns the stored entries (absent for a single run — today's revision
- * shape) and the run fonts' bytes for retention.
  */
 export async function resolveTextInputRuns(params: {
   text: string;
   runs?: TextInputRuns;
-  layerFace: FontFace;
-  layerCallerFont?: CallerFontFacts;
-  layerContentHash: string;
-  layerAxes?: TextAxes;
+  /** The raw Layer-level font source (before any single-run fold). */
+  layerFontInput: { font?: string; fontFile?: string };
+  /** The raw Layer-level colour/axes controls (before any fold). */
+  layerColorSpec?: string;
+  layerWeight?: number;
+  layerWidth?: number;
+  /** The Layer font resolver — the one path the caller's publication uses,
+   *  so the fold's font override resolves through the same flow. */
+  resolveLayerFont: (fontInput: { font?: string; fontFile?: string }) => Promise<{
+    face: FontFace;
+    bytes: Buffer;
+    callerFont?: CallerFontFacts;
+    contentHash: string;
+  }>;
 }): Promise<ResolvedTextInputRuns> {
-  const out: ResolvedTextInputRuns = { runFonts: [] };
   const runs = params.runs;
-  if (runs === undefined) return out;
+  if (runs === undefined) {
+    const layerFont = await params.resolveLayerFont(params.layerFontInput);
+    return { layerFont, layerFontInput: params.layerFontInput, runFonts: [] };
+  }
   if (runs.runTexts.length === 0) {
     throw new Error("--run takes the run's text (a nonempty string).");
   }
@@ -1937,9 +1994,10 @@ export async function resolveTextInputRuns(params: {
   if (runs.runTexts.join("") !== params.text) {
     throw new Error("The --run occurrences' concatenation must equal the Layer text.");
   }
-  if (runs.runTexts.length < 2) return out;
   // Per-run style edits, merged per index in command order (a later
-  // occurrence wins, like a repeated layer-level setter).
+  // occurrence wins, like a repeated layer-level setter). Index range
+  // validates BEFORE the single-run fold: a setter naming a run that does
+  // not exist is refused, never dropped.
   const styles = new Map<number, LayerRunStyleEdit>();
   for (const edit of runs.styles ?? []) {
     if (edit.index < 1 || edit.index > runs.runTexts.length) {
@@ -1948,6 +2006,76 @@ export async function resolveTextInputRuns(params: {
     const merged = { ...styles.get(edit.index), ...edit };
     styles.set(edit.index, merged);
   }
+  const validateStyleExclusivity = (style: LayerRunStyleEdit): void => {
+    if (style.font !== undefined && style.fontFile !== undefined) {
+      throw new Error(
+        "--run-font and --run-font-file name one font per run — pass a bundled family (--run-font <i>=<family>) or a local font file (--run-font-file <i>=<path>), not both.",
+      );
+    }
+  };
+
+  // THE SINGLE-RUN FOLD (one home: this ingestion point). One occurrence
+  // with per-run style edits folds them into the Layer-level facts — the
+  // stored revision keeps today's exact single-run shape.
+  if (runs.runTexts.length === 1) {
+    const style = styles.get(1);
+    if (style === undefined) {
+      const layerFont = await params.resolveLayerFont(params.layerFontInput);
+      return { layerFont, layerFontInput: params.layerFontInput, runFonts: [] };
+    }
+    validateStyleExclusivity(style);
+    let foldedColor: string | LayerFill | undefined;
+    if (style.colorSpec !== undefined) {
+      if (style.colorSpec === null) {
+        throw new Error(runRemovalOnAddRefusal("--run-color"));
+      }
+      // Canonicalized exactly like the Layer colour path's stored form.
+      foldedColor = canonicalizeTextFillForStorage(normalizeStoredTextFill(style.colorSpec.trim()));
+    }
+    let fontFile: string | undefined;
+    let font: string | undefined;
+    if (style.fontFile !== undefined) {
+      if (style.fontFile === null) {
+        throw new Error(runRemovalOnAddRefusal("--run-font-file"));
+      }
+      fontFile = style.fontFile;
+    } else if (style.font !== undefined) {
+      if (style.font === null) {
+        throw new Error(runRemovalOnAddRefusal("--run-font"));
+      }
+      font = style.font;
+    }
+    const layerFontInput =
+      font !== undefined || fontFile !== undefined
+        ? {
+            ...(font !== undefined ? { font } : {}),
+            ...(fontFile !== undefined ? { fontFile } : {}),
+          }
+        : params.layerFontInput;
+    const layerFont = await params.resolveLayerFont(layerFontInput);
+    // Folded axes are the raw explicit controls: the caller's ONE axes
+    // resolution validates them against the folded face.
+    const folded: { color?: string | LayerFill; weight?: number; width?: number } = {
+      ...(foldedColor !== undefined ? { color: foldedColor } : {}),
+      ...(style.weight !== undefined && style.weight !== null ? { weight: style.weight } : {}),
+      ...(style.width !== undefined && style.width !== null ? { width: style.width } : {}),
+    };
+    return {
+      layerFont,
+      layerFontInput,
+      ...(Object.keys(folded).length > 0 ? { folded } : {}),
+      runFonts: [],
+    };
+  }
+
+  // Multi-run: resolve the Layer font first (the runs' dedupe and inherited
+  // axes basis), then every run's overrides.
+  const layerFont = await params.resolveLayerFont(params.layerFontInput);
+  const out: ResolvedTextInputRuns = {
+    layerFont,
+    layerFontInput: params.layerFontInput,
+    runFonts: [],
+  };
   const entries: LayerTextRun[] = [];
   const runCallerFontFacts = new Map<number, CallerFontFacts>();
   const runCallerFontBytes = new Map<number, Buffer>();
@@ -1956,21 +2084,15 @@ export async function resolveTextInputRuns(params: {
     const entry: LayerTextRun = {};
     if (i > 1) entry.start = runs.runTexts.slice(0, i - 1).join("").length;
     if (style !== undefined) {
-      // Colour: the ONE grammar, canonicalized like the layer colour.
+      // Colour: the ONE grammar, canonicalized exactly like the Layer
+      // colour path's stored form.
       if (style.colorSpec !== undefined) {
         if (style.colorSpec === null) {
           throw new Error(runRemovalOnAddRefusal("--run-color"));
         }
-        const fill = normalizeStoredTextFill(style.colorSpec.trim());
-        entry.color = canonicalizeTextFillForStorage(fill);
+        entry.color = canonicalizeTextFillForStorage(normalizeStoredTextFill(style.colorSpec.trim()));
       }
-      // The run's font: one source per run, resolved once.
-      const wantsFont = style.font !== undefined || style.fontFile !== undefined;
-      if (style.font !== undefined && style.fontFile !== undefined) {
-        throw new Error(
-          "--run-font and --run-font-file name one font per run — pass a bundled family (--run-font <i>=<family>) or a local font file (--run-font-file <i>=<path>), not both.",
-        );
-      }
+      validateStyleExclusivity(style);
       let runFace: FontFace | undefined;
       let runCallerFont: CallerFontFacts | undefined;
       if (style.fontFile !== undefined) {
@@ -1992,23 +2114,26 @@ export async function resolveTextInputRuns(params: {
       // variable-face font override stores its resolved instance; a static
       // face stores nothing (its bytes fix the look); a run sharing the
       // layer face inherits the layer axes unless an axis is explicit.
-      const face = runFace ?? params.layerFace;
+      const face = runFace ?? layerFont.face;
+      const explicitWeight = style.weight !== undefined && style.weight !== null ? style.weight : undefined;
+      const explicitWidth = style.width !== undefined && style.width !== null ? style.width : undefined;
       if (runFace !== undefined) {
-        const axes = resolveTextAxes(face!, {
-          ...(style.weight !== undefined && style.weight !== null ? { weight: style.weight } : {}),
-          ...(style.width !== undefined && style.width !== null ? { width: style.width } : {}),
+        const axes = resolveTextAxes(face, {
+          ...(explicitWeight !== undefined ? { weight: explicitWeight } : {}),
+          ...(explicitWidth !== undefined ? { width: explicitWidth } : {}),
         });
         if (face.variant === "variable") {
           entry.weight = axes.weight;
           entry.width = axes.width;
         }
-      } else if (
-        (style.weight !== undefined && style.weight !== null) ||
-        (style.width !== undefined && style.width !== null)
-      ) {
+      } else if (explicitWeight !== undefined || explicitWidth !== undefined) {
         const axes = resolveTextAxes(face, {
-          ...(style.weight !== undefined && style.weight !== null ? { weight: style.weight } : (params.layerAxes?.weight !== undefined ? { weight: params.layerAxes.weight } : {})),
-          ...(style.width !== undefined && style.width !== null ? { width: style.width } : (params.layerAxes?.width !== undefined ? { width: params.layerAxes.width } : {})),
+          ...(explicitWeight !== undefined
+            ? { weight: explicitWeight }
+            : (params.layerWeight !== undefined ? { weight: params.layerWeight } : {})),
+          ...(explicitWidth !== undefined
+            ? { width: explicitWidth }
+            : (params.layerWidth !== undefined ? { width: params.layerWidth } : {})),
         });
         entry.weight = axes.weight;
         entry.width = axes.width;
@@ -2029,7 +2154,7 @@ export async function resolveTextInputRuns(params: {
           bytes = fontAssetBytes(runFace);
         }
         hash = createHash("sha256").update(bytes).digest("hex");
-        if (hash !== params.layerContentHash) {
+        if (hash !== layerFont.contentHash) {
           if (callerFont !== undefined) {
             await verifyCallerFontResolves(hash, bytes, callerFont);
           }
@@ -2166,9 +2291,13 @@ export async function applyTextInputRunEdits(params: {
     }
   }
   // 2. One run's characters are replaced in place per occurrence (applied
-  // in command order); later boundaries shift.
+  // in command order); later boundaries shift. The gate reads the
+  // POST-APPEND shape: an append in the same edit creates the runs the
+  // setters name (the documented order — appends, then --run-text, then
+  // setters), so a single-run Layer that just gained a run is multi-run
+  // here.
   if (params.runText !== undefined && params.runText.length > 0) {
-    if (prevRuns === undefined) {
+    if (entries.length < 2) {
       throw new Error(singleRunPerRunOptionRefusal(params.layerId));
     }
     for (const { index, text: replacement } of params.runText) {
@@ -2180,12 +2309,14 @@ export async function applyTextInputRunEdits(params: {
       const delta = replacement.length - (end - start);
       for (let i = index; i < entries.length; i++) {
         entries[i]!.start += delta;
+        assertRunBoundary(text, entries[i]!.start, "--run-text shifted run boundary");
       }
     }
   }
-  // 3. Per-run style setters, merged per index in command order.
+  // 3. Per-run style setters, merged per index in command order — gated on
+  // the post-append shape like the run-text step above.
   if (params.runStyles !== undefined && params.runStyles.length > 0) {
-    if (prevRuns === undefined) {
+    if (entries.length < 2) {
       throw new Error(singleRunPerRunOptionRefusal(params.layerId));
     }
     const merged = new Map<number, LayerRunStyleEdit>();
@@ -3833,8 +3964,12 @@ export function vectorColorKindRefusal(
  */
 
 /** The runs equality for the edit no-op check (#297): canonical entries in
- *  order, field by field — two runs fact sets are the same look only when
- *  every boundary and override matches. */
+ *  order, field by field, compared by CANONICAL VALUE, never reference —
+ *  the colour through the ONE fill equality (`fillsEqual`, the same
+ *  deep comparison the Layer colour's no-op check uses) and caller font
+ *  facts through the same facts equality the Layer font's no-op check
+ *  uses — so two runs fact sets describing the same look are equal even
+ *  when their fill objects are distinct references. */
 function textRunsEq(
   a: LayerTextRun[] | undefined,
   b: LayerTextRun[] | undefined,
@@ -3844,13 +3979,22 @@ function textRunsEq(
   return a.every((run, i) => {
     const other = b[i]!;
     return run.start === other.start &&
-      run.color === other.color &&
+      fillsEqual(
+        normalizeStoredTextFill(run.color ?? EMPTY_RUN_COLOR),
+        normalizeStoredTextFill(other.color ?? EMPTY_RUN_COLOR),
+      ) &&
+      (run.color === undefined) === (other.color === undefined) &&
       run.contentHash === other.contentHash &&
-      run.callerFont === other.callerFont &&
+      callerFontEq(run.callerFont, other.callerFont) &&
       run.weight === other.weight &&
       run.width === other.width;
   });
 }
+
+/** The absent-run-colour stand-in for the equality's fill comparison: the
+ *  runs equality compares overrides, so both-absent is the same look
+ *  regardless of the Layer colour — the sentinel never leaks to storage. */
+const EMPTY_RUN_COLOR = "#000000";
 
 function fitBoxEq(
   fitBox: TextFitBox | undefined,

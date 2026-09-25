@@ -1866,10 +1866,13 @@ export function checkEditLayerOptions(values: LayerOptionArgs): EditLayerCheck |
         case "run-text-source": {
           // The runs forms and the whole-text form are one content (#297):
           // --run appends runs, --run-text rewrites one run's slice, --runs
-          // "none" collapses — never beside a --text replacement.
-          if (values.text !== undefined && values.run !== undefined) {
+          // "none" collapses, and the per-run setters style one run — never
+          // beside a --text replacement, which would make the reference
+          // text ambiguous (the domain refuses bare --text on a multi-run
+          // Layer too; this boundary rule covers every run option).
+          if (values.text !== undefined && someLayerOptionProvided(values, RUN_OPTION_KEYS)) {
             return refuse(
-              "--text and --run are mutually exclusive content options: --text is the single-run form; author runs with one or more --run occurrences.",
+              "--text and the runs options (--run, --run-text, --runs, --run-color, --run-font, --run-font-file, --run-weight, --run-width) are mutually exclusive content options: --text is the single-run form; author runs with one or more --run occurrences.",
             );
           }
           break;

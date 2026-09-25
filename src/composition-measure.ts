@@ -408,12 +408,14 @@ function buildRunReports(
   axes: { weight: number; width: number } | null;
 }> {
   const slices = storedTextRunSlices(rev);
-  const layerAxes = normalizeStoredTextAxes(rev) ?? null;
-  void layerAxes;
   return runs.map((run, i) => {
     // A run's axes are its stored overrides — a run without one paints the
     // layer axes, so it reports null (absence IS the layer-default form).
-    const axes = run.weight !== undefined ? { weight: run.weight, width: run.width! } : null;
+    // The width is the reader's canonical pair fact, present with weight.
+    const axes =
+      run.weight !== undefined && run.width !== undefined
+        ? { weight: run.weight, width: run.width }
+        : null;
     const font =
       run.contentHash !== undefined && run.callerFont !== undefined
         ? { family: run.callerFont.family, caller: true as const }
