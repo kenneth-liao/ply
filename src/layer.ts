@@ -273,6 +273,47 @@ interface LayerRevisionBase {
    * written before #299 keep their exact ids.
    */
   blur?: number;
+  /**
+   * Canonical Layer edge choke (#300, spec #285 US-013, DEC-005, ADR-0024
+   * amendment): an inward alpha-erode radius in px, applied as the FIRST
+   * function of the outer element's effects filter chain — the alpha edge
+   * is shaped BEFORE the effects that read it (edge glow, outline, shadow;
+   * blur stays LAST), so a cutout's halo disappears on saturated backdrops
+   * and the glow band hugs the choked edge. The px are Layer-LOCAL: the
+   * canonical transform maps content+effects together, so the choke scales
+   * with the Layer's scale like the other effects.
+   *
+   * The choke SHRINKS painted extents (the shaped alpha is composited `in`
+   * the source graphic, so the ink never exceeds the unchoked ink — the
+   * edge step adds no effect reach, the ADR-0024 amendment). An effect,
+   * never placement: anchored placement resolves against the pre-effect
+   * ink (#288, ADR-0025).
+   *
+   * Present ⟺ a positive radius exists: absence IS the canonical no-choke
+   * form, so `--choke 0` drops the field and every reader treats absence
+   * as none. The revision hash appends it only when present, so revisions
+   * written before #300 keep their exact ids.
+   */
+  choke?: number;
+  /**
+   * Canonical Layer edge feather (#300, spec #285 US-013, DEC-005, ADR-0024
+   * amendment): a Gaussian alpha-edge softening radius (σ) in px, applied
+   * immediately after the choke in the SAME first filter function of the
+   * outer element's effects chain (erode, then blur, then `in` the source
+   * graphic). The px are Layer-LOCAL like the choke's.
+   *
+   * The feather softens the edge INWARD only: the `in` composite bounds the
+   * painted alpha by the source's, so the painted ink never exceeds the
+   * unfeathered ink and the edge step adds no effect reach (the ADR-0024
+   * amendment). An effect, never placement: anchored placement resolves
+   * against the pre-effect ink (#288, ADR-0025).
+   *
+   * Present ⟺ a positive radius exists: absence IS the canonical
+   * no-feather form, so `--feather 0` drops the field and every reader
+   * treats absence as none. The revision hash appends it only when
+   * present, so revisions written before #300 keep their exact ids.
+   */
+  feather?: number;
 }
 
 /** The documented blend modes (#220, spec #218 US-003, ADR-0024). */
@@ -909,6 +950,12 @@ const MAX_OUTLINE_WIDTH_PX = 256;
  *  (DEC-006). Exported for the option-table boundary parse — the ONE grammar
  *  both command surfaces run. */
 export const MAX_BLUR_RADIUS_PX = 256;
+/** The edge choke and feather radius bound (#300, ADR-0024 amendment): the
+ *  same bounded-effect footprint the other effects keep, so painted-extent
+ *  capture stays bounded (DEC-006); the choke's erode also chains under the
+ *  raster morphology cap the outline/glow share. Exported for the
+ *  option-table boundary parse — the ONE grammar both command surfaces run. */
+export const MAX_EDGE_RADIUS_PX = 256;
 
 /** Effect hex color: #RGB, #RRGGBB, or #RRGGBBAA. */
 const EFFECT_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
@@ -1355,6 +1402,40 @@ export function normalizeStoredBlur(revision: { blur?: unknown }): number | unde
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0 || raw > MAX_BLUR_RADIUS_PX) {
     throw new Error(
       `Malformed revision document: blur must be a finite number of px between 0 (exclusive, the removal form) and ${MAX_BLUR_RADIUS_PX} when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  return raw;
+}
+
+/** Canonical stored-choke validation and normalization (#300, spec #285
+ * US-013, DEC-005, ADR-0024 amendment). The one normalization boundary for
+ * the choke fact, mirror of `normalizeStoredBlur`: documents written before
+ * #300 lack the field, and absence IS the canonical no-choke form — a
+ * stored `0` normalizes to `undefined`, keeping the identity out of every
+ * stored document and hash. A present value must be a finite number of px
+ * in (0, MAX_EDGE_RADIUS_PX]. */
+export function normalizeStoredChoke(revision: { choke?: unknown }): number | undefined {
+  if (revision.choke === undefined) return undefined;
+  const raw = revision.choke;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0 || raw > MAX_EDGE_RADIUS_PX) {
+    throw new Error(
+      `Malformed revision document: choke must be a finite number of px between 0 (exclusive, the removal form) and ${MAX_EDGE_RADIUS_PX} when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  return raw;
+}
+
+/** Canonical stored-feather validation and normalization (#300, spec #285
+ * US-013, DEC-005, ADR-0024 amendment). The one normalization boundary for
+ * the feather fact, mirror of `normalizeStoredChoke`: absence IS the
+ * canonical no-feather form — a stored `0` normalizes to `undefined`. A
+ * present value must be a finite number of px in (0, MAX_EDGE_RADIUS_PX]. */
+export function normalizeStoredFeather(revision: { feather?: unknown }): number | undefined {
+  if (revision.feather === undefined) return undefined;
+  const raw = revision.feather;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0 || raw > MAX_EDGE_RADIUS_PX) {
+    throw new Error(
+      `Malformed revision document: feather must be a finite number of px between 0 (exclusive, the removal form) and ${MAX_EDGE_RADIUS_PX} when present (got ${JSON.stringify(raw)}).`,
     );
   }
   return raw;
@@ -2922,6 +3003,13 @@ export function computeRevisionHash(rev: LayerRevision): string {
   // only when present, so revisions written before #299 keep their exact ids.
   const blur = normalizeStoredBlur(rev);
   const blurField = blur !== undefined ? `:blur(${blur})` : "";
+  // The edge choke and feather radii (#300, spec #285 US-013, ADR-0024
+  // amendment): appended only when present, so revisions written before
+  // #300 keep their exact ids.
+  const choke = normalizeStoredChoke(rev);
+  const chokeField = choke !== undefined ? `:choke(${choke})` : "";
+  const feather = normalizeStoredFeather(rev);
+  const featherField = feather !== undefined ? `:feather(${feather})` : "";
   // The text layout rule (#287, spec #285 DEC-001, ADR-0017 amendment):
   // appended only when "natural", so revisions written before #287 keep their
   // exact ids.
@@ -2968,7 +3056,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
           })
           .join(";")})`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${chokeField}${featherField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -3273,6 +3361,12 @@ export async function readRevisionInternalFull(
   // radius is refused loudly before the revision hash is consulted. Absence
   // IS the no-blur form.
   const blur = normalizeStoredBlur(revision);
+  // Canonical edge choke and feather (#300, spec #285 US-013, ADR-0024
+  // amendment): validated and normalized at this same one boundary — a
+  // malformed stored radius is refused loudly before the revision hash is
+  // consulted. Absence IS the no-fact form for both.
+  const choke = normalizeStoredChoke(revision);
+  const feather = normalizeStoredFeather(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -3370,6 +3464,8 @@ export async function readRevisionInternalFull(
             ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
             ...(glow !== undefined ? { glow } : {}),
             ...(blur !== undefined ? { blur } : {}),
+            ...(choke !== undefined ? { choke } : {}),
+            ...(feather !== undefined ? { feather } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -3403,6 +3499,8 @@ export async function readRevisionInternalFull(
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
           ...(glow !== undefined ? { glow } : {}),
           ...(blur !== undefined ? { blur } : {}),
+          ...(choke !== undefined ? { choke } : {}),
+          ...(feather !== undefined ? { feather } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -3448,6 +3546,8 @@ export async function readRevisionInternalFull(
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
           ...(glow !== undefined ? { glow } : {}),
           ...(blur !== undefined ? { blur } : {}),
+          ...(choke !== undefined ? { choke } : {}),
+          ...(feather !== undefined ? { feather } : {}),
         };
 
   // Run font bytes (#297): every distinct run font override's retained
@@ -4017,6 +4117,54 @@ export function resolveEditBlur(
     );
   }
   return blurTo > 0 ? blurTo : undefined;
+}
+
+/**
+ * Canonical edge-choke resolution (#300, spec #285 US-013, DEC-005, ADR-0024
+ * amendment): `--choke <px>` is an ABSOLUTE radius setter in px, replacing
+ * any previous choke — `0` is the removal form and the identity is never
+ * stored. An omitted option preserves the Layer's current choke. The refusal
+ * runs before any staging. Exported as the ONE choke path for one-command
+ * `composition add` too, like every effect application case.
+ */
+export function resolveEditChoke(
+  options: { chokeTo?: number },
+  prevRev: ResolvedLayerRevision,
+): number | undefined {
+  const chokeTo = options.chokeTo;
+  if (chokeTo === undefined) {
+    return normalizeStoredChoke(prevRev);
+  }
+  if (typeof chokeTo !== "number" || !Number.isFinite(chokeTo) || chokeTo < 0 || chokeTo > MAX_EDGE_RADIUS_PX) {
+    throw new Error(
+      `Choke (--choke) takes a finite radius of px between 0 and ${MAX_EDGE_RADIUS_PX} — 0 removes the choke — got ${JSON.stringify(chokeTo)}.`,
+    );
+  }
+  return chokeTo > 0 ? chokeTo : undefined;
+}
+
+/**
+ * Canonical edge-feather resolution (#300, spec #285 US-013, DEC-005,
+ * ADR-0024 amendment): `--feather <px>` is an ABSOLUTE radius setter in px,
+ * replacing any previous feather — `0` is the removal form and the identity
+ * is never stored. An omitted option preserves the Layer's current feather.
+ * The refusal runs before any staging. Exported as the ONE feather path for
+ * one-command `composition add` too, like every effect application case.
+ */
+export function resolveEditFeather(
+  options: { featherTo?: number },
+  prevRev: ResolvedLayerRevision,
+): number | undefined {
+  const featherTo = options.featherTo;
+  if (featherTo === undefined) {
+    return normalizeStoredFeather(prevRev);
+  }
+  if (typeof featherTo !== "number" || !Number.isFinite(featherTo) || featherTo < 0 || featherTo > MAX_EDGE_RADIUS_PX) {
+    throw new Error(
+      `Feather (--feather) takes a finite radius of px between 0 and ${MAX_EDGE_RADIUS_PX} — 0 removes the feather — got ${JSON.stringify(featherTo)}.`,
+    );
+  }
+  return featherTo > 0 ? featherTo : undefined;
 }
 
 /**
@@ -5163,6 +5311,8 @@ async function buildEditedRevision(
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
       ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
+      ...(draft.choke !== undefined ? { choke: draft.choke } : {}),
+      ...(draft.feather !== undefined ? { feather: draft.feather } : {}),
       ...carried,
     };
     const unchanged =
@@ -5181,6 +5331,8 @@ async function buildEditedRevision(
       draft.blend === prevRev.blend &&
       glowEq(draft.glow, prevRev.glow) &&
       normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
+      normalizeStoredChoke(draft) === normalizeStoredChoke(prevRev) &&
+      normalizeStoredFeather(draft) === normalizeStoredFeather(prevRev) &&
       Object.keys(carried).length === 0;
     // The divergent-perspective publication gate (PROD-1, #298 review):
     // the image extent is the retained content's intrinsic box — run before
@@ -5303,6 +5455,8 @@ async function buildEditedRevision(
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
       ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
+      ...(draft.choke !== undefined ? { choke: draft.choke } : {}),
+      ...(draft.feather !== undefined ? { feather: draft.feather } : {}),
       ...carried,
     };
     const unchanged =
@@ -5331,6 +5485,8 @@ async function buildEditedRevision(
       draft.blend === prevRev.blend &&
       glowEq(draft.glow, prevRev.glow) &&
       normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
+      normalizeStoredChoke(draft) === normalizeStoredChoke(prevRev) &&
+      normalizeStoredFeather(draft) === normalizeStoredFeather(prevRev) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
     // --size change the content box, so the kept region re-validates against
@@ -5581,6 +5737,8 @@ async function buildEditedRevision(
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
       ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
+      ...(draft.choke !== undefined ? { choke: draft.choke } : {}),
+      ...(draft.feather !== undefined ? { feather: draft.feather } : {}),
       ...carried,
     };
     // The runs edits replace the whole-text fact: the stored text is the
@@ -5621,6 +5779,8 @@ async function buildEditedRevision(
       draft.blend === prevRev.blend &&
       glowEq(draft.glow, prevRev.glow) &&
       normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
+      normalizeStoredChoke(draft) === normalizeStoredChoke(prevRev) &&
+      normalizeStoredFeather(draft) === normalizeStoredFeather(prevRev) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a text edit (#211 review PROD-1): the text
     // content box is the measured line-box extent, so a text edit that can

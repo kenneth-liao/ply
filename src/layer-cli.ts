@@ -542,6 +542,37 @@ Options:
                         radius. It is a revision fact: sharing propagates
                         it, forks isolate it, and removal is its own edit.
                         Never changes retained pixels.
+  --choke <px>          Choke the Layer's alpha edge INWARD — erode the
+                        alpha by a radius in px (0 to 256) painted as the
+                        FIRST function of the effects chain, before the
+                        edge glow, outline, and shadow, so a cutout's halo
+                        disappears on saturated backdrops and every later
+                        effect hugs the choked edge. The px are
+                        Layer-LOCAL: the choke scales with the Layer's
+                        scale/scale-to like the other effects. The shaped
+                        alpha is composited with the source graphic, so the
+                        painted ink never exceeds the unchoked ink; choke
+                        SHRINKS painted extents, and anchored placement
+                        resolves against the pre-effect ink, so the choke
+                        never moves a stored placement. An ABSOLUTE setter
+                        — 0 removes the choke; an omitted --choke
+                        preserves the current radius. It is a revision
+                        fact: sharing propagates it, forks isolate it, and
+                        removal is its own edit. Never changes retained
+                        pixels.
+  --feather <px>        Feather the Layer's alpha edge — a Gaussian
+                        softening radius in px (0 to 256) applied
+                        immediately after the choke in the same first
+                        effects-chain function, so the edge softens INWARD
+                        only and no ink appears outside the unfeathered
+                        ink. The px are Layer-LOCAL like the choke's;
+                        painted extents never grow, and anchored placement
+                        resolves against the pre-effect ink. An ABSOLUTE
+                        setter — 0 removes the feather; an omitted
+                        --feather preserves the current radius. It is a
+                        revision fact: sharing propagates it, forks
+                        isolate it, and removal is its own edit. Never
+                        changes retained pixels.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -1197,7 +1228,15 @@ async function run() {
               rev.blur === undefined
                 ? ""
                 : `, Blur: ${rev.blur}px`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${shadow}${outline}${region}${grade}${glow}${blur}${blend}`);
+            const choke =
+              rev.choke === undefined
+                ? ""
+                : `, Choke: ${rev.choke}px`;
+            const feather =
+              rev.feather === undefined
+                ? ""
+                : `, Feather: ${rev.feather}px`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${shadow}${outline}${region}${grade}${glow}${blur}${choke}${feather}${blend}`);
           },
         );
       } catch (err) {

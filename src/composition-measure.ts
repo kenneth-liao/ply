@@ -111,6 +111,8 @@ import {
   normalizeStoredSkew,
   normalizeStoredPerspective,
   normalizeStoredBlur,
+  normalizeStoredChoke,
+  normalizeStoredFeather,
   storedTextRunSlices,
   type LayerTextRun,
   type SnapshotRunFont,
@@ -171,6 +173,21 @@ export interface MeasuredLayerBounds {
    * extents (by the Gaussian kernel's ~3σ visible reach, ceiled), which
    * `painted`/`paintedOnCanvas`/`clipped` already reflect. */
   blur: number | null;
+  /** The revision's effective edge choke radius in px (#300, spec #285
+   * US-013, DEC-005, ADR-0024 amendment): the stored radius (or null when
+   * the Layer has no choke) — the same fact painting applies as the first
+   * function of the effects chain, reported for auditability beside the
+   * blur and feather. The choke SHRINKS painted extents (the shaped alpha
+   * is composited `in` the source graphic — the ink never grows), which
+   * `painted`/`paintedOnCanvas`/`clipped` already reflect. */
+  choke: number | null;
+  /** The revision's effective edge feather radius in px (#300, spec #285
+   * US-013, DEC-005, ADR-0024 amendment): the stored radius (or null when
+   * the Layer has no feather) — the same fact painting applies immediately
+   * after the choke in the same first filter function, reported beside the
+   * blur. The feather softens the edge inward only: painted extents never
+   * exceed the unfeathered ink. */
+  feather: number | null;
   /** The revision's effective blend mode (#220, spec #218 US-003, ADR-0024):
    * the stored mix-blend-mode (or null when normal/unblended) — the same fact
    * painting applies, reported for auditability. */
@@ -407,8 +424,11 @@ type Box = { x: number; y: number; width: number; height: number };
  * This is the ONE local-reach list: `effectReachPx` maps it through the
  * transform for capture sizing, and `transformBlowupRefusal` feeds it to
  * the perspective-divergence depth so the publication gate sees the same
- * extent measure does. #300's choke and feather extend this term list,
- * never a second sum.
+ * extent measure does. #300's choke and feather add NO term here (the
+ * ADR-0024 amendment): the edge step's `in` composite bounds its output by
+ * the source alpha, so the shaped ink never exceeds the unshaped ink — the
+ * edge step adds no reach, it only reshapes (or shrinks) what the other
+ * terms already cover.
  */
 function localEffectReachPx(revision: TransformFactsSource): number {
   const outline = revision.outline?.width ?? 0;
@@ -992,6 +1012,10 @@ export async function measureCompositionLayers(
         grade: rev.grade ?? null,
         glow: rev.glow ?? null,
         blur: normalizeStoredBlur(rev) ?? null,
+        // The edge choke and feather (#300, ADR-0024 amendment), reported
+        // beside the blur for auditability (px, null when absent).
+        choke: normalizeStoredChoke(rev) ?? null,
+        feather: normalizeStoredFeather(rev) ?? null,
         blend: rev.blend ?? null,
         visibleRegion: rev.visibleRegion ?? null,
         // The vector colour (#215): the stored canonical hex (or null —

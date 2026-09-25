@@ -157,7 +157,7 @@ const IMAGE_ONE_COMMAND = [
   "--resize", "1.5", "--rotate", "15", "--flip", "horizontal",
   "--skew", "10x0", "--perspective", "0x12",
   "--anchor", "center,center",
-  "--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6",
+  "--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6", "--choke", "2", "--feather", "2",
 ];
 const IMAGE_CONTENT = ["--image", "<pad>", "--x", "120", "--y", "90", "--opacity", "0.85"];
 const IMAGE_TRANSFORMS = ["--resize", "1.5", "--rotate", "15", "--flip", "horizontal", "--skew", "10x0", "--perspective", "0x12"];
@@ -189,7 +189,7 @@ const SHAPE_ONE_COMMAND = [
   "--x", "160", "--y", "120", "--opacity", "0.9",
   "--scale", "1.5", "--rotate", "20", "--flip", "horizontal",
   "--anchor", "center,center",
-  "--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6",
+  "--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6", "--choke", "2", "--feather", "2",
 ];
 const SHAPE_CONTENT = [
   "--shape", "rectangle", "--size", "120x60", "--corner-radius", "12", "--fill", "#1d4ed8",
@@ -197,7 +197,7 @@ const SHAPE_CONTENT = [
 ];
 const SHAPE_TRANSFORMS = ["--scale", "1.5", "--rotate", "20", "--flip", "horizontal"];
 const SHAPE_ANCHOR = ["--anchor", "center,center", "--x", "160", "--y", "120"];
-const SHAPE_EFFECTS = ["--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6"];
+const SHAPE_EFFECTS = ["--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6", "--choke", "2", "--feather", "2"];
 
 test("image Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one");
