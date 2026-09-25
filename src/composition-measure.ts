@@ -948,14 +948,16 @@ async function measureSnapshot(
         // and a drifted markup (a masked Layer whose element is not
         // wrapped) would measure silently wrong ink. Refused loudly here,
         // naming the Layer, never measured through a stale contract.
-        const contractProblem = await page.evaluate((idx) => {
-          const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
-          const el = kids[idx];
-          if (el === undefined) return `element ${idx} not found in #canvas`;
-          return el.hasAttribute("data-ply-mask")
-            ? null
-            : `element ${idx} carries no data-ply-mask clip wrapper — the composition markup and the measurement capture contract have drifted`;
-        }, i);
+        const contractProblem = layers[i]!.revision.mask !== undefined
+          ? await page.evaluate((idx) => {
+              const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
+              const el = kids[idx];
+              if (el === undefined) return `element ${idx} not found in #canvas`;
+              return el.hasAttribute("data-ply-mask")
+                ? null
+                : `element ${idx} carries no data-ply-mask clip wrapper — the composition markup and the measurement capture contract have drifted`;
+            }, i)
+          : null;
         if (contractProblem !== null) {
           throw new Error(
             `Masked Layer "${layers[i]!.name}": ${contractProblem}. ` +
