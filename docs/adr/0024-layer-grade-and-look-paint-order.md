@@ -10,7 +10,10 @@
   function of the effects chain (see the amendment below). Amended again by
   the same spec's ticket #300 (US-013, DEC-005/DEC-006): edge choke and
   feather join the look paint order as the FIRST function of the effects
-  chain (see the second amendment below).
+  chain (see the second amendment below). Amended a third time by the same
+  spec's ticket #301 (US-014, DEC-008): the one-sided direction model joins
+  the edge glow as a second, mutually exclusive direction form (see the
+  third amendment below).
 
 ## Context
 
@@ -131,6 +134,9 @@ Because grade filters preserve alpha coverage exactly (DEC-005):
   `0..256` px, the effects' hex colour grammar, angle `-360..360` degrees
   clockwise from top stored canonically in `[0, 360)`, strength `0..1`, the
   pair supplied together, strength `0` dropping the pair (the even glow).
+  A second direction form — `from <angle>,<strength>`, the one-sided model —
+  joins the same fact with the third amendment below; the two forms are
+  mutually exclusive.
 - Storage normalisation (`normalizeStoredGlow`) is the ONE home for
   validation and removal — paint trusts the fact; the compact-value parser
   (`parseGlowSpec`) is the one boundary parse both command surfaces run, so
@@ -274,3 +280,81 @@ ADR's accepted paint order (DEC-006) — recorded here, not overridden in code:
   `choke` and `feather` (px, `null` when absent), beside the blur.
 - **Not included**: an outward dilate form (grow the alpha edge), a
   per-side choke, or a mask-driven matte — each is fog until specified.
+
+## Third amendment: the one-sided direction model joins the glow (#301)
+
+The one-sided glow is a NEW direction model (spec #285 US-014, ISC-53,
+DEC-008) that lets a rim light read as directional: at full strength from one
+side, the opposite edge is unlit. It amends this ADR's accepted glow decision
+(DEC-006) — recorded here, not overridden in code:
+
+- **Two direction forms, one fact, one home (DEC-008)**: the glow fact gains
+  an optional `direction: { angle, strength }` beside the legacy
+  `angle`/`strength` pair. The legacy pair keeps today's meaning — the paint
+  offsets the eroded interior mask opposite the light (the offset model), and
+  its stored values keep it: existing glow revisions and their Renders replay
+  byte-unchanged, their markup and revision ids pinned by test. The two forms
+  are MUTUALLY EXCLUSIVE: a stored document or a `--glow` value carrying both
+  is refused (malformed document / exit 2). Everything else is shared: one
+  normalization boundary (`normalizeStoredGlow`), one boundary parse
+  (`parseGlowSpec`), one revision-hash site (appending the direction only
+  when present, so old ids never change), ADR-0013 sharing and fork rules,
+  byte-identical replay. No second home for glow is created.
+- **CLI grammar**: `--glow "<width>,<softness>,<color>,from <angle>,<strength>"`
+  — the same width, softness, and colour grammar, with the direction pair
+  spelled `from`. Setting the glow is an absolute setter as before; `from
+  <angle>,0` normalizes to the even glow (the same strength-0 neutral rule
+  as the legacy pair), and the stored angle is canonical in `[0, 360)`
+  (`from -90,1` stores `270`). Refusals exit 2 naming the part and its
+  range, on both command surfaces, through the one parser.
+- **Angle convention (the same convention as the legacy pair)**: degrees
+  clockwise from top, and the light comes FROM that direction — the source
+  sits at direction `(sin a, −cos a)` in screen coordinates (y down). Angle
+  `0` is light from above, `90` from the right, `180` from below, `270` from
+  the left. The ISC-53 probe reads directly: angle `90`, strength `1` on a
+  rectangle lights the right edge and leaves the LEFT edge unlit.
+- **Strength between 0 and 1**: strength `s` is how much of the even band
+  the far side LOSES, fading linearly along the light axis across the
+  Layer's untransformed box — the far extent's band keeps `1 − s` of the
+  even band, the lit extent keeps all of it, and edges perpendicular to the
+  light fade along the axis with position. Strength `1` is fully one-sided:
+  the opposite edge is unlit. Strength `0` drops the direction (the even
+  glow). At strength `1` the far-edge band pixel holds at most ~half a
+  pixel's worth of the ramp (the gradient's zero stop sits at the box
+  extent; the pixel centre samples `~0.5/box-width` of the band) — no
+  visible glow; the tests name the tolerance: a toward-glow change below
+  `0.05` (~13/255 of the band after the filter's linear-space compositing).
+- **Paint method**: the even band (erode → blur → `out` against the source
+  alpha → flood → `in`) is unchanged, and the coloured band is weighted by a
+  LINEAR ALPHA RAMP before the Porter-Duff atop: an `feImage` referencing an
+  inline data-URI SVG whose `linearGradient` runs from the far extent
+  (stop-opacity `1 − strength`) to the lit extent (opacity 1) across the
+  element's box. The ramp's geometry is sized IN-PAGE by the same pass as
+  the filter regions (`sizeEffectFilterRegions`): the `feImage`'s subregion
+  is set to the element's real untransformed box and its href to the
+  gradient computed for that box's real aspect, so the angle is measured in
+  the Layer's local px — the same convention as the legacy pair, scaling
+  with the Layer's scale like every effect. The in-page sizing is mandatory:
+  objectBoundingBox percentage regions clip silently for large elements
+  (ADR-0019's verified finding — proven again by test on a 1600×900 Layer,
+  whose lit side must paint like the even glow's, no softening or offset),
+  and objectBoundingBox PRIMITIVE units would reinterpret the erode radius
+  as a box fraction (verified: it erases the band entirely), so primitive
+  units stay the default userSpaceOnUse. The markup's placeholder is inert
+  (a 1px transparent subregion — a skipped sizing paints no band, a visible
+  defect, never wrong pixels), and the same deterministic rewrite runs in
+  both page flows, so render and painted extents stay identical and pinned
+  replay stays byte-identical. The weighted band feeds the same atop
+  composite, so the composite's alpha is still exactly the source's: alpha
+  coverage is never altered (DEC-005), painted extents equal the no-glow
+  extents at every transform, and the ONE effect-reach reader
+  (`localEffectReachPx` in `src/composition-measure.ts`) gains no term —
+  the direction adds no reach. Emitted only when a direction fact exists,
+  so pre-#301 markup stays byte-identical.
+- **Reporting**: `composition measure`, `layer inspect`, and `layer review`
+  report the stored direction inside the glow fact (`direction: { angle,
+  strength }`), formatted as `one-sided from <angle>° (strength <s>)`;
+  legacy-pair formatting is unchanged.
+- **Not included**: a per-edge rim (two directions on one Layer), a ramp
+  shaped by the ink rather than the box, or a falloff curve other than
+  linear — each is fog until specified.

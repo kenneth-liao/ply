@@ -527,7 +527,12 @@ Options:
                         round. "none" removes it; an omitted --glow preserves
                         the current glow. It is a revision fact: sharing
                         propagates it, forks isolate it, and removal is its
-                        own edit. Never changes retained pixels.
+                        own edit. Never changes retained pixels. A one-sided
+                        rim light spells the pair "from <angle>,<strength>"
+                        instead: the light comes FROM that angle and the far
+                        side's band fades to 1 − strength (at strength 1 the
+                        opposite edge is unlit); strength 0 is the even glow,
+                        and the two direction forms cannot be combined.
   --blur <px>           Blur the Layer — a Gaussian defocus radius in px
                         (0 to 256) painted as the LAST function of the
                         effects chain, after the edge glow, outline, and

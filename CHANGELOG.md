@@ -1,6 +1,22 @@
 # Changelog
 
 ## [Unreleased]
+- Added the one-sided direction model to the Layer edge glow (#301, spec #285
+  US-014, ISC-53, DEC-008, ADR-0024 amendment): `composition add` and `layer
+  edit` accept `--glow "<width>,<softness>,<color>,from <angle>,<strength>"` —
+  the light comes FROM the angle (degrees clockwise from top, the same
+  convention as the direction pair) and the far side's band fades to
+  `1 − strength` of the even band along the light axis across the Layer's
+  box, so at strength 1 the opposite edge is unlit (angle 90 lights the right
+  edge and leaves the left edge dark); strength 0 is the even glow, the
+  stored angle is canonical in [0, 360), and the two direction forms are
+  mutually exclusive. Stored glow facts keep today's meaning — existing glow
+  revisions and their Renders replay byte-unchanged, with the legacy pair's
+  markup and revision ids pinned by test and both direction forms refused in
+  one document or value. The glow still alters no alpha coverage and adds no
+  effect reach; the direction joins the property × kind matrix, the
+  add/edit refusal parity tests, and the offline reversibility and replay
+  suite (#301).
 - Added edge choke and feather as Layer revision facts on every Layer kind
   (#300, spec #285 US-013, DEC-005, ADR-0024 amendment): `composition add`
   and `layer edit` take `--choke <px>` (an inward alpha-erode radius, 0 to

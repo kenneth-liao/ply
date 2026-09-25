@@ -516,6 +516,32 @@ function outlineFilterDef(
  *    content, under outline and shadow, which the outer chain applies
  *    after this filter.
  *
+ * The ONE-SIDED direction model (#301, ISC-53, DEC-008, ADR-0024 third
+ * amendment) replaces step 2: instead of offsetting the interior mask (the
+ * legacy pair's model, whose stored meaning never changes), the even band
+ * from steps 1 and 3–5 is weighted by a LINEAR ALPHA RAMP along the light
+ * direction — an `feImage` referencing an inline data-URI SVG whose
+ * linearGradient runs from the far extent (stop-opacity 1 − strength) to
+ * the lit extent (opacity 1) across the element's box, through the box
+ * centre. The ramp's geometry is sized IN-PAGE by the same pass as the
+ * filter region (see sizeEffectFilterRegions): the feImage's subregion is
+ * set to the element's real untransformed box and its href to the gradient
+ * computed for that box's real aspect, so the angle is measured in the
+ * Layer's local px — the same convention as the legacy pair. The in-page
+ * sizing is mandatory here (ADR-0019's verified finding: objectBoundingBox
+ * percentage regions clip silently for large elements, and the box is only
+ * knowable in the browser); both page flows run it, so render and painted
+ * extents stay identical and replay stays byte-identical. NOTE: primitive
+ * units stay the default userSpaceOnUse — objectBoundingBox units would
+ * reinterpret the erode radius as a box fraction (verified: it erases the
+ * band entirely). The weighted band feeds the same atop composite, so
+ * alpha coverage is still exactly the source's; at strength 1 the far-edge
+ * band alpha is the gradient's zero stop (unlit to within 8-bit rounding,
+ * ~2/255). Emitted only when a direction fact exists, so legacy markup
+ * stays byte-identical; the placeholder is inert (a 1px transparent
+ * subregion — a skipped sizing paints NO band, a visible defect, never
+ * wrong pixels).
+ *
  * One filter per GLOW Layer, the same recipe as the outline's def (its
  * region must be sized in-page from the element's real untransformed
  * box — the glow's output never leaves the box, so the sizing pass pads
@@ -523,8 +549,25 @@ function outlineFilterDef(
  * the glow facts plus the Layer's snapshot index. Emitted only when a
  * glow fact exists, so pre-#221 revisions paint exactly as before.
  */
+/**
+ * The one-sided direction model's ramp geometry (#301, DEC-008) is computed
+ * IN-PAGE inside sizeEffectFilterRegions's evaluate callback — the box is
+ * only knowable in the browser, so the gradient builder lives where the box
+ * is measured. The ramp is a 100-unit-viewBox SVG whose linearGradient runs
+ * along the light direction — a px-space direction (angle degrees clockwise
+ * from top, the legacy pair's convention) scaled by the box's real aspect —
+ * from the far extent (stop-opacity 1 − strength) to the lit extent (opacity
+ * 1), through the box centre. The def's placeholder feImage (glowFilterDef)
+ * is inert and always replaced before any screenshot; the same deterministic
+ * rewrite in both page flows keeps render and painted extents identical and
+ * pinned replay byte-identical.
+ */
 function glowFilterId(glow: LayerGlow, layerIndex: number): string {
-  return `ply-g-${createHash("sha256").update(`${glow.width}:${glow.softness}:${glow.color}:${glow.angle ?? ""}:${glow.strength ?? ""}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+  // The direction parts join the hash input ONLY when present, so legacy
+  // direction ids stay byte-identical across #301 (DEC-008).
+  const directionPart =
+    glow.direction !== undefined ? `:${glow.direction.angle}:${glow.direction.strength}` : "";
+  return `ply-g-${createHash("sha256").update(`${glow.width}:${glow.softness}:${glow.color}:${glow.angle ?? ""}:${glow.strength ?? ""}${directionPart}:${layerIndex}`).digest("hex").slice(0, 16)}`;
 }
 
 function glowFilterDef(
@@ -550,12 +593,46 @@ function glowFilterDef(
   // (DEC-006: one angle plus strength, not a light model): angle `a`
   // clockwise from top puts the light source at (sin a, -cos a) in screen
   // coordinates, so the mask moves by strength × width along (-sin a, cos a)
-  // and the band thickens on the lit side.
+  // and the band thickens on the lit side. The one-sided direction model
+  // (#301, DEC-008) keeps the even band and weights it with the ramp filter
+  // instead — see the one-sided note above; the two are mutually exclusive.
   const offsetNode =
     glow.angle !== undefined
       ? `<feOffset in="ger" dx="${(-glow.strength! * glow.width * Math.sin((glow.angle * Math.PI) / 180)).toFixed(4)}" dy="${(glow.strength! * glow.width * Math.cos((glow.angle * Math.PI) / 180)).toFixed(4)}" result="goff"/>`
       : "";
   const blurredIn = glow.angle !== undefined ? "goff" : "ger";
+  if (glow.direction !== undefined) {
+    // The ramp: an feImage whose subregion and href the in-page sizing pass
+    // sets to the element's real untransformed box (the same pass that sizes
+    // the filter region — the box is only knowable in the browser, and
+    // objectBoundingBox percentage regions clip silently for large elements,
+    // ADR-0019). The placeholder is inert: a 1px transparent subregion, so a
+    // skipped sizing paints no band rather than wrong pixels. The inner SVG
+    // keeps a 100-unit viewBox; the in-page href scales the light direction
+    // (px space, the legacy pair's convention) by the box's real aspect.
+    // Angle 90 is light FROM the right, so the left extent gets the far
+    // stop: at strength 1 the left-edge band alpha is the gradient's zero
+    // stop — unlit (ISC-53). The real geometry is set in-page by
+    // sizeEffectFilterRegions; the placeholder href is an inert 1×1
+    // transparent SVG (a skipped sizing paints no band, never wrong
+    // pixels).
+    const placeholderRef =
+      `data:image/svg+xml,${encodeURIComponent(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1' fill='#ffffff' fill-opacity='0'/></svg>`,
+      )}`;
+    return (
+      `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
+      erodeNodes +
+      `<feGaussianBlur in="ger" stdDeviation="${glow.softness}" result="gblur"/>` +
+      `<feComposite in="SourceAlpha" in2="gblur" operator="out" result="gband"/>` +
+      `<feFlood flood-color="${glow.color}" result="gflood"/>` +
+      `<feComposite in="gflood" in2="gband" operator="in" result="gglow"/>` +
+      `<feImage href="${placeholderRef}" x="0" y="0" width="1" height="1" preserveAspectRatio="none" result="grad"/>` +
+      `<feComposite in="gglow" in2="grad" operator="in" result="gglow2"/>` +
+      `<feComposite in="gglow2" in2="SourceGraphic" operator="atop"/>` +
+      `</filter>`
+    );
+  }
   return (
     `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
     erodeNodes +
@@ -895,14 +972,25 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
  */
 function outlineFilterSpecs(
   layers: SnapshotLayer[],
-): { id: string; pad: number; name: string; index: number }[] {
+): { id: string; pad: number; name: string; index: number; direction?: { angle: number; strength: number } }[] {
   const specs: { id: string; pad: number; name: string; index: number }[] = [];
   layers.forEach((l, i) => {
     if (l.revision.outline !== undefined) {
       specs.push({ id: outlineFilterId(l.revision.outline, i), pad: l.revision.outline.width + 1, name: l.name, index: i });
     }
     if (l.revision.glow !== undefined) {
-      specs.push({ id: glowFilterId(l.revision.glow, i), pad: 1, name: l.name, index: i });
+      // A directional glow (#301) sizes its filter region like any glow AND
+      // its feImage ramp subregion + href in-page (the box is only knowable
+      // in the browser) — the spec carries the direction facts.
+      specs.push({
+        id: glowFilterId(l.revision.glow, i),
+        pad: 1,
+        name: l.name,
+        index: i,
+        ...(l.revision.glow.direction !== undefined
+          ? { direction: l.revision.glow.direction }
+          : {}),
+      });
     }
     // The edge filter's output is bounded by the source graphic (the `in`
     // composite), so like the glow it never leaves the element's box: the
@@ -962,6 +1050,73 @@ export async function sizeEffectFilterRegions(page: Page, layers: SnapshotLayer[
         filter.setAttribute("y", String(-pad));
         filter.setAttribute("width", String(box.width + 2 * pad));
         filter.setAttribute("height", String(box.height + 2 * pad));
+        // The one-sided glow's ramp (#301): the feImage's subregion IS the
+        // element's real untransformed box and its href the gradient for
+        // that box's real aspect — the same measured box, the same
+        // deterministic rewrite in both page flows, so render and painted
+        // extents stay identical and pinned replay stays byte-identical.
+        if (spec.direction !== undefined) {
+          // Scoped to the ramp's own feImage (PROD-2): the result marker, not
+          // the element tag, is the contract.
+          const image = filter.querySelector('feImage[result="grad"]');
+          if (!image) {
+            problems.push(
+              `Layer "${spec.name}": effect filter ${spec.id} carries a direction but no feImage ramp`,
+            );
+          } else if (!box.width || !box.height) {
+            // A zero-area box would divide by zero in the ramp math below and
+            // mint NaN gradient coordinates — refuse with a named problem and
+            // keep the inert placeholder (PROD-1).
+            problems.push(
+              `Layer "${spec.name}": zero-size box (${box.width}x${box.height}), directional ramp skipped`,
+            );
+          } else {
+            // The ramp builder lives HERE, in-page (the box is only knowable
+            // in the browser). The gradient is a 100-unit viewBox whose line
+            // runs along the light direction — a px-space direction (angle
+            // degrees clockwise from top, the legacy pair's convention)
+            // scaled by the box's real aspect — from the far extent
+            // (stop-opacity 1 − strength) to the lit extent (opacity 1),
+            // through the box centre.
+            const a = (spec.direction.angle * Math.PI) / 180;
+            const dx = (Math.sin(a) * 100) / box.width;
+            const dy = (-Math.cos(a) * 100) / box.height;
+            const corners = [
+              [0, 0],
+              [100, 0],
+              [0, 100],
+              [100, 100],
+            ];
+            const ts = corners.map(([cx, cy]) => cx * dx + cy * dy);
+            const tMin = Math.min(...ts);
+            const tMax = Math.max(...ts);
+            // The gradient line passes through the box centre (50, 50). The
+            // offset divides by |d̂|² (d̂ is aspect-scaled, not unit length) so
+            // the endpoints sit exactly at the far and lit extents.
+            const d2 = dx * dx + dy * dy;
+            const x1 = 50 + ((tMin - 50 * dx - 50 * dy) / d2) * dx;
+            const y1 = 50 + ((tMin - 50 * dx - 50 * dy) / d2) * dy;
+            const x2 = 50 + ((tMax - 50 * dx - 50 * dy) / d2) * dx;
+            const y2 = 50 + ((tMax - 50 * dx - 50 * dy) / d2) * dy;
+            const rampSvg =
+              `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'>` +
+              `<defs><linearGradient id='g' gradientUnits='userSpaceOnUse' ` +
+              `x1='${x1.toFixed(4)}' y1='${y1.toFixed(4)}' x2='${x2.toFixed(4)}' y2='${y2.toFixed(4)}'>` +
+              `<stop offset='0' stop-color='#ffffff' stop-opacity='${(1 - spec.direction.strength).toFixed(4)}'/>` +
+              `<stop offset='1' stop-color='#ffffff' stop-opacity='1'/>` +
+              `</linearGradient></defs>` +
+              `<rect x='0' y='0' width='100' height='100' fill='url(#g)'/>` +
+              `</svg>`;
+            image.setAttribute("x", "0");
+            image.setAttribute("y", "0");
+            image.setAttribute("width", String(box.width));
+            image.setAttribute("height", String(box.height));
+            image.setAttribute(
+              "href",
+              `data:image/svg+xml,${encodeURIComponent(rampSvg)}`,
+            );
+          }
+        }
       }
     });
     return problems.length > 0 ? problems.join("; ") : null;

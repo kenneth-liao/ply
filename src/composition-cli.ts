@@ -596,7 +596,12 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         (-360 to 360) with <strength> between 0 and 1, passed
                         together; without the pair the glow is even all
                         round. "none" removes it. Never changes retained
-                        pixels.
+                        pixels. A one-sided rim light spells the pair
+                        "from <angle>,<strength>" instead: the light comes
+                        FROM that angle and the far side's band fades to
+                        1 − strength (at strength 1 the opposite edge is
+                        unlit); strength 0 is the even glow, and the two
+                        direction forms cannot be combined.
   --blur <px>           Blur the Layer — a Gaussian defocus radius in px
                         (0 to 256) painted as the LAST function of the
                         effects chain: the whole Layer look reads out of
