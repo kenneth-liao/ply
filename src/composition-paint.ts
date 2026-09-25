@@ -23,11 +23,13 @@
  * the clip lives on an inner content element under the Layer's wrapper
  * element, so `#canvas` keeps exactly one child per Layer and Layers
  * without a region paint exactly the pre-#211 markup.
- * A revision's grade (#219, ADR-0024) and edge glow (#221, ADR-0024) paint
+ * A revision's grade (#219, ADR-0024), edge choke & feather (#300, ADR-0024
+ * amendment) and edge glow (#221, ADR-0024) paint
  * in the same local space between the region and the outline: the grade's
  * CSS filter chain rides the inner content element (content only, alpha
- * untouched), and the glow is the first function of the outer element's
- * effect chain — an inner-alpha band over the graded content, under
+ * untouched), and the edge choke & feather alpha-edge shaper is the first
+ * function of the outer element's effect chain, with the glow the second —
+ * an inner-alpha band over the graded, edge-shaped content, under
  * outline and shadow, never extending painted extents (DEC-005). The
  * blend mode (#220, ADR-0024) then composites the whole Layer — content,
  * visible region, grade, glow, outline, shadow, transform, opacity — as
