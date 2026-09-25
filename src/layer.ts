@@ -176,8 +176,17 @@ interface LayerRevisionBase {
    * removal drops the field and every reader treats absence as none — no
    * second "no shadow" representation. The revision hash appends it only
    * when present, so revisions written before #139 keep their exact ids.
+   *
+   * Stacked effects (#302, spec #285 US-011, ISC-50, DEC-005, ADR-0027):
+   * the field is the ONE home for the Layer's shadows — one shadow stores
+   * today's single object; two or more store a list in the SAME field, in
+   * paint order (command order). A one-element list is never stored (the
+   * object form IS the one-shadow shape) and a stored one is a malformed
+   * document. The one stored-shape fold; resolved revisions carry the
+   * normalized list. A single shadow's document shape, id, and paint are
+   * byte-identical to the pre-#302 form.
    */
-  shadow?: LayerShadow;
+  shadow?: LayerShadow | LayerShadow[];
   /**
    * Canonical Layer outline (#140, ADR-0019): a solid outline hugging the
    * Layer's content in its LOCAL coordinate space — painted BEFORE the
@@ -192,8 +201,13 @@ interface LayerRevisionBase {
    * so removal drops the field and every reader treats absence as none — no
    * second "no outline" representation. The revision hash appends it only
    * when present, so revisions written before #140 keep their exact ids.
+   *
+   * Stacked effects (#302, spec #285 US-011, ISC-50, DEC-005, ADR-0027):
+   * the same ONE-home fold as the shadow — one outline stores today's
+   * single object, two or more a list in the SAME field, in paint order;
+   * a one-element list is never stored.
    */
-  outline?: LayerOutline;
+  outline?: LayerOutline | LayerOutline[];
   /**
    * Canonical rectangular visible region (#211, spec #207 US-003, ADR-0023):
    * the part of the Layer's content that is ink, as a rectangle in the
@@ -989,74 +1003,129 @@ function canonicalizeEffectColor(color: string): string {
 }
 
 /**
- * Canonical stored-shadow validation and normalization (#139, ADR-0018).
- * The one normalization boundary for the shadow effect: documents written
- * before #139 lack the field, and absence IS the canonical no-shadow form —
- * every downstream reader projects through this function and never re-derives
- * a default. A present field must be a valid shadow object: finite `dx`/`dy`
- * within the offset cap, finite `blur` ≥ 0 within the blur cap, and a hex
- * `color` (#RGB/#RRGGBB/#RRGGBBAA) — anything else is a malformed document,
- * refused loudly before the revision hash is consulted.
+ * The ONE read-side shape fold for a stack value (#302, review INT-1,
+ * ADR-0027): a list passes through, a single object folds to a one-element
+ * list — object-vs-list is interpreted HERE and nowhere else on the read
+ * direction. The stored normalizers layer validation and the stored
+ * length-1 refusal on top of this (a storage-shape rule, not a fold); the
+ * reach reader (`localEffectReachPx`, shared with the publication gate)
+ * uses it directly — its inputs are already-validated stored documents or
+ * resolved revisions, whose one-effect fields are one-element lists.
  */
-export function normalizeStoredShadow(revision: { shadow?: unknown }): LayerShadow | undefined {
-  if (revision.shadow === undefined) {
+export function readEffectStack<T>(value: T | T[] | undefined): T[] | undefined {
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * The stored stack fold for a repeatable effect field (#302, spec #285
+ * US-011, ISC-50, DEC-005, ADR-0027): ONE canonical home per fact — one
+ * effect stores today's single object; two or more store a list in the
+ * SAME field, in paint order. A stored length-1 list would be a second
+ * answer for the same fact (the object form IS the one-effect shape), so
+ * it is a malformed document, refused loudly (the #297 text-runs
+ * precedent). Absence IS the no-effect form. Both stored normalizers fold
+ * through this one helper, whose shape decision is `readEffectStack`'s.
+ */
+function foldStoredEffectStack<T>(
+  raw: unknown,
+  label: string,
+  validate: (entry: unknown, label: string) => T,
+): T[] | undefined {
+  if (raw === undefined) {
     return undefined;
   }
-  const raw = revision.shadow;
+  if (Array.isArray(raw) && raw.length < 2) {
+    // The stored-shape refusal, layered on the shared fold: the object form
+    // IS the one-effect shape, so a stored length-1 list is a second answer
+    // for the same fact.
+    throw new Error(
+      `Malformed revision document: ${label} must be the single object form when one effect is stored — a one-element list is a second answer for the same fact (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  return readEffectStack(raw)!.map((entry, i) =>
+    validate(entry, Array.isArray(raw) ? `${label}[${i + 1}]` : label),
+  );
+}
+
+/**
+ * Canonical stored-shadow validation and normalization (#139, ADR-0018;
+ * stacking #302, ADR-0027). The one normalization boundary for the shadow
+ * effect: documents written before #139 lack the field, and absence IS the
+ * canonical no-shadow form — every downstream reader projects through this
+ * function and never re-derives a default. A present field is the stored
+ * stack fold: a valid shadow object (finite `dx`/`dy` within the offset
+ * cap, finite `blur` ≥ 0 within the blur cap, and a hex `color`
+ * (#RGB/#RRGGBB/#RRGGBBAA)) or a list of two or more of them in paint
+ * order — anything else is a malformed document, refused loudly before the
+ * revision hash is consulted. Returns the normalized LIST a stack reader
+ * consumes (one shadow folds to a one-element list).
+ */
+export function normalizeStoredShadow(revision: { shadow?: unknown }): LayerShadow[] | undefined {
+  return foldStoredEffectStack(revision.shadow, "shadow", validateStoredShadowObject);
+}
+
+/** One stored shadow object's validation, label-parameterized so a stack
+ *  entry's failure names its position (`shadow[2].dx`). */
+function validateStoredShadowObject(raw: unknown, label: string): LayerShadow {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(
-      `Malformed revision document: shadow must be a shadow object when present (got ${JSON.stringify(raw)}).`,
+      `Malformed revision document: ${label} must be a shadow object when present (got ${JSON.stringify(raw)}).`,
     );
   }
   const { dx, dy, blur, color } = raw as Record<string, unknown>;
-  for (const [label, value] of [["dx", dx], ["dy", dy]] as const) {
+  for (const [name, value] of [["dx", dx], ["dy", dy]] as const) {
     if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > MAX_SHADOW_OFFSET_PX) {
       throw new Error(
-        `Malformed revision document: shadow.${label} must be a finite number of px within ±${MAX_SHADOW_OFFSET_PX} (got ${JSON.stringify(value)}).`,
+        `Malformed revision document: ${label}.${name} must be a finite number of px within ±${MAX_SHADOW_OFFSET_PX} (got ${JSON.stringify(value)}).`,
       );
     }
   }
   if (typeof blur !== "number" || !Number.isFinite(blur) || blur < 0 || blur > MAX_SHADOW_BLUR_PX) {
     throw new Error(
-      `Malformed revision document: shadow.blur must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX} (got ${JSON.stringify(blur)}).`,
+      `Malformed revision document: ${label}.blur must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX} (got ${JSON.stringify(blur)}).`,
     );
   }
   if (typeof color !== "string" || !EFFECT_COLOR_PATTERN.test(color)) {
     throw new Error(
-      `Malformed revision document: shadow.color must be a hex color like #000000, #000, or #00000080 (got ${JSON.stringify(color)}).`,
+      `Malformed revision document: ${label}.color must be a hex color like #000000, #000, or #00000080 (got ${JSON.stringify(color)}).`,
     );
   }
   return { dx, dy, blur, color } as LayerShadow;
 }
 
 /**
- * Canonical stored-outline validation and normalization (#140, ADR-0019).
- * The one normalization boundary for the outline effect: documents written
- * before #140 lack the field, and absence IS the canonical no-outline form —
- * every downstream reader projects through this function and never re-derives
- * a default. A present field must be a valid outline object: finite `width`
- * ≥ 0 within the width cap and a hex `color` — anything else is a malformed
- * document, refused loudly before the revision hash is consulted.
+ * Canonical stored-outline validation and normalization (#140, ADR-0019;
+ * stacking #302, ADR-0027). The one normalization boundary for the outline
+ * effect: documents written before #140 lack the field, and absence IS the
+ * canonical no-outline form — every downstream reader projects through this
+ * function and never re-derives a default. A present field is the stored
+ * stack fold: a valid outline object (finite `width` ≥ 0 within the width
+ * cap and a hex `color`) or a list of two or more of them in paint order —
+ * anything else is a malformed document, refused loudly before the revision
+ * hash is consulted. Returns the normalized LIST a stack reader consumes.
  */
-export function normalizeStoredOutline(revision: { outline?: unknown }): LayerOutline | undefined {
-  if (revision.outline === undefined) {
-    return undefined;
-  }
-  const raw = revision.outline;
+export function normalizeStoredOutline(revision: { outline?: unknown }): LayerOutline[] | undefined {
+  return foldStoredEffectStack(revision.outline, "outline", validateStoredOutlineObject);
+}
+
+/** One stored outline object's validation, label-parameterized like the
+ *  shadow's (`outline[2].width`). */
+function validateStoredOutlineObject(raw: unknown, label: string): LayerOutline {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(
-      `Malformed revision document: outline must be an outline object when present (got ${JSON.stringify(raw)}).`,
+      `Malformed revision document: ${label} must be an outline object when present (got ${JSON.stringify(raw)}).`,
     );
   }
   const { width, color } = raw as Record<string, unknown>;
   if (typeof width !== "number" || !Number.isFinite(width) || width < 0 || width > MAX_OUTLINE_WIDTH_PX) {
     throw new Error(
-      `Malformed revision document: outline.width must be a finite number of px between 0 and ${MAX_OUTLINE_WIDTH_PX} (got ${JSON.stringify(width)}).`,
+      `Malformed revision document: ${label}.width must be a finite number of px between 0 and ${MAX_OUTLINE_WIDTH_PX} (got ${JSON.stringify(width)}).`,
     );
   }
   if (typeof color !== "string" || !EFFECT_COLOR_PATTERN.test(color)) {
     throw new Error(
-      `Malformed revision document: outline.color must be a hex color like #000000, #000, or #00000080 (got ${JSON.stringify(color)}).`,
+      `Malformed revision document: ${label}.color must be a hex color like #000000, #000, or #00000080 (got ${JSON.stringify(color)}).`,
     );
   }
   return { width, color } as LayerOutline;
@@ -1509,10 +1578,19 @@ export function normalizeStoredFeather(revision: { feather?: unknown }): number 
   return raw;
 }
 
+/** The resolved effect fields (#302, ADR-0027): the stored stack fold is
+ *  resolved at the ONE ingestion point into the normalized lists every
+ *  reader consumes — a one-effect document resolves to a one-element list.
+ *  The stored document keeps its fold; the resolved view never re-folds. */
+type ResolvedEffectStacks = {
+  shadow?: LayerShadow[];
+  outline?: LayerOutline[];
+};
+
 export type ResolvedLayerRevision =
-  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number })
-  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number; layoutRule: NormalizedTextLayoutRule })
-  | (LayerShapeRevision & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number });
+  | (Omit<LayerImageRevision, "shadow" | "outline"> & ResolvedEffectStacks & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number })
+  | (Omit<LayerTextRevision, "shadow" | "outline"> & ResolvedEffectStacks & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number; layoutRule: NormalizedTextLayoutRule })
+  | (Omit<LayerShapeRevision, "shadow" | "outline"> & ResolvedEffectStacks & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number });
 
 export interface ResolvedLayer {
   id: string;
@@ -2991,12 +3069,19 @@ export function computeRevisionHash(rev: LayerRevision): string {
     rev.perspectiveTiltXDeg !== undefined || rev.perspectiveTiltYDeg !== undefined
       ? `:perspective(${rev.perspectiveTiltXDeg},${rev.perspectiveTiltYDeg})`
       : "";
+  // The stored stack fold (#302, ADR-0027): one effect keeps today's exact
+  // field string; a stack appends its entries joined with `;` inside the
+  // same `:shadow(...)` / `:outline(...)` field, in paint order — so single-
+  // effect revisions keep their exact ids and a stack's id derives from its
+  // ordered facts alone.
   const shadowField =
-    rev.shadow !== undefined
-      ? `:shadow(${rev.shadow.dx},${rev.shadow.dy},${rev.shadow.blur},${rev.shadow.color})`
-      : "";
+    rev.shadow === undefined
+      ? ""
+      : `:shadow(${shadowStackOf(rev.shadow)!.map((s) => `${s.dx},${s.dy},${s.blur},${s.color}`).join(";")})`;
   const outlineField =
-    rev.outline !== undefined ? `:outline(${rev.outline.width},${rev.outline.color})` : "";
+    rev.outline === undefined
+      ? ""
+      : `:outline(${outlineStackOf(rev.outline)!.map((o) => `${o.width},${o.color}`).join(";")})`;
   const regionField =
     rev.visibleRegion !== undefined
       ? `:region(${rev.visibleRegion.x},${rev.visibleRegion.y},${rev.visibleRegion.width},${rev.visibleRegion.height}` +
@@ -3869,12 +3954,14 @@ export interface EditLayerResult {
   /** Present when the edit flipped the Layer (#135): the absolute reflection
    * state now recorded on the revision. */
   flipped?: { flip: "horizontal" | "vertical" | "both" | "none" };
-  /** Present when the edit set or removed the shadow (#139): the absolute
-   * shadow state now recorded on the revision (null when removed). */
-  shadowed?: { shadow: LayerShadow | null };
-  /** Present when the edit set or removed the outline (#140): the absolute
-   * outline state now recorded on the revision (null when removed). */
-  outlined?: { outline: LayerOutline | null };
+  /** Present when the edit set or removed the shadow (#139; stacks #302,
+   * ADR-0027): the absolute shadow-stack state now recorded on the revision
+   * — the normalized list, in paint order (null when removed). */
+  shadowed?: { shadow: LayerShadow[] | null };
+  /** Present when the edit set or removed the outline (#140; stacks #302,
+   * ADR-0027): the normalized outline list, in paint order (null when
+   * removed). */
+  outlined?: { outline: LayerOutline[] | null };
   /** Present when the edit set or removed the visible region (#211): the
    * absolute region state now recorded on the revision (null when removed). */
   regionSet?: { visibleRegion: LayerVisibleRegion | null };
@@ -4573,12 +4660,46 @@ function fitBoxEq(
   return fitBox.width === prevRev.fitWidth && fitBox.height === prevRev.fitHeight;
 }
 
-/** Field-wise shadow equality for the no-op check (#139): the flip
- * precedent — re-issuing an identical shadow is a detected no-op, never a
- * redundant revision. */
-function shadowEq(a: LayerShadow | undefined, b: LayerShadow | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b;
-  return a.dx === b.dx && a.dy === b.dy && a.blur === b.blur && a.color === b.color;
+/** The one shape fold for a stack value at hand (#302, ADR-0027): a single
+ *  object folds to a one-element list; a list passes through. Callers hold
+ *  already-validated values (the edit draft starts from the resolved
+ *  revision or a fresh parse), so this carries no validation — the stored
+ *  normalizers own that. */
+/** The one storage fold for a stack value (#302, ADR-0027): a one-element
+ *  list collapses to the single object — the canonical one-effect shape, a
+ *  stored length-1 list is a second answer for the same fact — and longer
+ *  lists store as lists. This is the fold between the resolved view (and
+ *  the edit draft, which starts from it) and every stored document; the
+ *  stored normalizers own the reverse (read) direction. Exported for the
+ *  cross-Project copy's verbatim carry. */
+export function storedEffectStack<T>(value: T | T[] | undefined): T | T[] | undefined {
+  if (value === undefined) return undefined;
+  const list = Array.isArray(value) ? value : [value];
+  return list.length === 1 ? list[0]! : list;
+}
+
+function shadowStackOf(value: LayerShadow | LayerShadow[] | undefined): LayerShadow[] | undefined {
+  return readEffectStack(value);
+}
+
+function outlineStackOf(value: LayerOutline | LayerOutline[] | undefined): LayerOutline[] | undefined {
+  return readEffectStack(value);
+}
+
+/** Field-wise shadow-stack equality for the no-op check (#139; stacking
+ *  #302, ADR-0027): the flip precedent — re-issuing an identical shadow or
+ *  stack is a detected no-op, never a redundant revision. Both sides fold
+ *  through the one shape fold, so a single object and its one-element
+ *  resolved list describe the same fact. */
+function shadowEq(a: LayerShadow | LayerShadow[] | undefined, b: LayerShadow | LayerShadow[] | undefined): boolean {
+  const as = shadowStackOf(a);
+  const bs = shadowStackOf(b);
+  if (as === undefined || bs === undefined) return as === bs;
+  if (as.length !== bs.length) return false;
+  return as.every((s, i) => {
+    const o = bs[i]!;
+    return s.dx === o.dx && s.dy === o.dy && s.blur === o.blur && s.color === o.color;
+  });
 }
 
 /** Caller font facts equality (#232): both sides are normalized facts
@@ -4589,12 +4710,14 @@ function callerFontEq(a: CallerFontFacts | undefined, b: CallerFontFacts | undef
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** Field-wise outline equality for the no-op check (#140): the flip
- * precedent — re-issuing an identical outline is a detected no-op, never a
- * redundant revision. */
-function outlineEq(a: LayerOutline | undefined, b: LayerOutline | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b;
-  return a.width === b.width && a.color === b.color;
+/** Field-wise outline-stack equality for the no-op check (#140; stacking
+ *  #302, ADR-0027): the flip precedent, folded like the shadow's. */
+function outlineEq(a: LayerOutline | LayerOutline[] | undefined, b: LayerOutline | LayerOutline[] | undefined): boolean {
+  const as = outlineStackOf(a);
+  const bs = outlineStackOf(b);
+  if (as === undefined || bs === undefined) return as === bs;
+  if (as.length !== bs.length) return false;
+  return as.every((o, i) => o.width === bs[i]!.width && o.color === bs[i]!.color);
 }
 
 /**
@@ -5243,6 +5366,15 @@ async function buildEditedRevision(
 }> {
   const { x, y, opacity } = draft;
 
+  // The storage fold for the carried/applied stacks (#302, ADR-0027): the
+  // draft starts from the RESOLVED revision, whose effect fields are the
+  // normalized lists — a one-effect list collapses back to the single
+  // object (the canonical one-effect shape, never a stored length-1 list)
+  // and a stack stores its list. This is the ONE fold between the draft
+  // and every stored document below.
+  const storedShadow = storedEffectStack(draft.shadow);
+  const storedOutline = storedEffectStack(draft.outline);
+
   // Shape content options (#209, spec #207 US-002): each parameter is an
   // ABSOLUTE setter on a shape Layer; on image and text Layers every shape
   // option is refused naming kind stability — a Layer's kind is stable
@@ -5402,8 +5534,8 @@ async function buildEditedRevision(
       ...(perspectiveStored(draft)
         ? { perspectiveTiltXDeg: draft.perspectiveTiltXDeg, perspectiveTiltYDeg: draft.perspectiveTiltYDeg }
         : {}),
-      ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
-      ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
+      ...(storedShadow !== undefined ? { shadow: storedShadow } : {}),
+      ...(storedOutline !== undefined ? { outline: storedOutline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.vectorColor !== undefined ? { vectorColor: draft.vectorColor } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
@@ -5547,8 +5679,8 @@ async function buildEditedRevision(
       ...(perspectiveStored(draft)
         ? { perspectiveTiltXDeg: draft.perspectiveTiltXDeg, perspectiveTiltYDeg: draft.perspectiveTiltYDeg }
         : {}),
-      ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
-      ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
+      ...(storedShadow !== undefined ? { shadow: storedShadow } : {}),
+      ...(storedOutline !== undefined ? { outline: storedOutline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
@@ -5829,8 +5961,8 @@ async function buildEditedRevision(
       ...(perspectiveStored(draft)
         ? { perspectiveTiltXDeg: draft.perspectiveTiltXDeg, perspectiveTiltYDeg: draft.perspectiveTiltYDeg }
         : {}),
-      ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
-      ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
+      ...(storedShadow !== undefined ? { shadow: storedShadow } : {}),
+      ...(storedOutline !== undefined ? { outline: storedOutline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
@@ -6194,9 +6326,9 @@ export async function editLayerInternal(
     await applyLayerOption(step.option, draft, value, sharedContext);
   }
   const hasShadow = shared.shadow !== undefined;
-  const shadowedReport = { shadow: draft.shadow ?? null };
+  const shadowedReport = { shadow: shadowStackOf(draft.shadow) ?? null };
   const hasOutline = shared.outline !== undefined;
-  const outlinedReport = { outline: draft.outline ?? null };
+  const outlinedReport = { outline: outlineStackOf(draft.outline) ?? null };
   const hasRegion = shared["visible-region"] !== undefined || shared["visible-region-radius"] !== undefined;
   const regionSetReport = { visibleRegion: draft.visibleRegion ?? null };
   const vectorColorSetReport = { vectorColor: draft.vectorColor ?? null };

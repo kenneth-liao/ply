@@ -364,7 +364,13 @@ Options:
                         or "0,2,6,#00000080" (alpha softens the shadow) —
                         that replaces any previous shadow, and "none"
                         removes it (the same command twice keeps the same
-                        shadow). Offsets and blur are px (blur 0..256,
+                        shadow). REPEATABLE (#302, ADR-0027): two or more
+                        occurrences stack shadows in command order (the
+                        first is cast from the content, each later one from
+                        the ink accumulated before it); one occurrence is
+                        today's single-object form, and "none" cannot
+                        combine with value occurrences. Offsets and blur are
+                        px (blur 0..256,
                         offsets within ±256); negative offsets are valid.
                         The shadow paints in the Layer's LOCAL coordinate
                         space — the transform (scale/rotation/flip) then
@@ -382,7 +388,13 @@ Options:
                         "<width>,<color>" — e.g. "4,#000000" — that replaces
                         any previous outline, and "none" removes it (the
                         same command twice keeps the same outline). Width is
-                        px (0..256). The outline hugs the content in the
+                        px (0..256). REPEATABLE (#302, ADR-0027): two or
+                        more occurrences stack outlines in command order —
+                        each later dilate hugs everything the earlier ones
+                        accumulated, painting nested rings; one occurrence
+                        is today's single-object form, and "none" cannot
+                        combine with value occurrences. The outline hugs
+                        the content in the
                         Layer's LOCAL coordinate space, painted BEFORE the
                         shadow — a shadow on the same Layer is cast from the
                         outlined composite — and the transform then maps
@@ -1033,12 +1045,12 @@ async function run() {
             const flipped = res.flipped && res.flipped.flip !== "none" ? `; flip ${res.flipped.flip}` : res.flipped ? "; flip none" : "";
             const shadowed = res.shadowed
               ? res.shadowed.shadow
-                ? `; shadow ${res.shadowed.shadow.dx} ${res.shadowed.shadow.dy} ${res.shadowed.shadow.blur} ${res.shadowed.shadow.color}`
+                ? `; shadow ${res.shadowed.shadow.map((s) => `${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("; ")}`
                 : "; shadow none"
               : "";
             const outlined = res.outlined
               ? res.outlined.outline
-                ? `; outline ${res.outlined.outline.width} ${res.outlined.outline.color}`
+                ? `; outline ${res.outlined.outline.map((o) => `${o.width} ${o.color}`).join("; ")}`
                 : "; outline none"
               : "";
             const regionSet = res.regionSet
@@ -1202,14 +1214,16 @@ async function run() {
               (rev.perspectiveTiltXDeg ?? 0) === 0 && (rev.perspectiveTiltYDeg ?? 0) === 0
                 ? ""
                 : `, Perspective: ${rev.perspectiveTiltXDeg ?? 0}° ${rev.perspectiveTiltYDeg ?? 0}°`;
+            // Stacked effects (#302, ADR-0027): each effect of a type on
+            // its own entry, in paint order (the chain's function order).
             const shadow =
               rev.shadow === undefined
                 ? ""
-                : `, Shadow: ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`;
+                : rev.shadow.map((s) => `, Shadow: ${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("");
             const outline =
               rev.outline === undefined
                 ? ""
-                : `, Outline: ${rev.outline.width} ${rev.outline.color}`;
+                : rev.outline.map((o) => `, Outline: ${o.width} ${o.color}`).join("");
             const region =
               rev.visibleRegion === undefined
                 ? ""

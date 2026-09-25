@@ -43,7 +43,7 @@ import {
   RETAINED_MATTING_DIR,
   type RetainedMattingProvenance,
 } from "./matting-retention.js";
-import { readLayerInternalFull, formatGrade, formatGlow, type ResolvedLayer } from "./layer.js";
+import { readLayerInternalFull, formatGrade, formatGlow, type ResolvedLayer, type LayerOutline, type LayerShadow } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock, atomicCreate } from "./project-lock.js";
 import { atomicReplace } from "./reference-import.js";
@@ -323,6 +323,22 @@ function factsForJob(job: GenerationJobRecord): [string, string][] {
   return rows;
 }
 
+/** The ONE per-entry effect-rows builder for the review facts (#302,
+ *  review INT-2): one row per stacked effect, in paint order — outlines
+ *  before shadows, the effects chain's function order — shared by the
+ *  candidate facts and the shape parameter sheet so a future format change
+ *  cannot split them. */
+function effectFactRows(rev: { outline?: LayerOutline[]; shadow?: LayerShadow[] }): [string, string][] {
+  return [
+    ...(rev.outline !== undefined
+      ? rev.outline.map((o) => ["outline", `${o.width} ${o.color} (paint-time)`] as [string, string])
+      : []),
+    ...(rev.shadow !== undefined
+      ? rev.shadow.map((s) => ["shadow", `${s.dx} ${s.dy} ${s.blur} ${s.color} (paint-time)`] as [string, string])
+      : []),
+  ];
+}
+
 /**
  * Review one Project Layer's retained evidence and write the self-contained
  * sheet to `outPath`. Everything resolves through the canonical retained
@@ -349,6 +365,9 @@ export async function reviewRetainedLayer(
   let gradeFact: string | null = null;
   let glowFact: string | null = null;
   let blendFact: string | null = null;
+  // Stacked effects (#302, ADR-0027): one row per entry, in paint order —
+  // the chain's function order (glow band, then outlines, then shadows).
+  let effectFacts: [string, string][] = [];
   const review = await withProjectLock(resolvedRoot, async () => {
     const full = await readLayerInternalFull(resolvedRoot, layerId);
     const layer: ResolvedLayer = {
@@ -370,6 +389,7 @@ export async function reviewRetainedLayer(
     if (rev.blend !== undefined) {
       blendFact = rev.blend;
     }
+    effectFacts = effectFactRows(rev);
     if (rev.kind === "shape") {
       // A shape Layer (#208) has no retained bytes and no generation/matting
       // lineage — its content IS its parameters (DEC-001). The review reports
@@ -389,6 +409,7 @@ export async function reviewRetainedLayer(
         ...(rev.glow !== undefined
           ? [["edge glow", `${formatGlow(rev.glow)} (paint-time)`] as [string, string]]
           : []),
+        ...effectFacts,
         ...(rev.blend !== undefined
           ? [["blend mode", `${rev.blend} (paint-time)`] as [string, string]]
           : []),
@@ -519,6 +540,7 @@ export async function reviewRetainedLayer(
   if (glowFact !== null) {
     facts.push(["edge glow", `${glowFact} (paint-time)`]);
   }
+  facts.push(...effectFacts);
   if (blendFact !== null) {
     facts.push(["blend mode", `${blendFact} (paint-time)`]);
   }

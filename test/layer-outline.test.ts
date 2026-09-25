@@ -135,10 +135,10 @@ test("image Layer --outline paints outline pixels and keeps content bytes", asyn
   // canonical revision field.
   const rev = editJson.layer.currentRevision;
   expect(rev.contentHash).toBe(contentHash);
-  expect(rev.outline).toEqual({ width: 4, color: "#0000ff" });
+  expect(rev.outline).toEqual([{ width: 4, color: "#0000ff" }]);
 
   // Auditable outline report in JSON output.
-  expect(editJson.outlined).toEqual({ outline: { width: 4, color: "#0000ff" } });
+  expect(editJson.outlined).toEqual({ outline: [{ width: 4, color: "#0000ff" }] });
 
   // Retained bytes are byte-identical; no new blobs staged.
   const blob = await readFile(path.join(projDir, "content", contentHash));
@@ -168,7 +168,7 @@ test("image Layer --outline paints outline pixels and keeps content bytes", asyn
   const again = await invoke(["layer", "edit", layerId, "--outline", "2,#00ff00", "--project", projDir, "--json"]);
   expect(again.code).toBe(0);
   const againJson = JSON.parse(again.stdout);
-  expect(againJson.layer.currentRevision.outline).toEqual({ width: 2, color: "#00ff00" });
+  expect(againJson.layer.currentRevision.outline).toEqual([{ width: 2, color: "#00ff00" }]);
 
   // --outline none removes the outline (field drops from the revision).
   const remove = await invoke(["layer", "edit", layerId, "--outline", "none", "--project", projDir, "--json"]);
@@ -212,7 +212,7 @@ test("text Layer --outline paints at the glyph ink and keeps font bytes", async 
   expect(editRes.code).toBe(0);
   const rev = JSON.parse(editRes.stdout).layer.currentRevision;
   expect(rev.contentHash).toBe(fontHash);
-  expect(rev.outline).toEqual({ width: 4, color: "#00ff00" });
+  expect(rev.outline).toEqual([{ width: 4, color: "#00ff00" }]);
   const out = path.join(tempDir, "text-outline.png");
   expect((await invoke(["composition", "render", "doc", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
   const png = decodePng(await readFile(out));
@@ -252,8 +252,8 @@ test("outline paints before the shadow; the shadow is cast from the outlined com
   ]);
   expect(editRes.code).toBe(0);
   const rev = JSON.parse(editRes.stdout).layer.currentRevision;
-  expect(rev.outline).toEqual({ width: 6, color: "#00ff00" });
-  expect(rev.shadow).toEqual({ dx: 12, dy: 12, blur: 0, color: "#000000" });
+  expect(rev.outline).toEqual([{ width: 6, color: "#00ff00" }]);
+  expect(rev.shadow).toEqual([{ dx: 12, dy: 12, blur: 0, color: "#000000" }]);
 
   const out = path.join(tempDir, "combined.png");
   expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
@@ -324,7 +324,7 @@ test("measure includes the outline extent in painted bounds and clipping", async
   const measureRes = await invoke(["composition", "measure", "poster", "--project", projDir, "--json"]);
   expect(measureRes.code).toBe(0);
   const layer = JSON.parse(measureRes.stdout).layers[0];
-  expect(layer.effects).toEqual({ shadow: null, outline: { width: 10, color: "#0000ff" } });
+  expect(layer.effects).toEqual({ shadow: null, outline: [{ width: 10, color: "#0000ff" }] });
   expect(layer.box).toEqual({ x: 50, y: 50, width: 100, height: 60 });
   expect(layer.painted).toEqual({ x: 40, y: 40, width: 120, height: 80 });
   expect(layer.paintedOnCanvas).toEqual({ x: 40, y: 40, width: 120, height: 80 });
@@ -420,7 +420,7 @@ test("outline facts survive edits, forks, and cross-Project import", async () =>
   expect(moveRes.code).toBe(0);
   const moveJson = JSON.parse(moveRes.stdout);
   const outlinedRevId = moveJson.layer.currentRevisionId as string;
-  expect(moveJson.layer.currentRevision.outline).toEqual({ width: 5, color: "#ff8800" });
+  expect(moveJson.layer.currentRevision.outline).toEqual([{ width: 5, color: "#ff8800" }]);
   expect(moveJson.layer.currentRevision.contentHash).toBe(contentHash);
   // No outline option: no `outlined` report on this edit.
   expect(moveJson.outlined).toBeUndefined();
@@ -440,7 +440,7 @@ test("outline facts survive edits, forks, and cross-Project import", async () =>
   expect(forkJson.outlined).toEqual({ outline: null });
   const original = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
   expect(original.layer.currentRevisionId).toBe(outlinedRevId);
-  expect(original.layer.currentRevision.outline).toEqual({ width: 5, color: "#ff8800" });
+  expect(original.layer.currentRevision.outline).toEqual([{ width: 5, color: "#ff8800" }]);
 
   // Cross-Project import: the destination revision preserves the outline verbatim.
   const otherProj = path.join(tempDir, "proj2");
@@ -452,7 +452,7 @@ test("outline facts survive edits, forks, and cross-Project import", async () =>
   expect(importRes.code).toBe(0);
   const importedLayerId = JSON.parse(importRes.stdout).importedUses[0].layerId as string;
   const imported = JSON.parse((await invoke(["layer", "inspect", importedLayerId, "--project", otherProj, "--json"])).stdout);
-  expect(imported.layer.currentRevision.outline).toEqual({ width: 5, color: "#ff8800" });
+  expect(imported.layer.currentRevision.outline).toEqual([{ width: 5, color: "#ff8800" }]);
   expect(imported.layer.currentRevision.contentHash).toBe(contentHash);
   const copiedDoc = JSON.parse(
     await readFile(path.join(otherProj, "layers", `${importedLayerId}.revisions`, `${imported.layer.currentRevisionId}.json`), "utf8"),
@@ -566,7 +566,7 @@ test("outline colors canonicalize; an identical outline edit is a no-op", async 
   const setRes = await invoke(["layer", "edit", layerId, "--outline", "4,#0000FF", "--project", projDir, "--json"]);
   expect(setRes.code).toBe(0);
   const revId = JSON.parse(setRes.stdout).layer.currentRevisionId as string;
-  expect(JSON.parse(setRes.stdout).layer.currentRevision.outline).toEqual({ width: 4, color: "#0000ff" });
+  expect(JSON.parse(setRes.stdout).layer.currentRevision.outline).toEqual([{ width: 4, color: "#0000ff" }]);
 
   // The stored document holds the canonical form verbatim.
   const doc = JSON.parse(
@@ -701,7 +701,7 @@ test("anchored placement resolves against the pre-effect ink; --anchor and --out
   expect(JSON.parse(conflict.stdout).ok).toBe(false);
   const state = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
   expect(state.layer.currentRevision.x).toBe(100);
-  expect(state.layer.currentRevision.outline).toEqual({ width: 10, color: "#000000" });
+  expect(state.layer.currentRevision.outline).toEqual([{ width: 10, color: "#000000" }]);
 });
 
 /** Region-clip boundary (review CRAFT-1): the dilate ring must extend the
@@ -808,7 +808,7 @@ test("filter-region sizing fails loudly when the page is not the built compositi
   const { withRenderPage } = await import("../src/browser.js");
   const outlined = [{
     name: "hero",
-    revision: { outline: { width: 4, color: "#000000" } },
+    revision: { outline: [{ width: 4, color: "#000000" }] },
   }] as unknown as Parameters<typeof sizeEffectFilterRegions>[1];
 
   await withRenderPage(async (page) => {
@@ -833,4 +833,173 @@ test("filter-region sizing fails loudly when the page is not the built compositi
     );
     expect(region).toEqual({ units: "userSpaceOnUse", x: "-5" });
   });
+});
+
+/** Stacked outlines (#302, spec #285 US-011, ISC-50, DEC-005/DEC-006,
+ * ADR-0027): a Layer carries more than one outline — two `--outline`
+ * occurrences in command order set the whole stack; each later dilate
+ * operates on the composite the earlier ones accumulated, so the stack
+ * paints as nested rings (the first-listed hugging the content, later
+ * ones outside it) with additive geometry `content ⊕ square(Σwidth)` —
+ * the exact sum `localEffectReachPx` sizes the capture window with. */
+test("two --outline occurrences set a stack; the rings paint in order", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 50, y: 50 });
+  const layerId = addRes.use.layerId as string;
+
+  // Ring 1: 4px green hugging the content; ring 2: 6px blue outside it.
+  const editRes = await invoke([
+    "layer", "edit", layerId,
+    "--outline", "4,#00ff00",
+    "--outline", "6,#0000ff",
+    "--project", projDir, "--json",
+  ]);
+  expect(editRes.code).toBe(0);
+
+  const out = path.join(tempDir, "stacked.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
+  const png = decodePng(await readFile(out));
+  // Content [50,150)×[50,110). Green ring: 4px band [46,50) etc. Blue
+  // ring: the 6px band outside the green's extent (content ⊕ 4 ⊕ 2 = the
+  // outermost 2px... no: the second dilate extends the accumulated ink by
+  // 6, so the blue band spans content⊕4 → content⊕10 on every side).
+  expect(pixel(png, 47, 80)).toEqual([0, 255, 0, 255]); // green, 3px band
+  expect(pixel(png, 43, 80)).toEqual([0, 0, 255, 255]); // blue, outer band
+  expect(pixel(png, 80, 80)).toEqual(RED); // content untouched
+  expect(pixel(png, 39, 80)[3]).toBe(0); // beyond the stacked reach (content ⊕ 10 starts at x 40)
+
+  // Stored shape: a list in the SAME field, in command order.
+  const revId = JSON.parse(editRes.stdout).layer.currentRevisionId as string;
+  const doc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`), "utf8")) as Record<string, unknown>;
+  expect(doc.outline).toEqual([
+    { width: 4, color: "#00ff00" },
+    { width: 6, color: "#0000ff" },
+  ]);
+
+  // measure reports the normalized list in paint order.
+  const measureRes = await invoke(["composition", "measure", "poster", "hero", "--project", projDir, "--json"]);
+  expect(measureRes.code).toBe(0);
+  const layer = JSON.parse(measureRes.stdout).layers[0];
+  expect(layer.effects.outline).toEqual([
+    { width: 4, color: "#00ff00" },
+    { width: 6, color: "#0000ff" },
+  ]);
+  // Additive geometry: painted ink is content ⊕ square(10) exactly.
+  expect(layer.painted).toEqual({ x: 40, y: 40, width: 120, height: 80 });
+
+  // inspect lists each outline in paint order.
+  const inspectRes = await invoke(["layer", "inspect", layerId, "--project", projDir]);
+  expect(inspectRes.code).toBe(0);
+  expect(inspectRes.stdout).toContain("Outline: 4 #00ff00");
+  expect(inspectRes.stdout.indexOf("Outline: 4 #00ff00")).toBeLessThan(inspectRes.stdout.indexOf("Outline: 6 #0000ff"));
+
+  // Removal drops the whole stack.
+  const rmRes = await invoke(["layer", "edit", layerId, "--outline", "none", "--project", projDir, "--json"]);
+  expect(rmRes.code).toBe(0);
+  const rmId = JSON.parse(rmRes.stdout).layer.currentRevisionId as string;
+  const rmDoc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${rmId}.json`), "utf8")) as Record<string, unknown>;
+  expect(rmDoc.outline).toBeUndefined();
+});
+
+/** A single occurrence stores today's single-object form; a stack edited
+ *  down to one collapses back; the no-op rule works through the fold. */
+test("a single --outline occurrence stores the object form; a stack collapses back to it", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 50, y: 50 });
+  const layerId = addRes.use.layerId as string;
+
+  const stackRes = await invoke(["layer", "edit", layerId, "--outline", "4,#00ff00", "--outline", "6,#0000ff", "--project", projDir, "--json"]);
+  expect(stackRes.code).toBe(0);
+  const collapseRes = await invoke(["layer", "edit", layerId, "--outline", "3,#0000ff", "--project", projDir, "--json"]);
+  expect(collapseRes.code).toBe(0);
+  const collapseId = JSON.parse(collapseRes.stdout).layer.currentRevisionId as string;
+  const collapseDoc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${collapseId}.json`), "utf8")) as Record<string, unknown>;
+  expect(Array.isArray(collapseDoc.outline)).toBe(false);
+  expect(collapseDoc.outline).toEqual({ width: 3, color: "#0000ff" });
+
+  const again = await invoke(["layer", "edit", layerId, "--outline", "3,#0000ff", "--project", projDir, "--json"]);
+  expect(JSON.parse(again.stdout).layer.currentRevisionId).toBe(collapseId);
+
+  const stackAgain = await invoke(["layer", "edit", layerId, "--outline", "4,#00ff00", "--outline", "6,#0000ff", "--project", projDir, "--json"]);
+  expect(stackAgain.code).toBe(0);
+  const stackId = JSON.parse(stackAgain.stdout).layer.currentRevisionId as string;
+  const stackOnceMore = await invoke(["layer", "edit", layerId, "--outline", "4,#00ff00", "--outline", "6,#0000ff", "--project", projDir, "--json"]);
+  expect(JSON.parse(stackOnceMore.stdout).layer.currentRevisionId).toBe(stackId);
+});
+
+/** The stack joins the add surface with parity; "none" cannot combine with
+ *  value occurrences; a stored one-element list is malformed. */
+test("composition add accepts repeated --outline occurrences; mixed none refused; length-1 list malformed", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await invoke([
+    "composition", "add", "poster", "hero", "--image", redImg, "--x", "50", "--y", "50",
+    "--outline", "4,#00ff00", "--outline", "6,#0000ff",
+    "--project", projDir, "--json",
+  ]);
+  expect(addRes.code).toBe(0);
+  const layerId = JSON.parse(addRes.stdout).use.layerId as string;
+  const revId = JSON.parse(addRes.stdout).layer.currentRevisionId as string;
+  const doc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`), "utf8")) as Record<string, unknown>;
+  expect(doc.outline).toEqual([
+    { width: 4, color: "#00ff00" },
+    { width: 6, color: "#0000ff" },
+  ]);
+
+  const mixed = await invoke([
+    "layer", "edit", layerId, "--outline", "none", "--outline", "1,#000000", "--project", projDir, "--json",
+  ]);
+  expect(mixed.code).toBe(2);
+  expect(JSON.parse(mixed.stdout).error).toContain("none");
+
+  // A stored length-1 list is a second answer for the same fact.
+  const revFile = path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`);
+  const crafted = JSON.parse(await readFile(revFile, "utf8")) as Record<string, unknown>;
+  crafted.outline = [{ width: 4, color: "#00ff00" }];
+  await writeFile(revFile, JSON.stringify(crafted));
+  const bad = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(bad.code).toBe(1);
+  expect(JSON.parse(bad.stdout).error).toContain("single object form");
+});
+
+/** Paint order across the stack and across types (#302, ADR-0027): the
+ *  shadow stack is cast from the OUTLINED composite, in chain order — a
+ *  stacked outline's ink is shadowed too. */
+test("a shadow casts from the stacked outline composite", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 100, y: 100 });
+  const layerId = addRes.use.layerId as string;
+
+  // Outline 2px black + shadow (0,10,0, black): the shadow is cast from
+  // the outlined composite, so its ink extends past content⊕2 by the
+  // offset — ink below reaches y = 100+60+2+10 = 172.
+  const editRes = await invoke([
+    "layer", "edit", layerId,
+    "--outline", "2,#000000",
+    "--shadow", "0,10,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+  expect(editRes.code).toBe(0);
+
+  const out = path.join(tempDir, "outlined-shadow.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
+  const png = decodePng(await readFile(out));
+  // Content [100,200)×[100,160). Ring: 2px → to 162. Shadow from the
+  // outlined composite: offset 10 → ink to 171 inclusive.
+  expect(pixel(png, 150, 161)[3]).toBe(255); // ring bottom
+  expect(pixel(png, 150, 170)[3]).toBe(255); // shadow of the ring
+  expect(pixel(png, 150, 172)[3]).toBe(0); // past the additive reach
+  expect(pixel(png, 99, 130)[3]).toBe(255); // ring left of content
+  expect(pixel(png, 96, 130)[3]).toBe(0); // shadow has no x offset
 });

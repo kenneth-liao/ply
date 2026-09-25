@@ -113,6 +113,7 @@ import {
   normalizeStoredBlur,
   normalizeStoredChoke,
   normalizeStoredFeather,
+  readEffectStack,
   storedTextRunSlices,
   type LayerTextRun,
   type SnapshotRunFont,
@@ -152,11 +153,12 @@ export interface MeasuredLayerBounds {
   placement: { x: number; y: number; opacity: number };
   /** The revision's normalized canonical transform facts, verbatim. */
   transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number };
-  /** The revision's effective effect facts (#139/#140): `shadow` and
-   * `outline` are the stored effect parameters (or null when the Layer has
-   * none of that effect) — the same facts painting applies, reported for
-   * auditability. */
-  effects: { shadow: LayerShadow | null; outline: LayerOutline | null };
+  /** The revision's effective effect facts (#139/#140; stacked #302,
+   * ADR-0027): `shadow` and `outline` are the normalized effect LISTS in
+   * paint order (null when the Layer has none of that effect — absence IS
+   * the no-effect form; a one-effect Layer reports a one-element list) —
+   * the same facts painting applies, reported for auditability. */
+  effects: { shadow: LayerShadow[] | null; outline: LayerOutline[] | null };
   /** The revision's effective grade controls (#219, spec #218 US-001, ADR-0024):
    * the stored grade parameters (or null when the Layer has no grade) — the
    * same facts painting applies, reported for auditability. */
@@ -431,10 +433,16 @@ type Box = { x: number; y: number; width: number; height: number };
  * terms already cover.
  */
 function localEffectReachPx(revision: TransformFactsSource): number {
-  const outline = revision.outline?.width ?? 0;
-  const shadow = revision.shadow
-    ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
-    : 0;
+  // Stacked effects (#302, ADR-0027): the fold is `readEffectStack`'s (the
+  // ONE read-side shape interpreter, layer.ts) — the reach ADDS over every
+  // stacked effect (each outline dilates the accumulated composite; each
+  // shadow is cast from the accumulated ink), the same additive list the
+  // paint chain's function order builds.
+  const outline = (readEffectStack(revision.outline) ?? []).reduce((sum, o) => sum + o.width, 0);
+  const shadow = (readEffectStack(revision.shadow) ?? []).reduce(
+    (sum, s) => sum + Math.abs(s.dx) + Math.abs(s.dy) + 2 * s.blur,
+    0,
+  );
   const blur = normalizeStoredBlur(revision) ?? 0;
   const blurReach = blur > 0 ? Math.ceil(3 * blur) : 0;
   return outline + shadow + blurReach;
@@ -477,8 +485,10 @@ interface TransformFactsSource {
   skewYDeg?: unknown;
   perspectiveTiltXDeg?: unknown;
   perspectiveTiltYDeg?: unknown;
-  outline?: LayerOutline | undefined;
-  shadow?: LayerShadow | undefined;
+  /** The stored stack fold (#302, ADR-0027): object or list — the reach
+   *  reader folds both. */
+  outline?: LayerOutline | LayerOutline[] | undefined;
+  shadow?: LayerShadow | LayerShadow[] | undefined;
   /** The blur radius (#299, ADR-0024 amendment), unknown-typed because a
    *  fresh provisional revision may carry any stored shape — always read
    *  through `normalizeStoredBlur`. */

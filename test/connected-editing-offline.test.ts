@@ -343,7 +343,7 @@ recordedEnvOnly(
 
     // F2 in-tool: the requested drop shadow, as an absolute effect fact.
     const shadowed = await ok(["layer", "edit", bannerLayerId, "--shadow", "0,6,10,#00000080", ...P], root);
-    expect(shadowed.layer.currentRevision.shadow).toEqual({ dx: 0, dy: 6, blur: 10, color: "#00000080" });
+    expect(shadowed.layer.currentRevision.shadow).toEqual([{ dx: 0, dy: 6, blur: 10, color: "#00000080" }]);
     expect(shadowed.layer.currentRevision.contentHash).toBe(BANNER_HASH);
 
     const renderT1 = await ok(["composition", "render", "thumb", ...P], root);

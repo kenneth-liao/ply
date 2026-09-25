@@ -614,8 +614,8 @@ test("the kind-shared edit options work on a shape Layer as absolute setters", a
   expect(rev.rotationDeg).toBe(45);
   expect(rev.scaleX).toBe(2);
   expect(rev.scaleY).toBe(2);
-  expect(rev.shadow).toEqual({ dx: 2, dy: 3, blur: 4, color: "#000000" });
-  expect(rev.outline).toEqual({ width: 2, color: "#00ff00" });
+  expect(rev.shadow).toEqual([{ dx: 2, dy: 3, blur: 4, color: "#000000" }]);
+  expect(rev.outline).toEqual([{ width: 2, color: "#00ff00" }]);
   // The shape's parameters carried verbatim.
   expect(rev.shape).toBe("rectangle");
   expect(rev.width).toBe(120);
@@ -642,7 +642,7 @@ test("one-command add applies transforms, anchored placement, and effects to a s
   const rev = JSON.parse(add.stdout).layer.currentRevision;
   expect(rev.kind).toBe("shape");
   expect(rev.rotationDeg).toBe(12);
-  expect(rev.shadow).toEqual({ dx: 2, dy: 3, blur: 4, color: "#000000" });
+  expect(rev.shadow).toEqual([{ dx: 2, dy: 3, blur: 4, color: "#000000" }]);
   // The anchored placement resolved against the transformed ink and
   // published as plain placement in the SAME single revision (the plain
   // target was x=80; a dropped --anchor would leave x at exactly 80).

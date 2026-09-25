@@ -137,10 +137,10 @@ test("image Layer --shadow paints drop-shadow pixels and keeps content bytes", a
   // canonical revision field.
   const rev = editJson.layer.currentRevision;
   expect(rev.contentHash).toBe(contentHash);
-  expect(rev.shadow).toEqual({ dx: 10, dy: 10, blur: 4, color: "#000000" });
+  expect(rev.shadow).toEqual([{ dx: 10, dy: 10, blur: 4, color: "#000000" }]);
 
   // Auditable shadow report in JSON output.
-  expect(editJson.shadowed).toEqual({ shadow: { dx: 10, dy: 10, blur: 4, color: "#000000" } });
+  expect(editJson.shadowed).toEqual({ shadow: [{ dx: 10, dy: 10, blur: 4, color: "#000000" }] });
 
   // Retained bytes are byte-identical; no new blobs staged.
   const blob = await readFile(path.join(projDir, "content", contentHash));
@@ -171,7 +171,7 @@ test("image Layer --shadow paints drop-shadow pixels and keeps content bytes", a
   const again = await invoke(["layer", "edit", layerId, "--shadow", "2,0,0,#ff0000", "--project", projDir, "--json"]);
   expect(again.code).toBe(0);
   const againJson = JSON.parse(again.stdout);
-  expect(againJson.layer.currentRevision.shadow).toEqual({ dx: 2, dy: 0, blur: 0, color: "#ff0000" });
+  expect(againJson.layer.currentRevision.shadow).toEqual([{ dx: 2, dy: 0, blur: 0, color: "#ff0000" }]);
 
   // --shadow none removes the shadow (field drops from the revision).
   const remove = await invoke(["layer", "edit", layerId, "--shadow", "none", "--project", projDir, "--json"]);
@@ -218,7 +218,7 @@ test("text Layer --shadow paints at the glyph ink and keeps font bytes", async (
   expect(editRes.code).toBe(0);
   const rev = JSON.parse(editRes.stdout).layer.currentRevision;
   expect(rev.contentHash).toBe(fontHash);
-  expect(rev.shadow).toEqual({ dx: 0, dy: 8, blur: 0, color: "#00ff00" });
+  expect(rev.shadow).toEqual([{ dx: 0, dy: 8, blur: 0, color: "#00ff00" }]);
   const out = path.join(tempDir, "text-shadow.png");
   expect((await invoke(["composition", "render", "doc", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
   const png = decodePng(await readFile(out));
@@ -257,7 +257,7 @@ test("measure includes the shadow extent in painted bounds and clipping", async 
   const measureRes = await invoke(["composition", "measure", "poster", "--project", projDir, "--json"]);
   expect(measureRes.code).toBe(0);
   const layer = JSON.parse(measureRes.stdout).layers[0];
-  expect(layer.effects).toEqual({ shadow: { dx: 10, dy: 10, blur: 0, color: "#000000" }, outline: null });
+  expect(layer.effects).toEqual({ shadow: [{ dx: 10, dy: 10, blur: 0, color: "#000000" }], outline: null });
   expect(layer.box).toEqual({ x: 50, y: 50, width: 100, height: 60 });
   expect(layer.painted).toEqual({ x: 50, y: 50, width: 110, height: 70 });
   expect(layer.paintedOnCanvas).toEqual({ x: 50, y: 50, width: 110, height: 70 });
@@ -413,7 +413,7 @@ test("anchored placement resolves against the pre-effect ink; --anchor and --sha
   expect(JSON.parse(conflict.stdout).ok).toBe(false);
   const state = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
   expect(state.layer.currentRevision.x).toBe(100);
-  expect(state.layer.currentRevision.shadow).toEqual({ dx: -10, dy: 0, blur: 0, color: "#000000" });
+  expect(state.layer.currentRevision.shadow).toEqual([{ dx: -10, dy: 0, blur: 0, color: "#000000" }]);
 });
 
 /** Tracer 6: invalid shadow settings never advance live state. One parser
@@ -478,7 +478,7 @@ test("shadow facts survive edits, forks, and cross-Project import", async () => 
   expect(moveRes.code).toBe(0);
   const moveJson = JSON.parse(moveRes.stdout);
   const shadowedRevId = moveJson.layer.currentRevisionId as string;
-  expect(moveJson.layer.currentRevision.shadow).toEqual({ dx: 4, dy: 4, blur: 2, color: "#000000" });
+  expect(moveJson.layer.currentRevision.shadow).toEqual([{ dx: 4, dy: 4, blur: 2, color: "#000000" }]);
   expect(moveJson.layer.currentRevision.contentHash).toBe(contentHash);
   // No shadow option: no `shadowed` report on this edit.
   expect(moveJson.shadowed).toBeUndefined();
@@ -498,7 +498,7 @@ test("shadow facts survive edits, forks, and cross-Project import", async () => 
   expect(forkJson.shadowed).toEqual({ shadow: null });
   const original = JSON.parse((await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"])).stdout);
   expect(original.layer.currentRevisionId).toBe(shadowedRevId);
-  expect(original.layer.currentRevision.shadow).toEqual({ dx: 4, dy: 4, blur: 2, color: "#000000" });
+  expect(original.layer.currentRevision.shadow).toEqual([{ dx: 4, dy: 4, blur: 2, color: "#000000" }]);
 
   // Cross-Project import: the destination revision preserves the shadow verbatim.
   const otherProj = path.join(tempDir, "proj2");
@@ -510,7 +510,7 @@ test("shadow facts survive edits, forks, and cross-Project import", async () => 
   expect(importRes.code).toBe(0);
   const importedLayerId = JSON.parse(importRes.stdout).importedUses[0].layerId as string;
   const imported = JSON.parse((await invoke(["layer", "inspect", importedLayerId, "--project", otherProj, "--json"])).stdout);
-  expect(imported.layer.currentRevision.shadow).toEqual({ dx: 4, dy: 4, blur: 2, color: "#000000" });
+  expect(imported.layer.currentRevision.shadow).toEqual([{ dx: 4, dy: 4, blur: 2, color: "#000000" }]);
   expect(imported.layer.currentRevision.contentHash).toBe(contentHash);
   const copiedDoc = JSON.parse(
     await readFile(path.join(otherProj, "layers", `${importedLayerId}.revisions`, `${imported.layer.currentRevisionId}.json`), "utf8"),
@@ -685,4 +685,176 @@ test("measure includes the scale-amplified shadow extent: painted agrees with th
     }
   }
   expect({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 }).toEqual(layer.painted);
+});
+
+/** Stacked shadows (#302, spec #285 US-011, ISC-50, DEC-005/DEC-006,
+ * ADR-0027): a Layer carries more than one shadow — two `--shadow`
+ * occurrences in command order set the whole stack (an absolute setter);
+ * the stored document keeps ONE canonical home per fact (one shadow is
+ * today's single object, several are a list in the same `shadow` field —
+ * never a `shadows[]` sibling), both paint (the first from the content,
+ * the second from the accumulated ink), and `measure` reports the
+ * normalized list in paint order. */
+test("two --shadow occurrences set a stack; both paint and measure reports the list", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 50, y: 50 });
+  const layerId = addRes.use.layerId as string;
+
+  // Baseline: no ink below or right of the content.
+  const baseOut = path.join(tempDir, "base.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", baseOut, "--json"])).code).toBe(0);
+  const base = decodePng(await readFile(baseOut));
+  expect(pixel(base, 155, 55)[3]).toBe(0);
+  expect(pixel(base, 40, 40)[3]).toBe(0);
+
+  // Two shadows in one edit: a sharp offset shadow down-right and a second
+  // sharp offset shadow up-left (different colours to tell them apart).
+  const editRes = await invoke([
+    "layer", "edit", layerId,
+    "--shadow", "5,5,0,#0000ff",
+    "--shadow", "-5,-5,0,#00ff00",
+    "--project", projDir, "--json",
+  ]);
+  expect(editRes.code).toBe(0);
+
+  // Both paint: down-right ink is the blue shadow's (content+5), up-left
+  // ink the green's (content−5); the content pixel stays red.
+  const out = path.join(tempDir, "stacked.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", out, "--json"])).code).toBe(0);
+  const png = decodePng(await readFile(out));
+  expect(pixel(png, 100, 112)).toEqual([0, 0, 255, 255]); // blue, below-right
+  expect(pixel(png, 100, 47)).toEqual([0, 255, 0, 255]); // green, above-left
+  expect(pixel(png, 60, 60)).toEqual(RED); // content untouched
+
+  // Stored shape: several effects are a list in the SAME field, in command
+  // order; the single-effect object form is never a length-1 array.
+  const revId = JSON.parse(editRes.stdout).layer.currentRevisionId as string;
+  const doc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`), "utf8")) as Record<string, unknown>;
+  expect(doc.shadow).toEqual([
+    { dx: 5, dy: 5, blur: 0, color: "#0000ff" },
+    { dx: -5, dy: -5, blur: 0, color: "#00ff00" },
+  ]);
+
+  // measure reports the normalized list in paint order.
+  const measureRes = await invoke(["composition", "measure", "poster", "hero", "--project", projDir, "--json"]);
+  expect(measureRes.code).toBe(0);
+  const effects = JSON.parse(measureRes.stdout).layers[0].effects;
+  expect(effects.shadow).toEqual([
+    { dx: 5, dy: 5, blur: 0, color: "#0000ff" },
+    { dx: -5, dy: -5, blur: 0, color: "#00ff00" },
+  ]);
+
+  // inspect lists each effect in paint order.
+  const inspectRes = await invoke(["layer", "inspect", layerId, "--project", projDir]);
+  expect(inspectRes.code).toBe(0);
+  expect(inspectRes.stdout).toContain("Shadow: 5 5 0 #0000ff");
+  expect(inspectRes.stdout.indexOf("Shadow: 5 5 0 #0000ff")).toBeLessThan(inspectRes.stdout.indexOf("Shadow: -5 -5 0 #00ff00"));
+
+  // Removal drops the whole stack (absence IS the no-shadow form).
+  const rmRes = await invoke(["layer", "edit", layerId, "--shadow", "none", "--project", projDir, "--json"]);
+  expect(rmRes.code).toBe(0);
+  const rmId = JSON.parse(rmRes.stdout).layer.currentRevisionId as string;
+  const rmDoc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${rmId}.json`), "utf8")) as Record<string, unknown>;
+  expect(rmDoc.shadow).toBeUndefined();
+  const rmOut = path.join(tempDir, "removed.png");
+  expect((await invoke(["composition", "render", "poster", "--project", projDir, "--out", rmOut, "--json"])).code).toBe(0);
+  const rmPng = decodePng(await readFile(rmOut));
+  expect(pixel(rmPng, 100, 112)[3]).toBe(0);
+  expect(pixel(rmPng, 100, 47)[3]).toBe(0);
+});
+
+/** One occurrence stores today's single-object form — the fold's canonical
+ * single shape — so a stack edited down to one shadow collapses back to the
+ * object and re-setting the same single shadow stays a no-op. */
+test("a single --shadow occurrence stores the object form; a stack collapses back to it", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 50, y: 50 });
+  const layerId = addRes.use.layerId as string;
+
+  // Build a stack, then edit down to one: the stored document collapses to
+  // the object form, and the id equals the id a from-scratch single set
+  // would mint (same stored facts, same hash inputs).
+  const stackRes = await invoke([
+    "layer", "edit", layerId, "--shadow", "5,5,0,#0000ff", "--shadow", "-5,-5,0,#00ff00", "--project", projDir, "--json",
+  ]);
+  expect(stackRes.code).toBe(0);
+  const collapseRes = await invoke(["layer", "edit", layerId, "--shadow", "3,4,2,#0000ff", "--project", projDir, "--json"]);
+  expect(collapseRes.code).toBe(0);
+  const collapseId = JSON.parse(collapseRes.stdout).layer.currentRevisionId as string;
+  const collapseDoc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${collapseId}.json`), "utf8")) as Record<string, unknown>;
+  expect(Array.isArray(collapseDoc.shadow)).toBe(false);
+  expect(collapseDoc.shadow).toEqual({ dx: 3, dy: 4, blur: 2, color: "#0000ff" });
+
+  // The no-op rule works through the fold: re-setting the same single
+  // shadow is no revision; so is re-setting the same stack.
+  const again = await invoke(["layer", "edit", layerId, "--shadow", "3,4,2,#0000ff", "--project", projDir, "--json"]);
+  expect(JSON.parse(again.stdout).layer.currentRevisionId).toBe(collapseId);
+  const stackAgain = await invoke([
+    "layer", "edit", layerId, "--shadow", "5,5,0,#0000ff", "--shadow", "-5,-5,0,#00ff00", "--project", projDir, "--json",
+  ]);
+  expect(stackAgain.code).toBe(0);
+  const stackId = JSON.parse(stackAgain.stdout).layer.currentRevisionId as string;
+  const stackOnceMore = await invoke([
+    "layer", "edit", layerId, "--shadow", "5,5,0,#0000ff", "--shadow", "-5,-5,0,#00ff00", "--project", projDir, "--json",
+  ]);
+  expect(JSON.parse(stackOnceMore.stdout).layer.currentRevisionId).toBe(stackId);
+
+  // `add` accepts the same repeated-occurrence grammar.
+  const addStack = await addImageLayer("poster", "twin", redImg, { x: 200, y: 50 });
+  expect(addStack.code ?? 0).toBe(0);
+});
+
+/** The stack joins the add surface with parity: the same two occurrences
+ * on `composition add` and on `layer edit` store the same facts. */
+test("composition add accepts repeated --shadow occurrences and stores the stack", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(100, 60, RED));
+
+  await makeComp("poster", 400, 300);
+  const addRes = await invoke([
+    "composition", "add", "poster", "hero", "--image", redImg, "--x", "50", "--y", "50",
+    "--shadow", "5,5,0,#0000ff", "--shadow", "-5,-5,0,#00ff00",
+    "--project", projDir, "--json",
+  ]);
+  expect(addRes.code).toBe(0);
+  const layerId = JSON.parse(addRes.stdout).use.layerId as string;
+  const revId = JSON.parse(addRes.stdout).layer.currentRevisionId as string;
+  const doc = JSON.parse(await readFile(path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`), "utf8")) as Record<string, unknown>;
+  expect(doc.shadow).toEqual([
+    { dx: 5, dy: 5, blur: 0, color: "#0000ff" },
+    { dx: -5, dy: -5, blur: 0, color: "#00ff00" },
+  ]);
+
+  // "none" cannot combine with value occurrences — refusal before mutation.
+  const mixed = await invoke([
+    "layer", "edit", layerId, "--shadow", "none", "--shadow", "1,1,0,#000000", "--project", projDir, "--json",
+  ]);
+  expect(mixed.code).toBe(2);
+  expect(JSON.parse(mixed.stdout).error).toContain("none");
+});
+
+/** A stored length-1 list is a second answer for the same fact (the object
+ * form IS the one-shadow shape) — a malformed document, refused loudly. */
+test("a stored one-element shadow list is a malformed revision document", async () => {
+  const redImg = path.join(tempDir, "red.png");
+  await writeFile(redImg, solidPng(50, 50, RED));
+
+  await makeComp("poster", 200, 200);
+  const addRes = await addImageLayer("poster", "hero", redImg, { x: 5, y: 5 });
+  const layerId = addRes.use.layerId as string;
+  const revId = addRes.layer.currentRevisionId as string;
+  const revFile = path.join(projDir, "layers", `${layerId}.revisions`, `${revId}.json`);
+
+  const doc = JSON.parse(await readFile(revFile, "utf8")) as Record<string, unknown>;
+  doc.shadow = [{ dx: 1, dy: 2, blur: 3, color: "#000000" }];
+  await writeFile(revFile, JSON.stringify(doc));
+  const res = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).error).toContain("single object form");
 });

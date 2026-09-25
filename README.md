@@ -519,6 +519,20 @@ ply layer edit <layerId> --shadow none                 # remove (its own edit)
   `"none"` removes it. Offsets are px within ±256 (negative is valid),
   blur is a px radius between 0 and 256, and the color is hex —
   `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (alpha softens the shadow).
+- **Stacked shadows (ADR-0027):** the option is REPEATABLE — two or more
+  `--shadow` occurrences in one command set the whole stack, in command
+  order (the first is cast from the content, each later one from the ink
+  accumulated before it), and one occurrence is the single-object form:
+
+  ```bash
+  ply layer edit <layerId> --shadow "0,10,8,#00000066" --shadow "-6,-6,0,#ffffff"
+  ```
+
+  `"none"` removes the whole stack and cannot combine with value
+  occurrences. `measure`, `inspect`, and `layer review` report each
+  effect in paint order (normalized lists, even for one effect). The
+  reach adds over the stack, so measurement's capture window covers every
+  shadow; the perspective publication gate sees the same sum.
 - **Ordering contract:** the shadow paints in the Layer's LOCAL coordinate
   space — the canonical transform (scale/rotation/flip about `(x, y)`)
   then maps content and shadow together, the Layer's opacity fades both,
@@ -562,6 +576,12 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
   canonicalize at the command boundary: `#4C4C4C` and `#4c4c4c` are the
   same outline, so case/shorthand variants of the same paint cannot mint
   redundant revisions.
+- **Stacked outlines (ADR-0027):** the option is REPEATABLE — two or more
+  `--outline` occurrences in one command paint nested rings in command
+  order: each later dilate hugs everything the earlier ones accumulated
+  (the first-listed hugs the content, later ones sit outside it), with
+  additive geometry the measurement reach already sums. `"none"` removes
+  the whole stack and cannot combine with value occurrences.
 - **Ordering contract:** the outline hugs the content in the Layer's
   LOCAL coordinate space, painted BEFORE the shadow — a shadow on the
   same Layer is cast from the outlined composite — and the canonical

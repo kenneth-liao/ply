@@ -447,10 +447,14 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
  * `sizeEffectFilterRegions` — the SAME sizing pass in the paint and
  * measurement flows, so render and painted extents agree exactly. The id
  * is a deterministic hash of the pair plus the Layer's snapshot index, so
- * the same facts always emit the same markup.
+ * the same facts always emit the same markup. Stacked outlines (#302,
+ * ADR-0027) add the entry's stack position to the hash input ONLY from the
+ * second entry on, so a single outline's id — and every byte of its
+ * markup — stays identical to the pre-#302 form.
  */
-function outlineFilterId(outline: LayerOutline, layerIndex: number): string {
-  return `ply-o-${createHash("sha256").update(`${outline.width}:${outline.color}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+function outlineFilterId(outline: LayerOutline, layerIndex: number, entryIndex = 0): string {
+  const stackPart = entryIndex === 0 ? "" : `:${entryIndex}`;
+  return `ply-o-${createHash("sha256").update(`${outline.width}:${outline.color}:${layerIndex}${stackPart}`).digest("hex").slice(0, 16)}`;
 }
 
 function outlineFilterDef(
@@ -458,8 +462,9 @@ function outlineFilterDef(
   layerIndex: number,
   rev: { scaleX: number; scaleY: number },
   supersample = 1,
+  entryIndex = 0,
 ): string {
-  const id = outlineFilterId(outline, layerIndex);
+  const id = outlineFilterId(outline, layerIndex, entryIndex);
   const n = outlineDilateSteps(outline.width, rev, supersample);
   let morphNodes: string;
   if (n <= 1) {
@@ -932,9 +937,13 @@ function gradeFilterCss(grade: LayerGrade | undefined, layerIndex: number): stri
 function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
   const defs = layers
     .map((l, i) => {
+      // Stacked outlines (#302, ADR-0027): one def per stack entry, in
+      // paint order; a single outline emits exactly today's one def.
       const outline =
         l.revision.outline !== undefined
-          ? outlineFilterDef(l.revision.outline, i, l.revision, supersample)
+          ? l.revision.outline
+              .map((o, entry) => outlineFilterDef(o, i, l.revision, supersample, entry))
+              .join("")
           : "";
       const glow =
         l.revision.glow !== undefined
@@ -975,9 +984,17 @@ function outlineFilterSpecs(
 ): { id: string; pad: number; name: string; index: number; direction?: { angle: number; strength: number } }[] {
   const specs: { id: string; pad: number; name: string; index: number }[] = [];
   layers.forEach((l, i) => {
-    if (l.revision.outline !== undefined) {
-      specs.push({ id: outlineFilterId(l.revision.outline, i), pad: l.revision.outline.width + 1, name: l.name, index: i });
-    }
+    // Stacked outlines (#302, ADR-0027): one spec per entry — each filter's
+    // region is sized from the same element box expanded by the ACCUMULATED
+    // reach through that entry (its own width plus the widths before it):
+    // the chain feeds each entry's dilate the composite the earlier entries
+    // accumulated, so entry k's output ink is content ⊕ (w1+…+wk) and its
+    // declared region must cover that, or Chromium clips the outer rings.
+    let outlineReach = 0;
+    (l.revision.outline ?? []).forEach((o, entry) => {
+      outlineReach += o.width;
+      specs.push({ id: outlineFilterId(o, i, entry), pad: outlineReach + 1, name: l.name, index: i });
+    });
     if (l.revision.glow !== undefined) {
       // A directional glow (#301) sizes its filter region like any glow AND
       // its feImage ramp subregion + href in-page (the box is only knowable
@@ -1389,27 +1406,37 @@ export function buildCompositionHtml(
           ? `transform:${transformParts.join(" ")};transform-origin:0 0;`
           : "";
       // Canonical effects (#139/#140, ADR-0018/0019; edge glow #221, edge
-      // choke & feather #300, ADR-0024 + its amendments): one `filter` chain
-      // on the Layer element. The edge choke & feather come FIRST — the
-      // alpha-edge shaper operates on the region-clipped, graded composite
-      // (see edgeFilterDef) — then the edge glow's inner-alpha band operates
-      // on the shaped composite (see glowFilterDef), the outline's
-      // feMorphology dilate filter hugs the shaped composite's alpha/glyph
-      // ink and composites the ring under the source graphic (def above,
-      // referenced by id), and the shadow's single drop-shadow is cast from
-      // the outlined composite (since #299 the blur follows it as the
-      // chain's last function). CSS filter-list chaining feeds each
-      // function's output to the next, so the chain builds the union exactly
-      // once per primitive — dilate extends exactly `width` px in every
-      // direction with no scallop and no compounding. The transform above
-      // then maps content+edge+glow+outline+shadow together, and the
-      // element's opacity fades all of it. Emitted only when an effect
-      // exists, so pre-#139/#140 revisions and their pinned Render history
-      // paint exactly as before (the shadow-only markup is byte-identical to
-      // the #139 form).
+      // choke & feather #300, ADR-0024 + its amendments; stacks #302,
+      // ADR-0027): one `filter` chain on the Layer element. The edge choke
+      // & feather come FIRST — the alpha-edge shaper operates on the
+      // region-clipped, graded composite (see edgeFilterDef) — then the
+      // edge glow's inner-alpha band operates on the shaped composite (see
+      // glowFilterDef), the outline stack's feMorphology dilate filters hug
+      // the shaped composite's alpha/glyph ink (one def and one function
+      // per stack entry, in stored order — each later entry dilates the
+      // composite accumulated by the earlier ones) and composite each ring
+      // back under the source graphic, and the shadow stack's drop-shadows
+      // are cast in stored order from the outlined composite (each later
+      // one from the ink accumulated by the earlier ones; since #299 the
+      // blur follows them as the chain's last function). CSS filter-list
+      // chaining feeds each function's output to the next, so the chain
+      // builds the union exactly once per primitive — dilate extends
+      // exactly `width` px in every direction with no scallop and no
+      // compounding. The transform above then maps
+      // content+edge+glow+outlines+shadows together, and the element's
+      // opacity fades all of it. Emitted only when an effect exists, so
+      // pre-#139/#140 revisions and their pinned Render history paint
+      // exactly as before (the shadow-only markup is byte-identical to the
+      // #139 form).
+      // Stacked effects (#302, ADR-0027): the outline and shadow lists
+      // emit one function per entry, in stored (paint) order — each later
+      // function operates on the accumulated composite of everything before
+      // it, exactly as the single-function chain always has. A single-
+      // effect list emits the one function string the pre-#302 markup
+      // carried, byte for byte.
       const outlineFn =
         rev.outline !== undefined
-          ? `url(#${outlineFilterId(rev.outline, layerIndex)})`
+          ? rev.outline.map((o, entry) => `url(#${outlineFilterId(o, layerIndex, entry)})`).join(" ")
           : "";
       // The edge glow (#221, spec #218 US-002, ADR-0024): painted after the
       // edge choke & feather (#300) — the chain's second function, on the
@@ -1428,7 +1455,7 @@ export function buildCompositionHtml(
           : "";
       const shadowFn =
         rev.shadow !== undefined
-          ? `drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color})`
+          ? rev.shadow.map((s) => `drop-shadow(${s.dx}px ${s.dy}px ${s.blur}px ${s.color})`).join(" ")
           : "";
       // The blur (#299, spec #285 US-010, DEC-005, ADR-0024 amendment): the
       // LAST function of the outer element's filter chain — after glow,

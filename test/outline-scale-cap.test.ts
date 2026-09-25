@@ -589,7 +589,7 @@ test("n = 1 outlined layer markup matches the canonical single-dilate filter def
       rotationDeg: 0,
       flipX: false,
       flipY: false,
-      outline: { width: 42, color: "#00ff00" },
+      outline: [{ width: 42, color: "#00ff00" }],
     } as any,
     contentBytes: Buffer.from([]),
   };

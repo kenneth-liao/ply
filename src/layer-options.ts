@@ -458,8 +458,8 @@ export const LAYER_OPTION_PARSE_ARGS = {
   scale: { type: "string" },
   rotate: { type: "string" },
   flip: { type: "string" },
-  shadow: { type: "string" },
-  outline: { type: "string" },
+  shadow: { type: "string", multiple: true },
+  outline: { type: "string", multiple: true },
   "vector-color": { type: "string" },
   "visible-region": { type: "string" },
   "visible-region-radius": { type: "string" },
@@ -478,12 +478,13 @@ export const LAYER_OPTION_PARSE_ARGS = {
 } as const satisfies Record<LayerOptionKey, { type: "string"; multiple?: boolean }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
- *  (or `undefined` when not supplied) — except `--run` (#297), whose
- *  repeatable occurrences collect as an ordered string array. Command-specific
- *  flags are intersected per surface; see each entry point's `values` type. */
+ *  (or `undefined` when not supplied) — except the repeatable options
+ *  (#297 --run; #302 --shadow/--outline), whose occurrences collect as an
+ *  ordered string array. Command-specific flags are intersected per
+ *  surface; see each entry point's `values` type. */
 export type LayerOptionArgs = {
-  [K in Exclude<LayerOptionKey, "run">]?: string;
-} & { run?: string[] };
+  [K in Exclude<LayerOptionKey, "run" | "shadow" | "outline">]?: string;
+} & { run?: string[]; shadow?: string[]; outline?: string[] };
 
 /** The `--text` content marker plus the text style options: the option set
  *  the content-kind exclusivity rules treat as "the text content kind". */
@@ -1423,32 +1424,58 @@ export function parseLayerPerspective(
 
 /**
  * --shadow: syntax and well-formedness through the SAME parser the edit
- * path uses, so the two boundaries never disagree. Returns the raw spec
- * (the ingestion path re-resolves it against live state).
+ * path uses, so the two boundaries never disagree. Repeatable (#302,
+ * ADR-0027): each occurrence is one shadow spec, in command order; the
+ * collected occurrence list is the stack the application case stores.
+ * Returns the raw occurrences (the ingestion path re-resolves them).
  */
-export function parseLayerShadow(raw: string | undefined): OptionParse<string | undefined> {
+export function parseLayerShadow(raw: string | string[] | undefined): OptionParse<string[] | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
-  try {
-    parseShadowSpec(raw);
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
+  const occurrences = Array.isArray(raw) ? raw : [raw];
+  if (occurrences.length === 0) return { ok: true, value: undefined };
+  const hasNone = occurrences.some((o) => o.trim().toLowerCase() === "none");
+  if (hasNone && occurrences.length > 1) {
+    return {
+      ok: false,
+      error: '--shadow "none" removes the whole shadow stack and cannot combine with shadow values: one edit either removes the stack or replaces it.',
+    };
   }
-  return { ok: true, value: raw };
+  for (const occurrence of occurrences) {
+    try {
+      parseShadowSpec(occurrence);
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+  return { ok: true, value: occurrences };
 }
 
 /**
  * --outline: syntax and well-formedness through the SAME parser the edit
- * path uses, so the two boundaries never disagree. Returns the raw spec
- * (the ingestion path re-resolves it against live state).
+ * path uses, so the two boundaries never disagree. Repeatable (#302,
+ * ADR-0027) like --shadow; the collected occurrence list is the stack the
+ * application case stores. Returns the raw occurrences (the ingestion path
+ * re-resolves them).
  */
-export function parseLayerOutline(raw: string | undefined): OptionParse<string | undefined> {
+export function parseLayerOutline(raw: string | string[] | undefined): OptionParse<string[] | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
-  try {
-    parseOutlineSpec(raw);
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
+  const occurrences = Array.isArray(raw) ? raw : [raw];
+  if (occurrences.length === 0) return { ok: true, value: undefined };
+  const hasNone = occurrences.some((o) => o.trim().toLowerCase() === "none");
+  if (hasNone && occurrences.length > 1) {
+    return {
+      ok: false,
+      error: '--outline "none" removes the whole outline stack and cannot combine with outline values: one edit either removes the stack or replaces it.',
+    };
   }
-  return { ok: true, value: raw };
+  for (const occurrence of occurrences) {
+    try {
+      parseOutlineSpec(occurrence);
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+  return { ok: true, value: occurrences };
 }
 
 /**
@@ -2152,8 +2179,10 @@ export interface SharedOptionDraft {
    *  rule as the skew pair. */
   perspectiveTiltXDeg?: number;
   perspectiveTiltYDeg?: number;
-  shadow?: LayerShadow;
-  outline?: LayerOutline;
+  /** The stored stack fold (#302, ADR-0027): one effect the single object,
+   *  two or more the list in the same field. */
+  shadow?: LayerShadow | LayerShadow[];
+  outline?: LayerOutline | LayerOutline[];
   visibleRegion?: LayerVisibleRegion;
   vectorColor?: string;
   grade?: LayerGrade;
@@ -2487,15 +2516,31 @@ function applyPerspective(
 }
 
 function applyShadow(draft: SharedOptionDraft, value: unknown): void {
-  // "none" resolves to undefined — absence IS the no-shadow form, the same
-  // canonical shape the edit path publishes (ADR-0018); an omitted option
-  // preserves the current revision's shadow by construction (the draft
-  // starts there).
-  draft.shadow = parseShadowSpec(value as string);
+  // Stacked shadows (#302, ADR-0027): the occurrences are the whole stack —
+  // an ABSOLUTE setter that replaces any previous one. One occurrence is
+  // today's single-object form (the canonical one-shadow shape); several
+  // store the list in the same field; the removal value "none" (a single
+  // occurrence) drops the whole stack. An omitted option preserves the
+  // current revision's shadows by construction (the draft starts there).
+  // The mixed "none"+values refusal is the boundary parse's (exit 2), so
+  // both surfaces and the pre-staging path can never disagree.
+  const parsed = (value as string[]).map((spec) => parseShadowSpec(spec));
+  if (parsed.length === 0 || parsed[0] === undefined) {
+    delete draft.shadow;
+    return;
+  }
+  draft.shadow = parsed.length === 1 ? parsed[0] : (parsed as LayerShadow[]);
 }
 
 function applyOutline(draft: SharedOptionDraft, value: unknown): void {
-  draft.outline = parseOutlineSpec(value as string);
+  // Stacked outlines (#302, ADR-0027): the occurrences are the whole stack —
+  // the same absolute-setter fold as the shadow's, through parseOutlineSpec.
+  const parsed = (value as string[]).map((spec) => parseOutlineSpec(spec));
+  if (parsed.length === 0 || parsed[0] === undefined) {
+    delete draft.outline;
+    return;
+  }
+  draft.outline = parsed.length === 1 ? parsed[0] : (parsed as LayerOutline[]);
 }
 
 async function applyAnchor(

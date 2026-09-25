@@ -33,7 +33,7 @@ import {
 import { resolveFace, resolveTextAxes, fontAssetBytes, callerFontFace, verifyCallerFontResolves, type CallerFontFacts } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
 import { measureTextFit } from "./composition-measure.js";
-import { refuseDivergentPerspectiveProjection } from "./layer.js";
+import { refuseDivergentPerspectiveProjection, storedEffectStack } from "./layer.js";
 import { type LayerFill, canonicalizeTextFillForStorage } from "./fill.js";
 import {
   type ResolvedTextInputRuns,
@@ -1585,11 +1585,11 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
           (source.perspectiveTiltXDeg !== 0 || source.perspectiveTiltYDeg !== 0)
         ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
         : {}),
-      ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+      ...(source.shadow !== undefined ? { shadow: storedEffectStack(source.shadow) } : {}),
       // Blur (#299, ADR-0024 amendment): the radius copied verbatim — stored
       // only when set, so an unblurred source's copy keeps its exact shape.
       ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
-      ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+      ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
@@ -1627,11 +1627,11 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
           (source.perspectiveTiltXDeg !== 0 || source.perspectiveTiltYDeg !== 0)
         ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
         : {}),
-      ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+      ...(source.shadow !== undefined ? { shadow: storedEffectStack(source.shadow) } : {}),
       // Blur (#299, ADR-0024 amendment): the radius copied verbatim — stored
       // only when set, so an unblurred source's copy keeps its exact shape.
       ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
-      ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+      ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
@@ -1662,11 +1662,11 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
         (source.perspectiveTiltXDeg !== 0 || source.perspectiveTiltYDeg !== 0)
       ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
       : {}),
-    ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+    ...(source.shadow !== undefined ? { shadow: storedEffectStack(source.shadow) } : {}),
     // Blur (#299, ADR-0024 amendment): the radius copied verbatim — stored
     // only when set, so an unblurred source's copy keeps its exact shape.
     ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
-    ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
+    ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
     ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     // The vector colour (#215, DEC-002 — a revision fact shared as a whole):
     // copied verbatim with the Layer. A source revision cannot carry the

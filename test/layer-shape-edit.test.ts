@@ -494,15 +494,15 @@ test("shadow and outline paint on a shape and show in measure's painted extents"
     "layer", "edit", layerId, "--shadow", "6,0,0,#000000", "--project", projDir, "--json",
   ]);
   expect(shadow.code).toBe(0);
-  expect(JSON.parse(shadow.stdout).layer.currentRevision.shadow).toEqual({
-    dx: 6, dy: 0, blur: 0, color: "#000000",
-  });
+  expect(JSON.parse(shadow.stdout).layer.currentRevision.shadow).toEqual([
+    { dx: 6, dy: 0, blur: 0, color: "#000000" },
+  ]);
   const shadowPng = await renderPng();
   expectPixel(shadowPng, 100, 50, [0x1d, 0x4e, 0xd8, 255]); // fill unchanged
   expectPixel(shadowPng, 153, 50, [0, 0, 0, 255]); // shadow band (150..156)
   expectPixel(shadowPng, 160, 50, [0, 0, 0, 0]); // past the shadow
   const ms = await measureLayer();
-  expect((ms.effects as { shadow: unknown }).shadow).toEqual({ dx: 6, dy: 0, blur: 0, color: "#000000" });
+  expect((ms.effects as { shadow: unknown }).shadow).toEqual([{ dx: 6, dy: 0, blur: 0, color: "#000000" }]);
   expect(ms.painted).toEqual({ x: 50, y: 25, width: 106, height: 50 });
 
   // Outline 5px wide: hugs the content edge outward; the fill shows inside.
@@ -515,7 +515,7 @@ test("shadow and outline paint on a shape and show in measure's painted extents"
   expectPixel(outlinePng, 100, 50, [0x1d, 0x4e, 0xd8, 255]); // interior keeps the fill
   expectPixel(outlinePng, 43, 50, [0, 0, 0, 0]); // outside the outline
   const mo = await measureLayer();
-  expect((mo.effects as { outline: unknown }).outline).toEqual({ width: 5, color: "#00ff00" });
+  expect((mo.effects as { outline: unknown }).outline).toEqual([{ width: 5, color: "#00ff00" }]);
   expect(mo.painted).toEqual({ x: 45, y: 20, width: 110, height: 60 });
 });
 
