@@ -30,7 +30,8 @@ caller-selected canvas dimensions, local image, text, and shape Layers,
 generated and independently matted content ingested as ordinary Layers,
 shared edits and forks, independent cross-Project copies, and local
 deterministic Rendering. New work starts here — see
-[Quick start](#quick-start), the sections below, and the `ply-operating` skill.
+[Quick start](#quick-start), [Building from parts](#building-from-parts) for
+how Ply is meant to be used, the sections below, and the `ply-operating` skill.
 
 Models are optional source-asset producers. **Generation** is one uniform
 operation (`ply generate`) with no subject category (ADR-0014): full-canvas or
@@ -113,6 +114,68 @@ continue to work everywhere. Sharing rules are unchanged: a name address to a
 shared Layer still requires `--in-place` or `--fork`, and with `--fork` the
 address supplies the target Composition and use, so `--composition`/`--use`
 need not be repeated (repeating them must match the address).
+
+## Building from parts
+
+Ply is meant to be used like Photoshop: **every element is its own Layer**.
+A thumbnail is not one generated picture with text on top — it is a
+backdrop, a cutout, a logo, a product shot, a glow, a shadow, and each word
+of copy, each sourced or generated separately and placed freely. A part
+that is its own Layer can be moved, scaled, recoloured, re-graded,
+swapped, or dropped later without regenerating anything else, and
+`ply composition measure` reports it on its own.
+
+- **Source or generate each part on its own.** Import a real mark or
+  product file, generate a backdrop, generate or matte a cutout, draw bars
+  and pills as shape Layers, and set copy as text Layers — then add each
+  with its own `composition add`. What to source versus generate is the
+  caller's authoring policy, not Ply's.
+- **Generate light on black, then blend.** A glow, spark, flare, smoke, or
+  light ray generated on a pure black background needs no matte: add it
+  with `--blend screen` and the black drops out while the light stays (a
+  white-background element takes `--blend multiply` the same way; see
+  [Layer blend modes](#layer-blend-modes-new-surface)).
+- **One source, several Layers, registered by content origin.** Add the
+  same file more than once, each with its own `--visible-region`, at the
+  **same** `--x`/`--y`. Placement is defined against the full content box,
+  not the region, so the pieces reassemble exactly where they sat in the
+  source; then move, scale, or grade one piece on its own (see
+  [Visible region](#visible-region-new-surface)).
+- **`--anchor` lands the ink, not the box.** It resolves against the
+  Layer's pre-effect painted ink — transparent padding and a shadow or
+  outline do not count — the same way on `composition add` and `layer edit`
+  (ADR-0017 amendment #288; see [Layer anchors](#layer-anchors-new-surface)).
+- **A soft elliptical shadow is a radial-filled ellipse.** Fill an ellipse
+  with a radial gradient from a translucent dark centre to transparent,
+  then stretch it with `--resize-to WxH` — horizontal and vertical scale
+  are independent, and the radial fill stays smooth — and put it beneath
+  the subject with `--position before:<use>`.
+
+```bash
+# Backdrop, cutout, and copy — each its own Layer:
+ply composition add poster bg --from-generation <jobId> --position bottom -p ~/projects/my-poster
+ply composition add poster cutout --from-matte <matteId> --resize-to x640 \
+  --anchor center,bottom --x 900 --y 720 -p ~/projects/my-poster
+ply composition add poster headline --text "Ship It" --font Archivo --weight 800 \
+  --font-size 120 --color "#ffffff" --anchor left,center --x 60 --y 300 -p ~/projects/my-poster
+
+# A flare generated on black, composited with screen — no matte:
+ply generate "a lens flare on a pure black background"
+ply composition add poster flare --from-generation <jobId> --blend screen \
+  --resize-to 700x --anchor center,center --x 900 --y 260 -p ~/projects/my-poster
+
+# One screenshot as two Layers, registered at the same origin, then one nudged:
+ply composition add poster ui --image app.png --visible-region "0,0,800,500" \
+  --x 80 --y 120 -p ~/projects/my-poster
+ply composition add poster ui-card --image app.png --visible-region "520,300,280,160" \
+  --x 80 --y 120 --shadow "0,12,24,#00000099" -p ~/projects/my-poster
+ply layer edit poster/ui-card --x 120 --y 90 -p ~/projects/my-poster
+
+# A soft elliptical contact shadow beneath the cutout:
+ply composition add poster floor-shadow --shape ellipse --size 200x200 \
+  --fill "radial:#000000b3,#00000000" --resize-to 520x90 \
+  --anchor center,center --x 900 --y 705 --position before:cutout -p ~/projects/my-poster
+```
 
 ## Uniform generation (new surface)
 
