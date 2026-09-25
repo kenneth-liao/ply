@@ -2,9 +2,11 @@
 
 - Status: Accepted — decided by Kenny in the #306 interviews (2026-09-23
   and 2026-09-24) for [spec #285](https://github.com/kenneth-liao/ply/issues/285)
-  DEC-009 (US-018, ISC-36); §3's derived rules were written by the agent
-  from those decisions (see Context). Implementation is ticket #307;
-  nothing here has shipped.
+  DEC-009 (US-018, ISC-36). §3 records his answers to the follow-up
+  questions, and two choices the delivery orchestrator made within scope
+  (marked as such); §4's derived rules were
+  written by the agent from those decisions (see Context). Implementation
+  is ticket #307; nothing here has shipped.
 
 ## Context
 
@@ -21,7 +23,10 @@ nothing moves them as one. Placing a group means editing each member.
 The ISA deferred the choice between a group primitive and a nested
 Composition used as a unit (2026-09-19 decision log). Spec #285 DEC-009
 requires an ADR before ISC-36 work starts. Kenny decided the mechanism on
-2026-09-23 and the reference semantics on 2026-09-24.
+2026-09-23 and the reference semantics on 2026-09-24. A first draft of
+this ADR left four questions open (fork depth, fork trigger, unit bounds,
+and intent for edits that reach through units); Kenny answered them on
+2026-09-24, recorded on #306.
 
 A nested Composition touches several accepted decisions: ADR-0013 (a Layer
 is shared as a whole, forks isolate, Renders pin revisions), ADR-0024 and
@@ -29,12 +34,11 @@ ADR-0025 (paint order and masks), ADR-0017 (anchors resolve against ink),
 and ADR-0022 (supersampling). ISC-14 requires a shipped Render to replay
 exactly.
 
-As in ADR-0025, this ADR separates what Kenny **decided** (§1–§2) from
+As in ADR-0025, this ADR separates what was **decided** (§1–§3, with
+§3's two orchestrator choices marked) from
 what the agent **derived** from those decisions and existing invariants
-(§3). The derived rules are part of this accepted decision, but a reviewer
-or #307 may challenge them without re-opening the interview. Questions
-that need a new product choice are listed under **Left open**, not decided
-here.
+(§4). The derived rules are part of this accepted decision, but a reviewer
+or #307 may challenge them without re-opening the interview.
 
 ## Decision
 
@@ -55,12 +59,42 @@ is flattened to make or use the unit.
   is used.
 - **Each Render pins the inner revisions it used.** A retained Render
   replays unchanged after the inner Composition changes (ISC-14).
-- **A fork makes an independent copy.** How deep the copy goes and what
-  triggers it are Left open (Q1, Q2).
+- **A fork makes an independent copy.** §3 fixes its depth and trigger.
 
-### 3. Derived rules
+### 3. Follow-up decisions
 
-These follow from §1–§2 and from existing invariants.
+Kenny answered the four follow-up questions on 2026-09-24 (#306). The
+last two items are choices the delivery orchestrator made within scope,
+recorded in the same #306 comment; they are not Kenny's.
+
+- **Fork depth: members stay shared.** A forked unit gets a new inner
+  Composition whose uses reference the **same member Layers**. An
+  in-place member edit still reaches both, under ADR-0013.
+- **Fork trigger: `--fork` on an edit of the unit Layer.** The caller must
+  supply the name of the new inner Composition. A fork without that name
+  is refused.
+- **Bounds: the inner Composition's canvas, for now.** The unit's content
+  box is the inner canvas. The unit must be stored so that bounds derived
+  from its content can be added later without changing existing revision
+  ids or Renders. Content-derived bounds would let flow and hug become
+  rules on the unit later (#306 comment, from #320).
+- **Reach through units needs no extra intent.** An edit that reaches
+  Compositions only through units is not refused under ISC-11. Direct
+  referrers are counted for the `--in-place` / `--fork` rule as today.
+  The transitive reach is reported in the output.
+- **Isolated blending (orchestrator choice).** Members blend against each other
+  inside the unit, and the unit blends as one Layer against the outer
+  backdrop. Pass-through blending is out of scope.
+- **Delete refuses while any unit Layer refers to the Composition
+  (orchestrator choice).** A Composition that any unit Layer in the
+  Project refers to cannot be deleted. "Any" includes a unit Layer that
+  no Composition uses at the moment. A later Composition with the same name can therefore never be
+  picked up silently. The #290 `composition delete` command gains this
+  refusal in #307.
+
+### 4. Derived rules
+
+These follow from §1–§3 and from existing invariants.
 
 #### The unit is a Layer
 
@@ -90,20 +124,19 @@ The unit Layer takes the Layer facts that apply across Layer kinds
 (ADR-0016), opacity, visible region (ADR-0023), grade and the effects
 (ADR-0024; shadow ADR-0018, outline ADR-0019), blend, and mask
 (ADR-0025). Kind-specific facts (text, vector colour, shape geometry) do
-not apply. Which facts #307 ships first
-is its scope; none may be refused on the unit for being a unit.
+not apply. Which facts #307 ships first is its scope; none may be refused
+on the unit for being a unit.
 
 - **One edit moves or turns the unit.** `layer edit` on the unit's use
   changes the unit Layer's placement or transform. The members' own
   revisions do not change.
-- **The unit paints as one isolated group.** The inner Composition is
+- **The unit paints as one isolated group (§3).** The inner Composition is
   composited at paint time, members in its use order with their own
   facts. That composite is the unit Layer's content: step 1 of the
   ADR-0024 order, as amended by ADR-0025. The unit's own visible region,
   grade, effects, transform, opacity, mask clip, and blend then apply to
-  the composite as one Layer. Members blend against each other inside the
-  unit, not against the outer backdrop. The unit then blends as one layer
-  against the outer backdrop (ADR-0024 §5). This is how the inner
+  the composite as one Layer, which blends against the outer backdrop
+  (ADR-0024 §5). This is how the inner
   Composition composites when rendered on its own, so its members
   composite the same way wherever the unit is used.
 - **Painted at the size it appears.** The composite is painted at the
@@ -111,11 +144,12 @@ is its scope; none may be refused on the unit for being a unit.
   never rasterized at the inner canvas size and then resampled, so a
   scaled-up unit stays as sharp as its members. The composite is never
   stored as content; it exists only during painting.
-- **Content box.** Until the question of bounds is settled (Left open,
-  Q3), the unit's content box is the inner Composition's canvas. That is
-  the only bounds a Composition has today. Members outside the inner
-  canvas are cut, as they are when the inner Composition renders on its
-  own.
+- **Content box.** The unit's content box is the inner Composition's
+  canvas (§3). Members outside the inner canvas are cut, as they are when
+  the inner Composition renders on its own. Because the bounds must stay
+  extensible, a unit Layer revision written today must keep its id when a
+  bounds option is added later: the new option is stored only when set,
+  and its absence means the canvas.
 - **Anchors and measure.** The unit's pre-effect ink (the ADR-0017 anchor
   basis, as amended by #288) is the alpha of the inner composite, cropped
   by the unit's visible region. The members' own effects (their shadows,
@@ -131,40 +165,48 @@ is its scope; none may be refused on the unit for being a unit.
 
 - **Editing a member.** A member is edited in the inner Composition under
   the ordinary ADR-0013 rules. The change reaches every Composition that
-  uses the unit; that is the live reference Kenny decided (§2). The reach
-  must be visible: every edit reports the Compositions it reaches
-  **through units**, transitively, next to the direct ones, on success and
-  on refusal. Whether that transitive reach also counts toward the
-  `--in-place` / `--fork` requirement is Left open (Q4).
-- **Editing the unit.** The unit Layer is shared as a whole (ADR-0013).
-  Placing the same inner Composition differently in two outer Compositions
-  needs no fork: each outer Composition can hold its own unit Layer
-  referencing the same inner Composition. A unit Layer used by several
-  Compositions follows the usual `--in-place` / `--fork` rule for its own
-  facts, with one interim limit: until Q2 is answered, `--fork` on a unit
-  Layer is refused, naming the open question, because a fork's meaning for
-  the inner Composition is not yet decided.
+  uses the unit; that is the live reference (§2). Only direct referrers
+  count for the `--in-place` / `--fork` rule (§3). Every edit reports the
+  Compositions it reaches **through units**, transitively, next to the
+  direct ones, on success and on refusal.
+- **Editing the unit.** The unit Layer is shared as a whole (ADR-0013). A
+  unit Layer used by several Compositions follows the usual `--in-place`
+  / `--fork` rule for its own facts. Because `--fork` also copies the
+  inner Composition (§3), placing the same inner Composition differently
+  in two outer Compositions while keeping it live is done with two unit
+  Layers, one per outer Composition, that reference the same inner
+  Composition.
 - **Reference discovery.** ADR-0013's referrer scan grows one step: it
   follows unit references transitively for reporting. The Composition
   documents stay authoritative, and any index stays rebuildable.
 
 #### Fork
 
-Kenny decided that a fork makes an independent copy (§2). This ADR fixes
-only what follows from that and existing invariants:
+`layer edit --fork` on a unit Layer, with the required name (§3), does
+two things in one publication:
 
-- The copy is a new Composition in the same Project, and the unit that
-  receives the copy references it instead of the original. Later changes to the original
-  inner Composition's use list do not reach the copy, and changes to the
-  copy's use list do not reach the original.
+- It forks the unit Layer, as ADR-0013 defines a fork: a new Layer
+  identity, referenced only by the forking Composition, carrying the
+  edit.
+- It creates the new inner Composition under the caller's name, with the
+  original's canvas and the same use list: the same use names referring
+  to the same Layers. The forked unit Layer's revision refers to the new
+  name.
+
+What follows:
+
+- Later changes to either inner Composition's use list (adding,
+  removing, or reordering uses) do not reach the other. A member edited
+  in place reaches both, because both use it; such a member now has two
+  direct referrers, so the ordinary `--in-place` / `--fork` rule applies.
+- A unit used inside the original inner Composition is not forked. The
+  copy gets a use of the same unit Layer, which still refers to the same
+  nested inner Composition, live.
 - A fork never changes the original inner Composition, any other
   Composition that uses it, or any retained Render.
-- A Composition name that clashes with an existing Composition is
-  refused, never silently renamed (the rule ADR-0025 §3 applies to use
-  names).
-
-How deep the copy goes, what triggers it, and how the copy is named are
-Left open (Q1, Q2).
+- A name that clashes with an existing Composition is refused before
+  anything is published, never silently renamed (the rule ADR-0025 §3
+  applies to use names). The fork runs the cycle check.
 
 #### Import, relocation, and delete
 
@@ -181,19 +223,15 @@ Left open (Q1, Q2).
   destination is refused before anything is published. That includes an
   inner Composition an earlier import already copied, so importing a
   second outer Composition that shares it is refused today (see
-  Consequences). Cross-Project
-  links stay unsupported: a unit never references a Composition in
-  another Project.
+  Consequences). Cross-Project links stay unsupported: a unit never
+  references a Composition in another Project.
 - **Relocation** moves the whole Project. Composition names and Layer
   identities are Project-local, so units move unchanged.
-- **`composition delete`** (#290) gains a refusal. Deleting a Composition
-  that a unit Layer in another Composition still references is refused,
-  naming each referring Composition and use. The same check guards any
-  future rename. Retained Renders are unaffected either way: they replay
-  from their pins. A unit Layer that no Composition uses is not a
-  referrer; if a Composition with the same name is created later and that
-  Layer is used again, it paints the new Composition. The add is subject
-  to the same cycle and resolution checks as any unit use.
+- **`composition delete`** (#290) refuses while any unit Layer in the
+  Project refers to the Composition (§3). The refusal names each such
+  unit Layer, and the Compositions and uses that use it, if any. The
+  same check guards any future rename. Retained Renders are unaffected
+  either way: they replay from their pins.
 - **A unit whose inner Composition does not exist** is refused when
   painted, measured, or rendered, naming the missing Composition. It
   never paints empty as a fallback. This extends the CONTEXT.md invariant
@@ -255,12 +293,12 @@ adds a refusal to the #290 delete.
   Renders pin what they used. What is new:
   - A unit Layer's revision is immutable, but it paints the inner
     Composition's current state.
-  - An edit's reach now includes Compositions reached through units, and
-    is reported. Whether it counts for the `--in-place` / `--fork` rule
-    (the ISC-11 refusal and the CONTEXT.md invariant) is Q4.
-  - A fork of a unit makes an independent copy (§2); its
-    depth and trigger are Q1 and Q2, and `--fork` on a unit Layer is
-    refused until then.
+  - An edit's reach now includes Compositions reached through units. It
+    is reported, but it does not count for the `--in-place` / `--fork`
+    rule, so the ISC-11 refusal and the CONTEXT.md invariant still count
+    direct referrers only.
+  - `--fork` on a unit Layer also copies the inner Composition under a
+    caller-supplied name. Member Layers stay shared.
   - Cross-Project import brings referenced inner Compositions.
   - Render pins nest.
 - **ADR-0024 and ADR-0025 (paint order and masks) — constrained.** The
@@ -271,6 +309,8 @@ adds a refusal to the #290 delete.
   unit's pre-effect ink is its composite's alpha.
 - **ADR-0022 (supersampling) — constrained.** The composite is painted at
   the unit's painted size and the Render's supersample factor.
+- **#290 `composition delete` — constrained.** It refuses while any unit
+  Layer refers to the Composition. #307 adds the refusal.
 - **ADR-0014 (uniform Layers) — unchanged.** The unit Layer is a new Layer
   kind that takes the uniform Layer facts; no content-category
   exception is introduced.
@@ -300,41 +340,17 @@ adds a refusal to the #290 delete.
   referenced and clashing Compositions. Importing two outer Compositions
   that share an inner Composition into another Project is refused on the
   second import until a later rule recognises an earlier copy.
+- Ply has no command that deletes a Layer: `composition delete` and
+  `composition remove` keep the Layers they drop. So deleting the outer
+  Composition, or removing the unit's use, leaves an unused unit Layer
+  that keeps its inner Composition from being deleted for as long as the
+  Project exists. Today no command re-adds an existing Layer, so the
+  unused unit Layer cannot paint again; the refusal guards any future
+  re-add path. A future Layer cleanup would lift the block.
 - Out of scope:
   - references to Compositions in another Project;
-  - content-driven layout rules on a unit, such as flow and hug. The
-    picture-it benchmark (#320) and the ISA's fog keep these for later;
-    Q3 decides whether a unit's bounds can make them possible;
-  - pass-through blending of members against the outer backdrop.
+  - content-derived bounds, and content-driven layout rules on a unit
+    such as flow and hug. The picture-it benchmark (#320) and the ISA's
+    fog keep these for later; §3 keeps the storage open for them;
+  - pass-through blending of members against the outer backdrop (§3).
 
-## Left open
-
-These need a product choice from Kenny. They are not decided by this ADR.
-#307 must not settle them by implementation. Where an interim rule is
-stated, it keeps today's behaviour or refuses, so either answer can
-follow without changing shipped revisions or Renders.
-
-- **Q1. How deep a fork's copy goes.** Does the copy share the member
-  Layers with the original inner Composition, so an in-place member edit
-  still reaches both under ADR-0013? Or are the members forked too, so
-  the copy is fully independent?
-- **Q2. What triggers the copy, and how it is named.** Is it the
-  ADR-0013 `--fork` on an edit of a shared unit Layer, or a separate,
-  explicit operation on the unit? §3 lets two outer Compositions place
-  the same inner Composition differently without forking, so `--fork` on
-  a unit's own facts could keep the live reference. Does the caller name
-  the new Composition, or does Ply derive a name? Until answered, `--fork`
-  on a unit Layer is refused (§3).
-- **Q3. A unit's bounds.** Are they always the inner Composition's fixed
-  canvas, or can they come from its content? Content-derived bounds would
-  keep hug and flow possible as later rules on the unit (#306 comment,
-  from #320). §3 uses the canvas until this is answered; #307 must store
-  the unit so that content-derived bounds can be added later without
-  changing existing revision ids or Renders.
-- **Q4. Whether reach through units needs explicit intent.** A member
-  used directly only by the inner Composition has one referrer, so
-  ADR-0013 needs no flag, yet the edit reaches every Composition that uses
-  the unit. Should that reach count toward the `--in-place` / `--fork`
-  requirement (ISC-11), or does the live reference Kenny chose already
-  state that intent? Until answered, #307 counts direct referrers only,
-  as today, and reports the transitive reach.
