@@ -220,3 +220,32 @@ test(
   // 31 rows x 2 CLI spawns each: one generous timeout for the whole loop.
   120_000,
 );
+
+/** Stacked occurrences (#302, ADR-0027) refuse identically on both
+ *  surfaces: the boundary parse's mixed "none"+values refusal, and an
+ *  invalid LATER occurrence (the first is well-formed), are usage errors
+ *  with byte-identical stderr on `composition add` and `layer edit`. */
+test(
+  "stacked --shadow/--outline occurrences refuse identically on add and layer edit",
+  async () => {
+    const cases: { name: string; bad: string[] }[] = [
+      { name: "mixed none", bad: ["--shadow", "none", "--shadow", "1,1,0,#000000"] },
+      { name: "bad second occurrence", bad: ["--shadow", "1,1,0,#000000", "--shadow", "banana"] },
+      { name: "mixed none outline", bad: ["--outline", "none", "--outline", "2,#000000"] },
+      { name: "bad second outline occurrence", bad: ["--outline", "2,#000000", "--outline", "banana"] },
+    ];
+    let n = 0;
+    for (const c of cases) {
+      const add = await spawn([
+        "composition", "add", "poster", `s${n++}`, "--image", imagePath, ...c.bad, "--project", projDir,
+      ]);
+      const edit = await spawn(["layer", "edit", imageId, ...c.bad, "--project", projDir]);
+      expect(
+        { code: add.code, stderr: add.stderr },
+        `stacked refusal "${c.name}" (add exit ${add.code}, edit exit ${edit.code})`,
+      ).toEqual({ code: edit.code, stderr: edit.stderr });
+      expect(add.stderr).toContain("none");
+    }
+  },
+  120_000,
+);

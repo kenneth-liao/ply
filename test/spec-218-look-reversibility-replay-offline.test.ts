@@ -735,3 +735,78 @@ test("reversibility and lineage: cover fit reverses through the absolute scale s
   const revertedPng = await readFile(JSON.parse(renderReverted.stdout).render.output as string);
   expect(revertedPng.equals(initPng)).toBe(true);
 });
+
+/** Stacked effects (TEST-002, #302, spec #285 US-011, DEC-005/DEC-006,
+ * ADR-0027): a shadow stack and an outline stack join the offline
+ * reversibility and replay suite — setting stacks, rendering, removing
+ * with the documented removal values ("none" drops the whole stack),
+ * re-rendering byte-identically to the effect-less initial, with retained
+ * content bytes and lineage unchanged; the retained Render replays
+ * byte-identically through replay. */
+test("reversibility and lineage: stacked shadows and outlines reverse and replay offline", async () => {
+  const proj = path.join(tempDir, "proj-stack");
+  await invoke(["project", "init", proj, "--json"]);
+  await invoke(["composition", "create", "testcomp", "--width", "128", "--height", "128", "-p", proj, "--json"]);
+
+  const imgPath = path.join(tempDir, "stack-sample.png");
+  await writeFile(imgPath, solidPng(48, 48, [180, 90, 45, 255]));
+
+  const addRes = await invoke([
+    "composition", "add", "testcomp", "item",
+    "--image", imgPath, "--x", "40", "--y", "40",
+    "-p", proj, "--json",
+  ]);
+  expect(addRes.code).toBe(0);
+  const layerId = JSON.parse(addRes.stdout).use.layerId as string;
+
+  const renderInit = await invoke(["composition", "render", "testcomp", "-p", proj, "--json"]);
+  expect(renderInit.code).toBe(0);
+  const initPng = await readFile(JSON.parse(renderInit.stdout).render.output as string);
+  const inspectInit = await invoke(["layer", "inspect", layerId, "-p", proj, "--json"]);
+  const initialContentHash = JSON.parse(inspectInit.stdout).layer.currentRevision.contentHash as string;
+
+  // Apply the stacks: two shadows, two outlines.
+  const editRes = await invoke([
+    "layer", "edit", layerId,
+    "--shadow", "4,0,0,#000000", "--shadow", "0,4,0,#000000",
+    "--outline", "2,#00ff00", "--outline", "2,#0000ff",
+    "-p", proj, "--json",
+  ]);
+  expect(editRes.code).toBe(0);
+
+  const renderMod = await invoke(["composition", "render", "testcomp", "-p", proj, "--json"]);
+  expect(renderMod.code).toBe(0);
+  const modPng = await readFile(JSON.parse(renderMod.stdout).render.output as string);
+  expect(modPng.equals(initPng)).toBe(false);
+
+  // Retain the modified render's manifest, then replay it: the retained
+  // Render must replay byte-identically (offline replay).
+  const manifestPath = JSON.parse(renderMod.stdout).render.manifest as string;
+  const replay = await invoke([
+    "composition", "replay", manifestPath,
+    "--out", path.join(tempDir, "stack-replay.png"),
+    "-p", proj, "--json",
+  ]);
+  expect(replay.code).toBe(0);
+  const replayed = await readFile(path.join(tempDir, "stack-replay.png"));
+  expect(replayed.equals(modPng)).toBe(true);
+
+  // Remove the stacks with the documented removal values.
+  const removeRes = await invoke([
+    "layer", "edit", layerId,
+    "--shadow", "none", "--outline", "none",
+    "-p", proj, "--json",
+  ]);
+  expect(removeRes.code).toBe(0);
+
+  const renderRestored = await invoke(["composition", "render", "testcomp", "-p", proj, "--json"]);
+  expect(renderRestored.code).toBe(0);
+  const restoredPng = await readFile(JSON.parse(renderRestored.stdout).render.output as string);
+  expect(restoredPng.equals(initPng)).toBe(true);
+
+  const inspectRestored = await invoke(["layer", "inspect", layerId, "-p", proj, "--json"]);
+  const restoredRev = JSON.parse(inspectRestored.stdout).layer.currentRevision;
+  expect(restoredRev.contentHash).toBe(initialContentHash);
+  expect(restoredRev.shadow).toBeUndefined();
+  expect(restoredRev.outline).toBeUndefined();
+});

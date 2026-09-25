@@ -2,6 +2,10 @@
 
 - Status: Accepted — the outline command and its revision fact ship in
   [spec #132](https://github.com/kenneth-liao/ply/issues/132) ticket #140.
+  The one-effect-per-type rule below is **superseded by
+  [ADR-0027](0027-layer-effects-stack.md)** (#302, spec #285 US-011), which
+  lets `outline` stack in the same field; this ADR remains the record of
+  the single-outline contract the fold preserves for one effect.
 
 ## Decision
 

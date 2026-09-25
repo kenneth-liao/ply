@@ -1323,3 +1323,100 @@ test("matrix: choke and feather apply to raster image, vector image, text, and s
     expect(pixel(shaped, x, y)[3]).toBe(255);
   }
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// Stacked effects (#302, spec #285 US-011, ISC-50, DEC-005/DEC-006,
+// ADR-0027): two shadows and two outlines on one Layer, on every kind.
+// ---------------------------------------------------------------------------
+
+test("matrix: stacked shadows and outlines apply to raster image, vector image, text, and shape Layers", async () => {
+  await makeComp("comp-stack", 300, 200);
+
+  // 1a. Raster image: two sharp shadows in different directions.
+  const pngPath = path.join(tempDir, "raster-solid.png");
+  await writeFile(pngPath, solidPng(40, 40, [200, 60, 60, 255]));
+  await invoke([
+    "composition", "add", "comp-stack", "raster",
+    "--image", pngPath, "--x", "10", "--y", "10",
+    "--shadow", "3,0,0,#00ff00", "--shadow", "0,3,0,#0000ff",
+    "--project", projDir, "--json",
+  ]);
+
+  // 1b. Vector image: same stack.
+  const svgPath = path.join(tempDir, "vector-solid.svg");
+  await writeFile(svgPath, solidSvg(40, 40, "#3c3cc8"));
+  await invoke([
+    "composition", "add", "comp-stack", "vector",
+    "--image", svgPath, "--x", "70", "--y", "10",
+    "--shadow", "3,0,0,#00ff00", "--shadow", "0,3,0,#0000ff",
+    "--project", projDir, "--json",
+  ]);
+
+  // 1c. Text: same stack on the glyphs.
+  await invoke([
+    "composition", "add", "comp-stack", "text",
+    "--text", "MM", "--font", "Archivo", "--font-size", "24", "--color", "#2040a0",
+    "--x", "130", "--y", "10",
+    "--shadow", "3,0,0,#00ff00", "--shadow", "0,3,0,#0000ff",
+    "--project", projDir, "--json",
+  ]);
+
+  // 1d. Shape: rectangle with a two-outline stack (nested rings) plus a
+  // shadow cast from the outlined composite.
+  await invoke([
+    "composition", "add", "comp-stack", "shape",
+    "--shape", "rectangle", "--size", "40x40", "--fill", "#c8a232",
+    "--x", "10", "--y", "90",
+    "--outline", "3,#00ff00", "--outline", "3,#0000ff", "--shadow", "0,4,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+
+  const rendered = await render("comp-stack", "stack.png");
+  // Raster [10,50)×[10,50): right of the content is GREEN (the first
+  // shadow's horizontal band), below it BLUE (the second's vertical band).
+  expect(pixel(rendered, 52, 30)).toEqual([0, 255, 0, 255]);
+  expect(pixel(rendered, 30, 52)).toEqual([0, 0, 255, 255]);
+  // Vector [70,110)×[10,50): same directions.
+  expect(pixel(rendered, 112, 30)).toEqual([0, 255, 0, 255]);
+  expect(pixel(rendered, 90, 52)).toEqual([0, 0, 255, 255]);
+  // Text glyphs: a right-hand green band and a below blue band exist
+  // (probe the glyph's neighborhood — exact glyph geometry varies, so scan
+  // the text's region for the pure band colours; the glyph ink #2040a0 is
+  // distinguishable from both).
+  let greenBand = false;
+  let blueBand = false;
+  for (let y = 5; y < 55; y++) {
+    for (let x = 130; x < 230; x++) {
+      const p = pixel(rendered, x, y);
+      if (p[0] === 0 && p[1] === 255 && p[2] === 0) greenBand = true;
+      if (p[0] === 0 && p[1] === 0 && p[2] === 255) blueBand = true;
+    }
+  }
+  expect(greenBand).toBe(true);
+  expect(blueBand).toBe(true);
+
+  // Shape: nested rings — the inner band green, the outer band blue, the
+  // shadow below the outlined composite.
+  expect(pixel(rendered, 8, 110)).toEqual([0, 255, 0, 255]); // inner ring (content ⊕ 3 band starts at x 7)
+  expect(pixel(rendered, 5, 110)).toEqual([0, 0, 255, 255]); // outer ring (⊕ 6 starts at x 4)
+  expect(pixel(rendered, 30, 138)[3]).toBe(255); // shadow ink below
+  expect(pixel(rendered, 30, 141)[3]).toBe(0); // past the additive reach
+
+  // measure reports both stacks as lists in paint order, per kind.
+  const measured = await invoke(["composition", "measure", "comp-stack", "--project", projDir, "--json"]);
+  expect(measured.code).toBe(0);
+  const layers = JSON.parse(measured.stdout).layers as Array<{ name: string; effects: { shadow: unknown[] | null; outline: unknown[] | null } }>;
+  for (const l of layers) {
+    if (l.name === "shape") {
+      // The shape carries the outline stack and a single shadow.
+      expect(l.effects.shadow).toHaveLength(1);
+      expect(l.effects.outline).toEqual([
+        { width: 3, color: "#00ff00" },
+        { width: 3, color: "#0000ff" },
+      ]);
+    } else {
+      expect(l.effects.shadow).toHaveLength(2);
+      expect(l.effects.outline).toBeNull();
+    }
+  }
+});

@@ -2,6 +2,10 @@
 
 - Status: Accepted — the shadow command and its revision fact shipped in
   [spec #132](https://github.com/kenneth-liao/ply/issues/132) ticket #139.
+  The one-effect-per-type rule below is **superseded by
+  [ADR-0027](0027-layer-effects-stack.md)** (#302, spec #285 US-011), which
+  lets `shadow` stack in the same field; this ADR remains the record of the
+  single-shadow contract the fold preserves for one effect.
 
 ## Decision
 

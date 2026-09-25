@@ -74,7 +74,7 @@ import {
 import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill, normalizeStoredTextFill } from "./fill.js";
-import { formatGrade, formatGlow, runRemovalOnAddRefusal, type LayerGrade, type LayerGlow, type StoredLayerBlendMode } from "./layer.js";
+import { formatGrade, formatGlow, runRemovalOnAddRefusal, type LayerGrade, type LayerGlow, type LayerOutline, type LayerShadow, type StoredLayerBlendMode } from "./layer.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -514,14 +514,17 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         removes it.
   --shadow <spec>       Apply a shadow to the Layer's content: an absolute
                         setter "<dx>,<dy>,<blur>,<color>" (e.g.
-                        "10,10,4,#000000") or "none". Offsets and blur are
-                        px; negative offsets are valid. Paints in the
-                        Layer's LOCAL space, mapped by the transform and
-                        faded by opacity.
+                        "10,10,4,#000000") or "none". REPEATABLE (#302,
+                        ADR-0027): several occurrences stack shadows in
+                        command order. Offsets and blur are px; negative
+                        offsets are valid. Paints in the Layer's LOCAL
+                        space, mapped by the transform and faded by opacity.
   --outline <spec>      Apply an outline to the Layer's content: an absolute
                         setter "<width>,<color>" (e.g. "4,#000000") or
-                        "none". Width is px (0..256). Painted before the
-                        shadow, which is cast from the outlined composite.
+                        "none". REPEATABLE (#302, ADR-0027): several
+                        occurrences stack nested rings in command order.
+                        Width is px (0..256). Painted before the shadow,
+                        which is cast from the outlined composite.
   --vector-color <hex|none>
                         Paint a vector image Layer's shape in one colour
                         (#215, spec #207 US-005): an absolute setter taking
@@ -669,8 +672,8 @@ function oneCommandFacts(
     skewYDeg?: number;
     perspectiveTiltXDeg?: number;
     perspectiveTiltYDeg?: number;
-    shadow?: { dx: number; dy: number; blur: number; color: string };
-    outline?: { width: number; color: string };
+    shadow?: LayerShadow[] | null;
+    outline?: LayerOutline[] | null;
     vectorColor?: string;
     visibleRegion?: { x: number; y: number; width: number; height: number; cornerRadius?: number };
     grade?: LayerGrade;
@@ -696,8 +699,9 @@ function oneCommandFacts(
   if (rev.perspectiveTiltXDeg !== undefined && (rev.perspectiveTiltXDeg !== 0 || rev.perspectiveTiltYDeg !== 0)) {
     facts.push(`perspective ${rev.perspectiveTiltXDeg}° ${rev.perspectiveTiltYDeg}°`);
   }
-  if (rev.shadow) facts.push(`shadow ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`);
-  if (rev.outline) facts.push(`outline ${rev.outline.width} ${rev.outline.color}`);
+  // Stacked effects (#302, ADR-0027): one fact per entry, in paint order.
+  if (rev.shadow) for (const s of rev.shadow) facts.push(`shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
+  if (rev.outline) for (const o of rev.outline) facts.push(`outline ${o.width} ${o.color}`);
   if (rev.vectorColor) facts.push(`vector colour ${rev.vectorColor}`);
   if (rev.visibleRegion) {
     facts.push(
@@ -1593,13 +1597,17 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
             result.layers.forEach((layer, idx) => {
               const t = layer.transform;
               const facts: string[] = [];
+              // Stacked effects (#302, ADR-0027): one fact per entry, in
+              // paint order.
               if (layer.effects.shadow) {
-                const s = layer.effects.shadow;
-                facts.push(`shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
+                for (const s of layer.effects.shadow) {
+                  facts.push(`shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
+                }
               }
               if (layer.effects.outline) {
-                const o = layer.effects.outline;
-                facts.push(`outline ${o.width} ${o.color}`);
+                for (const o of layer.effects.outline) {
+                  facts.push(`outline ${o.width} ${o.color}`);
+                }
               }
               // The shape's ONE fill (#208/#210): the canonical fill facts
               // painting applies, reported for auditability.

@@ -1,6 +1,35 @@
 # Changelog
 
 ## [Unreleased]
+- Added stacked effects to Layers (BREAKING: `measure`/`inspect`/
+  `layer review` `--json` report shape changed — see below; #302, spec #285
+  US-011, ISC-50, DEC-005/DEC-006, ADR-0027): `--shadow` and `--outline` are
+  REPEATABLE on `composition add` and `layer edit` — two or more occurrences
+  in one command set the whole stack, in command order, so a title can carry
+  a glow and two drop shadows or nested outline rings. The field is the ONE
+  home for the Layer's effects of that type (the #297 one-fold precedent):
+  one effect stores today's single object, two or more store a list in the
+  SAME field, in paint order; a stored one-element list is refused as a
+  malformed document. Each later function in the paint chain operates on the
+  composite the earlier ones accumulated (the first shadow is cast from the
+  outlined composite, each later outline hugs everything the earlier ones
+  accumulated), the additive `localEffectReachPx` reach sums over every
+  stacked effect so the perspective publication gate sees them all, and the
+  cross-type paint order is unchanged (ADR-0024). `--shadow none` /
+  `--outline none` removes the whole stack (single occurrence; it cannot
+  combine with value occurrences), an omitted option preserves the stack,
+  and one occurrence stores today's single-object form — existing
+  single-effect revisions keep their exact document shape, revision ids, and
+  byte-identical Render replay (TEST-003). The stacks join the property ×
+  kind matrix, the add/edit refusal parity tests, and the offline
+  reversibility and replay suite (TEST-002); ADR-0027 supersedes
+  ADR-0018/0019's one-effect rule. Breaking: `measure`'s `effects` facts,
+  `layer inspect`, and `layer review` now report each effect of a type as
+  the normalized list in paint order, even for one effect (`effects.shadow`
+  was a single object, it is now an array; same for `effects.outline`) —
+  machine-readable consumers reading those fields must migrate. The edit
+  result reports `shadowed.shadow` / `outlined.outline` changed to lists
+  the same way.
 - Added the one-sided direction model to the Layer edge glow (#301, spec #285
   US-014, ISC-53, DEC-008, ADR-0024 amendment): `composition add` and `layer
   edit` accept `--glow "<width>,<softness>,<color>,from <angle>,<strength>"` —

@@ -237,8 +237,9 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
       expect(rev.perspectiveTiltXDeg).toBe(0);
       expect(rev.perspectiveTiltYDeg).toBe(20);
       break;
-    case "shadow": expect((rev.shadow as { dx: number } | undefined)?.dx).toBe(2); break;
-    case "outline": expect((rev.outline as { width: number } | undefined)?.width).toBe(2); break;
+    // Stacked effects (#302, ADR-0027): reports carry the normalized list.
+    case "shadow": expect((rev.shadow as Array<{ dx: number }> | undefined)?.[0]?.dx).toBe(2); break;
+    case "outline": expect((rev.outline as Array<{ width: number }> | undefined)?.[0]?.width).toBe(2); break;
     case "visible-region": expect(rev.visibleRegion).toEqual({ x: 10, y: 10, width: 20, height: 20 }); break;
     case "visible-region-radius":
       // The guard add supplies --visible-region "10,10,20,20" beside the

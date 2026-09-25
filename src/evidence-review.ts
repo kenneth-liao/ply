@@ -349,6 +349,9 @@ export async function reviewRetainedLayer(
   let gradeFact: string | null = null;
   let glowFact: string | null = null;
   let blendFact: string | null = null;
+  // Stacked effects (#302, ADR-0027): one row per entry, in paint order —
+  // the chain's function order (glow band, then outlines, then shadows).
+  let effectFacts: [string, string][] = [];
   const review = await withProjectLock(resolvedRoot, async () => {
     const full = await readLayerInternalFull(resolvedRoot, layerId);
     const layer: ResolvedLayer = {
@@ -370,6 +373,14 @@ export async function reviewRetainedLayer(
     if (rev.blend !== undefined) {
       blendFact = rev.blend;
     }
+    effectFacts = [
+      ...(rev.outline !== undefined
+        ? rev.outline.map((o) => ["outline", `${o.width} ${o.color} (paint-time)`] as [string, string])
+        : []),
+      ...(rev.shadow !== undefined
+        ? rev.shadow.map((s) => ["shadow", `${s.dx} ${s.dy} ${s.blur} ${s.color} (paint-time)`] as [string, string])
+        : []),
+    ];
     if (rev.kind === "shape") {
       // A shape Layer (#208) has no retained bytes and no generation/matting
       // lineage — its content IS its parameters (DEC-001). The review reports
@@ -388,6 +399,12 @@ export async function reviewRetainedLayer(
           : []),
         ...(rev.glow !== undefined
           ? [["edge glow", `${formatGlow(rev.glow)} (paint-time)`] as [string, string]]
+          : []),
+        ...(rev.outline !== undefined
+          ? rev.outline.map((o) => ["outline", `${o.width} ${o.color} (paint-time)`] as [string, string])
+          : []),
+        ...(rev.shadow !== undefined
+          ? rev.shadow.map((s) => ["shadow", `${s.dx} ${s.dy} ${s.blur} ${s.color} (paint-time)`] as [string, string])
           : []),
         ...(rev.blend !== undefined
           ? [["blend mode", `${rev.blend} (paint-time)`] as [string, string]]
@@ -519,6 +536,7 @@ export async function reviewRetainedLayer(
   if (glowFact !== null) {
     facts.push(["edge glow", `${glowFact} (paint-time)`]);
   }
+  facts.push(...effectFacts);
   if (blendFact !== null) {
     facts.push(["blend mode", `${blendFact} (paint-time)`]);
   }

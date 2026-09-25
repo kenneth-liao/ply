@@ -73,6 +73,10 @@ space apply in one fixed, canonical sequence (DEC-002, DEC-003):
    coverage (DEC-005).
 6. **Outline**: local stroke dilation around visible ink (ADR-0019).
 7. **Shadow**: local drop-shadow cast from the outlined composite (ADR-0018).
+   Within the outline and shadow steps, STACKED effects (#302, ADR-0027)
+   paint in stored order — each later function operates on the composite
+   the earlier ones accumulated; the steps' positions in this order are
+   unchanged.
 8. **Blur (#299)**: a Gaussian defocus over the whole Layer look — the LAST
    function of the effects chain (the amendment below).
 9. **Transform & Opacity**: scale, flip, rotation, and Layer-level opacity.
