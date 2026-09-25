@@ -881,6 +881,61 @@ ply layer edit <layerId> --fit-box none --in-place
   a fit box, and setting one is an edit — the revision becomes natural
   layout like any other text edit.
 
+## Text runs (new surface)
+
+One text Layer can carry runs of different colour, weight, or font (#297,
+spec #285 US-017, ISC-54, ADR-0021 amendment) — "5 HERDR PLUGINS" is one
+editable Layer, not three Layers placed by hand:
+
+```bash
+# Author runs on add: repeatable --run, one occurrence per run, in order.
+# The Layer-level options are the defaults run 1 inherits.
+ply composition add poster headline \
+  --run "5 " --run "HERDR " --run "PLUGINS" \
+  --font Archivo --font-size 72 \
+  --run-color 1=#ef4444 \
+  --run-color 2=linear:90deg,#ffb347,#c0182b \
+  --run-weight 2=800 \
+  --run-font 3="Archivo Black" --run-color 3=#3b82f6 \
+  -p ~/projects/my-poster
+
+# Edit one run later (1-based run indices; each setter is absolute).
+ply layer edit <layerId> --run-color 2=none --in-place      # remove an override
+ply layer edit <layerId> --run-text 2=BRAND --in-place       # rewrite one run's text
+ply layer edit <layerId> --run-font 2="Silkscreen" --run-font-file 3=./font.ttf --in-place
+ply layer edit <layerId> --run "!" --in-place                # append a run
+ply layer edit <layerId> --runs none --in-place              # collapse to a single run
+```
+
+- **One home per fact.** The Layer's `text` stays the only home of the
+  characters; the stored `runs` field (present iff there are two or more
+  runs) holds each run's boundary plus only the facts that run OVERRIDES
+  against the Layer-level defaults — colour (the same solid/gradient
+  grammar as `--color`), font identity (the run's own retained bytes,
+  deduped when equal to the Layer font's), caller font facts, and axes.
+  Run size, tracking, and line height are Layer facts that apply across
+  runs. A single-run Layer is stored, hashed, and rendered exactly as
+  today's text Layer.
+- **No style is synthesized (ADR-0021 amendment).** Each run's weight and
+  width validate against the RUN's effective face — its own face under a
+  font override, the Layer face otherwise — and a static face stores no
+  axes. An italic look comes from an italic face (for example an italic
+  caller font file) or a Layer transform; there is no italic control.
+- **Effects and layout hug across runs.** Outline and shadow are Layer
+  effects on the composited glyph alpha, so they hug every run — including
+  a gradient run, whose own gradient spans that run's ink box. Wrap width,
+  the fit box, and the canonical transform are Layer facts applied across
+  runs; `measure` reports the per-run facts (`runs` with each run's index,
+  text, colour, font, and axes) beside the layer-level ones, and a
+  single-run Layer's report is unchanged.
+- **Explicit edits, no silent collapses.** Bare `--text` on a multi-run
+  Layer is refused (it would discard the runs): rewrite one run with
+  `--run-text <i>=<text>`, append with `--run <text>`, or collapse
+  deliberately with `--runs none` — which restores the single-run render
+  byte-for-byte. Per-run setters name an existing run (1-based, refused
+  otherwise) and need a multi-run Layer; on a single-run Layer, set the
+  Layer's own options.
+
 ## Shape Layers (new surface)
 
 A shape Layer (#208) is a filled geometric region created from parameters

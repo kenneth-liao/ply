@@ -131,6 +131,26 @@ const audit: Array<{ suite: string; markers: string[] }> = [
     ],
   },
   {
+    suite: "layer-text-runs.test.ts",
+    markers: [
+      "runs authored on composition add store boundaries and overrides with text as the one character home",
+      "a single-run Layer is stored exactly as today's text revision — no runs field, same shape",
+      "layer edit --run-text replaces a run's slice and shifts later boundaries",
+      "layer edit --run appends a run; --runs none collapses to the single-run shape",
+      "a run style override lands only on its run; other runs keep the layer defaults",
+      "a caller font file works as a run font; measure reports the run's family",
+      "measure reports each run's weight and font beside the layer-level facts",
+      "wrap width applies across runs: the one element wraps, runs flow inside it",
+      "a fit box applies across runs: measure reports the effective font size",
+    ],
+  },
+  {
+    suite: "layer-text-runs-pixel.test.ts",
+    markers: [
+      "one Layer, three runs: each run paints its own colour, the gradient run spans its ink, outline and shadow hug every run",
+    ],
+  },
+  {
     suite: "generation-cli.test.ts",
     markers: ["omitting --model sends gpt-image-flare outbound and retains it as effective provenance"],
   },

@@ -1,6 +1,34 @@
 # Changelog
 
 ## [Unreleased]
+- Added text runs: one text Layer carries runs of different colour, weight,
+  or font (#297, ADR-0021 amendment) — "5 HERDR PLUGINS" is one editable
+  Layer. Author runs on `composition add` with repeatable `--run <text>`
+  (each occurrence one run; the concatenation is the Layer text; one
+  occurrence is exactly today's single-run form) and style them with the
+  encoded absolute setters `--run-color <i>=<spec>` (the same solid and
+  gradient grammar as `--color`), `--run-font <i>=<family>`,
+  `--run-font-file <i>=<path>`, `--run-weight <i>=<num>`, and
+  `--run-width <i>=<num>` (1-based run indices). `layer edit` rewrites one
+  run's characters with `--run-text <i>=<text>`, appends runs with `--run`,
+  removes a run's override with the `none` form, and collapses the Layer to
+  a single run with `--runs none` (restoring the single-run render
+  byte-for-byte); bare `--text` on a multi-run Layer is refused instead of
+  silently discarding the runs. One home per fact: `text` stays the only
+  home of the characters, `runs` stores boundaries plus overrides of the
+  Layer-level defaults only (stored only when there are two or more runs, so
+  a single-run Layer keeps its exact revision id and pinned Renders replay
+  byte-identically), and a run's axes validate against the run's effective
+  face — no style is synthesized at run level either: a static face stores
+  no axes, caller-font runs disable synthesis, and an italic look comes from
+  an italic face or a Layer transform, never a synthesized style. Outline
+  and shadow hug every run (including a gradient run, whose gradient spans
+  that run's ink box); wrap width, the fit box, and the canonical transform
+  apply across runs; `measure` reports each run's colour, font, and weight
+  beside the layer-level facts. The fact joins the property × kind matrix,
+  the add/edit refusal parity tests, and the offline reversibility and
+  replay suite (spec #285 US-017, ISC-54, DEC-005/DEC-006, TEST-001/
+  TEST-002/TEST-003) (#297).
 - Added an absolute per-axis scale setter for every Layer kind:
   `--scale-to <XxY>` on `composition add` and `layer edit` writes the SAME
   canonical `scaleX`/`scaleY` facts the uniform `--scale` sets (one stored

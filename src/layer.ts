@@ -397,6 +397,53 @@ export interface LayerTextRevision extends LayerRevisionBase {
    * to "legacy" (canvas-bounded wrapping).
    */
   layoutRule?: StoredTextLayoutRule;
+  /**
+   * Text runs (#297, spec #285 US-017, ISC-54, ADR-0021 amendment): present
+   * if and only if the Layer carries TWO OR MORE runs — the ONE ingestion
+   * point normalizes fewer away, so a single-run revision is field-for-field
+   * today's text revision and keeps its exact id. Each entry is an override
+   * of the Layer-level defaults, never a second copy of a Layer fact:
+   * `text` stays the only home of the characters; an entry stores the run's
+   * boundary (its first character's 0-based index — entry 1 begins at 0 and
+   * stores no field) plus only the facts that run overrides: colour, font
+   * identity (its own retained bytes), caller font facts, and axes. Run
+   * size, tracking, and line height are Layer facts only (they apply across
+   * runs). A run with no override stores an empty entry — the boundary is
+   * the fact. Appended to the revision hash only when present, so pre-#297
+   * revision ids are byte-identical.
+   */
+  runs?: LayerTextRun[];
+}
+
+/** One stored text run (#297, ADR-0021 amendment): a boundary plus the
+ *  overrides that run carries against the Layer-level defaults. Stored
+ *  fields are present only when set — absence IS the layer-default form,
+ *  so no reader can see two answers for one fact. The entries are ordered;
+ *  entry 1 begins at character 0 and stores no `start`. */
+export interface LayerTextRun {
+  /** 0-based character index where this run begins. Entry 1 begins at 0
+   *  (never stored); every later entry stores its strictly increasing,
+   *  in-bounds, nonempty-slice start. */
+  start?: number;
+  /** The run's colour override: canonical solid hex string or canonical
+   *  LayerFill — the ONE colour grammar the layer colour uses. Absent: the
+   *  run paints the Layer's colour. */
+  color?: string | LayerFill;
+  /** The run's own retained font bytes, when the run overrides the Layer's
+   *  font — a sha-256 identity into the same content store, deduped when
+   *  equal to the Layer font's bytes (then this field is absent again). */
+  contentHash?: string;
+  /** The run font's caller-supplied file facts (#232, DEC-006), present iff
+   *  the run's bytes came from a caller font file. */
+  callerFont?: CallerFontFacts;
+  /** The run's resolved axes (#179, ADR-0021): stored iff the run carries a
+   *  font override whose face is variable (the resolved instance, omitted
+   *  controls at the face's default) or explicitly overrides an axis on the
+   *  Layer's own variable face (the resolved pair). A static face stores
+   *  neither — its bytes fix the look — and a run sharing the Layer's face
+   *  without explicit axes inherits the Layer's axes. */
+  weight?: number;
+  width?: number;
 }
 
 /**
@@ -1650,6 +1697,787 @@ export function textFitRefusal(text: string, fitWidth: number, fitHeight: number
 }
 
 /**
+ * The one run-boundary guard (#297): a boundary is a character index into
+ * `text` that must not split a surrogate pair — a boundary between the two
+ * code units of one astral character would store a corrupt slice (half a
+ * glyph). Shared by the stored-document reader and the edit application, so
+ * both ingestion paths refuse identically.
+ */
+export function assertRunBoundary(text: string, start: number, what: string): void {
+  if (start < 1 || start > text.length) return; // range rules own these cases
+  const prev = text.charCodeAt(start - 1);
+  const next = start < text.length ? text.charCodeAt(start) : 0;
+  if (prev >= 0xd800 && prev <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    throw new Error(
+      `${what} ${start} would split a surrogate pair — a run boundary cannot fall between the two code units of one character.`,
+    );
+  }
+}
+
+/**
+ * Canonical stored-text-run validation and normalization (#297, spec #285
+ * US-017, ISC-54, ADR-0021 amendment). The ONE reader for a revision's
+ * `runs`: documents written before #297 lack the field, and absence IS the
+ * single-run form — every downstream reader (paint, measure, hashing, the
+ * edit paths) projects through this function and never re-derives a
+ * boundary. A present field must be an ordered array of TWO OR MORE entries
+ * (fewer normalizes away at the ingestion point, so it can never be stored):
+ * entry 1 stores no `start` (it begins at character 0); every later entry
+ * stores a finite integer `start`, strictly increasing and within the text
+ * (every run nonempty, the last run reaching the end). Each entry's colour
+ * validates through the ONE text-colour reader, its caller font facts
+ * through the ONE caller-font reader, and its axes through the ONE stored
+ * axes reader — anything else is a malformed document, refused loudly
+ * before the revision hash is consulted.
+ */
+export function normalizeStoredTextRuns(revision: {
+  text: unknown;
+  runs?: unknown;
+}): LayerTextRun[] | undefined {
+  const raw = revision.runs;
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(raw) || raw.length < 2) {
+    throw new Error(
+      `Malformed revision document: text runs must be an array of two or more run entries (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  if (typeof revision.text !== "string") {
+    throw new Error("Malformed revision document: text runs require stored text content.");
+  }
+  const text = revision.text;
+  const runs: LayerTextRun[] = [];
+  let prevStart = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const entry = raw[i];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Malformed revision document: text run ${i + 1} must be an object (got ${JSON.stringify(entry)}).`);
+    }
+    const e = entry as Record<string, unknown>;
+    let start: number | undefined;
+    if (i === 0) {
+      // Entry 1 begins at character 0: a stored start would be a second
+      // answer for the same fact.
+      if (e.start !== undefined) {
+        throw new Error("Malformed revision document: text run 1 begins at character 0 and stores no start.");
+      }
+    } else {
+      const value = e.start;
+      if (typeof value !== "number" || !Number.isInteger(value)) {
+        throw new Error(
+          `Malformed revision document: text run ${i + 1} start must be an integer character index (got ${JSON.stringify(value)}).`,
+        );
+      }
+      if (value <= prevStart || value >= text.length) {
+        throw new Error(
+          `Malformed revision document: text run ${i + 1} start ${value} is out of order or would make a run empty (text is ${text.length} characters).`,
+        );
+      }
+      assertRunBoundary(text, value, `Malformed revision document: text run ${i + 1} start`);
+      start = value;
+      prevStart = value;
+    }
+    if (e.contentHash !== undefined && (typeof e.contentHash !== "string" || !/^[0-9a-f]{64}$/.test(e.contentHash))) {
+      throw new Error(
+        `Malformed revision document: text run ${i + 1} contentHash is not a sha-256 digest (got ${JSON.stringify(e.contentHash)}).`,
+      );
+    }
+    // The stored colour is validated through the ONE reader but kept
+    // verbatim: a solid stays the canonical hex string it was stored as
+    // (one form per look — the stored form IS the paint), a gradient its
+    // canonical object.
+    if (e.color !== undefined) normalizeStoredTextFill(e.color);
+    runs.push({
+      ...(start !== undefined ? { start } : {}),
+      ...(e.color !== undefined ? { color: e.color as string | LayerFill } : {}),
+      ...(e.contentHash !== undefined ? { contentHash: e.contentHash as string } : {}),
+      ...(e.callerFont !== undefined ? { callerFont: normalizeStoredCallerFont({ callerFont: e.callerFont }) } : {}),
+      ...(normalizeStoredTextAxes(e) ?? {}),
+    });
+  }
+  return runs;
+}
+
+/**
+ * The one boundary/slice projection (#297): a revision's run text slices in
+ * stored order. `text` is the only home of the characters; the boundaries
+ * are positions into it. Single-run revisions yield the whole text as one
+ * slice, so every consumer can treat runs uniformly without consulting the
+ * presence of the field twice.
+ */
+export function storedTextRunSlices(
+  revision: Pick<LayerTextRevision, "text"> & { runs?: unknown },
+): string[] {
+  const runs = normalizeStoredTextRuns(revision);
+  if (runs === undefined) return [revision.text as string];
+  const text = revision.text as string;
+  const slices: string[] = [];
+  for (let i = 0; i < runs.length; i++) {
+    const start = i === 0 ? 0 : runs[i]!.start!;
+    const end = i + 1 < runs.length ? runs[i + 1]!.start! : text.length;
+    slices.push(text.slice(start, end));
+  }
+  return slices;
+}
+
+/** One resolved run font: the run's own retained bytes and, for a caller
+ *  font, its facts — the snapshot-side payload paint and measurement declare
+ *  @font-face rules from (the same bytes/identity the layer font uses). */
+export interface SnapshotRunFont {
+  contentHash: string;
+  bytes: Buffer;
+  caller?: CallerFontFacts;
+}
+
+/**
+ * Load a text revision's run font bytes (#297): every distinct run font
+ * override's retained bytes from the Project content store, the same
+ * hash-verified path the layer font's bytes go through. Runs sharing the
+ * layer's font need no entry (the layer's own bytes serve). Empty when the
+ * revision carries no run font overrides. Callers must hold the Project
+ * lock; the resolved bytes are verified by identity, never trusted.
+ */
+export async function loadSnapshotRunFonts(
+  resolvedRoot: string,
+  revision: ResolvedLayerRevision,
+): Promise<SnapshotRunFont[]> {
+  if (revision.kind !== "text" || revision.runs === undefined) return [];
+  const out: SnapshotRunFont[] = [];
+  for (const run of revision.runs) {
+    if (run.contentHash === undefined || run.contentHash === revision.contentHash) continue;
+    if (out.some((f) => f.contentHash === run.contentHash)) continue;
+    const blob = path.join(resolvedRoot, "content", run.contentHash);
+    if (outsideDir(resolvedRoot, blob)) {
+      throw new Error(`Security error: content blob escapes project boundary.`);
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(blob);
+    } catch {
+      throw new Error(
+        `Content blob "${run.contentHash}" for layer "${revision.layerId}" missing in project.`,
+      );
+    }
+    const actualHash = createHash("sha256").update(bytes).digest("hex");
+    if (actualHash !== run.contentHash) {
+      throw new Error(
+        `Corrupted content blob "${run.contentHash}" for layer "${revision.layerId}": stored bytes do not match the content hash.`,
+      );
+    }
+    out.push({
+      contentHash: run.contentHash,
+      bytes,
+      ...(run.callerFont !== undefined ? { caller: run.callerFont } : {}),
+    });
+  }
+  return out;
+}
+
+/** One per-run style edit, in the CLI's merged per-index shape (#297): each
+ *  present field is an ABSOLUTE setter for that run (or, with the `null`
+ *  removal form, removes the run's override so the Layer default applies
+ *  again). A run colour spec is the ONE `--color` grammar's raw text; the
+ *  font source is a bundled family or a caller font file path — one source
+ *  per run. */
+export interface LayerRunStyleEdit {
+  /** 1-based run index. */
+  index: number;
+  /** The run's colour spec (raw `--color` grammar) or null (removal). */
+  colorSpec?: string | null;
+  /** A bundled font family, or null (remove the font override). */
+  font?: string | null;
+  /** A caller font file path, or null (remove the font override). */
+  fontFile?: string | null;
+  weight?: number | null;
+  width?: number | null;
+}
+
+/** The runs-side input of a text add (#297): the run texts whose
+ *  concatenation IS the Layer text (one occurrence normalizes to the
+ *  single-run form at the ONE ingestion point), plus per-run style edits by
+ *  1-based index. */
+export interface TextInputRuns {
+  runTexts: string[];
+  styles?: LayerRunStyleEdit[];
+}
+
+/**
+ * The resolved runs facts of a text ingestion (#297): the canonical stored
+ * entries (absent for a single run), the Layer font resolved AFTER the
+ * single-run fold, the fold facts when one applies, and every run font's
+ * retained bytes (retained by the caller once everything else has
+ * resolved).
+ */
+export interface ResolvedTextInputRuns {
+  /** The Layer font resolved through the ONE ingestion path, AFTER the
+   *  single-run fold — a run-1 font override IS the Layer font. */
+  layerFont: {
+    face: FontFace;
+    bytes: Buffer;
+    callerFont?: CallerFontFacts;
+    contentHash: string;
+  };
+  /** The effective Layer font input after the single-run fold. */
+  layerFontInput: { font?: string; fontFile?: string };
+  /** Single-run fold facts (#297): per-run style edits that leave a single
+   *  run ARE the Layer's own style, folded here at the ONE ingestion point —
+   *  never dropped, never pre-handled by the CLI. The colour is CANONICAL
+   *  (exactly the Layer colour path's stored form); the axes are the raw
+   *  explicit controls for the caller's ONE axes resolution against the
+   *  folded face. */
+  folded?: { color?: string | LayerFill; weight?: number; width?: number };
+  /** The stored run entries — absent for a single run (today's revision
+   *  shape). */
+  runs?: LayerTextRun[];
+  /** Run font bytes to retain (hash → bytes), resolved but NOT retained:
+   *  the caller retains after every validation has passed. */
+  runFonts: SnapshotRunFont[];
+}
+
+/**
+ * Resolve authored text runs into their canonical stored form (#297, spec
+ * #285 US-017, ISC-54, ADR-0021 amendment) — the ONE ingestion point for
+ * run facts, including the single-run fold: per-run style edits that leave
+ * a single run fold into the Layer-level facts here (a single-run Layer IS
+ * today's text Layer — the fold is storage's fact, never the CLI's). All
+ * validations and resolutions run BEFORE any retention, so a refused run
+ * publishes nothing:
+ * - the run texts' concatenation must equal the Layer text, and each run
+ *   must be nonempty (an empty run would collapse boundaries);
+ * - a style edit names an existing 1-based run (validated before the fold,
+ *   so a single-run input with a run-2 setter refuses, never drops);
+ * - a run colour parses through the ONE colour grammar and canonicalizes
+ *   exactly like the Layer colour path's stored form;
+ * - a run font resolves once (bundled face or caller file read and parsed
+ *   once), one font source per run, and a caller font must pass the same
+ *   browser-resolution gate the layer font passes;
+ * - run axes validate against the RUN's effective face (the run's own face
+ *   under a font override, the layer face otherwise) through the ONE axes
+ *   resolver — a variable face stores the resolved pair, a static face
+ *   stores neither (its bytes fix the look), and a run sharing the layer's
+ *   face without explicit axes inherits the layer axes;
+ * - a run font whose bytes equal the Layer font's is deduped: the override
+ *   disappears and the run keeps the layer font (one home per fact).
+ */
+export async function resolveTextInputRuns(params: {
+  text: string;
+  runs?: TextInputRuns;
+  /** The raw Layer-level font source (before any single-run fold). */
+  layerFontInput: { font?: string; fontFile?: string };
+  /** The raw Layer-level colour/axes controls (before any fold). */
+  layerColorSpec?: string;
+  layerWeight?: number;
+  layerWidth?: number;
+  /** The Layer font resolver — the one path the caller's publication uses,
+   *  so the fold's font override resolves through the same flow. */
+  resolveLayerFont: (fontInput: { font?: string; fontFile?: string }) => Promise<{
+    face: FontFace;
+    bytes: Buffer;
+    callerFont?: CallerFontFacts;
+    contentHash: string;
+  }>;
+}): Promise<ResolvedTextInputRuns> {
+  const runs = params.runs;
+  if (runs === undefined) {
+    const layerFont = await params.resolveLayerFont(params.layerFontInput);
+    return { layerFont, layerFontInput: params.layerFontInput, runFonts: [] };
+  }
+  if (runs.runTexts.length === 0) {
+    throw new Error("--run takes the run's text (a nonempty string).");
+  }
+  for (const slice of runs.runTexts) {
+    if (slice.length === 0) {
+      throw new Error("--run takes the run's text (a nonempty string); a run cannot be empty.");
+    }
+  }
+  if (runs.runTexts.join("") !== params.text) {
+    throw new Error("The --run occurrences' concatenation must equal the Layer text.");
+  }
+  // Per-run style edits, merged per index in command order (a later
+  // occurrence wins, like a repeated layer-level setter). Index range
+  // validates BEFORE the single-run fold: a setter naming a run that does
+  // not exist is refused, never dropped.
+  const styles = new Map<number, LayerRunStyleEdit>();
+  for (const edit of runs.styles ?? []) {
+    if (edit.index < 1 || edit.index > runs.runTexts.length) {
+      throw new Error(runIndexOutOfRangeRefusal(edit.index, runs.runTexts.length));
+    }
+    const merged = { ...styles.get(edit.index), ...edit };
+    styles.set(edit.index, merged);
+  }
+  const validateStyleExclusivity = (style: LayerRunStyleEdit): void => {
+    if (style.font !== undefined && style.fontFile !== undefined) {
+      throw new Error(
+        "--run-font and --run-font-file name one font per run — pass a bundled family (--run-font <i>=<family>) or a local font file (--run-font-file <i>=<path>), not both.",
+      );
+    }
+  };
+
+  // THE SINGLE-RUN FOLD (one home: this ingestion point). One occurrence
+  // with per-run style edits folds them into the Layer-level facts — the
+  // stored revision keeps today's exact single-run shape.
+  if (runs.runTexts.length === 1) {
+    const style = styles.get(1);
+    if (style === undefined) {
+      const layerFont = await params.resolveLayerFont(params.layerFontInput);
+      return { layerFont, layerFontInput: params.layerFontInput, runFonts: [] };
+    }
+    validateStyleExclusivity(style);
+    let foldedColor: string | LayerFill | undefined;
+    if (style.colorSpec !== undefined) {
+      if (style.colorSpec === null) {
+        throw new Error(runRemovalOnAddRefusal("--run-color"));
+      }
+      // Canonicalized exactly like the Layer colour path's stored form.
+      foldedColor = canonicalizeTextFillForStorage(normalizeStoredTextFill(style.colorSpec.trim()));
+    }
+    let fontFile: string | undefined;
+    let font: string | undefined;
+    if (style.fontFile !== undefined) {
+      if (style.fontFile === null) {
+        throw new Error(runRemovalOnAddRefusal("--run-font-file"));
+      }
+      fontFile = style.fontFile;
+    } else if (style.font !== undefined) {
+      if (style.font === null) {
+        throw new Error(runRemovalOnAddRefusal("--run-font"));
+      }
+      font = style.font;
+    }
+    const layerFontInput =
+      font !== undefined || fontFile !== undefined
+        ? {
+            ...(font !== undefined ? { font } : {}),
+            ...(fontFile !== undefined ? { fontFile } : {}),
+          }
+        : params.layerFontInput;
+    const layerFont = await params.resolveLayerFont(layerFontInput);
+    // Folded axes are the raw explicit controls: the caller's ONE axes
+    // resolution validates them against the folded face.
+    const folded: { color?: string | LayerFill; weight?: number; width?: number } = {
+      ...(foldedColor !== undefined ? { color: foldedColor } : {}),
+      ...(style.weight !== undefined && style.weight !== null ? { weight: style.weight } : {}),
+      ...(style.width !== undefined && style.width !== null ? { width: style.width } : {}),
+    };
+    return {
+      layerFont,
+      layerFontInput,
+      ...(Object.keys(folded).length > 0 ? { folded } : {}),
+      runFonts: [],
+    };
+  }
+
+  // Multi-run: resolve the Layer font first (the runs' dedupe and inherited
+  // axes basis), then every run's overrides.
+  const layerFont = await params.resolveLayerFont(params.layerFontInput);
+  const out: ResolvedTextInputRuns = {
+    layerFont,
+    layerFontInput: params.layerFontInput,
+    runFonts: [],
+  };
+  const entries: LayerTextRun[] = [];
+  const runCallerFontFacts = new Map<number, CallerFontFacts>();
+  const runCallerFontBytes = new Map<number, Buffer>();
+  for (let i = 1; i <= runs.runTexts.length; i++) {
+    const style = styles.get(i);
+    const entry: LayerTextRun = {};
+    if (i > 1) entry.start = runs.runTexts.slice(0, i - 1).join("").length;
+    if (style !== undefined) {
+      // Colour: the ONE grammar, canonicalized exactly like the Layer
+      // colour path's stored form.
+      if (style.colorSpec !== undefined) {
+        if (style.colorSpec === null) {
+          throw new Error(runRemovalOnAddRefusal("--run-color"));
+        }
+        entry.color = canonicalizeTextFillForStorage(normalizeStoredTextFill(style.colorSpec.trim()));
+      }
+      validateStyleExclusivity(style);
+      let runFace: FontFace | undefined;
+      let runCallerFont: CallerFontFacts | undefined;
+      if (style.fontFile !== undefined) {
+        if (style.fontFile === null) {
+          throw new Error(runRemovalOnAddRefusal("--run-font-file"));
+        }
+        const ingested = await readCallerFontFile(style.fontFile);
+        runFace = callerFontFace(ingested.facts);
+        runCallerFontFacts.set(i, ingested.facts);
+        runCallerFontBytes.set(i, ingested.bytes);
+      } else if (style.font !== undefined) {
+        if (style.font === null) {
+          throw new Error(runRemovalOnAddRefusal("--run-font"));
+        }
+        runFace = resolveFace(style.font);
+      }
+      // The run's axes resolve against the run's EFFECTIVE face (the one
+      // ADR-0021 rule, applied per run): an explicit axis is validated; a
+      // variable-face font override stores its resolved instance; a static
+      // face stores nothing (its bytes fix the look); a run sharing the
+      // layer face inherits the layer axes unless an axis is explicit.
+      const face = runFace ?? layerFont.face;
+      const explicitWeight = style.weight !== undefined && style.weight !== null ? style.weight : undefined;
+      const explicitWidth = style.width !== undefined && style.width !== null ? style.width : undefined;
+      if (runFace !== undefined) {
+        const axes = resolveTextAxes(face, {
+          ...(explicitWeight !== undefined ? { weight: explicitWeight } : {}),
+          ...(explicitWidth !== undefined ? { width: explicitWidth } : {}),
+        });
+        if (face.variant === "variable") {
+          entry.weight = axes.weight;
+          entry.width = axes.width;
+        }
+      } else if (explicitWeight !== undefined || explicitWidth !== undefined) {
+        const axes = resolveTextAxes(face, {
+          ...(explicitWeight !== undefined
+            ? { weight: explicitWeight }
+            : (params.layerWeight !== undefined ? { weight: params.layerWeight } : {})),
+          ...(explicitWidth !== undefined
+            ? { width: explicitWidth }
+            : (params.layerWidth !== undefined ? { width: params.layerWidth } : {})),
+        });
+        entry.weight = axes.weight;
+        entry.width = axes.width;
+      } else if (style.weight === null || style.width === null) {
+        // Removal of a run axis override on add: nothing to remove.
+        throw new Error(runRemovalOnAddRefusal("--run-weight/--run-width"));
+      }
+      // Retain the run font (deduped against the layer font) AFTER every
+      // resolution above — a refused run publishes no content blob.
+      if (runFace !== undefined) {
+        let bytes: Buffer;
+        let hash: string;
+        let callerFont: CallerFontFacts | undefined;
+        if (runCallerFontBytes.has(i)) {
+          bytes = runCallerFontBytes.get(i)!;
+          callerFont = runCallerFontFacts.get(i);
+        } else {
+          bytes = fontAssetBytes(runFace);
+        }
+        hash = createHash("sha256").update(bytes).digest("hex");
+        if (hash !== layerFont.contentHash) {
+          if (callerFont !== undefined) {
+            await verifyCallerFontResolves(hash, bytes, callerFont);
+          }
+          if (!out.runFonts.some((f) => f.contentHash === hash)) {
+            out.runFonts.push({ contentHash: hash, bytes, ...(callerFont !== undefined ? { caller: callerFont } : {}) });
+          }
+          entry.contentHash = hash;
+          if (callerFont !== undefined) entry.callerFont = callerFont;
+        }
+      }
+    }
+    entries.push(entry);
+  }
+  out.runs = entries;
+  return out;
+}
+
+/** The out-of-range run-index refusal (#297), one wording shared by every
+ *  per-run option on both surfaces: 1-based indices, naming the run count. */
+export function runIndexOutOfRangeRefusal(index: number, count: number): string {
+  const runs = count === 1 ? "1 run" : `${count} runs`;
+  return `Run index ${index} is out of range: the Layer carries ${runs} (run indices 1–${count}).`;
+}
+
+/** The removal-form-on-add refusal (#297): a new Layer has no run overrides
+ *  to remove — the removal forms are edit-only. */
+export function runRemovalOnAddRefusal(option: string): string {
+  return `${option} "none" removes a run's override — a new Layer has none to remove; set the run's style instead.`;
+}
+
+/** The per-run-options-on-a-single-run refusal (#297): one wording for every
+ *  per-run option, naming the layer-level spellings and the append form. */
+export function singleRunPerRunOptionRefusal(layerId: string): string {
+  return (
+    `Layer "${layerId}" carries one run: per-run options (--run-color, --run-weight, --run-width, --run-font, --run-font-file, --run-text) name runs of a multi-run Layer. ` +
+    `Set the Layer's own style options (--color, --weight, --width, --font), replace the text with --text, or append a run with --run <text>.`
+  );
+}
+
+/** The bare --text on a multi-run refusal (#297): replacing the whole text
+ *  would silently discard the runs; the scoped forms are the explicit edits. */
+export function multiRunTextReplacementRefusal(layerId: string): string {
+  return (
+    `Layer "${layerId}" carries text runs: replacing the whole text with --text would discard them. ` +
+    `Edit one run with --run-text <i>=<text>, or collapse to a single run with --runs none.`
+  );
+}
+
+/**
+ * Apply one edit's runs-side intent (#297) to a text revision under
+ * construction — the edit surface's runs application, beside the other text
+ * branches. Returns the new text, the canonical stored entries (absent when
+ * collapsed or single-run), and the resolved per-run font facts for the
+ * caller to retain. Validations run before anything is retained:
+ * - bare `--text` on a multi-run Layer is refused (the scoped forms are the
+ *   explicit edits);
+ * - per-run options need a multi-run Layer (one wording for every option);
+ * - a run index must name an existing run (1-based, one wording for every
+ *   per-run option).
+ *
+ * Application order within one edit (documented, deterministic): appends
+ * first (`--run`), then `--run-text`, then the per-run style setters, then
+ * `--runs none` — so a setter naming a run that a collapse in the same edit
+ * would remove is refused by the index check, never silently dropped.
+ */
+export async function applyTextInputRunEdits(params: {
+  layerId: string;
+  prevText: string;
+  prevRuns?: LayerTextRun[];
+  runAppend?: string[];
+  runText?: Array<{ index: number; text: string }>;
+  runStyles?: LayerRunStyleEdit[];
+  runsNone?: boolean;
+  /** The layer's effective face RESOLVER (the resolution basis for runs
+   *  without a font override) — undefined when the retained bytes match no
+   *  bundled face and no caller facts are stored, in which case only colour
+   *  and run-font edits can resolve (an axis resolution needs --font).
+   *  Lazy: only a run-intent edit that needs the face resolves it. */
+  layerFace: () => FontFace | undefined;
+  layerAxes?: TextAxes;
+  layerContentHash: string;
+  /** The previous revision's verified run-font bytes (carried overrides'
+   *  bytes for the would-be revision's @font-face set). */
+  prevRunFonts?: SnapshotRunFont[];
+}): Promise<{
+  text: string;
+  runs?: LayerTextRun[];
+  /** The would-be revision's complete run-font set (fit/region probes). */
+  runFonts: SnapshotRunFont[];
+  /** This edit's own run fonts: verified and retained by the caller. */
+  newRunFonts: SnapshotRunFont[];
+}> {
+  const { prevText, prevRuns } = params;
+  const hasRunIntent =
+    (params.runAppend !== undefined && params.runAppend.length > 0) ||
+    params.runText !== undefined ||
+    (params.runStyles !== undefined && params.runStyles.length > 0) ||
+    params.runsNone === true;
+  if (!hasRunIntent) {
+    return { text: prevText, ...(prevRuns !== undefined ? { runs: prevRuns } : {}), runFonts: params.prevRunFonts ?? [], newRunFonts: [] };
+  }
+  if (params.runsNone === true) {
+    // Collapse first-class: every boundary and override is removed at once —
+    // the Layer returns to the single-run shape at its own defaults.
+    return { text: prevText, runFonts: [], newRunFonts: [] };
+  }
+  // Canonical previous entries with derived starts (entry 1 at 0).
+  const entries: Array<LayerTextRun & { start: number }> = (prevRuns ?? [{ start: 0 }]).map((run, i) => ({
+    start: i === 0 ? 0 : run.start!,
+    ...(run.color !== undefined ? { color: run.color } : {}),
+    ...(run.contentHash !== undefined ? { contentHash: run.contentHash } : {}),
+    ...(run.callerFont !== undefined ? { callerFont: run.callerFont } : {}),
+    ...(run.weight !== undefined ? { weight: run.weight } : {}),
+    ...(run.width !== undefined ? { width: run.width } : {}),
+  }));
+  const newRunFonts: SnapshotRunFont[] = [];
+  let text = prevText;
+  const sliceAt = (index: number): { start: number; end: number } => {
+    if (index < 1 || index > entries.length) {
+      throw new Error(runIndexOutOfRangeRefusal(index, entries.length));
+    }
+    const start = entries[index - 1]!.start;
+    const end = index < entries.length ? entries[index]!.start : text.length;
+    return { start, end };
+  };
+  // 1. Appends: each occurrence adds one run at the layer defaults.
+  if (params.runAppend !== undefined) {
+    for (const slice of params.runAppend) {
+      if (slice.length === 0) {
+        throw new Error("--run takes the run's text (a nonempty string); a run cannot be empty.");
+      }
+      entries.push({ start: text.length });
+      text += slice;
+    }
+  }
+  // 2. One run's characters are replaced in place per occurrence (applied
+  // in command order); later boundaries shift. The gate reads the
+  // POST-APPEND shape: an append in the same edit creates the runs the
+  // setters name (the documented order — appends, then --run-text, then
+  // setters), so a single-run Layer that just gained a run is multi-run
+  // here.
+  if (params.runText !== undefined && params.runText.length > 0) {
+    if (entries.length < 2) {
+      throw new Error(singleRunPerRunOptionRefusal(params.layerId));
+    }
+    for (const { index, text: replacement } of params.runText) {
+      if (replacement.length === 0) {
+        throw new Error("--run-text takes the run's text (a nonempty string); a run cannot be empty.");
+      }
+      const { start, end } = sliceAt(index);
+      text = text.slice(0, start) + replacement + text.slice(end);
+      const delta = replacement.length - (end - start);
+      for (let i = index; i < entries.length; i++) {
+        entries[i]!.start += delta;
+        assertRunBoundary(text, entries[i]!.start, "--run-text shifted run boundary");
+      }
+    }
+  }
+  // 3. Per-run style setters, merged per index in command order — gated on
+  // the post-append shape like the run-text step above.
+  if (params.runStyles !== undefined && params.runStyles.length > 0) {
+    if (entries.length < 2) {
+      throw new Error(singleRunPerRunOptionRefusal(params.layerId));
+    }
+    const merged = new Map<number, LayerRunStyleEdit>();
+    for (const edit of params.runStyles) {
+      if (edit.index < 1 || edit.index > entries.length) {
+        throw new Error(runIndexOutOfRangeRefusal(edit.index, entries.length));
+      }
+      merged.set(edit.index, { ...merged.get(edit.index), ...edit });
+    }
+    for (const [index, style] of merged) {
+      const entry = entries[index - 1]!;
+      if (style.colorSpec !== undefined) {
+        if (style.colorSpec === null) delete entry.color;
+        else {
+          const fill = normalizeStoredTextFill(style.colorSpec.trim());
+          entry.color = canonicalizeTextFillForStorage(fill);
+        }
+      }
+      const wantsFont = style.font !== undefined || style.fontFile !== undefined;
+      if (style.font !== undefined && style.fontFile !== undefined) {
+        throw new Error(
+          "--run-font and --run-font-file name one font per run — pass a bundled family (--run-font <i>=<family>) or a local font file (--run-font-file <i>=<path>), not both.",
+        );
+      }
+      let runFace: FontFace | undefined;
+      let runCallerFont: CallerFontFacts | undefined;
+      let runBytes: Buffer | undefined;
+      if (style.fontFile !== undefined) {
+        if (style.fontFile === null) {
+          delete entry.contentHash;
+          delete entry.callerFont;
+          // The axes overrides belong to the overridden face: removing the
+          // font override removes them with it (one home per fact).
+          delete entry.weight;
+          delete entry.width;
+        } else {
+          const ingested = await readCallerFontFile(style.fontFile);
+          runFace = callerFontFace(ingested.facts);
+          runCallerFont = ingested.facts;
+          runBytes = ingested.bytes;
+        }
+      } else if (style.font !== undefined) {
+        if (style.font === null) {
+          delete entry.contentHash;
+          delete entry.callerFont;
+          delete entry.weight;
+          delete entry.width;
+        } else {
+          runFace = resolveFace(style.font);
+          runBytes = fontAssetBytes(runFace);
+        }
+      }
+      const face = runFace ?? params.layerFace();
+      // An axis resolution against the layer face needs the face: retained
+      // bytes matching no bundled face refuse with the established wording,
+      // naming --font (the same refusal the layer-level axes edit gives).
+      if (
+        face === undefined &&
+        ((style.weight !== undefined && style.weight !== null) ||
+          (style.width !== undefined && style.width !== null))
+      ) {
+        throw new Error(
+          `The retained font of Layer "${params.layerId}" (content hash ${params.layerContentHash}) matches no bundled face — pass --font to choose a bundled family.`,
+        );
+      }
+      const explicitWeight = style.weight !== undefined && style.weight !== null ? style.weight : undefined;
+      const explicitWidth = style.width !== undefined && style.width !== null ? style.width : undefined;
+      if (runFace !== undefined) {
+        const axes = resolveTextAxes(face!, {
+          ...(explicitWeight !== undefined ? { weight: explicitWeight } : {}),
+          ...(explicitWidth !== undefined ? { width: explicitWidth } : {}),
+        });
+        if (face!.variant === "variable") {
+          entry.weight = axes.weight;
+          entry.width = axes.width;
+        } else {
+          delete entry.weight;
+          delete entry.width;
+        }
+        const hash = createHash("sha256").update(runBytes!).digest("hex");
+        if (hash !== params.layerContentHash) {
+          entry.contentHash = hash;
+          if (runCallerFont !== undefined) entry.callerFont = runCallerFont;
+          if (!newRunFonts.some((f) => f.contentHash === hash)) {
+            newRunFonts.push({ contentHash: hash, bytes: runBytes!, ...(runCallerFont !== undefined ? { caller: runCallerFont } : {}) });
+          }
+        } else {
+          // The run's font bytes equal the layer font's: the override is
+          // deduped away and the run keeps the layer font (one home).
+          delete entry.contentHash;
+          delete entry.callerFont;
+        }
+      } else if (wantsFont) {
+        // A removal: nothing further to resolve.
+      } else if (explicitWeight !== undefined || explicitWidth !== undefined) {
+        const axes = resolveTextAxes(face!, {
+          ...(explicitWeight !== undefined
+            ? { weight: explicitWeight }
+            : entry.weight !== undefined
+              ? { weight: entry.weight }
+              : params.layerAxes?.weight !== undefined
+                ? { weight: params.layerAxes.weight }
+                : {}),
+          ...(explicitWidth !== undefined
+            ? { width: explicitWidth }
+            : entry.width !== undefined
+              ? { width: entry.width }
+              : params.layerAxes?.width !== undefined
+                ? { width: params.layerAxes.width }
+                : {}),
+        });
+        entry.weight = axes.weight;
+        entry.width = axes.width;
+      } else if (style.weight === null || style.width === null) {
+        // Removal of a run axis override: the run falls back to the layer
+        // axes (no stored pair — absence IS the layer-default form).
+        delete entry.weight;
+        delete entry.width;
+      }
+    }
+  }
+  // Renormalize: a single run is today's stored form — no runs field. A
+  // collapse above returns early; this covers an append-less edit that
+  // cannot reduce the count (boundaries are never removed except by the
+  // collapse), so this is a shape invariant, not a silent correction.
+  if (entries.length < 2) {
+    return { text, runFonts: [], newRunFonts: [] };
+  }
+  const runs: LayerTextRun[] = entries.map((entry) => ({
+    ...(entry.start > 0 ? { start: entry.start } : {}),
+    ...(entry.color !== undefined ? { color: entry.color } : {}),
+    ...(entry.contentHash !== undefined ? { contentHash: entry.contentHash } : {}),
+    ...(entry.callerFont !== undefined ? { callerFont: entry.callerFont } : {}),
+    ...(entry.weight !== undefined ? { weight: entry.weight } : {}),
+    ...(entry.width !== undefined ? { width: entry.width } : {}),
+  }));
+  // The would-be revision's complete run-font set (the fit probe's and the
+  // region revalidation's @font-face inputs): new bytes from this edit,
+  // carried overrides' bytes from the caller's verified read.
+  const runFonts: SnapshotRunFont[] = [];
+  for (const entry of runs) {
+    if (entry.contentHash === undefined || entry.contentHash === params.layerContentHash) continue;
+    if (runFonts.some((f) => f.contentHash === entry.contentHash)) continue;
+    const carried = params.prevRunFonts?.find((f) => f.contentHash === entry.contentHash);
+    const fresh = newRunFonts.find((f) => f.contentHash === entry.contentHash);
+    const bytes = fresh?.bytes ?? carried?.bytes;
+    if (bytes === undefined) {
+      throw new Error(
+        `Run font "${entry.contentHash}" for layer "${params.layerId}" missing bytes — the run font must be retained before the revision is validated.`,
+      );
+    }
+    runFonts.push({
+      contentHash: entry.contentHash,
+      bytes,
+      ...(entry.callerFont !== undefined ? { caller: entry.callerFont } : {}),
+    });
+  }
+  return { text, runs, runFonts, newRunFonts };
+}
+
+/**
  * Canonical stored-text-axes validation and normalization (#179, ADR-0021).
  * The ONE normalization boundary AND the one reader for a revision's text
  * weight/width: documents written before #179 lack the fields (only a
@@ -1919,7 +2747,39 @@ export function computeRevisionHash(rev: LayerRevision): string {
   // ids are byte-identical.
   const fitBox = rev.kind === "text" ? normalizeStoredTextFitBox(rev) : undefined;
   const fitBoxField = fitBox !== undefined ? `:fitbox(${fitBox.width}x${fitBox.height})` : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}${fitBoxField}`).digest("hex").slice(0, 16)}`;
+  // The text runs (#297, spec #285 US-017, ADR-0021 amendment): appended
+  // only when present, in stored order — entry 1's implicit start 0, each
+  // later entry's boundary, then the entry's overrides in fixed order
+  // (colour, font bytes, caller font facts, weight, width) — so revisions
+  // written before #297 keep their exact ids.
+  const runs = rev.kind === "text" ? normalizeStoredTextRuns(rev) : undefined;
+  const runsField =
+    runs !== undefined
+      ? `:runs(${runs
+          .map((run, i) => {
+            const callerFont =
+              run.callerFont !== undefined ? normalizeStoredCallerFont({ callerFont: run.callerFont }) : undefined;
+            const callerFontPart = callerFont
+              ? callerFont.variant === "static"
+                ? `callerfont(${callerFont.family},${callerFont.variant},${callerFont.format},w${callerFont.weight})`
+                : `callerfont(${callerFont.family},${callerFont.variant},${callerFont.format},wght(${callerFont.axes!.wght.min},${callerFont.axes!.wght.default},${callerFont.axes!.wght.max})${
+                    callerFont.axes!.wdth !== undefined
+                      ? `,wdth(${callerFont.axes!.wdth.min},${callerFont.axes!.wdth.default},${callerFont.axes!.wdth.max})`
+                      : ""
+                  })`
+              : "";
+            return [
+              i === 0 ? "0" : String(run.start),
+              run.color !== undefined ? textFillIdentityString(run.color) : "",
+              run.contentHash ?? "",
+              callerFontPart,
+              run.weight !== undefined ? String(run.weight) : "",
+              run.width !== undefined ? String(run.width) : "",
+            ].join("|");
+          })
+          .join(";")})`
+      : "";
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -1964,7 +2824,7 @@ export async function storeContentBlob(projectPath: string, contentHash: string,
 export async function readLayerInternalFull(
   projectPath: string,
   layerId: string,
-): Promise<ResolvedLayer & { contentBytes: Buffer }> {
+): Promise<ResolvedLayer & { contentBytes: Buffer; runFonts?: SnapshotRunFont[] }> {
   if (!/^layer_[a-zA-Z0-9_]+$/.test(layerId)) {
     throw new Error(`Invalid Layer identity "${layerId}".`);
   }
@@ -2020,6 +2880,7 @@ export async function readLayerInternalFull(
     currentRevisionId: revHash,
     currentRevision: resolved.revision,
     contentBytes: resolved.contentBytes,
+    ...(resolved.runFonts !== undefined ? { runFonts: resolved.runFonts } : {}),
   };
 }
 
@@ -2039,7 +2900,7 @@ export async function readRevisionInternalFull(
   projectPath: string,
   layerId: string,
   revisionId: string,
-): Promise<{ revision: ResolvedLayerRevision; contentBytes: Buffer }> {
+): Promise<{ revision: ResolvedLayerRevision; contentBytes: Buffer; runFonts?: SnapshotRunFont[] }> {
   if (!/^layer_[a-zA-Z0-9_]+$/.test(layerId)) {
     throw new Error(`Invalid Layer identity "${layerId}".`);
   }
@@ -2187,6 +3048,11 @@ export async function readRevisionInternalFull(
   if (textFitBox !== undefined && textWrapWidth !== undefined && textFitBox.width < textWrapWidth) {
     throw new Error(textFitBoxNarrowerThanWrapRefusal(textFitBox.width, textWrapWidth));
   }
+  // Canonical text runs (#297, spec #285 US-017, ADR-0021 amendment):
+  // validated and normalized at this same one boundary — a malformed stored
+  // field is refused loudly before the revision hash is consulted. Absence
+  // IS the single-run form.
+  const textRuns = revision.kind === "text" ? normalizeStoredTextRuns(revision) : undefined;
   // Canonical vector colour (#215, DEC-008/010): validated and normalized at
   // this same one boundary — a malformed stored colour is refused loudly
   // before the revision hash is consulted. Absence IS the no-colour form.
@@ -2331,6 +3197,7 @@ export async function readRevisionInternalFull(
           ...(textWrapWidth !== undefined ? { wrapWidth: textWrapWidth } : {}),
           ...(textFitBox !== undefined ? { fitWidth: textFitBox.width, fitHeight: textFitBox.height } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
+          ...(textRuns !== undefined ? { runs: textRuns } : {}),
           fontBytes: contentBytes!.length,
           layoutRule: layoutRule!,
         }
@@ -2364,7 +3231,11 @@ export async function readRevisionInternalFull(
           ...(glow !== undefined ? { glow } : {}),
         };
 
-  return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0) };
+  // Run font bytes (#297): every distinct run font override's retained
+  // bytes, verified by identity at this one boundary, so paint and
+  // measurement never consult the store again.
+  const runFonts = await loadSnapshotRunFonts(resolvedRoot, resolved);
+  return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0), ...(runFonts.length > 0 ? { runFonts } : {}) };
 }
 
 /** Unlocked internal reader for Layer identity and its active revision. Callers must hold the Project lock. */
@@ -2495,6 +3366,17 @@ export interface EditLayerOptions {
    * their exact revision ids.
    */
   fitBox?: { width: number; height: number } | null;
+  /**
+   * Runs-side edits (#297, spec #285 US-017, ISC-54, ADR-0021 amendment):
+   * appends (`--run` occurrences), one run's text (`--run-text <i>=<text>`),
+   * per-run style setters merged per 1-based index, and the collapse form
+   * (`--runs none`). Each is an ABSOLUTE edit; the application order within
+   * one edit is documented on `applyTextInputRunEdits`.
+   */
+  runAppend?: string[];
+  runText?: Array<{ index: number; text: string }>;
+  runStyles?: LayerRunStyleEdit[];
+  runsNone?: boolean;
   x?: number;
   y?: number;
   opacity?: number;
@@ -3080,6 +3962,40 @@ export function vectorColorKindRefusal(
  * resolved control equals the previous revision's stored pair — both set
  * with the same values, or both absent.
  */
+
+/** The runs equality for the edit no-op check (#297): canonical entries in
+ *  order, field by field, compared by CANONICAL VALUE, never reference —
+ *  the colour through the ONE fill equality (`fillsEqual`, the same
+ *  deep comparison the Layer colour's no-op check uses) and caller font
+ *  facts through the same facts equality the Layer font's no-op check
+ *  uses — so two runs fact sets describing the same look are equal even
+ *  when their fill objects are distinct references. */
+function textRunsEq(
+  a: LayerTextRun[] | undefined,
+  b: LayerTextRun[] | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((run, i) => {
+    const other = b[i]!;
+    return run.start === other.start &&
+      fillsEqual(
+        normalizeStoredTextFill(run.color ?? EMPTY_RUN_COLOR),
+        normalizeStoredTextFill(other.color ?? EMPTY_RUN_COLOR),
+      ) &&
+      (run.color === undefined) === (other.color === undefined) &&
+      run.contentHash === other.contentHash &&
+      callerFontEq(run.callerFont, other.callerFont) &&
+      run.weight === other.weight &&
+      run.width === other.width;
+  });
+}
+
+/** The absent-run-colour stand-in for the equality's fill comparison: the
+ *  runs equality compares overrides, so both-absent is the same look
+ *  regardless of the Layer colour — the sentinel never leaks to storage. */
+const EMPTY_RUN_COLOR = "#000000";
+
 function fitBoxEq(
   fitBox: TextFitBox | undefined,
   prevRev: { fitWidth?: number; fitHeight?: number },
@@ -3275,6 +4191,10 @@ const REGION_CONFLICTING_OPTION_PRESENT = (options: EditLayerOptions): boolean =
   options.lineHeight !== undefined ||
   options.wrapWidth !== undefined ||
   options.fitBox !== undefined ||
+  options.runAppend !== undefined ||
+  options.runText !== undefined ||
+  options.runStyles !== undefined ||
+  options.runsNone !== undefined ||
   options.shape !== undefined ||
   options.size !== undefined ||
   options.cornerRadius !== undefined ||
@@ -3720,7 +4640,11 @@ async function buildEditedRevision(
       options.tracking !== undefined ||
       options.lineHeight !== undefined ||
       options.wrapWidth !== undefined ||
-      options.fitBox !== undefined
+      options.fitBox !== undefined ||
+      options.runAppend !== undefined ||
+      options.runText !== undefined ||
+      options.runStyles !== undefined ||
+      options.runsNone !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on an image Layer. Layer "${layerId}" is an image Layer.`);
     }
@@ -3889,7 +4813,11 @@ async function buildEditedRevision(
       options.tracking !== undefined ||
       options.lineHeight !== undefined ||
       options.wrapWidth !== undefined ||
-      options.fitBox !== undefined
+      options.fitBox !== undefined ||
+      options.runAppend !== undefined ||
+      options.runText !== undefined ||
+      options.runStyles !== undefined ||
+      options.runsNone !== undefined
     ) {
       throw new Error(`Cannot edit text attributes on a shape Layer. Layer "${layerId}" is a shape Layer.`);
     }
@@ -4161,6 +5089,43 @@ async function buildEditedRevision(
     const resolvedCallerFont =
       callerFont ?? (options.font !== undefined ? undefined : prevRev.callerFont);
 
+    // Text runs (#297, spec #285 US-017, ISC-54, ADR-0021 amendment): the
+    // runs-side edits apply through the ONE edit application — boundaries
+    // derived, overrides resolved per run, every validation before anything
+    // is retained. Bare --text on a multi-run Layer is refused here (the
+    // domain boundary no caller can bypass).
+    const prevRuns = normalizeStoredTextRuns(prevRev);
+    if (options.text !== undefined && prevRuns !== undefined) {
+      throw new Error(multiRunTextReplacementRefusal(layerId));
+    }
+    const prevRunFonts = await loadSnapshotRunFonts(resolvedRoot, prevRev);
+    const runEdits = await applyTextInputRunEdits({
+      layerId,
+      // The runs application starts from the would-be text (a bare --text
+      // replacement on a single-run Layer; on a multi-run Layer the bare
+      // form is refused above, so runs edits start from the stored text).
+      prevText: text,
+      ...(prevRuns !== undefined ? { prevRuns } : {}),
+      ...(options.runAppend !== undefined ? { runAppend: options.runAppend } : {}),
+      ...(options.runText !== undefined ? { runText: options.runText } : {}),
+      ...(options.runStyles !== undefined ? { runStyles: options.runStyles } : {}),
+      ...(options.runsNone !== undefined ? { runsNone: options.runsNone } : {}),
+      layerFace: () =>
+        face ?? (prevRev.callerFont !== undefined ? callerFontFace(prevRev.callerFont) : faceByContentHash(prevRev.contentHash)),
+      layerAxes: axes.weight !== undefined ? axes : undefined,
+      layerContentHash: contentHash,
+      ...(prevRunFonts.length > 0 ? { prevRunFonts } : {}),
+    });
+    // Run font retention (#297): the SAME content-store path and the SAME
+    // browser-resolution gate the layer font goes through — both before
+    // anything publishes.
+    for (const runFont of runEdits.newRunFonts) {
+      if (runFont.caller !== undefined) {
+        await verifyCallerFontResolves(runFont.contentHash, runFont.bytes, runFont.caller);
+      }
+      await storeContentBlob(resolvedRoot, runFont.contentHash, runFont.bytes);
+    }
+
     const carried = carryAppliedSharedFacts(draft, prevRev);
     const revision: LayerRevision = {
       schemaVersion: LAYER_SCHEMA_VERSION,
@@ -4168,7 +5133,7 @@ async function buildEditedRevision(
       createdAt,
       kind: "text",
       contentHash,
-      text,
+      text: runEdits.text,
       fontSize,
       color,
       layoutRule: "natural",
@@ -4178,6 +5143,7 @@ async function buildEditedRevision(
       ...(wrapWidth !== undefined ? { wrapWidth } : {}),
       ...(fitBox !== undefined ? { fitWidth: fitBox.width, fitHeight: fitBox.height } : {}),
       ...(resolvedCallerFont !== undefined ? { callerFont: resolvedCallerFont } : {}),
+      ...(runEdits.runs !== undefined ? { runs: runEdits.runs } : {}),
       x,
       y,
       opacity,
@@ -4194,10 +5160,17 @@ async function buildEditedRevision(
       ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
       ...carried,
     };
+    // The runs edits replace the whole-text fact: the stored text is the
+    // runs application's text (appends and --run-text rewrite it), so the
+    // resulting revision validates through the ONE text validator.
+    if (runEdits.text !== text) {
+      validateTextContent(runEdits.text, fontSize, rawColor);
+    }
     const unchanged =
       prevRev.layoutRule === "natural" &&
       contentHash === prevRev.contentHash &&
-      text === prevRev.text &&
+      runEdits.text === prevRev.text &&
+      textRunsEq(prevRuns, runEdits.runs) &&
       fontSize === prevRev.fontSize &&
       fillsEqual(fill, normalizeStoredTextFill(prevRev.color)) &&
       axes.weight === prevRev.weight &&
@@ -4236,11 +5209,14 @@ async function buildEditedRevision(
       (options.text !== undefined || options.font !== undefined || options.fontFile !== undefined ||
         options.fontSize !== undefined || options.weight !== undefined || options.width !== undefined ||
         options.tracking !== undefined || options.lineHeight !== undefined ||
-        options.wrapWidth !== undefined || options.fitBox !== undefined)
+        options.wrapWidth !== undefined || options.fitBox !== undefined ||
+        options.runAppend !== undefined || options.runText !== undefined ||
+        options.runStyles !== undefined || options.runsNone !== undefined)
     ) {
       const standalone = await measureStandaloneSnapshot(
         { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
         newTextBytes ?? prevContentBytes,
+        { ...(runEdits.runFonts.length > 0 ? { runFonts: runEdits.runFonts } : {}) },
       );
       validateKeptVisibleRegion(draft.visibleRegion, standalone.content, layerId);
       regionCarried = { visibleRegion: draft.visibleRegion };
@@ -4259,11 +5235,14 @@ async function buildEditedRevision(
         options.text !== undefined || options.font !== undefined || options.fontFile !== undefined ||
         options.fontSize !== undefined || options.weight !== undefined || options.width !== undefined ||
         options.tracking !== undefined || options.lineHeight !== undefined ||
-        options.wrapWidth !== undefined || options.fitBox !== undefined;
+        options.wrapWidth !== undefined || options.fitBox !== undefined ||
+        options.runAppend !== undefined || options.runText !== undefined ||
+        options.runStyles !== undefined || options.runsNone !== undefined;
       if (fitRelevant) {
         const fit = await measureTextFit(
           { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
           newTextBytes ?? prevContentBytes,
+          { ...(runEdits.runFonts.length > 0 ? { runFonts: runEdits.runFonts } : {}) },
         );
         if (fit !== null && !fit.fits) {
           throw new Error(
@@ -4452,11 +5431,15 @@ export async function editLayerInternal(
   const placement = resolveEditPlacement(options, prevRev);
   const shared = options.shared ?? {};
   const draft = { ...prevRev, ...placement } as SharedOptionDraft;
+  // The stored revision's run font bytes (#297, verified by the revision
+  // reader): the region application's standalone measurement paints the run
+  // spans, so a run font override's bytes ride beside the content bytes.
   const sharedContext: SharedOptionApplyContext = {
     surface: "edit",
     base: prevRev,
     layerId,
     contentBytes: current.contentBytes,
+    ...(current.runFonts !== undefined && current.runFonts.length > 0 ? { runFonts: current.runFonts } : {}),
     format:
       options.image === undefined && options.fromGeneration === undefined && options.fromMatte === undefined && prevRev.kind === "image"
         ? prevRev.format

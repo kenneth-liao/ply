@@ -61,6 +61,10 @@ import {
   normalizeStoredTextTypography,
   normalizeStoredTextWrapWidth,
   normalizeStoredTextFitBox,
+  normalizeStoredTextRuns,
+  storedTextRunSlices,
+  type LayerTextRun,
+  type SnapshotRunFont,
   MIN_FIT_FONT_SIZE,
   type LayerOutline,
   type LayerVisibleRegion,
@@ -101,6 +105,11 @@ export type SnapshotLayer = {
   layerId: string;
   revision: ResolvedLayerRevision;
   contentBytes: Buffer;
+  /** The revision's run font bytes (#297): every distinct run font
+   *  override's verified retained bytes, resolved by the caller — the
+   *  @font-face inputs the run spans declare. Present only for text Layers
+   *  with run font overrides. */
+  runFonts?: SnapshotRunFont[];
 };
 
 /**
@@ -390,6 +399,14 @@ export async function rejectUnresolvedFonts(page: Page, layers: SnapshotLayer[])
     if (l.revision.kind !== "text") continue;
     const family = internalFontFamily(l.revision.contentHash);
     byFamily.set(family, [...(byFamily.get(family) ?? []), l.name]);
+    // Run font overrides (#297): every run's own face is a declared family
+    // the glyphs actually use, gated exactly like the layer's — through the
+    // ONE stored-runs reader (INT-paint-3).
+    for (const run of normalizeStoredTextRuns(l.revision) ?? []) {
+      if (run.contentHash === undefined) continue;
+      const runFamily = internalFontFamily(run.contentHash);
+      byFamily.set(runFamily, [...(byFamily.get(runFamily) ?? []), l.name]);
+    }
   }
   const unresolved: string[] = [];
   for (const [family, names] of byFamily) {
@@ -601,6 +618,76 @@ function maskCss(prop: string, value: string): string {
 /** Minimal HTML escaping for caller-owned text (#81; shared with every
  * module that interpolates caller strings into the page — the guideline
  * overlay's region id/label/reason use this exact recipe, #174). */
+/**
+ * The run-spans content for a text element (#297, spec #285 US-017, ISC-54,
+ * ADR-0021 amendment): a single-run revision renders exactly today's escaped
+ * text; a multi-run revision renders one inline span per run in stored
+ * order, each span styled ONLY with that run's overrides against the
+ * element's own layer-default style — colour, font family, synthesis, and
+ * axes. The element stays the one layout fact (wrap width, fit, font size),
+ * and the effects chain above it hugs the composited glyph ink of every
+ * run. Spans inherit the element's paint: a run without a colour override
+ * paints the Layer's colour (a Layer gradient spans the whole element's ink
+ * exactly as before), and a run without a font override inherits the
+ * Layer's family and axes.
+ */
+function textRunsContent(
+  rev: Extract<ResolvedLayerRevision, { kind: "text" }>,
+): string {
+  const runs = normalizeStoredTextRuns(rev);
+  if (runs === undefined) return escapeHtml(rev.text);
+  const slices = storedTextRunSlices(rev);
+  return runs
+    .map((run, i) => {
+      const style = runSpanStyle(run);
+      return style === ""
+        ? `<span>${escapeHtml(slices[i]!)}</span>`
+        : `<span style="${style}">${escapeHtml(slices[i]!)}</span>`;
+    })
+    .join("");
+}
+
+/** One run span's style (#297): only the run's own overrides, in fixed
+ *  order (colour, font, synthesis, axes). A run colour projects through the
+ *  ONE fill projection — a solid paints `color` (and, so a solid run inside
+ *  a gradient Layer cannot be overruled by the inherited transparent text
+ *  fill, `-webkit-text-fill-color` too); a gradient clips the span's own
+ *  background to the span's glyphs, spanning that run's ink box. A run
+ *  font override declares its own internal family (its retained bytes'
+ *  family), disables synthesis for caller bytes, and emits its resolved
+ *  axes — or `normal` for a static face, so no inherited variation setting
+ *  can reach bytes with no such axis. An axes override on the Layer's own
+ *  face emits the full pair: a span's font-variation-settings replaces the
+ *  inherited property rather than merging with it. */
+function runSpanStyle(run: LayerTextRun): string {
+  let css = "";
+  const fill = run.color !== undefined ? normalizeStoredTextFill(run.color) : undefined;
+  if (fill !== undefined) {
+    if (fill.type === "solid") {
+      css += `color:${fill.color};-webkit-text-fill-color:${fill.color};`;
+    } else {
+      css +=
+        `background:${fillCssBackground(fill)};` +
+        `-webkit-background-clip:text;background-clip:text;` +
+        `-webkit-text-fill-color:transparent;color:transparent;`;
+    }
+  }
+  if (run.contentHash !== undefined) {
+    css += `font-family:'${internalFontFamily(run.contentHash)}';`;
+    if (run.callerFont !== undefined) css += "font-synthesis:none;";
+    if (run.weight !== undefined) {
+      css += `font-variation-settings:'wght' ${run.weight}, 'wdth' ${run.width};`;
+    } else {
+      // A static face's bytes fix the look: cancel any inherited variation
+      // setting so no axis can reach the run's bytes.
+      css += "font-variation-settings:normal;";
+    }
+  } else if (run.weight !== undefined) {
+    css += `font-variation-settings:'wght' ${run.weight}, 'wdth' ${run.width};`;
+  }
+  return css;
+}
+
 export function escapeHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
@@ -937,10 +1024,32 @@ export function buildCompositionHtml(
   }
   const faces = new Map<string, { bytes: Buffer; caller?: CallerFontFacts }>();
   for (const l of layers) {
-    if (l.revision.kind === "text" && !faces.has(l.revision.contentHash)) {
+    if (l.revision.kind !== "text") continue;
+    // Each run's font face registers INDEPENDENTLY of the Layer font
+    // (INT-paint-1): a second Layer sharing the Layer font still registers
+    // its own run fonts — the loop is per-Layer, only the map dedupes by
+    // hash.
+    if (!faces.has(l.revision.contentHash)) {
       faces.set(l.revision.contentHash, {
         bytes: l.contentBytes,
         ...(l.revision.callerFont !== undefined ? { caller: l.revision.callerFont } : {}),
+      });
+    }
+    // Run font overrides (#297): each run's own face is a declared family
+    // the glyphs actually use, resolved from the caller-verified run font
+    // bytes — a missing entry is a resolution gap, never a silent fall
+    // back to the layer font.
+    for (const run of normalizeStoredTextRuns(l.revision) ?? []) {
+      if (run.contentHash === undefined || faces.has(run.contentHash)) continue;
+      const bytes = l.runFonts?.find((f) => f.contentHash === run.contentHash);
+      if (bytes === undefined) {
+        throw new Error(
+          `Run font "${run.contentHash}" for layer "${l.layerId}" has no verified bytes — refusing to paint text with an undeclared font.`,
+        );
+      }
+      faces.set(run.contentHash, {
+        bytes: bytes.bytes,
+        ...(bytes.caller !== undefined ? { caller: bytes.caller } : {}),
       });
     }
   }
@@ -1126,11 +1235,11 @@ export function buildCompositionHtml(
             `font-family:'${internalFontFamily(rev.contentHash)}';` +
             `font-size:${rev.fontSize}px;color:${fill.color};${synthesisCss}${axesCss}${typographyCss}${layoutCss}`;
           if (rev.visibleRegion === undefined && gradeFilter === "") {
-            return `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}${textStyle}"${fitAttr}>${escapeHtml(rev.text)}</div>`;
+            return `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}${textStyle}"${fitAttr}>${textRunsContent(rev)}</div>`;
           }
           return (
             `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
-            `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${escapeHtml(rev.text)}</div></div>`
+            `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${textRunsContent(rev)}</div></div>`
           );
         }
 
@@ -1150,7 +1259,7 @@ export function buildCompositionHtml(
 
         return (
           `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
-          `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${escapeHtml(rev.text)}</div></div>`
+          `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${textRunsContent(rev)}</div></div>`
         );
       }
       if (rev.kind === "shape") {

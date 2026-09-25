@@ -35,6 +35,12 @@ import { readCallerFontFile } from "./font-file.js";
 import { measureTextFit } from "./composition-measure.js";
 import { type LayerFill, canonicalizeTextFillForStorage } from "./fill.js";
 import {
+  type ResolvedTextInputRuns,
+  resolveTextInputRuns,
+  type SnapshotRunFont,
+  type TextInputRuns,
+} from "./layer.js";
+import {
   oneCommandApplicationOrder,
   applyLayerOption,
   type SharedOptionApplyContext,
@@ -675,8 +681,10 @@ export async function addTextLayerToComposition(
   compName: string,
   localName: string,
   input: {
-    /** Rendered string content (nonempty, ≤ MAX_TEXT_LENGTH). */
-    text: string;
+    /** Rendered string content (nonempty, ≤ MAX_TEXT_LENGTH). With runs
+     *  (#297), the --run occurrences' concatenation is the text — one form
+     *  or the other, never both. */
+    text?: string;
     /**
      * A bundled font family name — resolved once at add, never re-consulted.
      * Mutually exclusive with `fontFile`: one font source per Layer (#232).
@@ -726,6 +734,15 @@ export async function addTextLayerToComposition(
      * on add — there is no previous value — and stores nothing).
      */
     fitBox?: { width: number; height: number } | null;
+    /**
+     * Text runs (#297, spec #285 US-017, ISC-54, ADR-0021 amendment): the
+     * run texts whose concatenation IS the Layer text, plus per-run style
+     * edits by 1-based index. One occurrence normalizes to the single-run
+     * form at the ONE ingestion point (`resolveTextInputRuns`); fewer than
+     * two runs means no runs field — a single-run Layer is today's text
+     * Layer. Omitted: the plain `--text` form.
+     */
+    runs?: TextInputRuns;
   },
   options: AddLayerOptions & { fontSize?: number } = {},
 ): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
@@ -740,43 +757,80 @@ export async function addTextLayerToComposition(
       "--font and --font-file name one font per edit — pass a bundled family (--font) or a local font file (--font-file), not both.",
     );
   }
+  // Runs vs plain text (#297): the run occurrences and the whole-text form
+  // are one content — the command boundary refuses the pair, the domain
+  // re-checks so no caller of the functions can bypass it.
+  if (input.text !== undefined && input.runs !== undefined) {
+    throw new Error(
+      "--text and --run are mutually exclusive content options: --text is the single-run form; author runs with one or more --run occurrences.",
+    );
+  }
 
   const { x, y, opacity } = parsePlacement(options);
   const fontSize = options.fontSize ?? 48;
-  const rawColor = input.color ?? "#ffffff";
+
+  // The runs facts (#297) resolve at the ONE ingestion point
+  // (`resolveTextInputRuns`), which also owns the single-run fold: per-run
+  // style edits that leave a single run fold into the Layer-level facts
+  // there (a single-run Layer IS today's text Layer) — never pre-handled or
+  // dropped by the CLI. The Layer font resolves through the SAME callback
+  // the fold's font override goes through, AFTER the fold, so the folded
+  // face is the face the Layer stores.
+  const runsInput = input.runs;
+  const layerFontInput = {
+    ...(input.font !== undefined ? { font: input.font } : {}),
+    ...(input.fontFile !== undefined ? { fontFile: input.fontFile } : {}),
+  };
+  const text = runsInput !== undefined ? runsInput.runTexts.join("") : input.text ?? "";
+  const resolvedRuns = await resolveTextInputRuns({
+    text,
+    ...(runsInput !== undefined ? { runs: runsInput } : {}),
+    layerFontInput,
+    ...(input.color !== undefined ? { layerColorSpec: input.color } : {}),
+    ...(input.weight !== undefined ? { layerWeight: input.weight } : {}),
+    ...(input.width !== undefined ? { layerWidth: input.width } : {}),
+    resolveLayerFont: async (fontInput) => {
+      if (fontInput.fontFile !== undefined) {
+        const ingested = await readCallerFontFile(fontInput.fontFile);
+        return {
+          face: callerFontFace(ingested.facts),
+          bytes: ingested.bytes,
+          callerFont: ingested.facts,
+          contentHash: createHash("sha256").update(ingested.bytes).digest("hex"),
+        };
+      }
+      const face = resolveFace(fontInput.font!);
+      const bytes = fontAssetBytes(face);
+      return { face, bytes, contentHash: createHash("sha256").update(bytes).digest("hex") };
+    },
+  });
+  const { face, bytes, callerFont, contentHash: layerContentHash } = resolvedRuns.layerFont;
+  const rawColor = resolvedRuns.folded?.color ?? input.color ?? "#ffffff";
+  // Axes resolve BEFORE any retention, so a refused control publishes
+  // nothing — not even a stray content blob (#179, ADR-0021). The fold's
+  // raw axis controls ride beside the Layer's own.
+  const axes = resolveTextAxes(face, {
+    weight: resolvedRuns.folded?.weight ?? input.weight,
+    width: resolvedRuns.folded?.width ?? input.width,
+  });
   // Canonical text validation at the ingestion boundary; the stored-revision
-  // parser reuses the same validator.
-  const fill = validateTextContent(input.text, fontSize, rawColor);
+  // parser reuses the same validator (the folded colour is canonical —
+  // exactly the Layer colour path's stored form — and re-validates here).
+  const fill = validateTextContent(text, fontSize, rawColor);
   const color = canonicalizeTextFillForStorage(fill);
+  const runsField = resolvedRuns.runs;
+  const runFontsToRetain = resolvedRuns.runFonts;
 
   const resolvedRoot = await resolveProjectRoot(projectPath);
   return withProjectLock(resolvedRoot, async () => {
     const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
 
     return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
-      // Resolve the face once and retain its exact bytes as the revision's
-      // content identity (#179/#232). For a bundled face the facts come from
-      // the registry; for a caller font file (#232, DEC-006) they are read
-      // ONCE from the file's own tables and the bytes go through the SAME
-      // retention path. Unknown families, unreadable or non-font files,
-      // missing bundled bytes, out-of-range/unsupported weight or width
-      // controls, and faces the rendering browser cannot resolve all fail
-      // loudly here — before anything is published.
-      let face: ReturnType<typeof resolveFace>;
-      let callerFont: CallerFontFacts | undefined;
-      let bytes: Buffer;
-      if (input.fontFile !== undefined) {
-        const ingested = await readCallerFontFile(input.fontFile);
-        bytes = ingested.bytes;
-        callerFont = ingested.facts;
-        face = callerFontFace(callerFont);
-      } else {
-        face = resolveFace(input.font!);
-        bytes = fontAssetBytes(face);
-      }
-      // Axes resolve BEFORE any retention, so a refused control publishes
-      // nothing — not even a stray content blob (#179, ADR-0021).
-      const axes = resolveTextAxes(face, { weight: input.weight, width: input.width });
+      // The Layer font resolved at the ONE ingestion point above (through
+      // the same resolveFace/readCallerFontFile flow): unknown families,
+      // unreadable or non-font files, missing bundled bytes, and
+      // out-of-range/unsupported weight or width controls refused before
+      // anything is published.
       // Typography resolves at the same one boundary (#187, ADR-0021) — a
       // refused tracking/line-height publishes nothing, and a set value is
       // stored only when set (a tracking of 0 is the same look as absent).
@@ -797,7 +851,7 @@ export async function addTextLayerToComposition(
       if (fitBox !== undefined && wrapWidth !== undefined && fitBox.width < wrapWidth) {
         throw new Error(textFitBoxNarrowerThanWrapRefusal(fitBox.width, wrapWidth));
       }
-      const contentHash = createHash("sha256").update(bytes).digest("hex");
+      const contentHash = layerContentHash;
       if (callerFont !== undefined) {
         // The render probe's family-resolution gate applies to caller fonts
         // BEFORE publication (#232): a file the browser cannot resolve
@@ -813,7 +867,7 @@ export async function addTextLayerToComposition(
           createdAt,
           kind: "text",
           contentHash,
-          text: input.text,
+          text,
           fontSize,
           color,
           layoutRule: "natural",
@@ -823,6 +877,7 @@ export async function addTextLayerToComposition(
           ...(wrapWidth !== undefined ? { wrapWidth } : {}),
           ...(fitBox !== undefined ? { fitWidth: fitBox.width, fitHeight: fitBox.height } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
+          ...(runsField !== undefined ? { runs: runsField } : {}),
           x,
           y,
           opacity,
@@ -837,6 +892,7 @@ export async function addTextLayerToComposition(
           composition: sanitizedComp,
           canvas: comp.canvas,
           contentBytes: bytes,
+          ...(runFontsToRetain.length > 0 ? { runFonts: runFontsToRetain } : {}),
         },
       );
       // Fit-to-box validation (#295, spec #285 US-016, DEC-010): the box is
@@ -846,7 +902,11 @@ export async function addTextLayerToComposition(
       // cannot fit at the minimum size is refused, naming the box and the
       // size needed. A refused add leaves no Layer, no use, and no content.
       if (revision.kind === "text" && revision.fitWidth !== undefined) {
-        const fit = await measureTextFit({ ...revision, x: 0, y: 0 } as ResolvedLayerRevision, bytes);
+        const fit = await measureTextFit(
+          { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
+          bytes,
+          { ...(runFontsToRetain.length > 0 ? { runFonts: runFontsToRetain } : {}) },
+        );
         if (fit !== null && !fit.fits) {
           throw new Error(
             textFitRefusal(revision.text, revision.fitWidth, revision.fitHeight!, fit.neededFontSize ?? revision.fontSize),
@@ -854,6 +914,12 @@ export async function addTextLayerToComposition(
         }
       }
       await storeContentBlob(projectPath, contentHash, bytes);
+      // Run font retention (#297): the SAME content-store path, AFTER the
+      // final revision has validated — a refused add leaves no Layer, no
+      // use, and no content blob, layer or run.
+      for (const runFont of runFontsToRetain) {
+        await storeContentBlob(projectPath, runFont.contentHash, runFont.bytes);
+      }
       return revision;
     }, options.position).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -1174,6 +1240,11 @@ export async function addMattedLayerToComposition(
 export interface ResolvedCompositionLayerFull extends ResolvedCompositionLayer {
   /** The Layer's verified retained content bytes. Internal projection — never serialized. */
   contentBytes: Buffer;
+  /** The Layer's run font bytes (#297): every distinct run font override's
+   *  verified retained bytes — the @font-face inputs paint and measurement
+   *  declare for run font overrides. Present only for text Layers with run
+   *  font overrides. Internal projection — never serialized. */
+  runFonts?: SnapshotRunFont[];
 }
 
 export interface ResolvedCompositionFull extends Omit<ResolvedComposition, "layers"> {
@@ -1205,6 +1276,7 @@ export async function readCompositionInternalFull(
       kind: layer.currentRevision.kind,
       revision: layer.currentRevision,
       contentBytes: layer.contentBytes,
+      ...(layer.runFonts !== undefined && layer.runFonts.length > 0 ? { runFonts: layer.runFonts } : {}),
     });
   }
 
@@ -1478,6 +1550,9 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ...(source.wrapWidth !== undefined ? { wrapWidth: source.wrapWidth } : {}),
       ...(source.fitWidth !== undefined ? { fitWidth: source.fitWidth, fitHeight: source.fitHeight } : {}),
       ...(source.callerFont !== undefined ? { callerFont: source.callerFont } : {}),
+      // Text runs (#297): validated stored facts — boundaries and overrides
+      // — copied verbatim, the same carry the other revision facts get.
+      ...(source.runs !== undefined ? { runs: source.runs } : {}),
       x: source.x,
       y: source.y,
       opacity: source.opacity,
@@ -1604,10 +1679,14 @@ async function copyCrossProject(
   // Map each DISTINCT source Layer identity to one destination identity from
   // the verified snapshot — no second Full resolution; duplicate uses share
   // the single mapped identity.
-  const identityMap = new Map<string, { revision: ResolvedLayerRevision; contentBytes: Buffer }>();
+  const identityMap = new Map<string, { revision: ResolvedLayerRevision; contentBytes: Buffer; runFonts?: SnapshotRunFont[] }>();
   for (const layer of sourceFull.layers) {
     if (!identityMap.has(layer.layerId)) {
-      identityMap.set(layer.layerId, { revision: layer.revision, contentBytes: layer.contentBytes });
+      identityMap.set(layer.layerId, {
+        revision: layer.revision,
+        contentBytes: layer.contentBytes,
+        ...(layer.runFonts !== undefined && layer.runFonts.length > 0 ? { runFonts: layer.runFonts } : {}),
+      });
     }
   }
 
@@ -1624,6 +1703,13 @@ async function copyCrossProject(
       // its parameters, so there is nothing to copy into content/.
       if (snapshot.revision.kind !== "shape") {
         await storeContentBlob(destRoot, snapshot.revision.contentHash, snapshot.contentBytes);
+      }
+      // Run font blobs (#297, INT-paint-2): the copied revision carries the
+      // runs verbatim, so every distinct run font's verified bytes copy
+      // alongside the Layer's own — a cross-Project import paints from the
+      // destination store alone.
+      for (const runFont of snapshot.runFonts ?? []) {
+        await storeContentBlob(destRoot, runFont.contentHash, runFont.bytes);
       }
 
       const createdAt = new Date().toISOString();

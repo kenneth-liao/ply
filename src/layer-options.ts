@@ -74,6 +74,8 @@ import {
   resolveEditFlip,
   type LayerRevision,
   type ResolvedLayerRevision,
+  type LayerRunStyleEdit,
+  type SnapshotRunFont,
   type LayerShadow,
   type LayerOutline,
   type LayerVisibleRegion,
@@ -139,7 +141,7 @@ export interface LayerOptionDef {
    *  presence-only identity parse, so a table key with NO registration
    *  fails loudly at runtime on both surfaces (#263) instead of being
    *  silently dropped. */
-  parse?: (raw: string | undefined) => OptionParse<unknown>;
+  parse?: (raw: never) => OptionParse<unknown>;
   /** The ONE application case for the option (DEC-001, #263): the shared
    *  application both command surfaces dispatch through, keyed by the
    *  option's own key. Registered for the post-content options — the ones
@@ -168,6 +170,14 @@ export type LayerOptionKey =
   | "line-height"
   | "wrap-width"
   | "fit-box"
+  | "run"
+  | "run-text"
+  | "runs"
+  | "run-color"
+  | "run-font"
+  | "run-font-file"
+  | "run-weight"
+  | "run-width"
   | "shape"
   | "size"
   | "corner-radius"
@@ -267,6 +277,20 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // text style option: text-only, and it joins every text content-kind
   // refusal through TEXT_CONTENT_KEYS.
   { key: "fit-box", group: "text", appliesTo: ["text"], editOption: true, dashNumeric: true, parse: parseLayerFitBox },
+  // Text runs (#297, spec #285 US-017, ISC-54, ADR-0021 amendment): --run is
+  // the repeatable run-text authoring option (each occurrence one run, in
+  // command order); the per-run style options are encoded absolute setters
+  // ("<1-based run index>=<value>"); --run-text rewrites one run's slice;
+  // --runs "none" collapses to the single-run shape. All are text-only and
+  // join the text content-kind exclusivity sets through their contentKind.
+  { key: "run", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRun },
+  { key: "run-text", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRunText },
+  { key: "runs", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRuns },
+  { key: "run-color", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRunColor },
+  { key: "run-font", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRunFont },
+  { key: "run-font-file", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRunFontFile },
+  { key: "run-weight", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRunWeight },
+  { key: "run-width", group: "text", contentKind: "text", appliesTo: ["text"], editOption: true, parse: parseLayerRunWidth },
   // Placement, transform, and effect options: kind-shared across image,
   // text, and shape Layers (#259) — the shared validators and the paint
   // markup treat a shape's box exactly like an image's content box. Only
@@ -369,6 +393,16 @@ export const LAYER_OPTION_PARSE_ARGS = {
   "line-height": { type: "string" },
   "wrap-width": { type: "string" },
   "fit-box": { type: "string" },
+  run: { type: "string", multiple: true },
+  // The per-run setters are repeatable: several runs restyle in one edit
+  // (`--run-color 2=... --run-weight 3=...`), so occurrences collect.
+  "run-text": { type: "string", multiple: true },
+  runs: { type: "string" },
+  "run-color": { type: "string", multiple: true },
+  "run-font": { type: "string", multiple: true },
+  "run-font-file": { type: "string", multiple: true },
+  "run-weight": { type: "string", multiple: true },
+  "run-width": { type: "string", multiple: true },
   x: { type: "string" },
   y: { type: "string" },
   opacity: { type: "string" },
@@ -391,17 +425,28 @@ export const LAYER_OPTION_PARSE_ARGS = {
   blend: { type: "string" },
   glow: { type: "string" },
   "scale-to": { type: "string" },
-} as const satisfies Record<LayerOptionKey, { type: "string" }>;
+} as const satisfies Record<LayerOptionKey, { type: "string"; multiple?: boolean }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
- *  (or `undefined` when not supplied). Command-specific flags are
- *  intersected per surface; see each entry point's `values` type. */
-export type LayerOptionArgs = { [K in LayerOptionKey]?: string };
+ *  (or `undefined` when not supplied) — except `--run` (#297), whose
+ *  repeatable occurrences collect as an ordered string array. Command-specific
+ *  flags are intersected per surface; see each entry point's `values` type. */
+export type LayerOptionArgs = {
+  [K in Exclude<LayerOptionKey, "run">]?: string;
+} & { run?: string[] };
 
 /** The `--text` content marker plus the text style options: the option set
  *  the content-kind exclusivity rules treat as "the text content kind". */
 export const TEXT_CONTENT_KEYS: readonly LayerOptionKey[] = [
   "text", "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width", "fit-box",
+  "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
+];
+
+/** The runs options (#297): --run and the per-run setters. Distinct from the
+ *  layer-level text style options, whose add-boundary "require --text" check
+ *  must exempt them (runs author their own text content). */
+export const RUN_OPTION_KEYS: readonly LayerOptionKey[] = [
+  "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
 ];
 
 /** The `--shape` content marker plus the shape's parameter options: the
@@ -443,7 +488,7 @@ export const COMPOSITION_ADD_OPTION_KEYS: readonly LayerOptionKey[] =
  *  `satisfies` — never a silently unparsed add flag — and the key-set tests
  *  pin the table's keys to this declaration's, so the spread is exactly
  *  the add surface's options. */
-export const COMPOSITION_ADD_OPTION_PARSE_ARGS: Record<LayerOptionKey, { type: "string" }> = {
+export const COMPOSITION_ADD_OPTION_PARSE_ARGS: Record<LayerOptionKey, { type: "string"; multiple?: boolean }> = {
   ...LAYER_OPTION_PARSE_ARGS,
 };
 
@@ -598,7 +643,7 @@ export function layerContentKindConflict(
             : "--image and --shape are mutually exclusive content kinds; use one per Layer.";
         }
         return surface === "edit"
-          ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box) are mutually exclusive."
+          ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box, --run, --run-text, --runs, --run-color, --run-font, --run-font-file, --run-weight, --run-width) are mutually exclusive."
           : "--image and --text are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
@@ -750,6 +795,137 @@ export function parseLayerFitBox(raw: string | undefined): OptionParse<{ width: 
     };
   }
   return { ok: true, value: { width: Number(m[1]), height: Number(m[2]) } };
+}
+
+/** A repeatable option's raw value arrives as an array (parseArgs
+ *  `multiple`) or a single string; the identity parse normalizes both to the
+ *  ordered occurrence list (#297). A blank occurrence is refused at the
+ *  boundary — an empty run would collapse boundaries. */
+export function parseLayerRun(raw: string | string[] | undefined): OptionParse<string[] | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const occurrences = Array.isArray(raw) ? raw : [raw];
+  if (occurrences.length === 0) return { ok: true, value: undefined };
+  if (occurrences.some((o) => o.length === 0)) {
+    return { ok: false, error: "--run takes the run's text (a nonempty string); a run cannot be empty." };
+  }
+  return { ok: true, value: occurrences };
+}
+
+/** The shared indexed-setter boundary parse (#297): "<1-based run
+ *  index>=<value>", split on the FIRST "=" (a value may itself contain one).
+ *  The index is a positive integer; the value passes through raw (its
+ *  grammar is semantic, the same split every layer-level option uses).
+ *  `valuePattern` states the expected value shape in the refusal. */
+function parseRunIndexedOption(
+  option: string,
+  valuePattern: string,
+  raw: string | string[] | undefined,
+): OptionParse<Array<{ index: number; value: string }> | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const occurrences = Array.isArray(raw) ? raw : [raw];
+  if (occurrences.length === 0) return { ok: true, value: undefined };
+  const out: Array<{ index: number; value: string }> = [];
+  for (const occurrence of occurrences) {
+    const eq = occurrence.indexOf("=");
+    if (eq <= 0) {
+      return { ok: false, error: `${option} must be "<1-based run index>=${valuePattern}" (got ${JSON.stringify(occurrence)}).` };
+    }
+    const indexPart = occurrence.slice(0, eq);
+    if (!/^[1-9][0-9]*$/.test(indexPart)) {
+      return { ok: false, error: `${option} must be "<1-based run index>=${valuePattern}" (got run index ${JSON.stringify(indexPart)}).` };
+    }
+    out.push({ index: Number(indexPart), value: occurrence.slice(eq + 1) });
+  }
+  return { ok: true, value: out };
+}
+
+/** --run-text: "<1-based run index>=<text>" — the run's replacement text is
+ *  taken verbatim; emptiness is a boundary refusal (a run cannot be empty). */
+export function parseLayerRunText(raw: string | string[] | undefined): OptionParse<Array<{ index: number; text: string }> | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const parsed = parseRunIndexedOption("--run-text", "<text>", raw);
+  if (!parsed.ok) return parsed;
+  if (parsed.value!.some((entry) => entry.value.length === 0)) {
+    return { ok: false, error: "--run-text takes the run's text (a nonempty string); a run cannot be empty." };
+  }
+  return { ok: true, value: parsed.value!.map((entry) => ({ index: entry.index, text: entry.value })) };
+}
+
+/** --runs: the collapse form — the literal "none" only (#297). */
+export function parseLayerRuns(raw: string | undefined): OptionParse<null | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === "none") return { ok: true, value: null };
+  return { ok: false, error: '--runs takes "none" — the form that collapses a multi-run Layer to a single run.' };
+}
+
+/** --run-color: "<1-based run index>=<color spec>" — the spec is the ONE
+ *  `--color` grammar's raw text; its grammar parses at the semantic
+ *  ingestion boundary exactly like the layer-level --color. The removal
+ *  form is the literal "none". */
+export function parseLayerRunColor(raw: string | string[] | undefined): OptionParse<Array<{ index: number; value: string }> | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  return parseRunIndexedOption("--run-color", "<color spec>", raw);
+}
+
+/** --run-font: "<1-based run index>=<family>" (or "none" — the removal
+ *  form); the family is taken verbatim, resolved semantically like --font. */
+export function parseLayerRunFont(raw: string | string[] | undefined): OptionParse<Array<{ index: number; value: string }> | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  return parseRunIndexedOption("--run-font", "<family>|none", raw);
+}
+
+/** --run-font-file: "<1-based run index>=<path>" (or "none"); a blank path
+ *  is a boundary refusal, the same shape rule --font-file enforces. */
+export function parseLayerRunFontFile(raw: string | string[] | undefined): OptionParse<Array<{ index: number; value: string }> | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const parsed = parseRunIndexedOption("--run-font-file", "<path>|none", raw);
+  if (!parsed.ok) return parsed;
+  if (parsed.value!.some((entry) => entry.value !== "none" && !entry.value.trim())) {
+    return { ok: false, error: "--run-font-file takes a path to a local TrueType or OpenType font file." };
+  }
+  return parsed;
+}
+
+/** --run-weight: "<1-based run index>=<finite number>" (or "none" — the
+ *  removal form), the same shape-and-finiteness split --weight uses. */
+export function parseLayerRunWeight(raw: string | string[] | undefined): OptionParse<Array<{ index: number; value: number | null }> | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const parsed = parseRunIndexedOption("--run-weight", "<finite number>|none", raw);
+  if (!parsed.ok) return parsed;
+  const out: Array<{ index: number; value: number | null }> = [];
+  for (const entry of parsed.value!) {
+    if (entry.value === "none") {
+      out.push({ index: entry.index, value: null });
+      continue;
+    }
+    const weight = parseNumericArgument(entry.value);
+    if (!Number.isFinite(weight)) {
+      return { ok: false, error: "Weight (--run-weight) must be a finite number." };
+    }
+    out.push({ index: entry.index, value: weight });
+  }
+  return { ok: true, value: out };
+}
+
+/** --run-width: "<1-based run index>=<finite number>" (or "none"), the same
+ *  shape-and-finiteness split --width uses. */
+export function parseLayerRunWidth(raw: string | string[] | undefined): OptionParse<Array<{ index: number; value: number | null }> | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const parsed = parseRunIndexedOption("--run-width", "<finite number>|none", raw);
+  if (!parsed.ok) return parsed;
+  const out: Array<{ index: number; value: number | null }> = [];
+  for (const entry of parsed.value!) {
+    if (entry.value === "none") {
+      out.push({ index: entry.index, value: null });
+      continue;
+    }
+    const width = parseNumericArgument(entry.value);
+    if (!Number.isFinite(width)) {
+      return { ok: false, error: "Width (--run-width) must be a finite number." };
+    }
+    out.push({ index: entry.index, value: width });
+  }
+  return { ok: true, value: out };
 }
 
 /**
@@ -1411,7 +1587,7 @@ export function parseSharedOption(
       `Option "--${key}" is declared in the shared option table but has no parse registration.`,
     );
   }
-  return def.parse(values[key]);
+  return def.parse(values[key] as never);
 }
 
 /**
@@ -1493,6 +1669,7 @@ export type LayerEditCheckStep =
         | "text-typography"
         | "text-font-source"
         | "text-font-axes"
+        | "run-text-source"
         | "anchor-conflict"
         | "anchor-targets";
     };
@@ -1519,6 +1696,15 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "line-height" },
   { option: "wrap-width" },
   { option: "fit-box" },
+  { option: "run-color" },
+  { option: "run-font" },
+  { option: "run-weight" },
+  { option: "run-width" },
+  { option: "run-font-file" },
+  { option: "run-text" },
+  { option: "runs" },
+  { option: "run" },
+  { policy: "run-text-source" },
   { policy: "text-typography" },
   { policy: "text-font-source" },
   { option: "font-file" },
@@ -1677,6 +1863,20 @@ export function checkEditLayerOptions(values: LayerOptionArgs): EditLayerCheck |
           }
           break;
         }
+        case "run-text-source": {
+          // The runs forms and the whole-text form are one content (#297):
+          // --run appends runs, --run-text rewrites one run's slice, --runs
+          // "none" collapses, and the per-run setters style one run — never
+          // beside a --text replacement, which would make the reference
+          // text ambiguous (the domain refuses bare --text on a multi-run
+          // Layer too; this boundary rule covers every run option).
+          if (values.text !== undefined && someLayerOptionProvided(values, RUN_OPTION_KEYS)) {
+            return refuse(
+              "--text and the runs options (--run, --run-text, --runs, --run-color, --run-font, --run-font-file, --run-weight, --run-width) are mutually exclusive content options: --text is the single-run form; author runs with one or more --run occurrences.",
+            );
+          }
+          break;
+        }
         case "anchor-conflict": {
           // Anchored placement is its own edit: transform and content edits
           // change the reference ink, so combining them in one edit is a
@@ -1795,6 +1995,10 @@ export interface SharedOptionApplyContext {
   /** The verified content bytes the option's measurements paint: the fresh
    *  content's on add, the retained content's on edit. */
   contentBytes?: Buffer;
+  /** Run font bytes (#297) beside the content bytes: the fresh runs' font
+   *  bytes on add, the stored revision's on edit — the @font-face inputs
+   *  the anchor and region measurements declare. */
+  runFonts?: SnapshotRunFont[];
   /** Add surface: the target Composition's name (anchor context) and its
    *  canvas (the measurement context). */
   composition?: string;
@@ -1833,6 +2037,36 @@ export type LayerOptionApply = (
  *  keys (DEC-001): the normalized values the shared parse produced — no
  *  per-option member exists to name. */
 export type SharedOptionValues = ParsedLayerOptionValues;
+
+/**
+ * The edit surface's runs-side style merge (#297): the parsed per-run
+ * setters, merged per 1-based run index in command order (a later
+ * occurrence wins, like a repeated layer-level setter). The `--color`
+ * grammar's "none" removal form maps to the null colour spec; the font
+ * sources' "none" maps to the null font; the axes' null carries through.
+ */
+export function buildRunStyleEdits(parsed: ParsedLayerOptionValues): LayerRunStyleEdit[] {
+  const byIndex = new Map<number, LayerRunStyleEdit>();
+  const editFor = (index: number): LayerRunStyleEdit => {
+    let edit = byIndex.get(index);
+    if (edit === undefined) {
+      edit = { index };
+      byIndex.set(index, edit);
+    }
+    return edit;
+  };
+  const runColor = parsed["run-color"] as Array<{ index: number; value: string }> | undefined;
+  for (const entry of runColor ?? []) editFor(entry.index).colorSpec = entry.value === "none" ? null : entry.value;
+  const runFont = parsed["run-font"] as Array<{ index: number; value: string }> | undefined;
+  for (const entry of runFont ?? []) editFor(entry.index).font = entry.value === "none" ? null : entry.value;
+  const runFontFile = parsed["run-font-file"] as Array<{ index: number; value: string }> | undefined;
+  for (const entry of runFontFile ?? []) editFor(entry.index).fontFile = entry.value === "none" ? null : entry.value;
+  const runWeight = parsed["run-weight"] as Array<{ index: number; value: number | null }> | undefined;
+  for (const entry of runWeight ?? []) editFor(entry.index).weight = entry.value;
+  const runWidth = parsed["run-width"] as Array<{ index: number; value: number | null }> | undefined;
+  for (const entry of runWidth ?? []) editFor(entry.index).width = entry.value;
+  return [...byIndex.values()];
+}
 
 /** Dispatch one option's ONE application case (DEC-001, #263): the lookup
  *  the edit surface's dispatch loop and the CLI's anchored boundary use. A
@@ -2064,6 +2298,7 @@ async function applyAnchor(
           : {}),
       } as ResolvedLayerRevision,
       contentBytes: context.contentBytes!,
+      ...(context.runFonts !== undefined && context.runFonts.length > 0 ? { runFonts: context.runFonts } : {}),
     },
     { anchor: value as ParsedAnchor, contextComposition: context.composition! },
   );
@@ -2100,6 +2335,7 @@ async function applyVisibleRegion(
     const measured = await measureStandaloneSnapshot(
       { ...(context.surface === "edit" ? context.base : draft), x: 0, y: 0 } as ResolvedLayerRevision,
       context.contentBytes!,
+      { ...(context.runFonts !== undefined && context.runFonts.length > 0 ? { runFonts: context.runFonts } : {}) },
     );
     validateVisibleRegionAgainstContent(region, measured.content, draft.layerId);
   } else {
@@ -2281,3 +2517,5 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "blend" },
   { option: "glow" },
 ];
+
+export type { LayerRunStyleEdit } from "./layer.js";

@@ -53,6 +53,41 @@ could not be reproduced from its manifest.
   needs three Archivo looks. The revision would still have to store the axes,
   so the presets remove no storage work.
 
+## Amendment — runs carry the same rule per run (#297, spec #285 US-017, ISC-54)
+
+One text Layer can carry **runs** of different colour, weight, or font
+("5 HERDR PLUGINS" as one editable Layer). The control model above extends
+from the Layer to the run unchanged:
+
+- The Layer-level controls (`--color`, `--weight`, `--width`, `--font`,
+  `--font-file`) are the **defaults** every run resolves against. A run
+  stores an **override** only for a fact it actually overrides — colour (the
+  same solid/gradient grammar), font identity (the run's own retained bytes,
+  deduped when equal to the Layer font's), caller font facts, and axes.
+  `text` stays the only home of the characters; a run is a boundary plus
+  overrides, never a second copy of a Layer fact, and a single-run Layer is
+  byte-identical to today's stored revision.
+- A run's axes validate against the **run's effective face** — the run's own
+  face under a font override, the Layer face otherwise — through the same
+  `resolveTextAxes` rules: a variable face stores the resolved pair, a static
+  face stores neither (its bytes fix the look), and a run sharing the Layer
+  face without explicit axes inherits the Layer axes. No synthesis anywhere:
+  `font-synthesis: none` on caller-font runs, and an inherited variation
+  setting is cancelled on a static-face run so no axis can reach bytes with
+  no such axis.
+- **No style is synthesized at run level either.** An italic look comes from
+  choosing an italic face (for example an italic caller font file) or from a
+  Layer-level transform; there is no italic control and no `font-style`
+  synthesis. Per-run size, tracking, and line height are not run facts —
+  they are Layer facts that apply across runs.
+- Outline and shadow are Layer effects on the composited glyph alpha, so
+  they hug every run (including a gradient run) with no new mechanism; wrap
+  width, the fit box, and the canonical transform are Layer facts applied
+  across runs.
+
+The revision hash appends the runs field only when present (two or more
+runs), so revisions written before this amendment keep their exact ids.
+
 ## Consequences
 
 - A variable-font Layer switches to a static face in one `layer edit`

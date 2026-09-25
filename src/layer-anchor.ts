@@ -34,7 +34,7 @@
  * on an unwrapped line (documented); a fork resolves in its target Composition,
  * whose use is about to own the Layer.
  */
-import { findLayerReferrers, readLayerInternalFull, type ResolvedLayerRevision } from "./layer.js";
+import { findLayerReferrers, readLayerInternalFull, type ResolvedLayerRevision, type SnapshotRunFont } from "./layer.js";
 import {
   measureProvisionalLayer,
   STANDALONE_CANVAS_PX,
@@ -178,6 +178,9 @@ async function resolvePreEffectAnchor(options: {
   name?: string;
   revision: ResolvedLayerRevision;
   contentBytes: Buffer;
+  /** Run font bytes (#297) for a text revision with run font overrides —
+   *  the @font-face inputs the measurement's markup declares. */
+  runFonts?: SnapshotRunFont[];
   anchor: ParsedAnchor;
   targetX?: number;
   targetY?: number;
@@ -198,7 +201,13 @@ async function resolvePreEffectAnchor(options: {
   }
   // The pre-effect ink basis: the effect facts never reach the measurement.
   const revision = preEffectInkBasis(options.revision);
-  const snapshot: SnapshotLayer = { name: options.name ?? layerId, layerId, revision, contentBytes: options.contentBytes };
+  const snapshot: SnapshotLayer = {
+    name: options.name ?? layerId,
+    layerId,
+    revision,
+    contentBytes: options.contentBytes,
+    ...(options.runFonts !== undefined && options.runFonts.length > 0 ? { runFonts: options.runFonts } : {}),
+  };
   const measured = await measureProvisionalLayer(canvas, snapshot);
   if (measured.refused) {
     throw new Error(measured.refused);
@@ -252,7 +261,7 @@ export async function resolveAnchoredPlacement(
   // content bytes, resolved exactly once under the Project lock, then
   // measured outside the lock — resolution writes nothing.
   const snapshots = await withProjectLock(resolvedRoot, async () => {
-    const contextSnapshots: { name: string; canvas: { width: number; height: number }; revision: ResolvedLayerRevision; contentBytes: Buffer }[] = [];
+    const contextSnapshots: { name: string; canvas: { width: number; height: number }; revision: ResolvedLayerRevision; contentBytes: Buffer; runFonts?: SnapshotRunFont[] }[] = [];
     for (const comp of contexts) {
       const full = await readCompositionInternalFull(projectPath, comp);
       const use =
@@ -262,12 +271,18 @@ export async function resolveAnchoredPlacement(
       if (!use) {
         throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
       }
-      contextSnapshots.push({ name: use.name, canvas: full.canvas, revision: use.revision, contentBytes: use.contentBytes });
+      contextSnapshots.push({
+        name: use.name,
+        canvas: full.canvas,
+        revision: use.revision,
+        contentBytes: use.contentBytes,
+        ...(use.runFonts !== undefined && use.runFonts.length > 0 ? { runFonts: use.runFonts } : {}),
+      });
     }
     // The Layer's current revision and verified bytes: the unanchored axes'
     // fallback placement, and the standalone snapshot when no context reads.
     const layer = await readLayerInternalFull(resolvedRoot, layerId);
-    return { contextSnapshots, current: layer.currentRevision, contentBytes: layer.contentBytes };
+    return { contextSnapshots, current: layer.currentRevision, contentBytes: layer.contentBytes, ...(layer.runFonts !== undefined && layer.runFonts.length > 0 ? { runFonts: layer.runFonts } : {}) };
   });
 
   if (snapshots.contextSnapshots.length === 0) {
@@ -280,6 +295,7 @@ export async function resolveAnchoredPlacement(
       layerId,
       revision: { ...snapshots.current, x: 0, y: 0 },
       contentBytes: snapshots.contentBytes,
+      ...(snapshots.runFonts !== undefined && snapshots.runFonts.length > 0 ? { runFonts: snapshots.runFonts } : {}),
       anchor,
       targetX,
       targetY,
@@ -310,6 +326,7 @@ export async function resolveAnchoredPlacement(
       name: snap.name,
       revision: snap.revision,
       contentBytes: snap.contentBytes,
+      ...(snap.runFonts !== undefined && snap.runFonts.length > 0 ? { runFonts: snap.runFonts } : {}),
       anchor,
       targetX,
       targetY,
@@ -386,7 +403,7 @@ function divergentRefusal(layerId: string, contexts: string[]): Error & { referr
  */
 export async function resolveProvisionalAnchoredPlacement(
   canvas: { width: number; height: number },
-  provisional: { layerId: string; revision: ResolvedLayerRevision; contentBytes: Buffer },
+  provisional: { layerId: string; revision: ResolvedLayerRevision; contentBytes: Buffer; runFonts?: SnapshotRunFont[] },
   options: { anchor: ParsedAnchor; contextComposition: string },
 ): Promise<AnchorResolution> {
   const { anchor } = options;
@@ -399,6 +416,7 @@ export async function resolveProvisionalAnchoredPlacement(
     layerId,
     revision: provisional.revision,
     contentBytes,
+    ...(provisional.runFonts !== undefined && provisional.runFonts.length > 0 ? { runFonts: provisional.runFonts } : {}),
     anchor,
     targetX,
     targetY,
