@@ -19,8 +19,10 @@ import {
   SCALE_HELP_KINDS,
   COVER_TO_HELP_KINDS,
   buildRunStyleEdits,
+  MASK_REMOVAL_VALUE,
 } from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
+import { resolveMaskEdit } from "./composition.js";
 import { formatFill, normalizeStoredTextFill, type LayerFill } from "./fill.js";
 import { parseLayerAddress, resolveLayerToken, LayerAddressSyntaxError, type ResolvedLayerToken } from "./layer-address.js";
 import { closeCliBrowser } from "./cli-browser.js";
@@ -612,6 +614,24 @@ Options:
                         revision fact: sharing propagates it, forks
                         isolate it, and removal is its own edit. Never
                         changes retained pixels.
+  --mask <use-name>     Clip the Layer to another Layer use's alpha
+                        (ADR-0025): <use-name> is a use of the SAME
+                        Composition, resolved per Composition, stored as a
+                        revision fact. The clip uses the mask use's content
+                        alpha after its own transforms and visible region,
+                        in canvas space — never its opacity, grade,
+                        effects, blend, or any mask of its own — and cuts
+                        the masked Layer's FINAL pixels (outline, shadow,
+                        and all) after its effects and before the blend. A
+                        use serving as a mask does not paint. Unresolved
+                        names, self-masks, and cycles are refused; a
+                        removal (:none) restores the render
+                        byte-for-byte. The removal spelling ":none" can
+                        never name a use. On edit, an in-place change
+                        resolves the name in EVERY referring Composition
+                        (the refusal names each where it does not) and the
+                        result reports each resolved use; a --fork change
+                        resolves against the fork target.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -864,8 +884,32 @@ async function run() {
       }
       const parsed = checked.parsed;
       const parsedAnchor = parsed.anchor as ParsedAnchor | undefined;
+      const parsedMask = parsed.mask as string | undefined;
 
       try {
+        // The Layer mask (ADR-0025 §5, #305): the would-be fact resolves ONCE
+        // at this boundary against the Composition(s) that use this Layer
+        // (read-only, under its own lock acquisition, before the edit
+        // lifecycle — the cover-fit/anchor boundary-resolution pattern): a
+        // --fork edit resolves against its target Composition, an in-place
+        // edit against EVERY referring Composition, and a refusal names
+        // each Composition where the name does not resolve. The resolution
+        // rides out as the result's blast-radius report. A removal (:none)
+        // has nothing to resolve.
+        let maskResolutions: Awaited<ReturnType<typeof resolveMaskEdit>> = [];
+        if (parsedMask !== undefined && parsedMask !== MASK_REMOVAL_VALUE) {
+          try {
+            maskResolutions = await resolveMaskEdit(targetProj, layerId, parsedMask, {
+              forkComposition: values.fork ? forkComposition : undefined,
+              forkUse: values.fork ? forkUse : undefined,
+            });
+          } catch (err) {
+            output({ ok: false, error: (err as Error).message }, isJson);
+            process.exitCode = 1;
+            return;
+          }
+        }
+
         // Cover fit (#293, spec #285 US-007, DEC-011): the "canvas" target
         // resolves ONCE at this boundary against the Layer's referring
         // Composition(s) (read-only, outside the edit's own lock; a --fork
@@ -1036,6 +1080,12 @@ async function run() {
         if (res.glowSet) {
           resultBody.glowSet = res.glowSet;
         }
+        if (parsedMask !== undefined) {
+          resultBody.masked = {
+            mask: parsedMask === MASK_REMOVAL_VALUE ? null : parsedMask,
+            resolved: maskResolutions,
+          };
+        }
         if (anchored) {
           resultBody.anchored = anchored;
         }
@@ -1111,6 +1161,11 @@ async function run() {
                 ? `; ${formatGlow(res.glowSet.glow)}`
                 : "; glow removed"
               : "";
+            const maskSummary = parsedMask !== undefined
+              ? parsedMask === MASK_REMOVAL_VALUE
+                ? "; mask none"
+                : `; mask "${parsedMask}"${maskResolutions.map((r) => ` -> "${r.use}" in composition "${r.composition}"`).join(", ")}`
+              : "";
             const shapeEdited = res.shapeEdited
               ? `; dropped carried corner radius ${res.shapeEdited.droppedCornerRadius}px (an ellipse has no corners)`
               : "";
@@ -1120,10 +1175,10 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${maskSummary}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${maskSummary}${shapeEdited}${anchorSummary}`);
             }
           },
         );
@@ -1290,9 +1345,16 @@ async function run() {
               rev.feather === undefined
                 ? ""
                 : `, Feather: ${rev.feather}px`;
+            // The Layer mask (ADR-0025, #305): shown only when set — absence
+            // IS the no-mask form. The name resolves per Composition; the
+            // fact's own line states the stored use name.
+            const mask =
+              rev.mask === undefined
+                ? ""
+                : `, Mask: ${rev.mask} (use in each referring Composition)`;
             // Report order matches the chain's function order (review INT-1):
             // inner shadow, then outlines, then shadows.
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${innerShadow}${outline}${shadow}${region}${grade}${glow}${blur}${choke}${feather}${blend}`);
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${innerShadow}${outline}${shadow}${region}${grade}${glow}${blur}${choke}${feather}${blend}${mask}`);
           },
         );
       } catch (err) {

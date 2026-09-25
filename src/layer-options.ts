@@ -93,6 +93,7 @@ import {
   LAYER_BLEND_MODES,
   type LayerBlendMode,
   type StoredLayerBlendMode,
+  isValidUseName,
 } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { measureStandaloneSnapshot } from "./composition-measure.js";
@@ -120,7 +121,7 @@ export type LayerOptionSurface = "edit" | "add";
 /** The Layer kinds an option can apply to. */
 export type LayerOptionKind = "image" | "text" | "shape";
 
-export type LayerOptionGroup = "content" | "paint" | "text" | "placement" | "transform" | "region" | "look" | "effect";
+export type LayerOptionGroup = "content" | "paint" | "text" | "placement" | "transform" | "region" | "mask" | "look" | "effect";
 
 export interface LayerOptionDef {
   /** parseArgs key: the flag is `--<key>`. */
@@ -210,6 +211,7 @@ export type LayerOptionKey =
   | "vector-color"
   | "visible-region"
   | "visible-region-radius"
+  | "mask"
   | "brightness"
   | "contrast"
   | "saturation"
@@ -372,6 +374,15 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // region's corners (one-command add applies it right after the rectangle,
   // still before the anchor and the effects).
   { key: "visible-region-radius", group: "region", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerVisibleRegionRadius, apply: applyVisibleRegionRadius },
+  // The Layer mask (ADR-0025, spec #285 US-009, DEC-007, #305): an ABSOLUTE
+  // setter over the Composition-LOCAL use name of the Layer use whose alpha
+  // clips this Layer. Its own group AFTER the region group and BEFORE the
+  // look/effect groups — the clip is the outermost paint step (ADR-0025 §4,
+  // after the effects, before blend), and one-command add applies it after
+  // the effects. The removal value is MASK_REMOVAL_VALUE (":none"), the
+  // colon-keyword form that can never name a use (the one name rule
+  // refuses the colon), so a removal can never be read as naming a use.
+  { key: "mask", group: "mask", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerMask, apply: applyMask },
   // The grade controls (#219, spec #218 US-001, ADR-0024): brightness,
   // contrast, saturation, warmth. Their own group "look" applied to content
   // only.
@@ -474,6 +485,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   "vector-color": { type: "string" },
   "visible-region": { type: "string" },
   "visible-region-radius": { type: "string" },
+  mask: { type: "string" },
   brightness: { type: "string" },
   contrast: { type: "string" },
   saturation: { type: "string" },
@@ -567,6 +579,7 @@ export function oneCommandAddOptionKeys(): LayerOptionKey[] {
         def.group === "paint" ||
         def.group === "transform" ||
         def.group === "region" ||
+        def.group === "mask" ||
         def.group === "look" ||
         def.group === "effect" ||
         def.key === "anchor",
@@ -599,6 +612,7 @@ export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOpti
     ["anchor" as LayerOptionKey, 3],
     ...LAYER_OPTION_DEFS.filter((def) => def.group === "look").map((def) => [def.key, 4] as const),
     ...LAYER_OPTION_DEFS.filter((def) => def.group === "effect").map((def) => [def.key, 5] as const),
+    ...LAYER_OPTION_DEFS.filter((def) => def.group === "mask").map((def) => [def.key, 6] as const),
   ]);
   // Fail fast (review INT-plumb-3): a supplied key with no stage would
   // otherwise sort as NaN — an unpredictable order — instead of naming
@@ -608,7 +622,7 @@ export function oneCommandApplicationOrder(args: LayerOptionPresence): LayerOpti
     if (s === undefined) {
       throw new Error(
         `One-command add: option "${key}" has no application stage — ` +
-          "the option table's post-content groups (paint, transform, region, look, effect, anchor) moved?",
+          "the option table's post-content groups (paint, transform, region, look, effect, mask, anchor) moved?",
       );
     }
     return s;
@@ -1648,6 +1662,38 @@ export function parseLayerBlend(raw: string | undefined): OptionParse<LayerBlend
   return { ok: true, value: value as LayerBlendMode };
 }
 
+/** The documented removal value of the `--mask` setter (ADR-0025, #305):
+ * the colon-keyword form (the `--position before:<use>` family) that can
+ * NEVER name a use — use names admit only `[a-zA-Z0-9_-]` (the one name
+ * rule), so removing a mask can never be read as naming a use. */
+export const MASK_REMOVAL_VALUE = ":none";
+
+/**
+ * --mask (ADR-0025, #305): syntax and well-formedness through the ONE
+ * boundary parse both surfaces dispatch. The value is either the removal
+ * value (`:none`) or a Composition-local use name under the one use-name
+ * grammar (`USE_NAME_PATTERN`, the exported home both surfaces and the
+ * stored-fact reader share — review INT-U1-4). The grammar check IS the
+ * removal-spelling guard: a value that fails it can never be stored, so
+ * `:none` is the only non-use-name value the setter accepts.
+ */
+export function parseLayerMask(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = raw.trim();
+  if (value === MASK_REMOVAL_VALUE) {
+    return { ok: true, value: MASK_REMOVAL_VALUE };
+  }
+  if (!isValidUseName(value)) {
+    return {
+      ok: false,
+      error:
+        `Mask (--mask) takes a use name in the same Composition (alphanumeric, dash, or underscore) ` +
+        `or "${MASK_REMOVAL_VALUE}" to remove the clip (got "${raw}").`,
+    };
+  }
+  return { ok: true, value };
+}
+
 /**
  * --glow (#221, spec #218 US-002, ADR-0024): syntax and well-formedness
  * through the SAME parser the edit path uses, so the two boundaries never
@@ -1732,42 +1778,66 @@ export function parseLayerAnchor(raw: string | undefined): OptionParse<ParsedAnc
   }
 }
 
-/** The options --anchor cannot combine with: every edit option except the
- *  anchor's own axes (--x, --y) and --opacity, which combine freely.
- *  Derived from the option table, so a newly added option automatically
- *  joins the conflict rule. */
-export function isAnchorConflicting(args: LayerOptionArgs): boolean {
+/** The keys --anchor cannot combine with, in the table's order: every
+ *  edit option except the anchor's own axes (--x, --y), --opacity, and
+ *  --anchor itself. ONE derivation home (review INT-3, INT-U3-2):
+ *  `isAnchorConflicting` tests presence against THIS key set and
+ *  `anchorConflictOptionList` spells the same set minus the plain content
+ *  kinds (which the refusal names as prose) — the two can never disagree,
+ *  and a newly added option (the mask group's `--mask` included) joins
+ *  both automatically. */
+function anchorConflictKeys(): LayerOptionKey[] {
   const anchorFree = new Set<LayerOptionKey>(["x", "y", "opacity", "anchor"]);
-  return LAYER_OPTION_DEFS.some(
-    (def) => def.editOption && !anchorFree.has(def.key) && args[def.key] !== undefined,
-  );
+  return LAYER_OPTION_DEFS
+    .filter((def) => def.editOption && !anchorFree.has(def.key))
+    .map((def) => def.key);
+}
+
+/** The plain content kinds the anchor refusal names as prose
+ *  ("content replacement"), never as flags. */
+const ANCHOR_CONFLICT_PROSE_KEYS: readonly LayerOptionKey[] = ["image", "from-generation", "from-matte", "text"];
+
+/** The options --anchor cannot combine with: every edit option except the
+ *  anchor's own axes (--x, --y) and --opacity, which combine freely — the
+ *  plain content kinds included (the refusal names them as prose).
+ *  Derived from the option table through `anchorConflictKeys` — the same
+ *  derivation the refusal text reads — so a newly added option
+ *  automatically joins the conflict rule. */
+export function isAnchorConflicting(args: LayerOptionArgs): boolean {
+  return anchorConflictKeys().some((key) => args[key] !== undefined);
 }
 
 /** The option-name segment of the edit surface's `--anchor` exclusivity
- *  refusal, derived from the SAME table and grouping `isAnchorConflicting`
- *  derives the conflict rule from (review INT-3): the transform, effect, and
- *  text groups spelled as flags, and the shape content group named as the
- *  "shape parameters" family. A newly added option in one of these groups
- *  joins both the rule and the refusal text automatically; the anchor-free
- *  axes (--x, --y, --opacity) stay outside, and the plain content kinds
- *  (--image, --from-generation, --from-matte, --text) are named as
- *  "content replacement" in the refusal's prose, not as a flag list. */
+ *  refusal, derived from the SAME key set `isAnchorConflicting` derives
+ *  from (`anchorConflictKeys`, review INT-3, INT-U3-2) minus the plain
+ *  content kinds: every non-prose conflicting key appears in the refusal
+ *  exactly once, grouped as the table groups them — the paint, transform,
+ *  region, mask, look, and effect groups spelled as flags, and the shape
+ *  content group named as the "shape parameters" family. A newly added
+ *  option in one of these groups joins both the rule and the refusal text
+ *  automatically; the anchor-free axes (--x, --y, --opacity) stay outside,
+ *  and the plain content kinds (--image, --from-generation, --from-matte,
+ *  --text) are named as "content replacement" in the refusal's prose, not
+ *  as a flag list. */
 export function anchorConflictOptionList(): string {
-  const editKeysOfGroup = (group: LayerOptionDef["group"]): LayerOptionKey[] =>
-    LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === group).map((def) => def.key);
-  const flags = (keys: readonly LayerOptionKey[]): string => keys.map((key) => `--${key}`).join(", ");
-  const shape = `shape parameters (${SHAPE_CONTENT_KEYS.map((key) => `--${key}`).join(", ")})`;
-  return [
-    flags(editKeysOfGroup("paint")),
-    flags(editKeysOfGroup("transform")),
-    flags(editKeysOfGroup("region")),
-    flags(editKeysOfGroup("look")),
-    flags(editKeysOfGroup("effect")),
-    shape,
-    flags(editKeysOfGroup("text")),
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const prose = new Set<string>(ANCHOR_CONFLICT_PROSE_KEYS);
+  const conflicting = new Set(anchorConflictKeys().filter((key) => !prose.has(key)));
+  const flags = (keys: readonly LayerOptionKey[]): string =>
+    keys.filter((key) => conflicting.has(key)).map((key) => `--${key}`).join(", ");
+  const group = (name: LayerOptionDef["group"]): string =>
+    flags(LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === name).map((def) => def.key));
+  const segments = [
+    group("paint"),
+    group("transform"),
+    group("region"),
+    group("mask"),
+    group("look"),
+    group("effect"),
+  ].filter(Boolean);
+  const shape = flags(SHAPE_CONTENT_KEYS);
+  if (shape !== "") segments.push(`shape parameters (${shape})`);
+  segments.push(group("text"));
+  return segments.filter(Boolean).join(", ");
 }
 
 /** The parsed values of the option surface, keyed by the option table's own
@@ -1960,6 +2030,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "inner-shadow" },
   { option: "visible-region" },
   { option: "visible-region-radius" },
+  { option: "mask" },
   { option: "vector-color" },
   { option: "brightness" },
   { option: "contrast" },
@@ -1996,6 +2067,7 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "inner-shadow",
   "visible-region",
   "visible-region-radius",
+  "mask",
   "vector-color",
   "brightness",
   "contrast",
@@ -2600,6 +2672,31 @@ function applyInnerShadow(draft: SharedOptionDraft, value: unknown): void {
   draft.innerShadow = parsed.length === 1 ? parsed[0] : (parsed as LayerInnerShadow[]);
 }
 
+function applyMask(draft: SharedOptionDraft, value: unknown): void {
+  // The Layer mask (ADR-0025, #305): an ABSOLUTE setter. The parsed value is
+  // the removal value or a use name (parseLayerMask); an omitted option
+  // preserves the current revision's mask by construction (the draft starts
+  // there). The SEMANTIC resolution — that the name resolves as a use in
+  // the Composition(s) that use this Layer, that it never names this Layer
+  // itself, and that it never completes a cycle — runs at each command
+  // boundary before anything is published (the edit boundary's live
+  // resolution, the add boundary's pre-staging check in publishLayerUse);
+  // this case stores the fact alone, like every other stored-only-when-set
+  // fact's application case.
+  if (value === MASK_REMOVAL_VALUE) {
+    delete draft.mask;
+    return;
+  }
+  if (typeof value === "string" && isValidUseName(value)) {
+    draft.mask = value;
+    return;
+  }
+  throw new Error(
+    `Mask (--mask) takes a use name in the same Composition or "${MASK_REMOVAL_VALUE}" to remove the clip ` +
+      `(got ${JSON.stringify(value)}).`,
+  );
+}
+
 async function applyAnchor(
   draft: SharedOptionDraft,
   value: unknown,
@@ -2903,6 +3000,7 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { policy: "region-content" },
   { option: "visible-region" },
   { option: "visible-region-radius" },
+  { option: "mask" },
   { option: "vector-color" },
   { option: "brightness" },
   { option: "contrast" },

@@ -15,12 +15,15 @@ import {
   type ResolvedLayer,
   generateLayerId,
   computeRevisionHash,
+  isValidUseName,
+  normalizeStoredMask,
   validateAndIngestImage,
   validateImageBytes,
   validateTextContent,
   storeContentBlob,
   readLayerInternal,
   readLayerInternalFull,
+  findLayerReferrersInternal,
   resolveTextTypographyControls,
   resolveTextWrapWidthControl,
   resolveTextFitBoxControl,
@@ -103,6 +106,14 @@ export interface ResolvedComposition {
  * use as the live commit point. Both image and text ingestion publish through
  * this one protocol — there is no text-specific publication copy.
  */
+/** The Layer identity behind the resolved mask use, for the add result's
+ *  report — the use is known to exist (the gate above ran). */
+function findMaskUseLayerId(comp: Composition, maskName: string): string {
+  const use = comp.layers.find((u) => u.name === maskName);
+  if (!use) throw new Error(`Mask use "${maskName}" vanished from Composition "${comp.name}" during publication.`);
+  return use.layerId;
+}
+
 async function publishLayerUse(
   resolvedRoot: string,
   comp: Composition,
@@ -110,7 +121,7 @@ async function publishLayerUse(
   localName: string,
   makeRevision: (layerId: string, createdAt: string) => Promise<LayerRevision>,
   position?: StackPosition,
-): Promise<{ layerId: string; layer: ResolvedLayer }> {
+): Promise<{ layerId: string; layer: ResolvedLayer; masked?: { mask: string; resolved: MaskResolution[] } }> {
   // Stack position (#230): resolved BEFORE any content retention, revision
   // staging, or identity staging — an unknown use name refuses here with
   // the Composition's use names and nothing is published.
@@ -119,6 +130,16 @@ async function publishLayerUse(
   const createdAt = new Date().toISOString();
 
   const revision = await makeRevision(layerId, createdAt);
+  // The Layer mask (ADR-0025, #305): the add surface's semantic gate — the
+  // fact must resolve as a use in the target Composition (never itself,
+  // never a cycle) BEFORE anything stages, like the stack position above.
+  // The resolution rides out as the add result's blast-radius report.
+  const maskName = normalizeStoredMask(revision);
+  let masked: { mask: string; resolved: MaskResolution[] } | undefined;
+  if (maskName !== undefined) {
+    await validateAddMask(resolvedRoot, comp, localName, revision);
+    masked = { mask: maskName, resolved: [{ composition: comp.name, use: maskName, layerId: findMaskUseLayerId(comp, maskName) }] };
+  }
   const revHash = computeRevisionHash(revision);
   const revDir = path.join(resolvedRoot, "layers", `${layerId}.revisions`);
   const revFile = path.join(revDir, `${revHash}.json`);
@@ -167,7 +188,7 @@ async function publishLayerUse(
     throw err;
   }
 
-  return { layerId, layer: resolvedLayer };
+  return { layerId, layer: resolvedLayer, ...(masked !== undefined ? { masked } : {}) };
 }
 
 /** Placement validation shared by both ingestion kinds. */
@@ -414,6 +435,185 @@ export function resolveStackPositionIndex(comp: Composition, position: StackPosi
   return position.kind === "before" ? index : index + 1;
 }
 
+// --- Layer masks (ADR-0025, spec #285 US-009, DEC-007, #305) -------------
+//
+// A masked Layer's revision names a Composition-LOCAL use (the mask fact).
+// These helpers are the one semantic home for that name's resolution: the
+// add boundary validates the fact BEFORE anything stages (the publication
+// protocol's fail-closed ordering, like the stack position), the edit
+// boundary resolves through `resolveMaskEdit` read-only before the edit
+// lifecycle runs, and the paint/measure/render paths resolve the name in
+// the Composition being painted through composition-mask.ts. Unresolved
+// names fail loudly everywhere; nothing ever paints unclipped as a fallback
+// (ADR-0025 §5).
+
+/** One composition's resolution of a masked Layer's mask name: the use it
+ *  names. The blast-radius report carries one per referring Composition. */
+export interface MaskResolution {
+  composition: string;
+  /** The use name the mask fact resolved to (equals the stored name). */
+  use: string;
+  /** The Layer identity the resolved use references. */
+  layerId: string;
+}
+
+/** Resolve one mask fact in ONE Composition document. Throws the shared
+ *  refusals (missing use, self-mask) with their established wording. */
+function resolveMaskInComposition(
+  comp: Composition,
+  maskName: string,
+  maskedLayerId: string,
+): MaskResolution {
+  const use = comp.layers.find((u) => u.name === maskName);
+  if (!use) {
+    const available =
+      comp.layers.length === 0
+        ? "the Composition has no uses"
+        : `available uses: ${comp.layers.map((u) => `"${u.name}"`).join(", ")}`;
+    throw new Error(
+      `Cannot mask Layer "${maskedLayerId}" with use "${maskName}": the name does not resolve in Composition "${comp.name}" (${available}). ` +
+        "A masked Layer never paints unclipped as a fallback (ADR-0025 §5).",
+    );
+  }
+  if (use.layerId === maskedLayerId) {
+    throw new Error(
+      `Cannot mask Layer "${maskedLayerId}": use "${maskName}" in Composition "${comp.name}" names the Layer itself — ` +
+        "a use cannot mask itself (ADR-0025 §5).",
+    );
+  }
+  return { composition: comp.name, use: maskName, layerId: use.layerId };
+}
+
+/** Read one use's current revision's mask fact. Callers must hold the
+ *  Project lock (or pass an override for a not-yet-staged revision). */
+async function storedMaskFactOfUse(resolvedRoot: string, use: CompositionLayerUse): Promise<string | undefined> {
+  const layer = await readLayerInternal(resolvedRoot, use.layerId);
+  return normalizeStoredMask(layer.currentRevision);
+}
+
+/** Walk one Composition's mask graph and refuse a cycle, naming the uses in
+ *  it, in chain order (ADR-0025 §5: a cycle is two or more uses that each
+ *  end up clipped by one another). `override` supplies the would-be fact
+ *  for the masked Layer being edited/added — every use of that Layer gets
+ *  the new fact, existing uses read their stored revisions. Chains that
+ *  leave the graph (a fact this Composition cannot resolve) cannot cycle
+ *  here and end the walk; the loud unresolved-name refusal at paint names
+ *  them. Callers must hold the Project lock. */
+async function assertNoMaskCycle(
+  resolvedRoot: string,
+  comp: Composition,
+  override?: { layerId: string; mask: string | undefined },
+): Promise<void> {
+  const facts = new Map<string, string | undefined>();
+  for (const use of comp.layers) {
+    facts.set(
+      use.name,
+      override !== undefined && use.layerId === override.layerId ? override.mask : await storedMaskFactOfUse(resolvedRoot, use),
+    );
+  }
+  for (const start of facts.keys()) {
+    if (facts.get(start) === undefined) continue;
+    const chain: string[] = [];
+    const seen = new Set<string>();
+    let current = start;
+    for (;;) {
+      if (seen.has(current)) {
+        const cycle = chain.slice(chain.indexOf(current));
+        const described = `${cycle.map((n) => `"${n}"`).join(" masks ")} masks "${current}"`;
+        throw new Error(
+          `Mask cycle in Composition "${comp.name}": ${described}. ` +
+            "Refusing to publish a clip cycle (ADR-0025 §5).",
+        );
+      }
+      seen.add(current);
+      chain.push(current);
+      const next = facts.get(current);
+      if (next === undefined || !facts.has(next)) break;
+      current = next;
+    }
+  }
+}
+
+/** The add surface's mask gate (ADR-0025 §3/§5): the freshly built
+ *  revision's mask fact must resolve as a use in the target Composition —
+ *  never itself, never a cycle — BEFORE anything stages. Runs inside the
+ *  publication protocol with the Project lock held (publishLayerUse), so a
+ *  refused mask publishes nothing: no Layer, no use, no content. The new
+ *  use is the only use of the new Layer, so a self-mask is exactly a fact
+ *  naming the new use's own name. */
+async function validateAddMask(
+  resolvedRoot: string,
+  comp: Composition,
+  localName: string,
+  revision: LayerRevision,
+): Promise<void> {
+  const maskName = normalizeStoredMask(revision);
+  if (maskName === undefined) return;
+  if (maskName === localName) {
+    throw new Error(
+      `Cannot mask Layer "${revision.layerId}": use "${localName}" in Composition "${comp.name}" would name the Layer itself — ` +
+        "a use cannot mask itself (ADR-0025 §5).",
+    );
+  }
+  resolveMaskInComposition(comp, maskName, revision.layerId);
+  // The only new edge is <new use> -> <mask use>; the walk covers it (and
+  // defensively the whole graph) with the new use's fact as the override.
+  await assertNoMaskCycle(resolvedRoot, comp, { layerId: revision.layerId, mask: maskName });
+}
+
+/** The edit surface's mask resolution (ADR-0025 §5): resolve the would-be
+ *  fact in the Composition(s) that use the edited Layer — every referring
+ *  Composition for an in-place edit, the fork target for a --fork edit —
+ *  and refuse unless it resolves in ALL of them, naming each Composition
+ *  where it does not. The resolution runs read-only under its own lock
+ *  acquisition (the CLI boundary calls this BEFORE the edit lifecycle, the
+ *  anchor's live-resolution pattern), so the blast radius is visible on
+ *  refusal and the resolved uses are reportable on success. A mask
+ *  removal (maskName undefined) has nothing to resolve. */
+export async function resolveMaskEdit(
+  projectPath: string,
+  layerId: string,
+  maskName: string | undefined,
+  options: { forkComposition?: string; forkUse?: string } = {},
+): Promise<MaskResolution[]> {
+  if (maskName === undefined) return [];
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    let contextCompositions: string[];
+    if (options.forkComposition !== undefined) {
+      // A --fork edit publishes the edited revision for ONE use; the mask
+      // name must resolve in that Composition alone.
+      contextCompositions = [options.forkComposition];
+    } else {
+      contextCompositions = await findLayerReferrersInternal(resolvedRoot, layerId);
+      if (contextCompositions.length === 0) {
+        throw new Error(
+          `Cannot mask Layer "${layerId}" with use "${maskName}": the Layer is not referenced by any Composition — ` +
+            "there is no Composition to resolve the mask name in (ADR-0025 §5).",
+        );
+      }
+    }
+    const resolutions: MaskResolution[] = [];
+    for (const compName of contextCompositions) {
+      const { comp } = await readCompositionDocument(resolvedRoot, compName);
+      if (options.forkComposition !== undefined && !comp.layers.some((u) => u.layerId === layerId)) {
+        throw new Error(
+          `Cannot mask Layer "${layerId}" for --fork into Composition "${compName}": the fork target Composition does not reference the Layer. ` +
+            "The mask must resolve where the masked use publishes (ADR-0025 §5).",
+        );
+      }
+      resolutions.push(resolveMaskInComposition(comp, maskName, layerId));
+    }
+    // Cycles are checked in every Composition that uses the masked Layer,
+    // with the edited Layer's uses carrying the would-be fact.
+    for (const resolution of resolutions) {
+      const { comp } = await readCompositionDocument(resolvedRoot, resolution.composition);
+      await assertNoMaskCycle(resolvedRoot, comp, { layerId, mask: maskName });
+    }
+    return resolutions;
+  });
+}
+
 export interface AddLayerOptions {
   x?: number;
   y?: number;
@@ -521,7 +721,7 @@ export function sanitizeName(name: string): string {
   if (!trimmed) {
     throw new Error("Name cannot be empty.");
   }
-  if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+  if (!isValidUseName(trimmed)) {
     throw new Error(`Name "${name}" contains invalid characters (use alphanumeric, dash, or underscore).`);
   }
   return trimmed;
@@ -674,7 +874,7 @@ export async function addLayerToComposition(
       );
       await storeContentBlob(projectPath, ingested.contentHash, ingested.bytes);
       return revision;
-    }, options.position).then(({ layerId, layer }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer }));
+    }, options.position).then(({ layerId, layer, masked }) => ({ composition: sanitizedComp, use: { name: sanitizedLocalName, layerId }, layer, ...(masked !== undefined ? { masked } : {}) }));
   });
 }
 
@@ -935,10 +1135,11 @@ export async function addTextLayerToComposition(
         await storeContentBlob(projectPath, runFont.contentHash, runFont.bytes);
       }
       return revision;
-    }, options.position).then(({ layerId, layer }) => ({
+    }, options.position).then(({ layerId, layer, masked }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
+      ...(masked !== undefined ? { masked } : {}),
     }));
   });
 }
@@ -1025,10 +1226,11 @@ export async function addShapeLayerToComposition(
         },
       );
       return revision;
-    }, options.position).then(({ layerId, layer }) => ({
+    }, options.position).then(({ layerId, layer, masked }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
+      ...(masked !== undefined ? { masked } : {}),
     }));
   });
 }
@@ -1132,10 +1334,11 @@ export async function addGeneratedLayerToComposition(
       await storeContentBlob(resolvedRoot, validated.contentHash, validated.bytes);
       await retainGenerationRecord(resolvedRoot, selected.job.jobId, selected.recordBytes);
       return revision;
-    }, options.position).then(({ layerId, layer }) => ({
+    }, options.position).then(({ layerId, layer, masked }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
+      ...(masked !== undefined ? { masked } : {}),
       generatedFrom: { jobId: source.jobId, contentHash: layer.currentRevision.contentHash },
     }));
   });
@@ -1235,10 +1438,11 @@ export async function addMattedLayerToComposition(
         };
       }
       return revision;
-    }, options.position).then(({ layerId, layer }) => ({
+    }, options.position).then(({ layerId, layer, masked }) => ({
       composition: sanitizedComp,
       use: { name: sanitizedLocalName, layerId },
       layer,
+      ...(masked !== undefined ? { masked } : {}),
       mattedFrom: {
         matteId: selected!.matte.matteId,
         engine: selected!.matte.result.engine,
@@ -1415,18 +1619,36 @@ export async function removeLayerFromComposition(
       throw new Error(`Use "${sanitizedLocalName}" not found in composition "${sanitizedComp}".`);
     }
 
+    // The Layer mask (ADR-0025 §3/§5, #305): removing a use that a masked
+    // Layer still names is refused — the remaining masked Layer would have
+    // nothing to resolve to, and it must never paint unclipped as a
+    // fallback. The masked use itself can always be removed: its fact
+    // travels with it, and no other use's resolution depends on it.
+    const remainingUses = comp.layers.filter((_, idx) => idx !== useIndex);
+    const namingUses: string[] = [];
+    for (const use of remainingUses) {
+      const maskName = await storedMaskFactOfUse(resolvedRoot, use);
+      if (maskName === sanitizedLocalName) namingUses.push(use.name);
+    }
+    if (namingUses.length > 0) {
+      throw new Error(
+        `Cannot remove use "${sanitizedLocalName}" from Composition "${sanitizedComp}": ` +
+          `the masked use${namingUses.length === 1 ? "" : "s"} ${namingUses.map((n) => `"${n}"`).join(", ")} still name${namingUses.length === 1 ? "s" : ""} it as their mask. ` +
+          "Remove the mask from those Layers first (--mask :none).",
+      );
+    }
+
     const removedUse = comp.layers[useIndex]!;
-    const updatedLayers = comp.layers.filter((_, idx) => idx !== useIndex);
     const updatedComp: Composition = {
       ...comp,
-      layers: updatedLayers,
+      layers: remainingUses,
     };
 
     await atomicReplace(compFile, JSON.stringify(updatedComp, null, 2) + "\n");
     return {
       composition: sanitizedComp,
       removedUse,
-      layers: updatedLayers,
+      layers: remainingUses,
     };
   });
 }
@@ -1592,6 +1814,12 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
       ...(source.innerShadow !== undefined ? { innerShadow: storedEffectStack(source.innerShadow) } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
+      // The Layer mask (ADR-0025, #305): copied verbatim — the fact names a
+      // Composition-local use, and the copy carries the source
+      // Composition's whole use list under unchanged names, so the stored
+      // name resolves in the destination copy of the mask (the ADR-0025 §3
+      // relink). Nothing is ever renamed silently.
+      ...(source.mask !== undefined ? { mask: source.mask } : {}),
     };
   }
   if (source.kind === "shape") {
@@ -1635,6 +1863,9 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
       ...(source.innerShadow !== undefined ? { innerShadow: storedEffectStack(source.innerShadow) } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
+      // The Layer mask (ADR-0025, #305): copied verbatim — the ADR-0025 §3
+      // relink (see the text branch above).
+      ...(source.mask !== undefined ? { mask: source.mask } : {}),
     };
   }
   if (source.kind !== "image") {
@@ -1676,6 +1907,9 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     // fact on raster content (the setter's raster gate), so no format gate
     // is needed here — the copy re-validates through the revision reader.
     ...(source.vectorColor !== undefined ? { vectorColor: source.vectorColor } : {}),
+    // The Layer mask (ADR-0025, #305): copied verbatim — the ADR-0025 §3
+    // relink (see the text branch above).
+    ...(source.mask !== undefined ? { mask: source.mask } : {}),
   };
 }
 

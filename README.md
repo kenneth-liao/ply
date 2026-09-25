@@ -647,6 +647,55 @@ ply layer edit <layerId> --inner-shadow none                # remove (its own ed
 - Invalid settings fail at the command boundary (exit 2) through the same
   parser the edit path uses.
 
+## Layer masks (new surface)
+
+`ply layer edit` and `ply composition add` accept `--mask <use-name>` on
+image (raster and vector), text, and shape Layers (#305, spec #285 US-009,
+DEC-007, ADR-0025) — a Layer is clipped to another Layer use's alpha in the
+same Composition:
+
+```bash
+ply composition add stage cut --shape rectangle --size 200x40 --fill "#00ff00" --y 100
+ply layer edit stage/subject --mask cut        # clip the subject to the cut use's alpha
+ply layer edit stage/subject --mask :none      # remove the clip (its own edit)
+```
+
+- **Addressed by use name (DEC-007):** the fact stores a
+  Composition-LOCAL use name and resolves separately in every Composition
+  that uses the Layer. The removal spelling is `:none` — a colon-keyword
+  form (the `--position before:<use>` family) that can never name a use,
+  so removing a clip is never read as naming one.
+- **The mask is an ordinary Layer:** move, transform, region-crop, and
+  edit it like any other — the clip follows it. Its own transforms and
+  visible region shape the clip, in canvas space.
+- **Strict whitelist (ADR-0025 §1/§5, the reading recorded at
+  implementation):** only the mask's CONTENT alpha, visible region,
+  placement, and transform shape the clip — never its opacity, grade,
+  edge glow, outline, shadow, blur, choke, feather, blend, or any mask of
+  its own. A soft clip edge comes from soft content alpha in the mask.
+- **A mask use does not paint (§2).** To show the object and also mask
+  with it, hold two uses of the same Layer — one painted, one mask — and
+  one edit moves both (ADR-0013 rules).
+- **Paint order (§4):** the clip cuts the masked Layer's FINAL pixels —
+  outline, shadow, and all — after its effects and before the blend, so
+  the clipped Layer blends as one unit. Anchored placement still resolves
+  against the pre-effect ink (#288); `measure`'s `painted` stays pre-clip
+  and reports `mask`, `maskedPainted`, `maskedPaintedOnCanvas`, and
+  `masks` alongside — the check (`composition check`) tests the ink that
+  renders: a masked Layer's POST-clip extents, with null (nothing
+  survives the clip) meaning no ink, never a pre-clip fallback.
+- **Loud everywhere (§5):** an unresolved name, a self-mask, or a cycle is
+  refused at set/add time and at paint/measure/render time, naming the
+  uses; a masked Layer never paints unclipped as a fallback. An in-place
+  mask edit resolves the name in EVERY referring Composition (the refusal
+  names each where it does not; the result reports each resolved use);
+  `composition remove` refuses to remove a use a masked Layer still
+  names.
+- **The mask travels (§3):** import carries the whole use list (same- and
+  cross-Project — the cross-Project copy relinks to the destination copy
+  of the mask), forks keep the fact, relocation moves it, and a Render
+  replays byte-identically from pinned inputs.
+
 ## Visible region (new surface)
 
 `ply layer edit --visible-region` shows only a rectangular part of a
@@ -1282,11 +1331,11 @@ automatically spans the glyph ink box and clips to glyph alpha via
 
 ## Region checking (new surface)
 
-`ply composition check <comp> --regions <file>` tests a Composition's painted
-Layer extents against caller-supplied regions — rectangles of platform UI
+`ply composition check <comp> --regions <file>` tests a Composition's rendered
+ink against caller-supplied regions — rectangles of platform UI
 that overlays your visual (badge, progress strip, captions), supplied by
 path, with no platform geometry hardcoded in Ply (ADR-0015). Every visible
-Layer's painted footprint is tested against every region, one finding per
+Layer's ink footprint is tested against every region, one finding per
 (layer, region) intersection naming the layer, its footprint, and the region
 — the same actionable shape the legacy `safe-area:` warnings have.
 
@@ -1298,7 +1347,11 @@ ply composition check poster --regions my-platform-regions.json --json -p ~/proj
 Findings are information, never render failures: the check exits 0 with
 findings, a full-bleed background intersecting every region is accepted
 noise, and the check writes nothing to the Project. Layers that paint
-nothing (opacity 0, fully transparent) produce no findings.
+nothing (opacity 0, fully transparent) produce no findings. The footprint
+is the ink that RENDERS (ADR-0025): a masked Layer is tested against its
+POST-clip extents (`maskedPainted`) — null (nothing survives the clip)
+means no ink, never a fallback to the pre-clip `painted` — so masking the
+offending ink away removes the finding.
 
 The region file is caller-owned data (schema version 1):
 

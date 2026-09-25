@@ -138,17 +138,21 @@ function resolveAxis(
 /** Resolve an anchored placement for `layerId` into plain canonical (x, y).
  * Read-only: it measures the live state and mutates nothing; the caller
 /** The pre-effect ink basis (DEC-002, spec #285 US-002, ADR-0017 amendment
- * #288): the exact revision facts stripped before anchor ink is measured.
- * ADR-0017's consequences named the ink-extending effects — the shadow
- * (#139, ADR-0018) and the outline (#140, ADR-0019) — and left the question
- * of effect-extended ink to their contracts; the amendment resolves it as
- * exactly these two facts. Grade, edge glow, and blend cannot change the
- * ink (they preserve alpha coverage — ADR-0024 DEC-005), and the visible
- * region is paint (ADR-0023), not an effect — both stay part of the basis.
- * One home: both anchored surfaces resolve through the function below, so
- * the basis cannot drift between `composition add` and `layer edit`. */
+ * #288; ADR-0025 #305): the exact revision facts stripped before anchor ink
+ * is measured. ADR-0017's consequences named the ink-extending effects — the
+ * shadow (#139, ADR-0018) and the outline (#140, ADR-0019) — and left the
+ * question of effect-extended ink to their contracts; the amendment resolves
+ * it as exactly these two facts. ADR-0025 extends the strip to the mask:
+ * the anchor basis is the pre-effect ink, which is NEVER mask-clipped
+ * (ADR-0025 §5) — a masked Layer anchors on its unclipped ink, so the clip
+ * neither moves nor shrinks a stored placement. Grade, edge glow, and blend
+ * cannot change the ink (they preserve alpha coverage — ADR-0024 DEC-005),
+ * and the visible region is paint (ADR-0023), not an effect — both stay
+ * part of the basis. One home: both anchored surfaces resolve through the
+ * function below, so the basis cannot drift between `composition add` and
+ * `layer edit`. */
 function preEffectInkBasis(revision: ResolvedLayerRevision): ResolvedLayerRevision {
-  const { shadow: _shadow, outline: _outline, ...rest } = revision;
+  const { shadow: _shadow, outline: _outline, mask: _mask, ...rest } = revision;
   return rest as ResolvedLayerRevision;
 }
 

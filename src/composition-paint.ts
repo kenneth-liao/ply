@@ -306,7 +306,155 @@ export async function paintComposition(
   layers: SnapshotLayer[],
   options: { page?: Page; supersample?: number } = {},
 ): Promise<{ png: Buffer; environment: PaintEnvironment }> {
-  return paintCompositionHtml(canvas, buildCompositionHtml(canvas, layers, options.supersample ?? 1), layers, options);
+  const supersample = options.supersample ?? 1;
+  // One page for the whole flow: the mask pass (when any use is masked)
+  // paints each mask use's canvas-space alpha raster on this page, then the
+  // composition page builds with those rasters and paints through the
+  // shared recipe (paintCompositionHtml). Same page → same serialized
+  // render-page contract as before.
+  const paint = async (page: Page) => {
+    const maskImages = await paintMaskRasters(canvas, layers, { page, supersample });
+    const html = buildCompositionHtml(canvas, layers, supersample, maskImages);
+    return paintCompositionHtml(canvas, html, layers, { ...options, page, supersample });
+  };
+  return options.page ? paint(options.page) : withRenderPage(paint);
+}
+
+/**
+ * The Layer mask's paint inputs (ADR-0025 §1/§5, #305): for every use that
+ * serves as a mask — a use named by at least one other use's `mask` fact —
+ * paint its canvas-space clip alpha at the DELIVERY device scale and canvas
+ * geometry (ADR-0022): the mask page is built from the SAME markup builder
+ * at the SAME supersample factor and captured at canvas×factor device
+ * pixels — never at 1x then stretched — and the final paint samples it at
+ * device resolution, so the clip's edges are exactly as sharp as a
+ * directly painted edge.
+ *
+ * The clip alpha is the §5 strict whitelist: the mask use's CONTENT alpha,
+ * cropped by its visible region, placed by its placement and transform.
+ * The mask's opacity, grade, edge glow, outline, shadow, blur, choke,
+ * feather, blend, and any mask of its own do not contribute — a mask use
+ * does not paint, so these facts have no visible effect while it serves as
+ * a mask (the sanitized revision below drops them; its content, runs, and
+ * fonts stay so the alpha is pixel-for-pixel the content's).
+ *
+ * Refusals (loud, before anything paints): a masked Layer whose stored name
+ * is not among the Composition's uses; a use naming itself; a mask cycle.
+ * The masked Layer never paints unclipped as a fallback.
+ *
+ * Returns the rasters keyed by the MASK USE's name (each masked Layer looks
+ * its mask up by the use name its revision stores).
+ */
+export async function paintMaskRasters(
+  canvas: { width: number; height: number },
+  layers: SnapshotLayer[],
+  options: { page?: Page; supersample?: number } = {},
+): Promise<Map<string, string>> {
+  const supersample = options.supersample ?? 1;
+  // Resolve each masked Layer's mask use in THIS use list (the Composition
+  // being painted — ADR-0025 §1: the name resolves in the Composition being
+  // painted, measured, or rendered).
+  const byName = new Map(layers.map((l) => [l.name, l]));
+  const masksBySource = new Map<string, Set<string>>(); // mask use name -> masked use names
+  for (const l of layers) {
+    const maskName = l.revision.mask;
+    if (maskName === undefined) continue;
+    const maskUse = byName.get(maskName);
+    if (maskUse === undefined) {
+      throw new Error(
+        `Layer "${l.name}" masks use "${maskName}", which is not among this Composition's uses ` +
+          `(${layers.map((u) => `"${u.name}"`).join(", ")}). ` +
+          "The masked Layer never paints unclipped as a fallback (ADR-0025 §5).",
+      );
+    }
+    if (maskUse === l) {
+      throw new Error(`Layer "${l.name}" masks itself — a use cannot mask itself (ADR-0025 §5).`);
+    }
+    if (!masksBySource.has(maskName)) masksBySource.set(maskName, new Set());
+    masksBySource.get(maskName)!.add(l.name);
+  }
+  // Cycle refusal at paint (defence in depth beside the command-surface
+  // checks): a cycle is two or more uses that each end up clipped by one
+  // another. Chains are allowed — a masked Layer that serves as a mask
+  // gives its own UNCLIPPED content alpha (its own clip plays no part).
+  for (const start of masksBySource.keys()) {
+    const chain: string[] = [];
+    const seen = new Set<string>();
+    let current: string | undefined = start;
+    for (;;) {
+      if (current === undefined) break;
+      if (seen.has(current)) {
+        const cycle = chain.slice(chain.indexOf(current));
+        throw new Error(
+          `Mask cycle: ${cycle.map((n) => `"${n}"`).join(" masks ")} masks "${current}". ` +
+            "Refusing to paint a clip cycle (ADR-0025 §5).",
+        );
+      }
+      seen.add(current);
+      chain.push(current);
+      current = byName.get(current)?.revision.mask;
+    }
+  }
+  if (masksBySource.size === 0) return new Map();
+  // One sanitized revision per distinct mask use: the §5 whitelist alone.
+  // The paints run SEQUENTIALLY when they share a page — a page is a serial
+  // resource, and concurrent setContent/screenshot pairs would interleave.
+  const rasters = new Map<string, string>();
+  for (const maskName of masksBySource.keys()) {
+    const maskUse = byName.get(maskName)!;
+    const rev = maskUse.revision;
+    const sanitized = {
+      ...rev,
+      opacity: 1,
+      shadow: undefined,
+      outline: undefined,
+      innerShadow: undefined,
+      glow: undefined,
+      blur: undefined,
+      choke: undefined,
+      feather: undefined,
+      grade: undefined,
+      blend: undefined,
+      mask: undefined,
+    } as unknown as typeof rev;
+    const maskLayers: SnapshotLayer[] = [{ ...maskUse, revision: sanitized }];
+    const png = await paintMaskPage(canvas, maskLayers, { page: options.page, supersample });
+    rasters.set(maskName, `data:image/png;base64,${png.toString("base64")}`);
+  }
+  return rasters;
+}
+
+/**
+ * Paint one mask page: the delivery device-scale capture (canvas × factor
+ * device pixels) WITHOUT the area-average — the final paint samples the
+ * raster at device resolution across the clip wrapper's border box, so the
+ * mask's edges keep exactly the sampling a directly painted edge gets (the
+ * delivery average then applies to both alike). The page flow is the paint
+ * path's own: awaited decode, effect-filter region sizing, the retained-font
+ * gate, and the fit derivation, so a mask use's glyph alpha is the fitted,
+ * font-gated alpha.
+ */
+async function paintMaskPage(
+  canvas: { width: number; height: number },
+  layers: SnapshotLayer[],
+  options: { page?: Page; supersample?: number } = {},
+): Promise<Buffer> {
+  const supersample = options.supersample ?? 1;
+  const paint = async (page: Page) => {
+    await page.setViewportSize({ width: canvas.width * supersample, height: canvas.height * supersample });
+    await page.setContent(buildCompositionHtml(canvas, layers, supersample), { waitUntil: "load" });
+    await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+    await sizeEffectFilterRegions(page, layers);
+    await rejectUnresolvedFonts(page, layers);
+    await applyTextFit(page, layers);
+    return page.screenshot({
+      type: "png",
+      omitBackground: true,
+      clip: { x: 0, y: 0, width: canvas.width * supersample, height: canvas.height * supersample },
+      timeout: 60000,
+    });
+  };
+  return options.page ? paint(options.page) : withRenderPage(paint);
 }
 
 /**
@@ -1123,7 +1271,11 @@ export async function sizeEffectFilterRegions(page: Page, layers: SnapshotLayer[
     if (!canvas) return "#canvas element missing";
     const problems: string[] = [];
     input.forEach((spec) => {
-      const el = canvas.children[spec.index] as HTMLElement | undefined;
+      // The mask wrapper (ADR-0025, #305): a masked Layer's direct #canvas
+      // child is the full-canvas clip wrapper; the layer element — the one
+      // the effect filter region sizes from — is inside it.
+      const child = canvas.children[spec.index] as HTMLElement | undefined;
+      const el = (child?.hasAttribute("data-ply-mask") ? child.firstElementChild : child) as HTMLElement | undefined;
       const filter = document.getElementById(spec.id);
       if (!el) {
         problems.push(`Layer "${spec.name}": element ${spec.index} not found in #canvas`);
@@ -1294,11 +1446,16 @@ export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise
       if (!spec) return null;
       const outer = canvasEl.children[spec.index] as HTMLElement | undefined;
       if (!outer) throw new Error(`text fit pass: element ${spec.index} not found in #canvas`);
+      // The mask wrapper (ADR-0025, #305): the layer element — the one that
+      // carries the transform and the data-ply-fit marker — is inside it.
+      const layerEl = (outer.hasAttribute("data-ply-mask")
+        ? outer.firstElementChild
+        : outer) as HTMLElement;
       // The derivation sets the font size on the element that CARRIES it —
       // the text element marked `data-ply-fit` (the outer element itself for
       // the single-div markup, the inner text div for the region/grade and
       // gradient structures).
-      const holder = outer.matches("[data-ply-fit]") ? outer : outer.querySelector("[data-ply-fit]");
+      const holder = layerEl.matches("[data-ply-fit]") ? layerEl : layerEl.querySelector("[data-ply-fit]");
       if (!(holder instanceof HTMLElement)) {
         // Fail closed (INT-2, #328 review): every markup branch that stores a
         // fit box emits the marker, so reaching this line means the markup
@@ -1317,8 +1474,8 @@ export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise
       // removal never reflows other Layers, they are absolutely
       // positioned), so scale/rotation/flip map the FITTED block afterwards
       // and never inflate the measured layout size.
-      const savedTransform = outer.style.transform;
-      outer.style.transform = "none";
+      const savedTransform = layerEl.style.transform;
+      layerEl.style.transform = "none";
       try {
         let size = spec.fontSize;
         holder.style.fontSize = `${size}px`;
@@ -1344,7 +1501,7 @@ export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise
         }
         return { effectiveFontSize: size, fits: false, neededFontSize: needed };
       } finally {
-        outer.style.transform = savedTransform;
+        layerEl.style.transform = savedTransform;
       }
     });
   }, specs);
@@ -1368,7 +1525,13 @@ export function buildCompositionHtml(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
   supersample = 1,
+  maskImages: Map<string, string> = new Map(),
 ): string {
+  // The Layer mask (ADR-0025, #305): `maskImages` maps each masked Layer's
+  // stored use name to the mask use's canvas-space alpha raster as a data
+  // URL, painted at the delivery device scale by the mask pass
+  // (`paintMaskRasters`). A masked Layer without a raster is a caller
+  // ordering bug — refused loudly here, never painted unclipped.
   if (!Number.isInteger(supersample) || supersample < 1) {
     throw new Error(`Invalid supersample factor ${supersample}: must be an integer of at least 1.`);
   }
@@ -1419,7 +1582,23 @@ export function buildCompositionHtml(
   const els = layers
     .map((l, layerIndex) => {
       const rev = l.revision;
-      const base = `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};`;
+      // A use that serves as a mask gives only its alpha to the clip: it is
+      // NOT painted (ADR-0025 §2), and its place in the use order has no
+      // effect on the image. The element still exists — the one-element-per-
+      // Layer markup under #canvas is the page probes' index contract
+      // (#140/#295, the geometry probe), and a mask use has ink of its own
+      // (it measures and anchors like any Layer, ADR-0025 §5) — so it paints
+      // as its ordinary markup with visibility:hidden. The measurement
+      // painted-ink pass toggles visibility per Layer, which clears this
+      // inline hidden for the mask use's own capture; in a render nothing
+      // toggles it, so the mask use never paints.
+      const maskUseNames = new Set(
+        layers.map((u) => u.revision.mask).filter((m): m is string => m !== undefined),
+      );
+      const servesAsMask = maskUseNames.has(l.name);
+      const base =
+        `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};` +
+        (servesAsMask ? "visibility:hidden;" : "");
       // Canonical transform (#133/#134/#135/#298, ADR-0016 amendment): applied
       // about the Layer's (x, y) top-left placement point, in the documented
       // order — innermost flip, then scale, then rotation, then skew, then
@@ -1578,7 +1757,49 @@ export function buildCompositionHtml(
       // shadow, transform, and opacity — blends as ONE unit against everything
       // beneath it. Emitted only when set, so pre-#220 revisions and their
       // pinned Render history paint byte-identically.
-      const blendCss = rev.blend !== undefined ? `mix-blend-mode:${rev.blend};` : "";
+      const blendCss =
+        // The Layer mask (ADR-0025 §4, #305): the clip sits BETWEEN transform
+        // & opacity and blend, and the clipped Layer blends as ONE unit — so
+        // a masked Layer's blend mode moves from the layer element to the
+        // mask wrapper (maskWrapper below), which blends the CLIPPED result
+        // against the backdrop. Emitted on the wrapper only when a blend is
+        // stored, so unmasked revisions paint byte-identically.
+        rev.blend !== undefined && rev.mask === undefined ? `mix-blend-mode:${rev.blend};` : "";
+      // The Layer mask's clip wrapper (ADR-0025 §4, #305): a full-canvas
+      // element carrying the mask use's CANVAS-SPACE alpha raster as a CSS
+      // mask, around the layer element's existing markup (steps 1–8:
+      // content, vector colour, region, grade, edge, glow, inner shadow,
+      // outline, shadow, blur, transform, opacity — all unchanged on the
+      // inner element). The wrapper's mask applies to the child's rendered
+      // composite AFTER its transform and opacity, and the wrapper's
+      // mix-blend-mode (moved from the inner element) then blends the
+      // CLIPPED result against the backdrop — the ADR-0025 §5 order falls
+      // out of the markup shape, exactly as the region clip's wrapper does
+      // for #211. The mask raster is painted at the delivery device scale
+      // and canvas geometry by the mask pass (ADR-0022), keyed by the
+      // masked Layer's stored use name. Emitted only when the fact is set,
+      // so pre-mask revisions and their pinned Render history paint
+      // byte-identically. The `data-ply-mask` attribute is the one markup
+      // contract the page probes read through (`sizeEffectFilterRegions`,
+      // the geometry probe, the fit derivation) to reach the layer element
+      // inside the wrapper.
+      const maskRaster = rev.mask !== undefined ? maskImages.get(rev.mask) : undefined;
+      if (rev.mask !== undefined && maskRaster === undefined) {
+        throw new Error(
+          `Layer "${l.name}" masks use "${rev.mask}", but no mask alpha raster was supplied — ` +
+            "the mask resolver must run before the composition markup is built.",
+        );
+      }
+      const maskWrapper = (el: string): string =>
+        rev.mask === undefined
+          ? el
+          : `<div style="position:absolute;left:0;top:0;width:${canvas.width}px;height:${canvas.height}px;` +
+            maskCss("mask-image", `url('${maskRaster}')`) +
+            maskCss("mask-size", "100% 100%") +
+            maskCss("mask-position", "0 0") +
+            maskCss("mask-repeat", "no-repeat") +
+            (rev.blend !== undefined ? `mix-blend-mode:${rev.blend};` : "") +
+            `" data-ply-mask="${escapeHtml(rev.mask)}">${el}</div>`;
       // The visible region's clip reference (#211, ADR-0023): applied to the
       // INNER content element, so the clip crops the content BEFORE the
       // Layer element's filter chain — the outline dilate and the drop-shadow
@@ -1672,11 +1893,11 @@ export function buildCompositionHtml(
             `font-family:'${internalFontFamily(rev.contentHash)}';` +
             `font-size:${rev.fontSize}px;color:${fill.color};${synthesisCss}${axesCss}${typographyCss}${layoutCss}`;
           if (rev.visibleRegion === undefined && gradeFilter === "") {
-            return `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}${textStyle}"${fitAttr}>${textRunsContent(rev)}</div>`;
+            return maskWrapper(`<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}${textStyle}"${fitAttr}>${textRunsContent(rev)}</div>`);
           }
-          return (
+          return maskWrapper(
             `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
-            `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${textRunsContent(rev)}</div></div>`
+            `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${textRunsContent(rev)}</div></div>`,
           );
         }
 
@@ -1694,9 +1915,9 @@ export function buildCompositionHtml(
           `font-size:${rev.fontSize}px;${synthesisCss}${axesCss}${typographyCss}${layoutCss}` +
           gradientCss;
 
-        return (
+        return maskWrapper(
           `<div style="${base}${outerLayoutCss}${transformed}${effectsFilter}${blendCss}">` +
-          `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${textRunsContent(rev)}</div></div>`
+          `<div style="${textStyle}${regionClip}${gradeFilter}"${fitAttr}>${textRunsContent(rev)}</div></div>`,
         );
       }
       if (rev.kind === "shape") {
@@ -1721,11 +1942,11 @@ export function buildCompositionHtml(
           `width:${rev.width}px;height:${rev.height}px;` +
           `background:${fillCssBackground(rev.fill)};${radiusCss}`;
         if (rev.visibleRegion === undefined && gradeFilter === "") {
-          return `<div style="${base}${transformed}${effectsFilter}${blendCss}${shapeStyle}"></div>`;
+          return maskWrapper(`<div style="${base}${transformed}${effectsFilter}${blendCss}${shapeStyle}"></div>`);
         }
-        return (
+        return maskWrapper(
           `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
-          `<div style="${shapeStyle}${regionClip}${gradeFilter}"></div></div>`
+          `<div style="${shapeStyle}${regionClip}${gradeFilter}"></div></div>`,
         );
       }
       // The vector colour (#215, spec #207 US-005, DEC-008): a recoloured
@@ -1768,19 +1989,19 @@ export function buildCompositionHtml(
         // wrapper's effect chain hugs the cropped, coloured edge. Layers
         // without a region emit the same wrapper shape the region path
         // already used, with an empty clip.
-        return (
+        return maskWrapper(
           `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
-          `<div style="${vectorColorCss}${regionClip}${gradeFilter}"></div></div>`
+          `<div style="${vectorColorCss}${regionClip}${gradeFilter}"></div></div>`,
         );
       }
       if (rev.visibleRegion !== undefined || gradeFilter !== "") {
-        return (
+        return maskWrapper(
           `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
           `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="display:block;${regionClip}${gradeFilter}">` +
-          `</div>`
+          `</div>`,
         );
       }
-      return `<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="${base}${transformed}${effectsFilter}${blendCss}">`;
+      return maskWrapper(`<img src="data:${MIME[rev.format]};base64,${l.contentBytes.toString("base64")}"${imageSize(rev)} style="${base}${transformed}${effectsFilter}${blendCss}">`);
     })
     .join("");
   return (

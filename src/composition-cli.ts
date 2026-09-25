@@ -166,7 +166,10 @@ composition — Composition authoring and inspection
       A Layer's effects extend its painted ink: painted bounds, the on-canvas
       intersection, and clipped include the effect extent, and the effective
       shadow and outline settings are reported in the effects facts and in
-      compact text.
+      compact text. A masked Layer (ADR-0025) reports its stored mask use in
+      the facts and its POST-clip extents beside the pre-clip painted ones —
+      painted stays with-effects/pre-clip, and the masked segment names
+      what the clip keeps (on canvas) or that nothing survives it.
       Painted values are two-decimal rounded: ink is quantized to the
       capture window's pixel grid, while canvas offsets are layout-derived
       and may be fractional. Capture is bounded — one windowed screenshot
@@ -641,6 +644,17 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         only and painted extents never grow. The px are
                         Layer-LOCAL like the choke's. "0" removes it.
                         Never changes retained pixels.
+  --mask <use-name>     Clip the new Layer to another Layer use's alpha
+                        (ADR-0025): <use-name> is a use of the SAME
+                        Composition (it must already exist there — the
+                        name resolves before anything publishes), stored
+                        as a revision fact on the one-command add's single
+                        revision. The clip uses the mask use's content
+                        alpha after its own transforms and visible region
+                        and cuts the new Layer's final pixels; the mask
+                        use does not paint. The removal spelling ":none"
+                        can never name a use. The result reports the
+                        resolved use.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -696,6 +710,7 @@ function oneCommandFacts(
     blur?: number;
     choke?: number;
     feather?: number;
+    mask?: string;
   },
   anchorSpec?: string,
 ): string {
@@ -743,6 +758,9 @@ function oneCommandFacts(
   }
   if (rev.blend) {
     facts.push(`blend ${rev.blend}`);
+  }
+  if (rev.mask) {
+    facts.push(`mask "${rev.mask}"`);
   }
   if (anchorSpec !== undefined) {
     facts.push(`anchored ${anchorSpec} -> placement (${rev.x}, ${rev.y})`);
@@ -1136,7 +1154,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           );
           mutationCommitted = true;
           output(
-            { ok: true, composition: res.composition, use: res.use, layer: res.layer, generatedFrom: res.generatedFrom },
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer, generatedFrom: res.generatedFrom, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
             isJson,
             () => {
               const rev = res.layer.currentRevision;
@@ -1173,6 +1191,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               use: res.use,
               layer: res.layer,
               mattedFrom: res.mattedFrom,
+              ...(res.masked !== undefined ? { masked: res.masked } : {}),
               ...(res.generatedFrom ? { generatedFrom: res.generatedFrom } : {}),
             },
             isJson,
@@ -1333,7 +1352,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           );
           mutationCommitted = true;
           output(
-            { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
             isJson,
             () => {
               const rev = res.layer.currentRevision;
@@ -1399,7 +1418,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           );
           mutationCommitted = true;
           output(
-            { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
             isJson,
             () => {
               const rev = res.layer.currentRevision;
@@ -1417,7 +1436,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity, oneCommand, position: stackPosition });
         mutationCommitted = true;
         output(
-          { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+          { ok: true, composition: res.composition, use: res.use, layer: res.layer, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
           isJson,
           () => {
             const rev = res.layer.currentRevision;
@@ -1691,6 +1710,16 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               }
               if (layer.feather !== null && layer.feather !== undefined) {
                 facts.push(`feather ${layer.feather}px`);
+              }
+              // The Layer mask (ADR-0025, #305): the stored fact, the
+              // post-clip extents it produces, and (for a mask use) the
+              // uses it serves — surfaced beside the painted facts so the
+              // human-readable line shows the ink that renders.
+              if (layer.mask !== null && layer.mask !== undefined) {
+                facts.push(`mask "${layer.mask}"`);
+              }
+              if (layer.masks.length > 0) {
+                facts.push(`masks ${layer.masks.map((n) => `"${n}"`).join(", ")}`);
               }
               console.log(
                 `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height} ${paintedText(layer)}` +
@@ -2025,18 +2054,40 @@ function contentLabel(layer: { kind: string; content: { width: number; height: n
  * box, plus the on-canvas intersection only when ink is clipped, or the
  * explicit no-visible-ink wording when there is nothing painted.
  */
-function paintedText(layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped" | "refused">): string {
+function paintedText(
+  layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped" | "refused" | "mask" | "maskedPainted" | "maskedPaintedOnCanvas">,
+): string {
   if (layer.refused) return `refused (${layer.refused})`;
-  if (!layer.painted) return "painted: none (no visible ink)";
-  const p = layer.painted;
-  let segment = `painted (${p.x}, ${p.y}) ${p.width}×${p.height}`;
-  if (layer.clipped) {
-    // Ink can be clipped with an empty on-canvas footprint — entirely
-    // outside the canvas — so the intersection may be null.
-    const v = layer.paintedOnCanvas;
-    segment += v
-      ? `, on-canvas (${v.x}, ${v.y}) ${v.width}×${v.height} — clipped`
-      : " — clipped (entirely off-canvas)";
+  let segment: string;
+  if (!layer.painted) {
+    segment = "painted: none (no visible ink)";
+  } else {
+    const p = layer.painted;
+    segment = `painted (${p.x}, ${p.y}) ${p.width}×${p.height}`;
+    if (layer.clipped) {
+      // Ink can be clipped with an empty on-canvas footprint — entirely
+      // outside the canvas — so the intersection may be null.
+      const v = layer.paintedOnCanvas;
+      segment += v
+        ? `, on-canvas (${v.x}, ${v.y}) ${v.width}×${v.height} — clipped`
+        : " — clipped (entirely off-canvas)";
+    }
+  }
+  // The Layer mask (ADR-0025, #305): the pre-clip `painted` keeps its
+  // with-effects meaning; the ink that renders is the POST-clip extent,
+  // reported beside it — null when nothing survives the clip.
+  if (layer.mask !== null) {
+    segment += `; masked: painted stays pre-clip, the clip keeps`;
+    const m = layer.maskedPainted;
+    if (!m) {
+      segment += " nothing (no ink survives the clip)";
+    } else {
+      segment += ` (${m.x}, ${m.y}) ${m.width}×${m.height}`;
+      const mv = layer.maskedPaintedOnCanvas;
+      segment += mv
+        ? `, on-canvas (${mv.x}, ${mv.y}) ${mv.width}×${mv.height}`
+        : ", on-canvas: none (the clipped ink falls entirely outside the canvas)";
+    }
   }
   return segment;
 }
