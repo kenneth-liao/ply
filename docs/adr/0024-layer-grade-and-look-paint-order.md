@@ -136,10 +136,12 @@ Because grade filters preserve alpha coverage exactly (DEC-005):
   (`parseGlowSpec`) is the one boundary parse both command surfaces run, so
   refusals (exit 2, naming the part and its range) can never disagree.
 - Paint emits one SVG filter per glow Layer (deterministic id, sized in-page
-  by the same pass as the outline's region) as the FIRST function of the
+  by the same pass as the outline's region) painted after the edge choke &
+  feather (#300, the second amendment below) — the second function of the
   outer element's filter chain — glow → outline → shadow — so the band
-  operates on the region-clipped, graded alpha and stays inside the blend
-  unit. The chain: erode the source alpha by `width` (chained under the same
+  operates on the region-clipped, graded, edge-shaped alpha and stays inside
+  the blend unit. The chain: erode the source alpha by `width` (chained under
+  the same
   256px raster cap as the outline's dilate), offset the eroded mask opposite
   the light direction by `strength × width` px when a direction is stored,
   blur by `softness`, subtract from the source alpha, flood the colour,

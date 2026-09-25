@@ -1231,36 +1231,40 @@ export function buildCompositionHtml(
         transformParts.length > 0
           ? `transform:${transformParts.join(" ")};transform-origin:0 0;`
           : "";
-      // Canonical effects (#139/#140, ADR-0018/0019; edge glow #221, ADR-0024):
-      // one `filter` chain on the Layer element. The edge glow comes FIRST —
-      // its inner-alpha band operates on the region-clipped, graded composite
-      // (see glowFilterDef) — then the outline's feMorphology dilate filter
-      // hugs the composite's alpha/glyph ink and composites the ring under
-      // the source graphic (def above, referenced by id), and the shadow's
-      // single drop-shadow is cast from the outlined composite (since #299
-      // the blur follows it as the chain's last function). CSS filter-list
-      // chaining feeds each function's output to the next, so the chain
-      // builds the union exactly once per primitive —
-      // dilate extends exactly `width` px in every direction with no scallop
-      // and no compounding. The transform above then maps
-      // content+glow+outline+shadow together, and the element's opacity
-      // fades all of it. Emitted only when an effect exists, so pre-#139/#140
-      // revisions and their pinned Render history paint exactly as before
-      // (the shadow-only markup is byte-identical to the #139 form).
+      // Canonical effects (#139/#140, ADR-0018/0019; edge glow #221, edge
+      // choke & feather #300, ADR-0024 + its amendments): one `filter` chain
+      // on the Layer element. The edge choke & feather come FIRST — the
+      // alpha-edge shaper operates on the region-clipped, graded composite
+      // (see edgeFilterDef) — then the edge glow's inner-alpha band operates
+      // on the shaped composite (see glowFilterDef), the outline's
+      // feMorphology dilate filter hugs the shaped composite's alpha/glyph
+      // ink and composites the ring under the source graphic (def above,
+      // referenced by id), and the shadow's single drop-shadow is cast from
+      // the outlined composite (since #299 the blur follows it as the
+      // chain's last function). CSS filter-list chaining feeds each
+      // function's output to the next, so the chain builds the union exactly
+      // once per primitive — dilate extends exactly `width` px in every
+      // direction with no scallop and no compounding. The transform above
+      // then maps content+edge+glow+outline+shadow together, and the
+      // element's opacity fades all of it. Emitted only when an effect
+      // exists, so pre-#139/#140 revisions and their pinned Render history
+      // paint exactly as before (the shadow-only markup is byte-identical to
+      // the #139 form).
       const outlineFn =
         rev.outline !== undefined
           ? `url(#${outlineFilterId(rev.outline, layerIndex)})`
           : "";
-      // The edge glow (#221, spec #218 US-002, ADR-0024): the FIRST function
-      // of the outer element's filter chain — ahead of outline and shadow —
-      // so it operates on the region-clipped, graded composite the inner
-      // element renders, paints over the graded content, and stays inside
-      // the blend unit (the whole Layer still blends as one against the
-      // backdrop). CSS filter-list chaining then feeds the glow composite
-      // to the outline's dilate — the glow's band is a subset of the
-      // source's alpha, so the outline's geometry is unchanged — and the
-      // shadow is cast from the outlined composite. Emitted only when a
-      // glow fact exists, so pre-#221 revisions paint exactly as before.
+      // The edge glow (#221, spec #218 US-002, ADR-0024): painted after the
+      // edge choke & feather (#300) — the chain's second function, on the
+      // region-clipped, graded, edge-shaped composite the inner element and
+      // the edge filter render — so the band hugs the choked/feathered edge,
+      // paints over the graded content, and stays inside the blend unit (the
+      // whole Layer still blends as one against the backdrop). CSS
+      // filter-list chaining then feeds the glow composite to the outline's
+      // dilate — the glow's band is a subset of the source's alpha, so the
+      // outline's geometry is unchanged — and the shadow is cast from the
+      // outlined composite. Emitted only when a glow fact exists, so pre-#221
+      // revisions paint exactly as before.
       const glowFn =
         rev.glow !== undefined
           ? `url(#${glowFilterId(rev.glow, layerIndex)})`

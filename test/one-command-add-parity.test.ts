@@ -162,7 +162,7 @@ const IMAGE_ONE_COMMAND = [
 const IMAGE_CONTENT = ["--image", "<pad>", "--x", "120", "--y", "90", "--opacity", "0.85"];
 const IMAGE_TRANSFORMS = ["--resize", "1.5", "--rotate", "15", "--flip", "horizontal", "--skew", "10x0", "--perspective", "0x12"];
 const IMAGE_ANCHOR = ["--anchor", "center,center", "--x", "120", "--y", "90"];
-const IMAGE_EFFECTS = ["--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6"];
+const IMAGE_EFFECTS = ["--shadow", "3,4,5,#000000", "--outline", "2,#00ff00", "--blur", "6", "--choke", "2", "--feather", "2"];
 
 const TEXT_ONE_COMMAND = [
   "--text", "Groundline", "--font", "Archivo", "--font-size", "48", "--color", "#ffcc00",
