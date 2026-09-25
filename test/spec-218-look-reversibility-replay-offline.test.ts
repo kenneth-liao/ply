@@ -181,6 +181,7 @@ test("reversibility and lineage: raster image Layer", async () => {
     "--blend", "multiply",
     "--glow", "8,3,#ff0000,45,0.7",
     "--blur", "6",
+    "--choke", "3", "--feather", "2",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -198,6 +199,7 @@ test("reversibility and lineage: raster image Layer", async () => {
     "--blend", "normal",
     "--glow", "none",
     "--blur", "0",
+    "--choke", "0", "--feather", "0",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -216,6 +218,8 @@ test("reversibility and lineage: raster image Layer", async () => {
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
   expect(restoredRev.blur).toBeUndefined();
+  expect(restoredRev.choke).toBeUndefined();
+  expect(restoredRev.feather).toBeUndefined();
 });
 
 test("reversibility and lineage: vector image Layer (SVG)", async () => {
@@ -255,6 +259,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
     "--blend", "screen",
     "--glow", "6,2,#00ffff,90,0.6",
     "--blur", "6",
+    "--choke", "3", "--feather", "2",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -270,6 +275,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
     "--blend", "normal",
     "--glow", "none",
     "--blur", "0",
+    "--choke", "0", "--feather", "0",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -285,6 +291,8 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
   expect(restoredRev.blur).toBeUndefined();
+  expect(restoredRev.choke).toBeUndefined();
+  expect(restoredRev.feather).toBeUndefined();
 });
 
 test("reversibility and lineage: text Layer (including gradient fill)", async () => {
@@ -322,6 +330,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
     "--blend", "overlay",
     "--glow", "6,2,#ff8800,0,0.5",
     "--blur", "6",
+    "--choke", "3", "--feather", "2",
     "--color", "linear:90deg,#ff0000,#0000ff",
     "-p", proj, "--json",
   ]);
@@ -338,6 +347,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
     "--blend", "normal",
     "--glow", "none",
     "--blur", "0",
+    "--choke", "0", "--feather", "0",
     "--color", "#ffffff",
     "-p", proj, "--json",
   ]);
@@ -354,6 +364,8 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
   expect(restoredRev.blur).toBeUndefined();
+  expect(restoredRev.choke).toBeUndefined();
+  expect(restoredRev.feather).toBeUndefined();
   expect(restoredRev.color).toBe("#ffffff");
 });
 
@@ -388,6 +400,7 @@ test("reversibility and lineage: shape Layer", async () => {
     "--blend", "soft-light",
     "--glow", "10,4,#ffff00,180,0.8",
     "--blur", "6",
+    "--choke", "3", "--feather", "2",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -403,6 +416,7 @@ test("reversibility and lineage: shape Layer", async () => {
     "--blend", "normal",
     "--glow", "none",
     "--blur", "0",
+    "--choke", "0", "--feather", "0",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -417,6 +431,8 @@ test("reversibility and lineage: shape Layer", async () => {
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
   expect(restoredRev.blur).toBeUndefined();
+  expect(restoredRev.choke).toBeUndefined();
+  expect(restoredRev.feather).toBeUndefined();
 });
 
 // ---------------------------------------------------------------------------
@@ -488,6 +504,7 @@ test("one Composition using every look parameter replays byte-identically after 
       "--brightness", "1.2", "--contrast", "1.1", "--blend", "screen",
       "--glow", "6,2,#ff00ff,45,0.7",
       "--blur", "2",
+      "--choke", "2", "--feather", "1",
       "-p", proj, "--json",
     ],
     root,

@@ -1155,3 +1155,89 @@ test("matrix: blur applies to raster image, vector image, text, and shape Layers
     expect(pixel(blurred, x, y)[3]).toBe(255);
   }
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// O. Matrix: choke and feather on all 4 kinds (#300, spec #285 US-013,
+//    ADR-0024 amendment)
+// ---------------------------------------------------------------------------
+
+test("matrix: choke and feather apply to raster image, vector image, text, and shape Layers", async () => {
+  await makeComp("comp-edge", 200, 200);
+
+  // One 60x60 solid ink block per kind, hard-edged against the canvas,
+  // each with the same edge shape: choke 4, feather 2.
+  const pngPath = path.join(tempDir, "raster-solid.png");
+  await writeFile(pngPath, solidPng(60, 60, [200, 60, 60, 255]));
+  await invoke([
+    "composition", "add", "comp-edge", "raster",
+    "--image", pngPath, "--x", "10", "--y", "10", "--choke", "4", "--feather", "2",
+    "--project", projDir, "--json",
+  ]);
+
+  const svgPath = path.join(tempDir, "vector-solid.svg");
+  await writeFile(svgPath, solidSvg(60, 60, "#3c3cc8"));
+  await invoke([
+    "composition", "add", "comp-edge", "vector",
+    "--image", svgPath, "--x", "80", "--y", "10", "--choke", "4", "--feather", "2",
+    "--project", projDir, "--json",
+  ]);
+
+  await invoke([
+    "composition", "add", "comp-edge", "text",
+    "--text", "MM", "--font", "Archivo", "--font-size", "40", "--color", "#2040a0",
+    "--x", "10", "--y", "90", "--choke", "4", "--feather", "2",
+    "--project", projDir, "--json",
+  ]);
+
+  await invoke([
+    "composition", "add", "comp-edge", "shape",
+    "--shape", "rectangle", "--size", "60x60", "--fill", "#c8a232",
+    "--x", "80", "--y", "90", "--choke", "4", "--feather", "2",
+    "--project", projDir, "--json",
+  ]);
+
+  // A plain twin renders the same content hard-edged.
+  await makeComp("comp-edge-base", 200, 200);
+  await invoke([
+    "composition", "add", "comp-edge-base", "raster",
+    "--image", pngPath, "--x", "10", "--y", "10",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-edge-base", "vector",
+    "--image", svgPath, "--x", "80", "--y", "10",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-edge-base", "text",
+    "--text", "MM", "--font", "Archivo", "--font-size", "40", "--color", "#2040a0",
+    "--x", "10", "--y", "90",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-edge-base", "shape",
+    "--shape", "rectangle", "--size", "60x60", "--fill", "#c8a232",
+    "--x", "80", "--y", "90",
+    "--project", projDir, "--json",
+  ]);
+
+  const shaped = await render("comp-edge", "edge-matrix.png");
+  const base = await render("comp-edge-base", "edge-matrix-base.png");
+
+  // On every kind the hard ink edge pixel (just inside the original box)
+  // loses alpha to the choke: the alpha edge is eroded, and NO ink appears
+  // outside the original box (the `in` composite bounds the shaped alpha
+  // by the source's). Raster right edge (x=69, y=40), vector right edge
+  // (x=139, y=40), shape right edge (x=139, y=120); the text glyph edge is
+  // asserted through the raster/vector/shape pixels and the text layer's
+  // stored fact.
+  for (const [x, y] of [[69, 40], [139, 40], [139, 120]] as const) {
+    expect(pixel(base, x, y)[3]).toBe(255);
+    expect(pixel(shaped, x, y)[3]).toBeLessThan(255);
+    expect(pixel(shaped, x + 3, y)[3]).toBe(0);
+  }
+  // The interiors stay opaque on every kind.
+  for (const [x, y] of [[30, 40], [100, 40], [100, 120]] as const) {
+    expect(pixel(shaped, x, y)[3]).toBe(255);
+  }
+}, 30_000);

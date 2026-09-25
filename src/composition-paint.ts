@@ -23,11 +23,13 @@
  * the clip lives on an inner content element under the Layer's wrapper
  * element, so `#canvas` keeps exactly one child per Layer and Layers
  * without a region paint exactly the pre-#211 markup.
- * A revision's grade (#219, ADR-0024) and edge glow (#221, ADR-0024) paint
+ * A revision's grade (#219, ADR-0024), edge choke & feather (#300, ADR-0024
+ * amendment) and edge glow (#221, ADR-0024) paint
  * in the same local space between the region and the outline: the grade's
  * CSS filter chain rides the inner content element (content only, alpha
- * untouched), and the glow is the first function of the outer element's
- * effect chain — an inner-alpha band over the graded content, under
+ * untouched), and the edge choke & feather alpha-edge shaper is the first
+ * function of the outer element's effect chain, with the glow the second —
+ * an inner-alpha band over the graded, edge-shaped content, under
  * outline and shadow, never extending painted extents (DEC-005). The
  * blend mode (#220, ADR-0024) then composites the whole Layer — content,
  * visible region, grade, glow, outline, shadow, transform, opacity — as
@@ -568,6 +570,93 @@ function glowFilterDef(
 }
 
 /**
+ * The edge choke and feather's SVG-filter id and def (#300, spec #285
+ * US-013, ADR-0024 amendment): the alpha-edge shaper — erode the source
+ * alpha INWARD by the choke px, Gaussian-soften it by the feather px, then
+ * composite the source graphic THROUGH the shaped alpha. The FIRST function
+ * of the outer element's effects filter chain (before glow, outline,
+ * shadow; blur stays LAST), so every later effect reads the shaped edge:
+ * the glow band hugs the choked edge, the outline dilates the shaped ink,
+ * and the shadow is cast from it. The chain operates on the filter input's
+ * alpha — for the outer chain that input is the region-clipped, graded
+ * composite — and the final `feComposite operator="in"` with the source
+ * graphic BOUNDS the output alpha by the source's, so the painted ink never
+ * exceeds the unshaped ink (the edge softens inward only) and the step
+ * adds no effect reach (the ADR-0024 amendment).
+ *
+ * 1. `feMorphology erode` the source alpha by `choke` px (LOCAL px, before
+ *    the transform; chained under the same MAX_OUTLINE_DILATE_PX raster cap
+ *    the outline dilate and glow erode obey — sequential box erosions
+ *    compose exactly).
+ * 2. `feGaussianBlur` the eroded alpha by `feather` px — the edge
+ *    softening. The erode-then-blur order is the matte rule: the choke
+ *    moves the edge, the feather rounds it.
+ * 3. `feComposite operator="in"`: `SourceGraphic` through the shaped
+ *    alpha — colours preserved byte-for-byte in the interior, alpha
+ *    coverage reshaped, output alpha = source alpha × shaped alpha.
+ *
+ * One filter per LAYER WITH AN EDGE FACT, the same recipe as the glow's
+ * def (its region is sized in-page from the element's real untransformed
+ * box — the output never leaves the box, so the sizing pass pads it by the
+ * antialiasing 1px only), with a deterministic id hashed from both edge
+ * facts plus the Layer's snapshot index. Emitted only when an edge fact
+ * exists, so pre-#300 revisions paint exactly as before.
+ */
+function edgeFilterId(choke: number, feather: number, layerIndex: number): string {
+  return `ply-e-${createHash("sha256").update(`${choke}:${feather}:${layerIndex}`).digest("hex").slice(0, 16)}`;
+}
+
+/** The ONE id-derivation home for a revision's edge filter: the facts are
+ *  independent setters, so either may be absent at paint time — the absent
+ *  one reads as 0, the same convention the def and both reference sites
+ *  run. Glow doesn't need this because it passes the fact object whole. */
+function edgeFilterIdForRevision(
+  rev: { choke?: number; feather?: number },
+  layerIndex: number,
+): string {
+  return edgeFilterId(rev.choke ?? 0, rev.feather ?? 0, layerIndex);
+}
+
+function edgeFilterDef(
+  choke: number,
+  feather: number,
+  rev: { scaleX: number; scaleY: number },
+  layerIndex: number,
+  supersample = 1,
+): string {
+  const id = edgeFilterId(choke, feather, layerIndex);
+  // The erode is split the same way the outline's dilate is (#194): no
+  // single feMorphology step exceeds Chromium's 256px device-raster cap,
+  // and sequential box erosions compose exactly like the dilate steps do.
+  let erodeNodes = "";
+  if (choke > 0) {
+    const n = outlineDilateSteps(choke, rev, supersample);
+    const radii = outlineDilateRadii(choke, n);
+    erodeNodes = radii
+      .map((r, i) => {
+        const inName = i === 0 ? "SourceAlpha" : `eer_${i}`;
+        const outName = i === radii.length - 1 ? "eer" : `eer_${i + 1}`;
+        return `<feMorphology in="${inName}" operator="erode" radius="${r}" result="${outName}"/>`;
+      })
+      .join("");
+  }
+  const shaped =
+    feather > 0
+      ? (choke > 0
+          ? `<feGaussianBlur in="eer" stdDeviation="${feather}" result="eshape"/>`
+          : `<feGaussianBlur in="SourceAlpha" stdDeviation="${feather}" result="eshape"/>`)
+      : "";
+  const maskRef = feather > 0 ? "eshape" : choke > 0 ? "eer" : "SourceAlpha";
+  return (
+    `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
+    erodeNodes +
+    shaped +
+    `<feComposite in="SourceGraphic" in2="${maskRef}" operator="in"/>` +
+    `</filter>`
+  );
+}
+
+/**
  * The visible region's SVG-clipPath id and def (#211, spec #207 US-003,
  * ADR-0023): one `clipPath` (userSpaceOnUse) holding the region rectangle
  * in the Layer's LOCAL px — the same coordinate system the outline filter
@@ -774,6 +863,13 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
         l.revision.glow !== undefined
           ? glowFilterDef(l.revision.glow, i, l.revision, supersample)
           : "";
+      // The edge choke and feather (#300, ADR-0024 amendment): one def for
+      // the pair — the facts are independent setters, the filter is one
+      // alpha-edge shape. Emitted when either fact exists.
+      const edge =
+        l.revision.choke !== undefined || l.revision.feather !== undefined
+          ? edgeFilterDef(l.revision.choke ?? 0, l.revision.feather ?? 0, l.revision, i, supersample)
+          : "";
       const region =
         l.revision.visibleRegion !== undefined
           ? regionClipPathDef(l.revision.visibleRegion, i)
@@ -782,7 +878,7 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
         l.revision.grade?.warmth !== undefined
           ? warmthFilterDef(l.revision.grade.warmth, i)
           : "";
-      return outline + glow + region + warmth;
+      return outline + glow + edge + region + warmth;
     })
     .join("");
   if (defs === "") return "";
@@ -807,6 +903,12 @@ function outlineFilterSpecs(
     }
     if (l.revision.glow !== undefined) {
       specs.push({ id: glowFilterId(l.revision.glow, i), pad: 1, name: l.name, index: i });
+    }
+    // The edge filter's output is bounded by the source graphic (the `in`
+    // composite), so like the glow it never leaves the element's box: the
+    // antialiasing 1px pad is enough.
+    if (l.revision.choke !== undefined || l.revision.feather !== undefined) {
+      specs.push({ id: edgeFilterIdForRevision(l.revision, i), pad: 1, name: l.name, index: i });
     }
   });
   return specs;
@@ -1131,36 +1233,40 @@ export function buildCompositionHtml(
         transformParts.length > 0
           ? `transform:${transformParts.join(" ")};transform-origin:0 0;`
           : "";
-      // Canonical effects (#139/#140, ADR-0018/0019; edge glow #221, ADR-0024):
-      // one `filter` chain on the Layer element. The edge glow comes FIRST —
-      // its inner-alpha band operates on the region-clipped, graded composite
-      // (see glowFilterDef) — then the outline's feMorphology dilate filter
-      // hugs the composite's alpha/glyph ink and composites the ring under
-      // the source graphic (def above, referenced by id), and the shadow's
-      // single drop-shadow is cast from the outlined composite (since #299
-      // the blur follows it as the chain's last function). CSS filter-list
-      // chaining feeds each function's output to the next, so the chain
-      // builds the union exactly once per primitive —
-      // dilate extends exactly `width` px in every direction with no scallop
-      // and no compounding. The transform above then maps
-      // content+glow+outline+shadow together, and the element's opacity
-      // fades all of it. Emitted only when an effect exists, so pre-#139/#140
-      // revisions and their pinned Render history paint exactly as before
-      // (the shadow-only markup is byte-identical to the #139 form).
+      // Canonical effects (#139/#140, ADR-0018/0019; edge glow #221, edge
+      // choke & feather #300, ADR-0024 + its amendments): one `filter` chain
+      // on the Layer element. The edge choke & feather come FIRST — the
+      // alpha-edge shaper operates on the region-clipped, graded composite
+      // (see edgeFilterDef) — then the edge glow's inner-alpha band operates
+      // on the shaped composite (see glowFilterDef), the outline's
+      // feMorphology dilate filter hugs the shaped composite's alpha/glyph
+      // ink and composites the ring under the source graphic (def above,
+      // referenced by id), and the shadow's single drop-shadow is cast from
+      // the outlined composite (since #299 the blur follows it as the
+      // chain's last function). CSS filter-list chaining feeds each
+      // function's output to the next, so the chain builds the union exactly
+      // once per primitive — dilate extends exactly `width` px in every
+      // direction with no scallop and no compounding. The transform above
+      // then maps content+edge+glow+outline+shadow together, and the
+      // element's opacity fades all of it. Emitted only when an effect
+      // exists, so pre-#139/#140 revisions and their pinned Render history
+      // paint exactly as before (the shadow-only markup is byte-identical to
+      // the #139 form).
       const outlineFn =
         rev.outline !== undefined
           ? `url(#${outlineFilterId(rev.outline, layerIndex)})`
           : "";
-      // The edge glow (#221, spec #218 US-002, ADR-0024): the FIRST function
-      // of the outer element's filter chain — ahead of outline and shadow —
-      // so it operates on the region-clipped, graded composite the inner
-      // element renders, paints over the graded content, and stays inside
-      // the blend unit (the whole Layer still blends as one against the
-      // backdrop). CSS filter-list chaining then feeds the glow composite
-      // to the outline's dilate — the glow's band is a subset of the
-      // source's alpha, so the outline's geometry is unchanged — and the
-      // shadow is cast from the outlined composite. Emitted only when a
-      // glow fact exists, so pre-#221 revisions paint exactly as before.
+      // The edge glow (#221, spec #218 US-002, ADR-0024): painted after the
+      // edge choke & feather (#300) — the chain's second function, on the
+      // region-clipped, graded, edge-shaped composite the inner element and
+      // the edge filter render — so the band hugs the choked/feathered edge,
+      // paints over the graded content, and stays inside the blend unit (the
+      // whole Layer still blends as one against the backdrop). CSS
+      // filter-list chaining then feeds the glow composite to the outline's
+      // dilate — the glow's band is a subset of the source's alpha, so the
+      // outline's geometry is unchanged — and the shadow is cast from the
+      // outlined composite. Emitted only when a glow fact exists, so pre-#221
+      // revisions paint exactly as before.
       const glowFn =
         rev.glow !== undefined
           ? `url(#${glowFilterId(rev.glow, layerIndex)})`
@@ -1181,7 +1287,20 @@ export function buildCompositionHtml(
       // blur fact exists, so pre-#299 revisions paint exactly as before.
       const blurFn =
         rev.blur !== undefined ? `blur(${rev.blur}px)` : "";
-      const effectsFns = [glowFn, outlineFn, shadowFn, blurFn].filter(Boolean).join(" ");
+      // The edge choke and feather (#300, spec #285 US-013, DEC-005, ADR-0024
+      // amendment): the FIRST function of the outer element's filter chain —
+      // ahead of the glow, outline, and shadow — so the alpha edge is eroded
+      // and softened BEFORE the effects that read it: the glow band hugs the
+      // shaped edge, the outline dilates the shaped ink, the shadow is cast
+      // from it, and the blur stays the chain's LAST function. The final
+      // `in` composite bounds the output by the source's alpha, so the ink
+      // never exceeds the unshaped ink. Emitted only when an edge fact
+      // exists, so pre-#300 revisions paint exactly as before.
+      const edgeFn =
+        rev.choke !== undefined || rev.feather !== undefined
+          ? `url(#${edgeFilterIdForRevision(rev, layerIndex)})`
+          : "";
+      const effectsFns = [edgeFn, glowFn, outlineFn, shadowFn, blurFn].filter(Boolean).join(" ");
       const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
       // The blend mode (#220, spec #218 US-003, ADR-0024): applied to the
       // OUTER element via CSS mix-blend-mode in the DEC-002 paint order,

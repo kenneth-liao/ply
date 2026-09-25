@@ -1,6 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+- Added edge choke and feather as Layer revision facts on every Layer kind
+  (#300, spec #285 US-013, DEC-005, ADR-0024 amendment): `composition add`
+  and `layer edit` take `--choke <px>` (an inward alpha-erode radius, 0 to
+  256, `0` removes) and `--feather <px>` (a Gaussian alpha-edge softening
+  radius, 0 to 256, `0` removes) — the FIRST function of the effects chain,
+  before the edge glow, outline, and shadow (blur stays last), so a cutout's
+  halo disappears on saturated backgrounds and every later effect hugs the
+  shaped edge. The px are Layer-local (they scale with
+  `--scale`/`--scale-to` like the other effects); the shaped alpha is
+  composited with the source graphic, so the painted ink never exceeds the
+  unshaped ink — the edge step adds no effect reach and painted extents
+  never grow — and anchored placement still resolves against the pre-effect
+  ink, so neither fact moves a stored placement. Removal restores the render
+  byte-for-byte and pinned Renders replay byte-identically; measure reports
+  both radii beside the blur; the facts join the property × kind matrix, the
+  add/edit refusal parity tests, and the offline reversibility and replay
+  suite.
 - Added blur as a Layer revision fact on every Layer kind (#299, spec #285
   US-010, DEC-005, ADR-0024 amendment): `composition add` and `layer edit`
   take `--blur <px>` (a Gaussian defocus radius, 0 to 256, `0` removes) —

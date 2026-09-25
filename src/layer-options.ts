@@ -75,7 +75,10 @@ import {
   resolveEditSkew,
   resolveEditPerspective,
   resolveEditBlur,
+  resolveEditChoke,
+  resolveEditFeather,
   MAX_BLUR_RADIUS_PX,
+  MAX_EDGE_RADIUS_PX,
   type LayerRevision,
   type ResolvedLayerRevision,
   type LayerRunStyleEdit,
@@ -210,7 +213,9 @@ export type LayerOptionKey =
   | "warmth"
   | "blend"
   | "glow"
-  | "blur";
+  | "blur"
+  | "choke"
+  | "feather";
 
 /**
  * The one option table (DEC-001), in the order the edit surface's
@@ -384,6 +389,21 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // pre-effect-ink rule). 0 is the removal form; the identity is never
   // stored.
   { key: "blur", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerBlur, apply: applyBlur },
+  // The edge choke (#300, spec #285 US-013, DEC-005, ADR-0024 amendment):
+  // an absolute revision-fact setter on every kind — an inward alpha-erode
+  // painted as the FIRST function of the outer effects filter chain, before
+  // the glow/outline/shadow that read the shaped edge (blur stays LAST).
+  // Layer-local px; the shaped alpha is composited `in` the source graphic,
+  // so the ink never exceeds the unchoked ink and the edge step adds no
+  // reach. 0 is the removal form; the identity is never stored.
+  { key: "choke", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerChoke, apply: applyChoke },
+  // The edge feather (#300, spec #285 US-013, DEC-005, ADR-0024 amendment):
+  // an absolute revision-fact setter on every kind — a Gaussian alpha-edge
+  // softening applied immediately after the choke in the SAME first filter
+  // function. Layer-local px; the `in` composite bounds the painted alpha
+  // by the source's, so the edge softens inward only and adds no reach.
+  // 0 is the removal form; the identity is never stored.
+  { key: "feather", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerFeather, apply: applyFeather },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -450,6 +470,8 @@ export const LAYER_OPTION_PARSE_ARGS = {
   blend: { type: "string" },
   glow: { type: "string" },
   blur: { type: "string" },
+  choke: { type: "string" },
+  feather: { type: "string" },
   "scale-to": { type: "string" },
   skew: { type: "string" },
   perspective: { type: "string" },
@@ -1595,6 +1617,42 @@ export function parseLayerBlur(raw: string | undefined): OptionParse<number | un
 }
 
 /**
+ * --choke: the absolute inward alpha-erode radius in px (#300, ADR-0024
+ * amendment). The boundary parse of the ONE grammar both command surfaces
+ * run, so the add and edit refusals can never disagree: a finite number of
+ * px in 0..256, where 0 is the documented removal form.
+ */
+export function parseLayerChoke(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < 0 || value > MAX_EDGE_RADIUS_PX) {
+    return {
+      ok: false,
+      error: `Choke (--choke) takes a finite radius of px between 0 and ${MAX_EDGE_RADIUS_PX} — 0 removes the choke — got "${raw}".`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * --feather: the absolute alpha-edge Gaussian softening radius in px
+ * (#300, ADR-0024 amendment). The boundary parse of the ONE grammar both
+ * command surfaces run, so the add and edit refusals can never disagree: a
+ * finite number of px in 0..256, where 0 is the documented removal form.
+ */
+export function parseLayerFeather(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < 0 || value > MAX_EDGE_RADIUS_PX) {
+    return {
+      ok: false,
+      error: `Feather (--feather) takes a finite radius of px between 0 and ${MAX_EDGE_RADIUS_PX} — 0 removes the feather — got "${raw}".`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/**
  * --anchor: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Semantic refusals (no
  * visible ink, divergent multi-Composition geometry) happen in the
@@ -1844,6 +1902,8 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "blend" },
   { option: "glow" },
   { option: "blur" },
+  { option: "choke" },
+  { option: "feather" },
   { option: "anchor" },
   { policy: "anchor-conflict" },
   { policy: "anchor-targets" },
@@ -1877,6 +1937,8 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "blend",
   "glow",
   "blur",
+  "choke",
+  "feather",
   "anchor",
 ];
 
@@ -2101,6 +2163,14 @@ export interface SharedOptionDraft {
    *  absolute setter when the fact is set — 0 (the removal form) deletes
    *  the key, so the identity is never stored. */
   blur?: number;
+  /** Canonical edge choke radius in px (#300, ADR-0024 amendment): the
+   *  resolved absolute setter when the fact is set — 0 (the removal form)
+   *  deletes the key, so the identity is never stored. */
+  choke?: number;
+  /** Canonical edge feather radius in px (#300, ADR-0024 amendment): the
+   *  resolved absolute setter when the fact is set — 0 (the removal form)
+   *  deletes the key, so the identity is never stored. */
+  feather?: number;
   /** Anything else the application cases set — including a shared option's
    *  own revision fact (the probe's stamp) — flows into the published
    *  revision through the applied-fact carry (DEC-001). */
@@ -2667,6 +2737,39 @@ function applyBlur(
   draft.blur = blur;
 }
 
+function applyChoke(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  // Absolute choke setter (#300, ADR-0024 amendment): the resolved radius IS
+  // the canonical choke fact. The removal form (0) deletes the key — stored
+  // only when set — so an unchoked revision keeps its exact document shape.
+  const choke = resolveEditChoke({ chokeTo: value as number }, context.base as ResolvedLayerRevision);
+  if (choke === undefined) {
+    delete draft.choke;
+    return;
+  }
+  draft.choke = choke;
+}
+
+function applyFeather(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  // Absolute feather setter (#300, ADR-0024 amendment): the resolved radius
+  // IS the canonical feather fact. The removal form (0) deletes the key —
+  // stored only when set — so an unfeathered revision keeps its exact
+  // document shape.
+  const feather = resolveEditFeather({ featherTo: value as number }, context.base as ResolvedLayerRevision);
+  if (feather === undefined) {
+    delete draft.feather;
+    return;
+  }
+  draft.feather = feather;
+}
+
 /**
  * The edit surface's established application order (spec #226 DEC-002 as
  * the edit path resolves it, #263): the resize family's domain re-checks,
@@ -2705,6 +2808,8 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "blend" },
   { option: "glow" },
   { option: "blur" },
+  { option: "choke" },
+  { option: "feather" },
 ];
 
 export type { LayerRunStyleEdit } from "./layer.js";

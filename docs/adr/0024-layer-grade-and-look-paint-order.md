@@ -7,7 +7,10 @@
   step this ADR reserved for it. Amended by
   [spec #285](https://github.com/kenneth-liao/ply/issues/285) ticket #299
   (US-010, DEC-005/DEC-006): the blur joins the look paint order as the LAST
-  function of the effects chain (see the amendment below).
+  function of the effects chain (see the amendment below). Amended again by
+  the same spec's ticket #300 (US-013, DEC-005/DEC-006): edge choke and
+  feather join the look paint order as the FIRST function of the effects
+  chain (see the second amendment below).
 
 ## Context
 
@@ -133,10 +136,12 @@ Because grade filters preserve alpha coverage exactly (DEC-005):
   (`parseGlowSpec`) is the one boundary parse both command surfaces run, so
   refusals (exit 2, naming the part and its range) can never disagree.
 - Paint emits one SVG filter per glow Layer (deterministic id, sized in-page
-  by the same pass as the outline's region) as the FIRST function of the
+  by the same pass as the outline's region) painted after the edge choke &
+  feather (#300, the second amendment below) — the second function of the
   outer element's filter chain — glow → outline → shadow — so the band
-  operates on the region-clipped, graded alpha and stays inside the blend
-  unit. The chain: erode the source alpha by `width` (chained under the same
+  operates on the region-clipped, graded, edge-shaped alpha and stays inside
+  the blend unit. The chain: erode the source alpha by `width` (chained under
+  the same
   256px raster cap as the outline's dilate), offset the eroded mask opposite
   the light direction by `strength × width` px when a direction is stored,
   blur by `softness`, subtract from the source alpha, flood the colour,
@@ -190,7 +195,7 @@ code:
   sets the Gaussian standard deviation σ = r, and Chrome's kernel reaches
   ~3σ, so the defocus extends the ink by up to ~3r px in every local
   direction. The ONE additive effect-reach reader (`effectReachPx` in
-  `src/composition-measure.ts` — the home #300's choke and feather extend)
+  `src/composition-measure.ts`)
   adds `ceil(3 × blur)` px of local reach, additive after the outline and
   shadow terms, mapped through the transform's worst-case magnification. A
   2× margin would clip the visible tail (the rendered alpha>0 ink reaches
@@ -203,5 +208,69 @@ code:
 - **Reporting**: `composition measure` reports the effective radius as
   `blur` (px, `null` when absent), beside the grade and glow; `painted`,
   `paintedOnCanvas`, and `clipped` already reflect the growth.
-- **Not included**: edge choke and feather (#300) extend the same reach
-  reader; no second reach home is created here.
+- **Not included**: edge choke and feather (#300) add no term to this reach
+  reader — their `in` composite bounds the painted ink by the source alpha
+  (see the second amendment below); no second reach home is created here.
+
+## Second amendment: edge choke and feather join the paint order (#300)
+
+Edge choke and feather are Layer revision facts on every Layer kind (spec
+#285 US-013, ISC-52, DEC-005) that reshape a Layer's alpha edge at paint
+time, so a cutout's halo disappears on saturated backgrounds. They amend this
+ADR's accepted paint order (DEC-006) — recorded here, not overridden in code:
+
+- **Fact shapes (DEC-005)**: `rev.choke?: number` — an inward alpha-erode
+  radius in Layer-local px — and `rev.feather?: number` — a Gaussian
+  alpha-edge softening radius (σ) in Layer-local px. Both are absolute
+  setters with a documented range of `0..256` px (the same bounded-effect
+  footprint as the blur; the choke's erode also chains under the raster
+  morphology cap the outline and glow obey). `0` is each removal form and
+  the identities are never stored: absence IS the canonical no-fact form,
+  so removal drops the field and every reader treats absence as none. One
+  normalization boundary per fact (`normalizeStoredChoke`,
+  `normalizeStoredFeather`), one resolve path per fact (`resolveEditChoke`,
+  `resolveEditFeather`, shared by the edit and one-command add surfaces);
+  the revision hash appends each only when present. They follow ADR-0013
+  sharing and fork rules and replay byte-identically from retained Render
+  manifests.
+- **Paint order position**: a new step **5. Edge choke & feather** between
+  Grade (4) and Edge glow (the former 5, now 6; the later steps renumber) —
+  the FIRST function of the outer element's effects filter chain
+  (`choke/feather → glow → outline → shadow → blur`). The alpha edge must be
+  shaped BEFORE the effects that read it: the glow band paints just inside
+  the shaped edge, the outline dilates the shaped ink, the shadow is cast
+  from the outlined shaped composite, and the blur (#299) stays the LAST
+  function. One SVG filter per Layer with either fact: `feMorphology erode`
+  the source alpha by the choke (chained under the same raster cap as the
+  outline's dilate), `feGaussianBlur` the eroded alpha by the feather (the
+  matte rule — the choke moves the edge, the feather rounds it), then
+  `feComposite operator="in"` the source graphic through the shaped alpha.
+  Emitted only when an edge fact exists, so pre-#300 revisions and their
+  pinned Render history paint byte-identically.
+- **The ink never grows — the edge step adds NO reach**: the final `in`
+  composite bounds the output alpha by the SOURCE's alpha everywhere
+  (output α = source α × shaped α), so the painted ink never exceeds the
+  unshaped ink: the choke erodes it, the feather softens it INWARD only,
+  and even where the feather's Gaussian tail would spread the shaped mask
+  outward past the original edge, the source-alpha bound clips it. The
+  alpha-edge step therefore adds no term to the ONE local-reach reader
+  (`localEffectReachPx` in `src/composition-measure.ts`) — it only reshapes
+  (or shrinks) ink the outline, shadow, and blur terms already cover, and
+  no second reach home is created. This is the deliberate opposite of the
+  blur's growth (#299): choke and feather are matte corrections, not new
+  ink, and keeping every painted pixel inside the retained content's own
+  alpha is what makes halo removal safe.
+- **Painted extents shrink (a DEC-005 exception, like the blur's growth)**:
+  alpha coverage IS altered — that is the feature. `painted`,
+  `paintedOnCanvas`, and `clipped` follow the rendered ink, so a choke
+  shrinks the reported extents. Where the feather's inward tail (≈2.4σ of
+  visible alpha at 8-bit) regrows past the choke, the extent returns toward
+  the original edge but never past it.
+- **Anchors never move**: the edge facts are effects, so anchored placement
+  resolves against the pre-effect ink (#288, ADR-0025) — the same anchor
+  lands at the same stored placement with and without the choke/feather, on
+  add and on edit.
+- **Reporting**: `composition measure` reports the effective radii as
+  `choke` and `feather` (px, `null` when absent), beside the blur.
+- **Not included**: an outward dilate form (grow the alpha edge), a
+  per-side choke, or a mask-driven matte — each is fog until specified.

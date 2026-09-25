@@ -88,6 +88,18 @@ const audit: Array<{ suite: string; markers: string[] }> = [
     ],
   },
   {
+    suite: "layer-edge.test.ts",
+    markers: [
+      "choke and feather refuse non-numeric and out-of-range values before publication, naming the flag and range",
+      "a cutout's light fringe on saturated blue shows no fringe after the choke",
+      "choke and feather change the render on raster, vector, text, and shape Layers and 0 restores each byte-for-byte",
+      "measure reports the choke and feather facts and the painted extent never grows",
+      "a feathered edge pixel's alpha is at most the source alpha, and no ink appears outside the original ink",
+      "choke and feather never move a stored placement: anchor parity on add and edit",
+      "choke and feather compose with the other effects and removal restores byte-for-byte",
+    ],
+  },
+  {
     suite: "layer-flip.test.ts",
     markers: [
       "image Layer --flip sets an absolute reflection state, keeps content bytes",

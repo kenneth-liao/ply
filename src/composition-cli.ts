@@ -605,6 +605,21 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         blur grows painted extents and never moves anchored
                         placement. "0" removes it. Never changes retained
                         pixels.
+  --choke <px>          Choke the Layer's alpha edge INWARD — erode the
+                        alpha by a radius in px (0 to 256) painted as the
+                        FIRST function of the effects chain, before the
+                        edge glow, outline, and shadow, so a cutout's halo
+                        disappears on saturated backdrops. The px are
+                        Layer-LOCAL; the painted ink never exceeds the
+                        unchoked ink and choke SHRINKS painted extents.
+                        "0" removes it. Never changes retained pixels.
+  --feather <px>        Feather the Layer's alpha edge — a Gaussian
+                        softening radius in px (0 to 256) applied
+                        immediately after the choke in the same first
+                        effects-chain function, so the edge softens INWARD
+                        only and painted extents never grow. The px are
+                        Layer-LOCAL like the choke's. "0" removes it.
+                        Never changes retained pixels.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -657,6 +672,8 @@ function oneCommandFacts(
     blend?: StoredLayerBlendMode;
     glow?: LayerGlow;
     blur?: number;
+    choke?: number;
+    feather?: number;
   },
   anchorSpec?: string,
 ): string {
@@ -691,6 +708,12 @@ function oneCommandFacts(
   }
   if (rev.blur !== undefined) {
     facts.push(`blur ${rev.blur}px`);
+  }
+  if (rev.choke !== undefined) {
+    facts.push(`choke ${rev.choke}px`);
+  }
+  if (rev.feather !== undefined) {
+    facts.push(`feather ${rev.feather}px`);
   }
   if (rev.blend) {
     facts.push(`blend ${rev.blend}`);
@@ -1632,6 +1655,12 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               }
               if (layer.blur !== null && layer.blur !== undefined) {
                 facts.push(`blur ${layer.blur}px`);
+              }
+              if (layer.choke !== null && layer.choke !== undefined) {
+                facts.push(`choke ${layer.choke}px`);
+              }
+              if (layer.feather !== null && layer.feather !== undefined) {
+                facts.push(`feather ${layer.feather}px`);
               }
               console.log(
                 `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height} ${paintedText(layer)}` +

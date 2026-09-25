@@ -146,6 +146,8 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "blend": return ["multiply"];
     case "glow": return ["6,2,#ff9900"];
     case "blur": return ["6"];
+    case "choke": return ["4"];
+    case "feather": return ["3"];
     case "fit-box": return ["600x200"];
     // The runs options (#297) never reach this guardValue: they are text
     // CONTENT (the --run occurrences), not layer-level style setters, so
@@ -258,6 +260,8 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
     case "blend": expect(rev.blend).toBe("multiply"); break;
     case "glow": expect(rev.glow).toEqual({ width: 6, softness: 2, color: "#ff9900" }); break;
     case "blur": expect(rev.blur).toBe(6); break;
+    case "choke": expect(rev.choke).toBe(4); break;
+    case "feather": expect(rev.feather).toBe(3); break;
     case "font-size": expect(rev.fontSize).toBe(64); break;
     case "color": expect(rev.color).toBe("#ffcc00"); break;
     case "weight": expect(rev.weight).toBe(800); break;

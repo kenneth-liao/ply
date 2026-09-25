@@ -105,6 +105,8 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "blend",
       "glow",
       "blur",
+      "choke",
+      "feather",
     ]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
@@ -161,7 +163,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
       "x", "y", "opacity", "anchor",
       "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "skew", "perspective", "shadow", "outline", "visible-region", "visible-region-radius",
-      "brightness", "contrast", "saturation", "warmth", "blend", "glow", "blur",
+      "brightness", "contrast", "saturation", "warmth", "blend", "glow", "blur", "choke", "feather",
     ]);
   });
 
@@ -188,8 +190,10 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // but the boundary still accepts dash-leading values); #219 adds --warmth (-1..1);
     // #294 adds --wrap-width (a negative width is refused by the range validator);
     // #295 adds --fit-box the same way (a negative axis is refused by the range validator);
-    // #299 adds --blur (a negative radius is refused by the range validator).
-    expect(editFlags).toHaveLength(15);
+    // #299 adds --blur (a negative radius is refused by the range validator);
+    // #300 adds --choke and --feather the same way (negative radii are
+    // refused by the range validators).
+    expect(editFlags).toHaveLength(17);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--warmth");
   });
