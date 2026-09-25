@@ -73,7 +73,7 @@ transform, effect, and text option `ply layer edit` accepts for that Layer
 kind, with identical spelling, validation, and refusal texts — so a Layer is
 created in its final state with one command. The options apply in the
 documented order — content, then content-level paint (`--vector-color`),
-then transforms (`--resize`, `--scale`, `--rotate`, `--flip`), then the
+then transforms (`--resize`, `--scale`, `--scale-to`, `--rotate`, `--flip`), then the
 visible region, then anchored placement (`--anchor`), then effects
 (`--shadow`, `--outline`) — and publish exactly one Layer revision; any
 refused option publishes nothing (no Layer, no use, no content). The
@@ -216,6 +216,7 @@ content (ADR-0016) — resizing changes placement, never retained pixels:
 ```bash
 ply layer edit <layerId> --resize 2        # relative: current scale × 2
 ply layer edit <layerId> --scale 2         # absolute: the scale IS 2
+ply layer edit <layerId> --scale-to 1.3x0.8  # absolute per-axis: 1.3× wide, 0.8× tall
 ply layer edit <layerId> --resize-to 800x  # absolute size, aspect preserved
 ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
 ```
@@ -233,6 +234,20 @@ ply layer edit <layerId> --resize-to 800x600   # deliberate aspect change
   scale field), and never changes retained pixels. Mutually exclusive with
   `--resize` and `--resize-to` (and with content replacement, like the
   other resize forms); refused before anything publishes.
+- `--scale-to <XxY>` (#296, ADR-0016 amendment) is the **absolute per-axis**
+  setter: it writes the SAME canonical `scaleX`/`scaleY` facts, so every
+  Layer kind — text included, whose per-axis scale was previously
+  unreachable — takes independent horizontal and vertical scale
+  (`--scale-to 1.3x0.8` stretches 1.3× horizontally, 0.8× vertically;
+  repeating the command never compounds). One omitted axis (`1.3x`, `x0.8`)
+  keeps the Layer's current scale on the omitted axis. Uniform and per-axis
+  are one stored fact: either setter wholly replaces the current scale, and
+  `--scale-to 1x1` removes it (the render returns to scale 1
+  byte-for-byte). Wrap width and fit box (#294/#295) stay layout px
+  BEFORE transforms — the per-axis scale maps the wrapped layout box into
+  canvas space and never re-wraps. Mutually exclusive with `--resize`,
+  `--resize-to`, `--cover-to`, and `--scale`; refused before anything
+  publishes.
 - `--resize-to <WxH>` is image-only (text has no intrinsic pixel size).
   Supplying one axis (`800x`, `x600`) preserves the Layer's current aspect
   ratio — a deliberate aspect change survives later one-axis resizes;

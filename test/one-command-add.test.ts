@@ -129,6 +129,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "resize-to": return ["96x"];
     case "cover-to": return ["canvas"];
     case "scale": return ["2"];
+    case "scale-to": return ["1.3x0.8"];
     case "rotate": return ["12"];
     case "flip": return ["horizontal"];
     case "shadow": return ["2,3,4,#000000"];
@@ -207,6 +208,12 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
       // The absolute scale setter writes the canonical scale directly.
       expect(rev.scaleX).toBe(2);
       expect(rev.scaleY).toBe(2);
+      break;
+    case "scale-to":
+      // The absolute per-axis setter writes the same canonical scale fact
+      // (#296): the two factors ARE scaleX/scaleY.
+      expect(rev.scaleX).toBe(1.3);
+      expect(rev.scaleY).toBe(0.8);
       break;
     case "rotate": expect(rev.rotationDeg).toBe(12); break;
     case "flip":

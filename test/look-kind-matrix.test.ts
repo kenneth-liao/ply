@@ -917,3 +917,82 @@ test("matrix: fit box (--fit-box) applies to text Layers, refuses image and shap
   expect(rowsWithInk).toBeLessThan(120); // never taller than the box
   expect(inkAt(340, 80)).toBe(false); // right of the box: no ink
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// Per-axis scale property × kind matrix (#296, spec #285 US-030,
+// DEC-005/DEC-006, ADR-0016 amendment, TEST-002)
+// ---------------------------------------------------------------------------
+
+test("matrix: per-axis scale (--scale-to) applies to raster, vector, text, and shape Layers", async () => {
+  await makeComp("comp-scale-to", 400, 300);
+
+  // Raster image: 64x48 red, --scale-to 2x0.5 paints 128x24.
+  const raster = path.join(tempDir, "scale-red.png");
+  await writeFile(raster, solidPng(64, 48, [255, 0, 0, 255]));
+  const rAdd = await invoke([
+    "composition", "add", "comp-scale-to", "raster-scale",
+    "--image", raster, "--x", "10", "--y", "10", "--scale-to", "2x0.5",
+    "--project", projDir, "--json",
+  ]);
+  expect(rAdd.code).toBe(0);
+  const rRev = JSON.parse(rAdd.stdout).layer.currentRevision;
+  expect(rRev.scaleX).toBe(2);
+  expect(rRev.scaleY).toBe(0.5);
+
+  // Vector image (kind image, format svg): 64x48 blue, --scale-to 1.5x2.
+  const vector = path.join(tempDir, "scale-blue.svg");
+  await writeFile(vector, solidSvg(64, 48, "#0000ff"));
+  const vAdd = await invoke([
+    "composition", "add", "comp-scale-to", "vector-scale",
+    "--image", vector, "--x", "10", "--y", "50", "--scale-to", "1.5x2",
+    "--project", projDir, "--json",
+  ]);
+  expect(vAdd.code).toBe(0);
+  const vRev = JSON.parse(vAdd.stdout).layer.currentRevision;
+  expect(vRev.scaleX).toBe(1.5);
+  expect(vRev.scaleY).toBe(2);
+
+  // Text Layer: the previously unreachable per-axis scale stores through the
+  // SAME canonical fact (no text-only field).
+  const tAdd = await invoke([
+    "composition", "add", "comp-scale-to", "text-scale",
+    "--text", "Stretch", "--font", "Archivo", "--font-size", "24", "--x", "10", "--y", "160",
+    "--scale-to", "1.3x0.8",
+    "--project", projDir, "--json",
+  ]);
+  expect(tAdd.code).toBe(0);
+  const tRev = JSON.parse(tAdd.stdout).layer.currentRevision;
+  expect(tRev.scaleX).toBe(1.3);
+  expect(tRev.scaleY).toBe(0.8);
+
+  // Shape Layer: the same fact as --resize-to/--scale's canonical scale.
+  const sAdd = await invoke([
+    "composition", "add", "comp-scale-to", "shape-scale",
+    "--shape", "rectangle", "--size", "40x20", "--fill", "#00ff00", "--x", "300", "--y", "160",
+    "--scale-to", "2x0.5",
+    "--project", projDir, "--json",
+  ]);
+  expect(sAdd.code).toBe(0);
+  const sRev = JSON.parse(sAdd.stdout).layer.currentRevision;
+  expect(sRev.scaleX).toBe(2);
+  expect(sRev.scaleY).toBe(0.5);
+
+  // measure reports both factors on the text Layer (the shared transform
+  // report, every kind).
+  const measure = await invoke(["composition", "measure", "comp-scale-to", "text-scale", "--project", projDir, "--json"]);
+  expect(measure.code).toBe(0);
+  const mLayer = JSON.parse(measure.stdout).layers[0];
+  expect(mLayer.transform.scaleX).toBe(1.3);
+  expect(mLayer.transform.scaleY).toBe(0.8);
+
+  // The renders prove the per-axis stretch: the raster's 64x48 red box
+  // paints 128x24 (half-height, right edge at 138), the vector's blue paints
+  // 96x96, and the shape's 40x20 rectangle paints 80x10.
+  const png = await render("comp-scale-to", "scale-to-matrix.png");
+  expect(pixel(png, 100, 20)).toEqual([255, 0, 0, 255]); // raster, inside 128x24
+  expect(pixel(png, 150, 20)).toEqual([0, 0, 0, 0]); // right of the scaled raster
+  expect(pixel(png, 100, 40)).toEqual([0, 0, 0, 0]); // below the scaled raster
+  expect(pixel(png, 100, 80)).toEqual([0, 0, 255, 255]); // vector, inside 96x96
+  expect(pixel(png, 340, 165)).toEqual([0, 255, 0, 255]); // shape, inside 80x10
+  expect(pixel(png, 340, 172)).toEqual([0, 0, 0, 0]); // below the scaled shape
+}, 30_000);

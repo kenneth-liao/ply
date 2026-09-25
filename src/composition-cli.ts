@@ -455,12 +455,25 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         apply before the anchored placement, so
                         "--cover-to canvas --anchor center,center" covers
                         the canvas centred in one command. Mutually
-                        exclusive with --resize, --resize-to, and --scale.
+                        exclusive with --resize, --resize-to, --scale, and
+                        --scale-to.
   --scale <factor>      Set the Layer's scale to an ABSOLUTE factor (uniform,
                         both axes): the same command keeps the same scale,
                         never compounding. Works on
                         ${SCALE_HELP_KINDS}; mutually exclusive
-                        with --resize, --resize-to, and --cover-to.
+                        with --resize, --resize-to, --cover-to, and
+                        --scale-to.
+  --scale-to <XxY>      Set the Layer's scale to ABSOLUTE per-axis factors
+                        (e.g. "1.3x0.8" stretches 1.3× horizontally, 0.8×
+                        vertically); "<X>x" or "x<Y>" sets one axis and
+                        keeps the created Layer's scale-1 on the omitted
+                        axis. The same command keeps the same scale, never
+                        compounding. Works on ${SCALE_HELP_KINDS}. This and
+                        --scale are ONE stored fact (the canonical
+                        scaleX/scaleY): either setter wholly replaces the
+                        current scale, and "1x1" removes it. Mutually
+                        exclusive with --resize, --resize-to, --cover-to,
+                        and --scale.
   --rotate <deg>        Rotate to an ABSOLUTE angle in degrees, clockwise
                         positive, about the Layer's (x, y) corner.
   --flip <mode>         Flip to an ABSOLUTE reflection state: horizontal,
