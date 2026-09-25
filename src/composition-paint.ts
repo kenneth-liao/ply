@@ -66,6 +66,9 @@ import {
   type LayerTextRun,
   type SnapshotRunFont,
   MIN_FIT_FONT_SIZE,
+  PERSPECTIVE_DISTANCE_PX,
+  normalizeStoredSkew,
+  normalizeStoredPerspective,
   type LayerOutline,
   type LayerVisibleRegion,
   type ResolvedLayerRevision,
@@ -1070,16 +1073,48 @@ export function buildCompositionHtml(
     .map((l, layerIndex) => {
       const rev = l.revision;
       const base = `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};`;
-      // Canonical transform (#133/#134/#135, ADR-0016): applied about the
-      // Layer's (x, y) top-left placement point. Flip and scale act on the
-      // content along its own axes first (both are diagonal transforms and
-      // commute, so their emitted order among themselves is immaterial), then
-      // rotation rotates the transformed result — CSS composes left-to-right
-      // as rotate∘flip∘scale. Each factor is emitted only when non-identity,
-      // so revisions written before #133/#134/#135 and identity-transform
-      // revisions paint exactly as before (pinned history stays
-      // byte-identical).
+      // Canonical transform (#133/#134/#135/#298, ADR-0016 amendment): applied
+      // about the Layer's (x, y) top-left placement point, in the documented
+      // order — innermost flip, then scale, then rotation, then skew, then
+      // perspective — emitted left-to-right outermost-first, since CSS
+      // composes left-to-right as function composition. Each factor is
+      // emitted only when non-identity, so revisions written before
+      // #133/#134/#135/#298 and identity-transform revisions paint exactly
+      // as before (pinned history stays byte-identical).
+      //
+      // Skew (#298) shears the rotated result about the placement point.
+      // Perspective (#298) is the outermost projection: the fixed documented
+      // 1000px perspective distance (a paint constant, never a stored fact)
+      // with the tilt about the Layer's OWN untransformed content centre —
+      // the translate(50%,50%) … translate(-50%,-50%) wrapper pivots the
+      // tilt about the element's border-box centre (layout px before
+      // transforms, resolved by the browser for every kind), so a tile turns
+      // in place with its centre instead of swinging around the placement
+      // corner.
+      // Skew and perspective (#298) read through the ONE stored-field
+      // readers — a fresh provisional revision (the one-command add path)
+      // may carry absent fields, which normalize to identity here, and a
+      // malformed stored pair refuses loudly at the paint boundary instead
+      // of interpolating into the markup.
+      const skew = normalizeStoredSkew(rev);
+      const perspective = normalizeStoredPerspective(rev);
       const transformParts: string[] = [];
+      if (perspective.perspectiveTiltXDeg !== 0 || perspective.perspectiveTiltYDeg !== 0) {
+        transformParts.push(`perspective(${PERSPECTIVE_DISTANCE_PX}px)`, "translate(50%,50%)");
+        if (perspective.perspectiveTiltXDeg !== 0) {
+          transformParts.push(`rotateX(${perspective.perspectiveTiltXDeg}deg)`);
+        }
+        if (perspective.perspectiveTiltYDeg !== 0) {
+          transformParts.push(`rotateY(${perspective.perspectiveTiltYDeg}deg)`);
+        }
+        transformParts.push("translate(-50%,-50%)");
+      }
+      if (skew.skewXDeg !== 0) {
+        transformParts.push(`skewX(${skew.skewXDeg}deg)`);
+      }
+      if (skew.skewYDeg !== 0) {
+        transformParts.push(`skewY(${skew.skewYDeg}deg)`);
+      }
       if (rev.rotationDeg !== 0) {
         transformParts.push(`rotate(${rev.rotationDeg}deg)`);
       }

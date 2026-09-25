@@ -92,6 +92,8 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "scale-to",
       "rotate",
       "flip",
+      "skew",
+      "perspective",
       "shadow",
       "outline",
       "visible-region",
@@ -157,7 +159,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "weight", "width", "tracking", "line-height", "wrap-width", "fit-box",
       "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
       "x", "y", "opacity", "anchor",
-      "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
+      "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "skew", "perspective", "shadow", "outline", "visible-region", "visible-region-radius",
       "brightness", "contrast", "saturation", "warmth", "blend", "glow",
     ]);
   });

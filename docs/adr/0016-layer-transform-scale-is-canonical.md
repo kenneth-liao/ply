@@ -158,3 +158,82 @@ is refused together with content replacement (the effective-size cap reads
 the retained content's intrinsic size). Wrap width and fit box (#294/#295)
 remain layout px BEFORE transforms: the per-axis scale maps the wrapped
 layout box into canvas space and never re-wraps.
+
+## Skew and perspective extension (#298)
+
+Skew and perspective join the same canonical representation as Layer
+revision facts on every Layer kind (spec #285 US-008, ISC-47, DEC-005) —
+no per-kind field, no second transform home:
+
+- `--skew <Xdeg>x<Ydeg>` stores `skewXDeg`/`skewYDeg`, absolute shear
+  angles in degrees about the Layer's `(x, y)` top-left placement point.
+  A one-axis form (`"15x"`, `"x5"`) keeps the Layer's current angle on the
+  omitted axis (the `--scale-to` one-axis rule at angle semantics).
+  `--skew 0x0` is the removal form.
+- `--perspective <tiltXdeg>x<tiltYdeg>` stores
+  `perspectiveTiltXDeg`/`perspectiveTiltYDeg`, absolute tilt angles in
+  degrees about the X and Y axes — positive X tips the top edge away from
+  the viewer, positive Y tips the right edge. The perspective DISTANCE is
+  never a stored fact: the projection uses one fixed documented distance
+  of 1000px. A one-axis form keeps the other tilt. `--perspective 0x0` is
+  the removal form.
+
+Both facts are stored only when set: a stored document never carries the
+identity form, so an unskewed revision keeps its exact pre-#298 document
+shape, and the removal form drops the pair (the render returns to the
+unskewed output byte-for-byte; the edit is still a new deliberate
+revision). Both fields of each pair are recorded together, like flip — a
+partial pair is malformed and refused loudly at the one revision-reader
+boundary. Angles are bounded to `|angle| ≤ 89` degrees: the skew tangent
+diverges at ±90°, and a ±90° perspective tilt is edge-on; the same bound
+is enforced at the parser (usage error), the resolver (domain refusal),
+and the stored reader (malformed document). measure refuses loudly when a
+tilt would project the content deeper than the 1000px distance (the
+divide would diverge), and the effect-reach magnification widens the
+painted-extent capture window for skew and perspective so an effected
+Layer's full extent is captured or refused, never clipped.
+
+### Full transform order
+
+The complete order, innermost to outermost, is:
+
+**flip, scale, rotation, skew, perspective.**
+
+Paint emits the functions left-to-right outermost-first —
+`perspective(1000px) translate(50%,50%) rotateX(a) rotateY(b)
+translate(-50%,-50%) skewX(ax) skewY(ay) rotate(a) scaleX(±1) scaleY(±1)
+scale(sx, sy)` — with `transform-origin: 0 0`, each factor emitted only
+when non-identity. CSS composes left-to-right as function composition, so
+the content reflects, stretches along its own axes, then rotates, then
+shears, then tilts under the perspective projection.
+
+Every non-perspective transform acts about the Layer's `(x, y) top-left
+placement point, exactly as before. The perspective tilt pivots about the
+Layer's OWN untransformed content centre — the
+`translate(50%,50%) … translate(-50%,-50%)` wrapper resolves against the
+element's border box (layout px before transforms), so a tile turns in
+place with its centre instead of swinging around the placement corner;
+with the vanishing point at the top-left a "turned" tile looked lopsided.
+The fixed 1000px perspective distance is a paint constant, never a stored
+fact, so it can be documented here once and every read re-derives the
+same projection.
+
+measure reads the COMPUTED transform — the browser's resolved matrix,
+percentages resolved and all 3D factors folded into one matrix3d — and
+maps the content rectangle's corners through it with the projective
+divide, so `corners` reports the projected quad and anchors resolve
+against the transformed ink's painted extents exactly as they do for the
+affine transforms.
+
+Each factor is emitted only when non-identity, so revisions written
+before #298 — and identity-transform revisions — paint exactly as before
+(pinned Render history stays byte-identical). Compatibility follows the
+scale/rotation/flip pattern exactly: the hash appends the skew and
+perspective pairs only when present, so revisions written before #298
+hash to their exact pre-#298 ids; absent fields normalize to 0 at the one
+revision-reader boundary; every newly written revision records a pair
+only when set. Skew and perspective are independent of the retained
+content's size (like rotation), so they combine freely with other edit
+options, including the resize family and content replacement. Cross-
+Project copies preserve them verbatim (ADR-0013: shared as a whole,
+forks isolate, copies preserve).

@@ -125,6 +125,43 @@ interface LayerRevisionBase {
   flipX?: boolean;
   flipY?: boolean;
   /**
+   * Canonical transform skew (#298, spec #285 US-008, ADR-0016 amendment):
+   * the Layer's skew angles in degrees about its `(x, y)` top-left placement
+   * point — `skewXDeg` shears along the content's own x axis, `skewYDeg`
+   * along its own y axis — applied AFTER rotation and BEFORE perspective
+   * (the documented order: flip, scale, rotation, skew, perspective). The
+   * command sets ABSOLUTE angles (`--skew <Xdeg>x<Ydeg>`); the removal value
+   * is `0x0`, and a stored document never carries the identity form —
+   * stored only when set, so an unskewed revision keeps its exact pre-#298
+   * id and shape. Both fields are recorded together, like flip.
+   *
+   * Optional in the stored shape only for revisions written before #298 —
+   * absent means 0 and is normalized by the one revision reader. The hash
+   * appends the pair only when present, so pre-#298 revisions keep their
+   * exact ids.
+   */
+  skewXDeg?: number;
+  skewYDeg?: number;
+  /**
+   * Canonical transform perspective (#298, spec #285 US-008, ADR-0016
+   * amendment): the Layer's perspective tilt in degrees about the X and Y
+   * axes — `perspectiveTiltXDeg` tips the top edge away from the viewer,
+   * `perspectiveTiltYDeg` the right edge — pivoting about the Layer's own
+   * untransformed content centre (layout px before transforms), applied
+   * AFTER skew as the outermost transform, followed by the fixed documented
+   * 1000px perspective distance. The command sets ABSOLUTE tilts
+   * (`--perspective <tiltXdeg>x<tiltYdeg>`); the removal value is `0x0`,
+   * and a stored document never carries the identity form — stored only
+   * when set. Both fields are recorded together, like flip.
+   *
+   * Optional in the stored shape only for revisions written before #298 —
+   * absent means 0 and is normalized by the one revision reader. The hash
+   * appends the pair only when present, so pre-#298 revisions keep their
+   * exact ids.
+   */
+  perspectiveTiltXDeg?: number;
+  perspectiveTiltYDeg?: number;
+  /**
    * Canonical Layer shadow (#139, ADR-0018): a drop shadow applied to the
    * Layer's content in its LOCAL coordinate space — before the canonical
    * transform, which maps content+shadow together — then faded by the
@@ -746,6 +783,100 @@ export function normalizeStoredFlip(revision: {
   return { flipX, flipY };
 }
 
+/** The transform angles' domain (#298): tangent diverges at ±90°, and a ±90°
+ *  perspective tilt is edge-on, so both facts' angles are bounded away from
+ *  it. One home for the bound: the parser, the resolver, and the stored
+ *  reader all enforce it. */
+export const TRANSFORM_ANGLE_BOUND = 89;
+
+/** Canonical normalized transform skew: the one shape every consumer reads. */
+export interface LayerTransformSkew {
+  skewXDeg: number;
+  skewYDeg: number;
+}
+
+/**
+ * Canonical stored-skew validation and normalization (#298, ADR-0016
+ * amendment). The one normalization boundary for transform skew: documents
+ * written before #298 lack the fields (only a missing field is absent — a
+ * present `null` or any other non-number is a malformed document, never a
+ * silent default) and normalize to 0 here; every downstream reader projects
+ * through this function and never re-derives a default. A present pair must
+ * be two finite angles within the ±89° bound, recorded together like flip.
+ * The identity form is never stored (stored only when set), but a present
+ * `0x0` document still reads as the identity it is.
+ */
+export function normalizeStoredSkew(revision: {
+  skewXDeg?: unknown;
+  skewYDeg?: unknown;
+}): LayerTransformSkew {
+  const hasX = revision.skewXDeg !== undefined;
+  const hasY = revision.skewYDeg !== undefined;
+  if (hasX !== hasY) {
+    throw new Error(
+      `Malformed revision document: skewXDeg and skewYDeg must be present together (got skewXDeg ${JSON.stringify(revision.skewXDeg)}, skewYDeg ${JSON.stringify(revision.skewYDeg)}).`,
+    );
+  }
+  if (!hasX) {
+    return { skewXDeg: 0, skewYDeg: 0 };
+  }
+  const skewXDeg = revision.skewXDeg;
+  const skewYDeg = revision.skewYDeg;
+  if (
+    typeof skewXDeg !== "number" || !Number.isFinite(skewXDeg) || Math.abs(skewXDeg) > TRANSFORM_ANGLE_BOUND ||
+    typeof skewYDeg !== "number" || !Number.isFinite(skewYDeg) || Math.abs(skewYDeg) > TRANSFORM_ANGLE_BOUND
+  ) {
+    throw new Error(
+      `Malformed revision document: skewXDeg and skewYDeg must be finite angles between -${TRANSFORM_ANGLE_BOUND} and ${TRANSFORM_ANGLE_BOUND} degrees when present (got ${JSON.stringify(revision.skewXDeg)}, ${JSON.stringify(revision.skewYDeg)}).`,
+    );
+  }
+  return { skewXDeg, skewYDeg };
+}
+
+/** Canonical normalized transform perspective: the one shape every consumer reads. */
+export interface LayerTransformPerspective {
+  perspectiveTiltXDeg: number;
+  perspectiveTiltYDeg: number;
+}
+
+/** The one perspective distance (#298): a fixed documented constant, never
+ *  a stored fact — the projection is `perspective(1000px)` applied
+ *  outermost, after the tilt about the content centre. */
+export const PERSPECTIVE_DISTANCE_PX = 1000;
+
+/**
+ * Canonical stored-perspective validation and normalization (#298, ADR-0016
+ * amendment). The one normalization boundary for the perspective tilt: the
+ * same rules as skew — absent normalizes to 0, a present pair must be two
+ * finite angles within the ±89° bound, recorded together.
+ */
+export function normalizeStoredPerspective(revision: {
+  perspectiveTiltXDeg?: unknown;
+  perspectiveTiltYDeg?: unknown;
+}): LayerTransformPerspective {
+  const hasX = revision.perspectiveTiltXDeg !== undefined;
+  const hasY = revision.perspectiveTiltYDeg !== undefined;
+  if (hasX !== hasY) {
+    throw new Error(
+      `Malformed revision document: perspectiveTiltXDeg and perspectiveTiltYDeg must be present together (got perspectiveTiltXDeg ${JSON.stringify(revision.perspectiveTiltXDeg)}, perspectiveTiltYDeg ${JSON.stringify(revision.perspectiveTiltYDeg)}).`,
+    );
+  }
+  if (!hasX) {
+    return { perspectiveTiltXDeg: 0, perspectiveTiltYDeg: 0 };
+  }
+  const perspectiveTiltXDeg = revision.perspectiveTiltXDeg;
+  const perspectiveTiltYDeg = revision.perspectiveTiltYDeg;
+  if (
+    typeof perspectiveTiltXDeg !== "number" || !Number.isFinite(perspectiveTiltXDeg) || Math.abs(perspectiveTiltXDeg) > TRANSFORM_ANGLE_BOUND ||
+    typeof perspectiveTiltYDeg !== "number" || !Number.isFinite(perspectiveTiltYDeg) || Math.abs(perspectiveTiltYDeg) > TRANSFORM_ANGLE_BOUND
+  ) {
+    throw new Error(
+      `Malformed revision document: perspectiveTiltXDeg and perspectiveTiltYDeg must be finite angles between -${TRANSFORM_ANGLE_BOUND} and ${TRANSFORM_ANGLE_BOUND} degrees when present (got ${JSON.stringify(revision.perspectiveTiltXDeg)}, ${JSON.stringify(revision.perspectiveTiltYDeg)}).`,
+    );
+  }
+  return { perspectiveTiltXDeg, perspectiveTiltYDeg };
+}
+
 /** Effect parameter bounds (#139/#140, ADR-0018/0019): a bounded effect
  * footprint, so painted-extent capture stays bounded (DEC-006). Shadow
  * offsets may be negative. */
@@ -1185,9 +1316,9 @@ export function formatGlow(glow: LayerGlow): string {
 }
 
 export type ResolvedLayerRevision =
-  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean })
-  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; layoutRule: NormalizedTextLayoutRule })
-  | (LayerShapeRevision & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean });
+  | (LayerImageRevision & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number })
+  | (LayerTextRevision & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number; layoutRule: NormalizedTextLayoutRule })
+  | (LayerShapeRevision & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number });
 
 export interface ResolvedLayer {
   id: string;
@@ -2657,6 +2788,15 @@ export function computeRevisionHash(rev: LayerRevision): string {
   const rotationField = rev.rotationDeg !== undefined ? `:${rev.rotationDeg}` : "";
   const flipFields =
     rev.flipX !== undefined || rev.flipY !== undefined ? `:${rev.flipX}:${rev.flipY}` : "";
+  // Skew and perspective (#298, spec #285 US-008): appended only when the
+  // pair is present, so revisions written before #298 — and identity forms,
+  // which are never stored — keep their exact ids.
+  const skewFields =
+    rev.skewXDeg !== undefined || rev.skewYDeg !== undefined ? `:skew(${rev.skewXDeg},${rev.skewYDeg})` : "";
+  const perspectiveFields =
+    rev.perspectiveTiltXDeg !== undefined || rev.perspectiveTiltYDeg !== undefined
+      ? `:perspective(${rev.perspectiveTiltXDeg},${rev.perspectiveTiltYDeg})`
+      : "";
   const shadowField =
     rev.shadow !== undefined
       ? `:shadow(${rev.shadow.dx},${rev.shadow.dy},${rev.shadow.blur},${rev.shadow.color})`
@@ -2779,7 +2919,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
           })
           .join(";")})`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -2997,6 +3137,16 @@ export async function readRevisionInternalFull(
   // boundary (#135, ADR-0016) — malformed stored fields are refused loudly
   // before the revision hash is consulted.
   const flip = normalizeStoredFlip(revision);
+  // Canonical transform skew: validated and normalized at this same one
+  // boundary (#298, ADR-0016 amendment) — malformed stored pairs are
+  // refused loudly before the revision hash is consulted. Absence IS the
+  // no-skew form.
+  const skew = normalizeStoredSkew(revision);
+  // Canonical transform perspective: validated and normalized at this same
+  // one boundary (#298, ADR-0016 amendment) — malformed stored pairs are
+  // refused loudly before the revision hash is consulted. Absence IS the
+  // no-perspective form.
+  const perspective = normalizeStoredPerspective(revision);
   // Canonical shadow effect: validated and normalized at this same one
   // boundary (#139, ADR-0018) — a malformed stored field is refused loudly
   // before the revision hash is consulted. Absence IS the no-shadow form.
@@ -3154,6 +3304,10 @@ export async function readRevisionInternalFull(
             rotationDeg,
             flipX: flip.flipX,
             flipY: flip.flipY,
+            skewXDeg: skew.skewXDeg,
+            skewYDeg: skew.skewYDeg,
+            perspectiveTiltXDeg: perspective.perspectiveTiltXDeg,
+            perspectiveTiltYDeg: perspective.perspectiveTiltYDeg,
             ...(shadow !== undefined ? { shadow } : {}),
             ...(outline !== undefined ? { outline } : {}),
             ...(visibleRegion !== undefined ? { visibleRegion } : {}),
@@ -3183,6 +3337,10 @@ export async function readRevisionInternalFull(
           rotationDeg,
           flipX: flip.flipX,
           flipY: flip.flipY,
+          skewXDeg: skew.skewXDeg,
+          skewYDeg: skew.skewYDeg,
+          perspectiveTiltXDeg: perspective.perspectiveTiltXDeg,
+          perspectiveTiltYDeg: perspective.perspectiveTiltYDeg,
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
@@ -3223,6 +3381,10 @@ export async function readRevisionInternalFull(
           rotationDeg,
           flipX: flip.flipX,
           flipY: flip.flipY,
+          skewXDeg: skew.skewXDeg,
+          skewYDeg: skew.skewYDeg,
+          perspectiveTiltXDeg: perspective.perspectiveTiltXDeg,
+          perspectiveTiltYDeg: perspective.perspectiveTiltYDeg,
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
@@ -3739,6 +3901,85 @@ export function resolveEditFlip(
         `Invalid flip "${String(options.flip)}": --flip takes horizontal, vertical, both, or none.`,
       );
   }
+}
+
+/**
+ * Canonical skew normalization (#298, ADR-0016 amendment): `--skew` sets
+ * ABSOLUTE angles in degrees, replacing any previous skew — `0x0` is the
+ * removal form. One axis may be omitted (`{skewXDeg?}` / `{skewYDeg?}`
+ * exactly one defined): the omitted axis keeps the Layer's current skew.
+ * Angles are bounded away from the tangent's ±90° divergence. Omitted
+ * option preserves the current revision's skew. The refusal runs before
+ * any staging, so an invalid angle never advances live state. Exported as
+ * the ONE skew path for one-command `composition add` too.
+ */
+export function resolveEditSkew(
+  options: { skewTo?: { skewXDeg?: number; skewYDeg?: number } },
+  prevRev: ResolvedLayerRevision,
+): LayerTransformSkew {
+  const skewTo = options.skewTo;
+  if (skewTo === undefined) {
+    return { skewXDeg: prevRev.skewXDeg, skewYDeg: prevRev.skewYDeg };
+  }
+  const hasX = skewTo.skewXDeg !== undefined;
+  const hasY = skewTo.skewYDeg !== undefined;
+  if (!hasX && !hasY) {
+    return { skewXDeg: prevRev.skewXDeg, skewYDeg: prevRev.skewYDeg };
+  }
+  const skewXDeg = hasX ? (skewTo.skewXDeg as number) : prevRev.skewXDeg;
+  const skewYDeg = hasY ? (skewTo.skewYDeg as number) : prevRev.skewYDeg;
+  for (const angle of [skewXDeg, skewYDeg]) {
+    if (!Number.isFinite(angle) || Math.abs(angle) > TRANSFORM_ANGLE_BOUND) {
+      throw new Error(
+        `Invalid skew angle ${angle}: skew angles must be finite numbers between -${TRANSFORM_ANGLE_BOUND} and ${TRANSFORM_ANGLE_BOUND} degrees.`,
+      );
+    }
+  }
+  return { skewXDeg, skewYDeg };
+}
+
+/**
+ * Canonical perspective normalization (#298, ADR-0016 amendment):
+ * `--perspective` sets ABSOLUTE tilts in degrees, replacing any previous
+ * perspective — `0x0` is the removal form. One axis may be omitted: the
+ * omitted tilt keeps the Layer's current perspective. Tilts are bounded
+ * away from the ±90° edge-on degeneracy. Omitted option preserves the
+ * current revision's perspective. The refusal runs before any staging.
+ * Exported as the ONE perspective path for one-command `composition add` too.
+ */
+export function resolveEditPerspective(
+  options: { perspectiveTo?: { perspectiveTiltXDeg?: number; perspectiveTiltYDeg?: number } },
+  prevRev: ResolvedLayerRevision,
+): LayerTransformPerspective {
+  const perspectiveTo = options.perspectiveTo;
+  if (perspectiveTo === undefined) {
+    return {
+      perspectiveTiltXDeg: prevRev.perspectiveTiltXDeg,
+      perspectiveTiltYDeg: prevRev.perspectiveTiltYDeg,
+    };
+  }
+  const hasX = perspectiveTo.perspectiveTiltXDeg !== undefined;
+  const hasY = perspectiveTo.perspectiveTiltYDeg !== undefined;
+  if (!hasX && !hasY) {
+    return {
+      perspectiveTiltXDeg: prevRev.perspectiveTiltXDeg,
+      perspectiveTiltYDeg: prevRev.perspectiveTiltYDeg,
+    };
+  }
+  const perspectiveTiltXDeg = hasX
+    ? (perspectiveTo.perspectiveTiltXDeg as number)
+    : prevRev.perspectiveTiltXDeg;
+  const perspectiveTiltYDeg = hasY
+    ? (perspectiveTo.perspectiveTiltYDeg as number)
+    : prevRev.perspectiveTiltYDeg;
+  for (const tilt of [perspectiveTiltXDeg, perspectiveTiltYDeg]) {
+    if (!Number.isFinite(tilt) || Math.abs(tilt) > TRANSFORM_ANGLE_BOUND) {
+      throw new Error(
+        `Invalid perspective tilt ${tilt}: perspective tilts must be finite numbers between -${TRANSFORM_ANGLE_BOUND} and ${TRANSFORM_ANGLE_BOUND} degrees.`,
+      );
+    }
+  }
+  return { perspectiveTiltXDeg, perspectiveTiltYDeg };
 }
 
 /**
@@ -4570,6 +4811,19 @@ function carryAppliedSharedFacts(
   return carried;
 }
 
+/** The skew pair's stored shape (#298): recorded together, stored only when
+ *  set — the identity form is never stored, so an unskewed revision keeps
+ *  its exact pre-#298 document shape and id. */
+function skewStored(d: { skewXDeg?: number; skewYDeg?: number }): boolean {
+  return (d.skewXDeg ?? 0) !== 0 || (d.skewYDeg ?? 0) !== 0;
+}
+
+/** The perspective pair's stored shape (#298): recorded together, stored
+ *  only when set — the same rule as the skew pair. */
+function perspectiveStored(d: { perspectiveTiltXDeg?: number; perspectiveTiltYDeg?: number }): boolean {
+  return (d.perspectiveTiltXDeg ?? 0) !== 0 || (d.perspectiveTiltYDeg ?? 0) !== 0;
+}
+
 async function buildEditedRevision(
   resolvedRoot: string,
   prevRev: ResolvedLayerRevision,
@@ -4758,6 +5012,10 @@ async function buildEditedRevision(
       rotationDeg: draft.rotationDeg,
       flipX: draft.flipX,
       flipY: draft.flipY,
+      ...(skewStored(draft) ? { skewXDeg: draft.skewXDeg, skewYDeg: draft.skewYDeg } : {}),
+      ...(perspectiveStored(draft)
+        ? { perspectiveTiltXDeg: draft.perspectiveTiltXDeg, perspectiveTiltYDeg: draft.perspectiveTiltYDeg }
+        : {}),
       ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
@@ -4772,6 +5030,9 @@ async function buildEditedRevision(
       draft.scaleX === prevRev.scaleX && draft.scaleY === prevRev.scaleY &&
       draft.rotationDeg === prevRev.rotationDeg &&
       draft.flipX === prevRev.flipX && draft.flipY === prevRev.flipY &&
+      (draft.skewXDeg ?? 0) === (prevRev.skewXDeg ?? 0) && (draft.skewYDeg ?? 0) === (prevRev.skewYDeg ?? 0) &&
+      (draft.perspectiveTiltXDeg ?? 0) === (prevRev.perspectiveTiltXDeg ?? 0) &&
+      (draft.perspectiveTiltYDeg ?? 0) === (prevRev.perspectiveTiltYDeg ?? 0) &&
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
@@ -4886,6 +5147,10 @@ async function buildEditedRevision(
       rotationDeg: draft.rotationDeg,
       flipX: draft.flipX,
       flipY: draft.flipY,
+      ...(skewStored(draft) ? { skewXDeg: draft.skewXDeg, skewYDeg: draft.skewYDeg } : {}),
+      ...(perspectiveStored(draft)
+        ? { perspectiveTiltXDeg: draft.perspectiveTiltXDeg, perspectiveTiltYDeg: draft.perspectiveTiltYDeg }
+        : {}),
       ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
@@ -4910,6 +5175,9 @@ async function buildEditedRevision(
       draft.rotationDeg === prevRev.rotationDeg &&
       draft.flipX === prevRev.flipX &&
       draft.flipY === prevRev.flipY &&
+      (draft.skewXDeg ?? 0) === (prevRev.skewXDeg ?? 0) && (draft.skewYDeg ?? 0) === (prevRev.skewYDeg ?? 0) &&
+      (draft.perspectiveTiltXDeg ?? 0) === (prevRev.perspectiveTiltXDeg ?? 0) &&
+      (draft.perspectiveTiltYDeg ?? 0) === (prevRev.perspectiveTiltYDeg ?? 0) &&
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
@@ -5152,6 +5420,10 @@ async function buildEditedRevision(
       rotationDeg: draft.rotationDeg,
       flipX: draft.flipX,
       flipY: draft.flipY,
+      ...(skewStored(draft) ? { skewXDeg: draft.skewXDeg, skewYDeg: draft.skewYDeg } : {}),
+      ...(perspectiveStored(draft)
+        ? { perspectiveTiltXDeg: draft.perspectiveTiltXDeg, perspectiveTiltYDeg: draft.perspectiveTiltYDeg }
+        : {}),
       ...(draft.shadow !== undefined ? { shadow: draft.shadow } : {}),
       ...(draft.outline !== undefined ? { outline: draft.outline } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
@@ -5188,6 +5460,9 @@ async function buildEditedRevision(
       draft.rotationDeg === prevRev.rotationDeg &&
       draft.flipX === prevRev.flipX &&
       draft.flipY === prevRev.flipY &&
+      (draft.skewXDeg ?? 0) === (prevRev.skewXDeg ?? 0) && (draft.skewYDeg ?? 0) === (prevRev.skewYDeg ?? 0) &&
+      (draft.perspectiveTiltXDeg ?? 0) === (prevRev.perspectiveTiltXDeg ?? 0) &&
+      (draft.perspectiveTiltYDeg ?? 0) === (prevRev.perspectiveTiltYDeg ?? 0) &&
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&

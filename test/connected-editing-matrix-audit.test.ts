@@ -14,6 +14,7 @@
  * | absolute resize (--resize-to)   | "--resize-to normalizes to scale with documented aspect-ratio behavior" | (refusal owned by the same text test) | test/layer-resize.test.ts |
  * | per-axis scale (--scale-to)     | "--scale-to sets absolute per-axis factors on image Layers; repeating it is idempotent" | "a text Layer scaled 1.3 by 0.8 renders stretched and measure reports both factors"; removal and replay cells | test/layer-scale-to.test.ts |
  * | rotation (--rotate)             | "image Layer --rotate sets an absolute angle" | "text Layer rotates and keeps its retained font bytes" | test/layer-rotate.test.ts |
+ * | skew/perspective (--skew/--perspective) | "a tile tilted in perspective renders differently and measure shows the far edge shorter with the centre unmoved"; "skew shears the tile about the placement point and measure reports the sheared quad" | "skew and perspective work on text and shape Layers through add and edit"; removal, order, and replay cells | test/layer-skew-perspective.test.ts |
  * | reflection (--flip)             | "image Layer --flip sets an absolute reflection state" | "text Layer flips vertically / horizontally" | test/layer-flip.test.ts |
  * | layout/content measurement      | "measure reports an identity image Layer's layout box" | "text measurement uses the retained face" | test/composition-measure.test.ts |
  * | painted bounds / padding        | "measure reports painted extents separately from layout boxes" | "text painted extents are tight glyph ink" | test/composition-measure.test.ts |
@@ -61,6 +62,17 @@ const audit: Array<{ suite: string; markers: string[] }> = [
       "image Layer --rotate sets an absolute angle, keeps content bytes",
       "text Layer rotates and keeps its retained font bytes",
       "rotation never touches retained generation lineage or source bytes",
+    ],
+  },
+  {
+    suite: "layer-skew-perspective.test.ts",
+    markers: [
+      "a tile tilted in perspective renders differently and measure shows the far edge shorter with the centre unmoved",
+      "skew shears the tile about the placement point and measure reports the sheared quad",
+      "skew and perspective compose with flip, scale, and rotation in the documented order",
+      "skew and perspective work on text and shape Layers through add and edit",
+      "removing skew and perspective restores the render byte-for-byte and stores nothing",
+      "a Render retained before the skew/perspective edit replays byte-identically",
     ],
   },
   {

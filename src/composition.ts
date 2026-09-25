@@ -1561,6 +1561,16 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       rotationDeg: source.rotationDeg,
       flipX: source.flipX,
       flipY: source.flipY,
+      // Skew and perspective (#298, ADR-0016 amendment): revision facts
+      // copied verbatim — stored only when set, so an unskewed source's
+      // copy keeps its exact document shape.
+      ...(source.skewXDeg !== undefined && (source.skewXDeg !== 0 || source.skewYDeg !== 0)
+        ? { skewXDeg: source.skewXDeg, skewYDeg: source.skewYDeg }
+        : {}),
+      ...(source.perspectiveTiltXDeg !== undefined &&
+          (source.perspectiveTiltXDeg !== 0 || source.perspectiveTiltYDeg !== 0)
+        ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
+        : {}),
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
@@ -1590,6 +1600,16 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       rotationDeg: source.rotationDeg,
       flipX: source.flipX,
       flipY: source.flipY,
+      // Skew and perspective (#298, ADR-0016 amendment): revision facts
+      // copied verbatim — stored only when set, so an unskewed source's
+      // copy keeps its exact document shape.
+      ...(source.skewXDeg !== undefined && (source.skewXDeg !== 0 || source.skewYDeg !== 0)
+        ? { skewXDeg: source.skewXDeg, skewYDeg: source.skewYDeg }
+        : {}),
+      ...(source.perspectiveTiltXDeg !== undefined &&
+          (source.perspectiveTiltXDeg !== 0 || source.perspectiveTiltYDeg !== 0)
+        ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
+        : {}),
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
@@ -1612,6 +1632,16 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     rotationDeg: source.rotationDeg,
     flipX: source.flipX,
     flipY: source.flipY,
+    // Skew and perspective (#298, ADR-0016 amendment): revision facts
+    // copied verbatim — stored only when set, so an unskewed source's
+    // copy keeps its exact document shape.
+    ...(source.skewXDeg !== undefined && (source.skewXDeg !== 0 || source.skewYDeg !== 0)
+      ? { skewXDeg: source.skewXDeg, skewYDeg: source.skewYDeg }
+      : {}),
+    ...(source.perspectiveTiltXDeg !== undefined &&
+        (source.perspectiveTiltXDeg !== 0 || source.perspectiveTiltYDeg !== 0)
+      ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
+      : {}),
     ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
     ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
     ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),

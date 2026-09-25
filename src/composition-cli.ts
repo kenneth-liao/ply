@@ -501,6 +501,17 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         positive, about the Layer's (x, y) corner.
   --flip <mode>         Flip to an ABSOLUTE reflection state: horizontal,
                         vertical, both, or none.
+  --skew <XxY>          Skew the Layer to ABSOLUTE shear angles in degrees
+                        ("<Xdeg>x<Ydeg>"; one-axis "<Xdeg>x" / "x<Ydeg>"
+                        keeps the other axis's current angle): "15x0" shears
+                        along the content's x axis. "0x0" removes it.
+  --perspective <XxY>   Tilt the Layer to ABSOLUTE perspective angles in
+                        degrees about the X and Y axes ("<tiltX>x<tiltY>";
+                        one-axis forms keep the other tilt): positive X tilt
+                        tips the top edge away, positive Y tilt the right
+                        edge, pivoting about the Layer's own content centre
+                        through a fixed 1000px perspective distance. "0x0"
+                        removes it.
   --shadow <spec>       Apply a shadow to the Layer's content: an absolute
                         setter "<dx>,<dy>,<blur>,<color>" (e.g.
                         "10,10,4,#000000") or "none". Offsets and blur are
@@ -626,6 +637,10 @@ function oneCommandFacts(
     rotationDeg: number;
     flipX: boolean;
     flipY: boolean;
+    skewXDeg?: number;
+    skewYDeg?: number;
+    perspectiveTiltXDeg?: number;
+    perspectiveTiltYDeg?: number;
     shadow?: { dx: number; dy: number; blur: number; color: string };
     outline?: { width: number; color: string };
     vectorColor?: string;
@@ -643,6 +658,12 @@ function oneCommandFacts(
   if (rev.rotationDeg !== 0) facts.push(`rotation ${rev.rotationDeg}°`);
   if (rev.flipX || rev.flipY) {
     facts.push(`flip ${rev.flipX && rev.flipY ? "both" : rev.flipX ? "horizontal" : "vertical"}`);
+  }
+  if (rev.skewXDeg !== undefined && (rev.skewXDeg !== 0 || rev.skewYDeg !== 0)) {
+    facts.push(`skew ${rev.skewXDeg}° ${rev.skewYDeg}°`);
+  }
+  if (rev.perspectiveTiltXDeg !== undefined && (rev.perspectiveTiltXDeg !== 0 || rev.perspectiveTiltYDeg !== 0)) {
+    facts.push(`perspective ${rev.perspectiveTiltXDeg}° ${rev.perspectiveTiltYDeg}°`);
   }
   if (rev.shadow) facts.push(`shadow ${rev.shadow.dx} ${rev.shadow.dy} ${rev.shadow.blur} ${rev.shadow.color}`);
   if (rev.outline) facts.push(`outline ${rev.outline.width} ${rev.outline.color}`);
@@ -1590,6 +1611,12 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               if (t.rotationDeg !== 0) facts.push(`rot ${t.rotationDeg}°`);
               if (t.flipX || t.flipY) {
                 facts.push(`flip ${t.flipX && t.flipY ? "both" : t.flipX ? "horizontal" : "vertical"}`);
+              }
+              if (t.skewXDeg !== undefined && (t.skewXDeg !== 0 || t.skewYDeg !== 0)) {
+                facts.push(`skew ${t.skewXDeg}° ${t.skewYDeg}°`);
+              }
+              if (t.perspectiveTiltXDeg !== undefined && (t.perspectiveTiltXDeg !== 0 || t.perspectiveTiltYDeg !== 0)) {
+                facts.push(`perspective ${t.perspectiveTiltXDeg}° ${t.perspectiveTiltYDeg}°`);
               }
               console.log(
                 `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height} ${paintedText(layer)}` +

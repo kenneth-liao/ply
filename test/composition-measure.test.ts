@@ -187,7 +187,7 @@ test("measure reports an identity image Layer's layout box at its intrinsic size
   expect(layer.kind).toBe("image");
   expect(layer.content).toEqual({ width: 120, height: 80 });
   expect(layer.placement).toEqual({ x: 30, y: 20, opacity: 1 });
-  expect(layer.transform).toEqual({ scaleX: 1, scaleY: 1, rotationDeg: 0, flipX: false, flipY: false });
+  expect(layer.transform).toEqual({ scaleX: 1, scaleY: 1, rotationDeg: 0, flipX: false, flipY: false, skewXDeg: 0, skewYDeg: 0, perspectiveTiltXDeg: 0, perspectiveTiltYDeg: 0 });
   // Identity transform: the layout box is exactly the placement point plus
   // the intrinsic size — in Composition coordinates, unclipped.
   expect(layer.box).toEqual({ x: 30, y: 20, width: 120, height: 80 });

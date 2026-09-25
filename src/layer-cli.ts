@@ -336,6 +336,28 @@ Options:
                         Layer's (x, y) top-left corner, and never changes
                         retained pixels. Combines with other edit options,
                         including --resize and content replacement.
+  --skew <XxY>          Skew the Layer to ABSOLUTE shear angles in degrees,
+                        replacing any previous skew: "<Xdeg>x<Ydeg>" (e.g.
+                        "15x0" shears along the content's x axis), or a
+                        one-axis form "<Xdeg>x" / "x<Ydeg>" (the omitted
+                        axis keeps its current angle). "0x0" removes the
+                        skew. Applies after rotation, before perspective,
+                        about the Layer's (x, y) top-left corner, and never
+                        changes retained pixels. Combines with other edit
+                        options, including --resize and content
+                        replacement.
+  --perspective <XxY>   Tilt the Layer to ABSOLUTE perspective angles in
+                        degrees about the X and Y axes, replacing any
+                        previous perspective: "<tiltXdeg>x<tiltYdeg>" (e.g.
+                        "0x20" tips the right edge away), or a one-axis form
+                        (the omitted tilt keeps its current angle).
+                        "0x0" removes the perspective. The tilt pivots
+                        about the Layer's own untransformed content centre,
+                        projected through a fixed 1000px perspective
+                        distance, as the outermost transform after skew.
+                        Never changes retained pixels. Combines with other
+                        edit options, including --resize and content
+                        replacement.
   --shadow <spec>       Apply a shadow to the Layer's content (#139), on
                         image alpha and text glyphs alike: an ABSOLUTE setter
                         "<dx>,<dy>,<blur>,<color>" — e.g. "10,10,4,#000000"
@@ -1122,6 +1144,14 @@ async function run() {
                 : rev.flipX && rev.flipY
                   ? ", Flip: both"
                   : ", Flip: " + (rev.flipX ? "horizontal" : "vertical");
+            const skew =
+              (rev.skewXDeg ?? 0) === 0 && (rev.skewYDeg ?? 0) === 0
+                ? ""
+                : `, Skew: ${rev.skewXDeg ?? 0}° ${rev.skewYDeg ?? 0}°`;
+            const perspective =
+              (rev.perspectiveTiltXDeg ?? 0) === 0 && (rev.perspectiveTiltYDeg ?? 0) === 0
+                ? ""
+                : `, Perspective: ${rev.perspectiveTiltXDeg ?? 0}° ${rev.perspectiveTiltYDeg ?? 0}°`;
             const shadow =
               rev.shadow === undefined
                 ? ""
@@ -1149,7 +1179,7 @@ async function run() {
               rev.glow === undefined
                 ? ""
                 : `, Glow: ${formatGlow(rev.glow)}`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${shadow}${outline}${region}${grade}${glow}${blend}`);
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${shadow}${outline}${region}${grade}${glow}${blend}`);
           },
         );
       } catch (err) {

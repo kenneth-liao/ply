@@ -1,6 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+- Added skew and perspective as Layer revision facts on every Layer kind
+  (#298, spec #285 US-008, DEC-005, ADR-0016 amendment): `composition add`
+  and `layer edit` take `--skew <Xdeg>x<Ydeg>` (absolute shear angles about
+  the placement point, one-axis forms keep the other axis, `0x0` removes)
+  and `--perspective <tiltXdeg>x<tiltYdeg>` (absolute tilts about the X/Y
+  axes, pivoting about the Layer's own content centre through a fixed
+  documented 1000px perspective distance, `0x0` removes; angles bounded to
+  |a| ≤ 89°). They compose with flip, scale, and rotation in the documented
+  order — flip, scale, rotation, skew, perspective — paint only when set
+  (removal restores the render byte-for-byte, pinned Renders replay
+  byte-identically), measure reports the facts and the projected quad
+  (corners) with painted extents and anchors following the transformed
+  ink, and the facts join the property × kind matrix, the add/edit refusal
+  parity tests, and the offline reversibility and replay suite.
 - Added text runs: one text Layer carries runs of different colour, weight,
   or font (#297, ADR-0021 amendment) — "5 HERDR PLUGINS" is one editable
   Layer. Author runs on `composition add` with repeatable `--run <text>`

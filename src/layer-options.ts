@@ -72,6 +72,8 @@ import {
   coverKindGate,
   resolveEditRotation,
   resolveEditFlip,
+  resolveEditSkew,
+  resolveEditPerspective,
   type LayerRevision,
   type ResolvedLayerRevision,
   type LayerRunStyleEdit,
@@ -193,6 +195,8 @@ export type LayerOptionKey =
   | "scale-to"
   | "rotate"
   | "flip"
+  | "skew"
+  | "perspective"
   | "shadow"
   | "outline"
   | "vector-color"
@@ -327,6 +331,15 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "scale-to", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, apply: applyScaleTo },
   { key: "rotate", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerRotation, apply: applyRotation },
   { key: "flip", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerFlip, apply: applyFlip },
+  // Skew and perspective (#298, spec #285 US-008, DEC-005, ADR-0016
+  // amendment): absolute revision-fact setters on every kind, independent
+  // of the retained content's size (like rotation) — combinable with the
+  // resize family and content replacement. --skew sets the shear angles,
+  // --perspective the tilts about the X/Y axes (the fixed documented
+  // 1000px perspective distance is a paint constant, never a stored fact);
+  // 0x0 is each fact's removal form and the identity is never stored.
+  { key: "skew", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerSkew, apply: applySkew },
+  { key: "perspective", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerPerspective, apply: applyPerspective },
   { key: "shadow", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerShadow, apply: applyShadow },
   { key: "outline", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerOutline, apply: applyOutline },
   // The rectangular visible region (#211, spec #207 US-003, ADR-0023): a
@@ -425,6 +438,8 @@ export const LAYER_OPTION_PARSE_ARGS = {
   blend: { type: "string" },
   glow: { type: "string" },
   "scale-to": { type: "string" },
+  skew: { type: "string" },
+  perspective: { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string"; multiple?: boolean }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
@@ -1307,6 +1322,70 @@ export function parseLayerFlip(
   return { ok: true, value: mode };
 }
 
+/** The XxY angle grammar shared by --skew and --perspective (#298): both
+ *  axes ("<X>x<Y>"), or one axis ("<X>x" / "x<Y>") keeping the Layer's
+ *  current angle on the omitted axis — the --scale-to one-axis rule at
+ *  angle semantics. Each component must parse as a finite number. */
+function parseXYAngles(
+  flag: string,
+  raw: string | undefined,
+  axes: { x: string; y: string },
+): OptionParse<{ x?: number; y?: number } | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const trimmed = raw.trim();
+  const match = /^([^x]*)x([^x]*)$/.exec(trimmed);
+  if (!match) {
+    return {
+      ok: false,
+      error:
+        `${flag} takes "<${axes.x}>x<${axes.y}>" (both axes: absolute angles in degrees) or ` +
+        `"<${axes.x}>x" / "x<${axes.y}>" (one axis: the omitted axis keeps the Layer's current angle), ` +
+        `e.g. "15x0" — got "${raw}".`,
+    };
+  }
+  const xRaw = match[1]!.trim();
+  const yRaw = match[2]!.trim();
+  if (xRaw === "" && yRaw === "") {
+    return {
+      ok: false,
+      error:
+        `${flag} takes "<${axes.x}>x<${axes.y}>" (both axes: absolute angles in degrees) or ` +
+        `"<${axes.x}>x" / "x<${axes.y}>" (one axis: the omitted axis keeps the Layer's current angle), ` +
+        `e.g. "15x0" — got "${raw}".`,
+    };
+  }
+  const x = xRaw === "" ? undefined : parseNumericArgument(xRaw);
+  const y = yRaw === "" ? undefined : parseNumericArgument(yRaw);
+  if ((xRaw !== "" && !Number.isFinite(x)) || (yRaw !== "" && !Number.isFinite(y))) {
+    return {
+      ok: false,
+      error:
+        `${flag} takes "<${axes.x}>x<${axes.y}>" (both axes: absolute angles in degrees) or ` +
+        `"<${axes.x}>x" / "x<${axes.y}>" (one axis: the omitted axis keeps the Layer's current angle), ` +
+        `e.g. "15x0" — got "${raw}".`,
+    };
+  }
+  return { ok: true, value: { ...(x !== undefined ? { x } : {}), ...(y !== undefined ? { y } : {}) } };
+}
+
+/** --skew: absolute shear angles in degrees, one or both axes. */
+export function parseLayerSkew(raw: string | undefined): OptionParse<{ skewXDeg?: number; skewYDeg?: number } | undefined> {
+  const parsed = parseXYAngles("--skew", raw, { x: "Xdeg", y: "Ydeg" });
+  if (!parsed.ok || parsed.value === undefined) return parsed as OptionParse<{ skewXDeg?: number; skewYDeg?: number } | undefined>;
+  return { ok: true, value: { skewXDeg: parsed.value.x, skewYDeg: parsed.value.y } };
+}
+
+/** --perspective: absolute tilts in degrees about the X and Y axes. */
+export function parseLayerPerspective(
+  raw: string | undefined,
+): OptionParse<{ perspectiveTiltXDeg?: number; perspectiveTiltYDeg?: number } | undefined> {
+  const parsed = parseXYAngles("--perspective", raw, { x: "tiltXdeg", y: "tiltYdeg" });
+  if (!parsed.ok || parsed.value === undefined) {
+    return parsed as OptionParse<{ perspectiveTiltXDeg?: number; perspectiveTiltYDeg?: number } | undefined>;
+  }
+  return { ok: true, value: { perspectiveTiltXDeg: parsed.value.x, perspectiveTiltYDeg: parsed.value.y } };
+}
+
 /**
  * --shadow: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Returns the raw spec
@@ -1716,6 +1795,8 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "scale-to" },
   { option: "rotate" },
   { option: "flip" },
+  { option: "skew" },
+  { option: "perspective" },
   { option: "shape" },
   { option: "size" },
   { option: "corner-radius" },
@@ -1750,6 +1831,8 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "scale-to",
   "rotate",
   "flip",
+  "skew",
+  "perspective",
   "shadow",
   "outline",
   "visible-region",
@@ -1964,6 +2047,16 @@ export interface SharedOptionDraft {
   rotationDeg: number;
   flipX: boolean;
   flipY: boolean;
+  /** Canonical transform skew (#298, ADR-0016 amendment): the resolved pair
+   *  when the fact is set — the identity form deletes the keys (stored only
+   *  when set). */
+  skewXDeg?: number;
+  skewYDeg?: number;
+  /** Canonical transform perspective (#298, ADR-0016 amendment): the
+   *  resolved tilt pair when the fact is set — same stored-only-when-set
+   *  rule as the skew pair. */
+  perspectiveTiltXDeg?: number;
+  perspectiveTiltYDeg?: number;
   shadow?: LayerShadow;
   outline?: LayerOutline;
   visibleRegion?: LayerVisibleRegion;
@@ -2246,6 +2339,46 @@ function applyFlip(
   draft.flipY = flip.flipY;
 }
 
+function applySkew(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  // Absolute skew setter (#298, ADR-0016 amendment): the resolved pair IS
+  // the canonical skew fact. The identity form deletes the keys — stored
+  // only when set — so `--skew 0x0` is the removal form and an unskewed
+  // revision keeps its exact document shape.
+  const skew = resolveEditSkew({ skewTo: value as { skewXDeg?: number; skewYDeg?: number } }, context.base as ResolvedLayerRevision);
+  if (skew.skewXDeg === 0 && skew.skewYDeg === 0) {
+    delete draft.skewXDeg;
+    delete draft.skewYDeg;
+    return;
+  }
+  draft.skewXDeg = skew.skewXDeg;
+  draft.skewYDeg = skew.skewYDeg;
+}
+
+function applyPerspective(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  // Absolute perspective setter (#298, ADR-0016 amendment): the resolved
+  // tilt pair IS the canonical perspective fact — same stored-only-when-set
+  // rule as the skew pair.
+  const perspective = resolveEditPerspective(
+    { perspectiveTo: value as { perspectiveTiltXDeg?: number; perspectiveTiltYDeg?: number } },
+    context.base as ResolvedLayerRevision,
+  );
+  if (perspective.perspectiveTiltXDeg === 0 && perspective.perspectiveTiltYDeg === 0) {
+    delete draft.perspectiveTiltXDeg;
+    delete draft.perspectiveTiltYDeg;
+    return;
+  }
+  draft.perspectiveTiltXDeg = perspective.perspectiveTiltXDeg;
+  draft.perspectiveTiltYDeg = perspective.perspectiveTiltYDeg;
+}
+
 function applyShadow(draft: SharedOptionDraft, value: unknown): void {
   // "none" resolves to undefined — absence IS the no-shadow form, the same
   // canonical shape the edit path publishes (ADR-0018); an omitted option
@@ -2504,6 +2637,8 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "scale-to" },
   { option: "rotate" },
   { option: "flip" },
+  { option: "skew" },
+  { option: "perspective" },
   { option: "shadow" },
   { option: "outline" },
   { policy: "region-content" },

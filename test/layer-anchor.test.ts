@@ -149,7 +149,7 @@ test("image Layer --anchor center,center resolves placement so the painted ink c
   expect(rev.scaleY).toBe(1);
   expect(rev.rotationDeg).toBe(0);
   expect(Object.keys(rev).sort()).toEqual(
-    ["bytes", "contentHash", "createdAt", "flipX", "flipY", "format", "height", "kind", "layerId", "opacity", "revisionId", "rotationDeg", "scaleX", "scaleY", "schemaVersion", "width", "x", "y"],
+    ["bytes", "contentHash", "createdAt", "flipX", "flipY", "format", "height", "kind", "layerId", "opacity", "perspectiveTiltXDeg", "perspectiveTiltYDeg", "revisionId", "rotationDeg", "scaleX", "scaleY", "schemaVersion", "skewXDeg", "skewYDeg", "width", "x", "y"],
   );
 
   // Auditable anchor report: what was asked, what was resolved, and the

@@ -996,3 +996,75 @@ test("matrix: per-axis scale (--scale-to) applies to raster, vector, text, and s
   expect(pixel(png, 340, 165)).toEqual([0, 255, 0, 255]); // shape, inside 80x10
   expect(pixel(png, 340, 172)).toEqual([0, 0, 0, 0]); // below the scaled shape
 }, 30_000);
+
+test("matrix: skew and perspective apply to raster, vector, text, and shape Layers", async () => {
+  await makeComp("comp-skew", 600, 300);
+
+  // Raster image: 64x48 red, --skew 10x0 shears the vertical edges.
+  const raster = path.join(tempDir, "skew-red.png");
+  await writeFile(raster, solidPng(64, 48, [255, 0, 0, 255]));
+  const rAdd = await invoke([
+    "composition", "add", "comp-skew", "raster-skew",
+    "--image", raster, "--x", "10", "--y", "10", "--skew", "10x0",
+    "--project", projDir, "--json",
+  ]);
+  expect(rAdd.code).toBe(0);
+  const rRev = JSON.parse(rAdd.stdout).layer.currentRevision;
+  expect(rRev.skewXDeg).toBe(10);
+  expect(rRev.skewYDeg).toBe(0);
+
+  // Vector image (kind image, format svg): perspective tilt about Y.
+  const vector = path.join(tempDir, "skew-blue.svg");
+  await writeFile(vector, solidSvg(64, 48, "#0000ff"));
+  const vAdd = await invoke([
+    "composition", "add", "comp-skew", "vector-tilt",
+    "--image", vector, "--x", "10", "--y", "120", "--perspective", "0x15",
+    "--project", projDir, "--json",
+  ]);
+  expect(vAdd.code).toBe(0);
+  const vRev = JSON.parse(vAdd.stdout).layer.currentRevision;
+  expect(vRev.perspectiveTiltYDeg).toBe(15);
+
+  // Text Layer: the same two facts through the same setters.
+  const tAdd = await invoke([
+    "composition", "add", "comp-skew", "text-skew",
+    "--text", "Shear", "--font", "Archivo", "--font-size", "24", "--x", "200", "--y", "20",
+    "--skew", "0x8", "--perspective", "10x0",
+    "--project", projDir, "--json",
+  ]);
+  expect(tAdd.code).toBe(0);
+  const tRev = JSON.parse(tAdd.stdout).layer.currentRevision;
+  expect(tRev.skewYDeg).toBe(8);
+  expect(tRev.perspectiveTiltXDeg).toBe(10);
+
+  // Shape Layer: the same facts through edit.
+  const sAdd = await invoke([
+    "composition", "add", "comp-skew", "shape-skew",
+    "--shape", "rectangle", "--size", "40x20", "--fill", "#00ff00", "--x", "200", "--y", "120",
+    "--project", projDir, "--json",
+  ]);
+  expect(sAdd.code).toBe(0);
+  const sId = JSON.parse(sAdd.stdout).use.layerId as string;
+  const sEdit = await invoke(["layer", "edit", sId, "--skew", "12x0", "--perspective", "0x12", "--project", projDir, "--json"]);
+  expect(sEdit.code).toBe(0);
+  const sRev = JSON.parse(sEdit.stdout).layer.currentRevision;
+  expect(sRev.skewXDeg).toBe(12);
+  expect(sRev.perspectiveTiltYDeg).toBe(12);
+
+  // measure reports the facts on every kind (the shared transform report).
+  for (const use of ["raster-skew", "vector-tilt", "text-skew", "shape-skew"]) {
+    const measure = await invoke(["composition", "measure", "comp-skew", use, "--project", projDir, "--json"]);
+    expect(measure.code).toBe(0);
+    const mLayer = JSON.parse(measure.stdout).layers[0];
+    expect(mLayer.transform.skewXDeg + mLayer.transform.skewYDeg + mLayer.transform.perspectiveTiltXDeg + mLayer.transform.perspectiveTiltYDeg).toBeGreaterThan(0);
+  }
+
+  // The renders prove the facts paint: the raster's sheared box reaches
+  // beyond its unsheared right edge (tan(10°)·48 ≈ 8.5px), and the vector's
+  // tilted box foreshortens its far edge — neither pixel-identical to the
+  // untilted shapes' plain boxes.
+  const png = await render("comp-skew", "skew-matrix.png");
+  expect(pixel(png, 60, 20)).toEqual([255, 0, 0, 255]); // inside the sheared raster
+  expect(pixel(png, 78, 55)).toEqual([255, 0, 0, 255]); // right of the unsheared edge (local (64,45) reaches 64+tan(10°)·45 ≈ 71.9)
+  expect(pixel(png, 60, 130)).toEqual([0, 0, 255, 255]); // inside the tilted vector
+}, 30_000);
