@@ -942,6 +942,26 @@ async function measureSnapshot(
           },
           { left, top },
         );
+        // The markup contract at capture time (review INT-U3-4): a masked
+        // Layer's direct #canvas child MUST be the data-ply-mask clip
+        // wrapper — the pre-clip capture below toggles the wrapper's mask,
+        // and a drifted markup (a masked Layer whose element is not
+        // wrapped) would measure silently wrong ink. Refused loudly here,
+        // naming the Layer, never measured through a stale contract.
+        const contractProblem = await page.evaluate((idx) => {
+          const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
+          const el = kids[idx];
+          if (el === undefined) return `element ${idx} not found in #canvas`;
+          return el.hasAttribute("data-ply-mask")
+            ? null
+            : `element ${idx} carries no data-ply-mask clip wrapper — the composition markup and the measurement capture contract have drifted`;
+        }, i);
+        if (contractProblem !== null) {
+          throw new Error(
+            `Masked Layer "${layers[i]!.name}": ${contractProblem}. ` +
+              "Refusing to measure masked ink against a markup contract that no longer holds.",
+          );
+        }
         await page.evaluate((idx) => {
           const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
           kids.forEach((el, j) => {

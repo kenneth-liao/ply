@@ -14,11 +14,14 @@
  *   single ingestion point (`readRegionFile` → `ingestRegionCanvas`, or
  *   the one-call `loadCompositionRegions`) that turns raw caller JSON
  *   into trusted rectangle data and enforces the canvas contract.
- * - **Footprints** are the painted extents `measureCompositionLayers`
- *   (src/composition-measure.ts) reports — the browser-measured visible
- *   ink that `composition measure` reports, including effect reach and
- *   its conservative over-approximation, unchanged. A Layer whose painted
- *   extents are null (hidden at opacity 0, or fully transparent content)
+ * - **Footprints** are the ink that renders: `measureCompositionLayers`
+ *   (src/composition-measure.ts) reports painted extents, and since
+ *   ADR-0025 (#305) a masked Layer's `painted` is PRE-clip by documented
+ *   meaning — so the check tests the POST-clip extents (`maskedPainted`)
+ *   for a masked Layer and treats null (nothing survives the clip) as no
+ *   ink, never falling back to pre-clip painted; an unmasked Layer tests
+ *   its `painted` extents. Effect reach and its conservative
+ *   over-approximation are unchanged. A Layer whose tested ink is null
  *   paints nothing and is skipped — the legacy leaf rule, already
  *   enforced by the measurement authority. Nothing here reslices,
  *   inflates, or recomputes geometry: the check is pure intersection over
@@ -40,7 +43,7 @@ export interface RegionFinding {
   layer: string;
   /** The Layer identity the use refers to. */
   layerId: string;
-  /** The Layer's painted footprint (the measured authority's extents) in Composition coordinates. */
+  /** The Layer's tested ink footprint — the POST-clip extents for a masked Layer, the painted extents otherwise (the measured authority's ink-that-renders) — in Composition coordinates. */
   footprint: { x: number; y: number; width: number; height: number };
   /** The intersected caller region (trusted data from the ingestion point). */
   region: Region;
@@ -107,13 +110,18 @@ export async function checkCompositionRegions(
       refused.push({ layer: layer.name, layerId: layer.layerId, message: layer.refused });
       continue;
     }
-    // Hidden (opacity 0) and fully transparent Layers paint nothing —
-    // `painted: null` is the measurement authority's documented "nothing
-    // is visible" signal — so there is no footprint to test.
-    if (!layer.painted) continue;
+    // The ink that RENDERS (review PROD-U3-3): a masked Layer's painted
+    // extents are pre-clip by documented meaning (ADR-0025 §5), so the
+    // check tests the POST-clip extents (`maskedPainted`) — null means
+    // nothing survives the clip, never a fallback to pre-clip ink. An
+    // unmasked Layer tests its painted extents. Either way, null paints
+    // nothing (hidden at opacity 0, fully transparent content, or an
+    // empty post-clip remainder) and there is no footprint to test.
+    const ink = layer.mask !== null ? layer.maskedPainted : layer.painted;
+    if (!ink) continue;
     for (const region of regions) {
-      if (intersects(layer.painted, region.box)) {
-        findings.push({ layer: layer.name, layerId: layer.layerId, footprint: layer.painted, region });
+      if (intersects(ink, region.box)) {
+        findings.push({ layer: layer.name, layerId: layer.layerId, footprint: ink, region });
       }
     }
   }

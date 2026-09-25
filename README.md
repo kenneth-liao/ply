@@ -680,7 +680,10 @@ ply layer edit stage/subject --mask :none      # remove the clip (its own edit)
   outline, shadow, and all — after its effects and before the blend, so
   the clipped Layer blends as one unit. Anchored placement still resolves
   against the pre-effect ink (#288); `measure`'s `painted` stays pre-clip
-  and reports `mask`, `maskedPaint`, and `masks` alongside.
+  and reports `mask`, `maskedPainted`, `maskedPaintedOnCanvas`, and
+  `masks` alongside — the check (`composition check`) tests the ink that
+  renders: a masked Layer's POST-clip extents, with null (nothing
+  survives the clip) meaning no ink, never a pre-clip fallback.
 - **Loud everywhere (§5):** an unresolved name, a self-mask, or a cycle is
   refused at set/add time and at paint/measure/render time, naming the
   uses; a masked Layer never paints unclipped as a fallback. An in-place
@@ -1328,11 +1331,11 @@ automatically spans the glyph ink box and clips to glyph alpha via
 
 ## Region checking (new surface)
 
-`ply composition check <comp> --regions <file>` tests a Composition's painted
-Layer extents against caller-supplied regions — rectangles of platform UI
+`ply composition check <comp> --regions <file>` tests a Composition's rendered
+ink against caller-supplied regions — rectangles of platform UI
 that overlays your visual (badge, progress strip, captions), supplied by
 path, with no platform geometry hardcoded in Ply (ADR-0015). Every visible
-Layer's painted footprint is tested against every region, one finding per
+Layer's ink footprint is tested against every region, one finding per
 (layer, region) intersection naming the layer, its footprint, and the region
 — the same actionable shape the legacy `safe-area:` warnings have.
 
@@ -1344,7 +1347,11 @@ ply composition check poster --regions my-platform-regions.json --json -p ~/proj
 Findings are information, never render failures: the check exits 0 with
 findings, a full-bleed background intersecting every region is accepted
 noise, and the check writes nothing to the Project. Layers that paint
-nothing (opacity 0, fully transparent) produce no findings.
+nothing (opacity 0, fully transparent) produce no findings. The footprint
+is the ink that RENDERS (ADR-0025): a masked Layer is tested against its
+POST-clip extents (`maskedPainted`) — null (nothing survives the clip)
+means no ink, never a fallback to the pre-clip `painted` — so masking the
+offending ink away removes the finding.
 
 The region file is caller-owned data (schema version 1):
 

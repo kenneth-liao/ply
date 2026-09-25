@@ -1656,19 +1656,35 @@ export function normalizeStoredFeather(revision: { feather?: unknown }): number 
 }
 
 /**
+ * The one use-name grammar (the one name rule for Project-visible names,
+ * sanitizeName): nonempty, alphanumeric, dash, underscore. ONE exported
+ * home (review INT-U1-4): the command boundary's `sanitizeName`, the
+ * `--mask` boundary parse and application case (`parseLayerMask`,
+ * `applyMask`), and the stored-fact reader (`normalizeStoredMask`) all
+ * test against this pattern, so the removal spelling `:none` — and any
+ * other non-grammar value — can never read as a use name anywhere.
+ */
+export const USE_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+/** Whether `value` satisfies the one use-name grammar. */
+export function isValidUseName(value: string): boolean {
+  return USE_NAME_PATTERN.test(value);
+}
+
+/**
  * Canonical Layer mask (ADR-0025, #305): the Composition-local use name of
  * the Layer use whose alpha clips this Layer, validated and normalized at
  * this same one boundary — a malformed stored name is refused loudly before
  * the revision hash is consulted. Absence IS the no-mask form. The stored
- * name must satisfy the one name rule for Project-visible names (the same
- * grammar `sanitizeName` enforces at the command boundary), so a stored
- * fact can never read as anything but a use name — and never as the
- * removal value `:none`, whose colon the grammar refuses.
+ * name must satisfy the one use-name grammar (`USE_NAME_PATTERN`, the same
+ * rule `sanitizeName` enforces at the command boundary), so a stored fact
+ * can never read as anything but a use name — and never as the removal
+ * value `:none`, whose colon the grammar refuses.
  */
 export function normalizeStoredMask(revision: { mask?: unknown }): string | undefined {
   if (revision.mask === undefined) return undefined;
   const raw = revision.mask;
-  if (typeof raw !== "string" || !/^[a-zA-Z0-9_-]+$/.test(raw)) {
+  if (typeof raw !== "string" || !isValidUseName(raw)) {
     throw new Error(
       `Malformed revision document: mask must be a use name (alphanumeric, dash, or underscore) when present (got ${JSON.stringify(raw)}).`,
     );

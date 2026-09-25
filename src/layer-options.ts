@@ -93,6 +93,7 @@ import {
   LAYER_BLEND_MODES,
   type LayerBlendMode,
   type StoredLayerBlendMode,
+  isValidUseName,
 } from "./layer.js";
 import { resolveFace, resolveTextAxes } from "./fonts.js";
 import { measureStandaloneSnapshot } from "./composition-measure.js";
@@ -1670,9 +1671,9 @@ export const MASK_REMOVAL_VALUE = ":none";
 /**
  * --mask (ADR-0025, #305): syntax and well-formedness through the ONE
  * boundary parse both surfaces dispatch. The value is either the removal
- * value (`:none`) or a Composition-local use name under the one name rule
- * grammar (`sanitizeName`'s `[a-zA-Z0-9_-]+`, restated here because this
- * module must not import the composition module). The grammar check IS the
+ * value (`:none`) or a Composition-local use name under the one use-name
+ * grammar (`USE_NAME_PATTERN`, the exported home both surfaces and the
+ * stored-fact reader share — review INT-U1-4). The grammar check IS the
  * removal-spelling guard: a value that fails it can never be stored, so
  * `:none` is the only non-use-name value the setter accepts.
  */
@@ -1682,7 +1683,7 @@ export function parseLayerMask(raw: string | undefined): OptionParse<string | un
   if (value === MASK_REMOVAL_VALUE) {
     return { ok: true, value: MASK_REMOVAL_VALUE };
   }
-  if (!/^[a-zA-Z0-9_-]+$/.test(value)) {
+  if (!isValidUseName(value)) {
     return {
       ok: false,
       error:
@@ -1777,42 +1778,62 @@ export function parseLayerAnchor(raw: string | undefined): OptionParse<ParsedAnc
   }
 }
 
-/** The options --anchor cannot combine with: every edit option except the
- *  anchor's own axes (--x, --y) and --opacity, which combine freely.
- *  Derived from the option table, so a newly added option automatically
- *  joins the conflict rule. */
-export function isAnchorConflicting(args: LayerOptionArgs): boolean {
+/** The keys `isAnchorConflicting` treats as conflicting, in the table's
+ *  order, MINUS the plain content kinds the refusal names as prose
+ *  ("content replacement"): the shape parameters stay in (they are named
+ *  as the "shape parameters" family in the refusal text). ONE derivation
+ *  home (review INT-3, INT-U3-2): `isAnchorConflicting` tests presence
+ *  against THIS key set and `anchorConflictOptionList` spells it — the
+ *  two can never disagree, and a newly added option (the mask group's
+ *  `--mask` included) joins both automatically. */
+const ANCHOR_CONFLICT_PROSE_KEYS: readonly LayerOptionKey[] = ["image", "from-generation", "from-matte", "text"];
+
+function anchorConflictKeys(): LayerOptionKey[] {
   const anchorFree = new Set<LayerOptionKey>(["x", "y", "opacity", "anchor"]);
-  return LAYER_OPTION_DEFS.some(
-    (def) => def.editOption && !anchorFree.has(def.key) && args[def.key] !== undefined,
-  );
+  return LAYER_OPTION_DEFS
+    .filter((def) => def.editOption && !anchorFree.has(def.key) && !ANCHOR_CONFLICT_PROSE_KEYS.includes(def.key))
+    .map((def) => def.key);
+}
+
+/** The options --anchor cannot combine with: every edit option except the
+ *  anchor's own axes (--x, --y) and --opacity, which combine freely, and
+ *  the plain content kinds, which the refusal names as prose.
+ *  Derived from the option table through `anchorConflictKeys` — the same
+ *  derivation the refusal text reads — so a newly added option
+ *  automatically joins the conflict rule. */
+export function isAnchorConflicting(args: LayerOptionArgs): boolean {
+  return anchorConflictKeys().some((key) => args[key] !== undefined);
 }
 
 /** The option-name segment of the edit surface's `--anchor` exclusivity
- *  refusal, derived from the SAME table and grouping `isAnchorConflicting`
- *  derives the conflict rule from (review INT-3): the transform, effect, and
- *  text groups spelled as flags, and the shape content group named as the
- *  "shape parameters" family. A newly added option in one of these groups
- *  joins both the rule and the refusal text automatically; the anchor-free
- *  axes (--x, --y, --opacity) stay outside, and the plain content kinds
+ *  refusal, derived from the SAME key set `isAnchorConflicting` derives
+ *  from (`anchorConflictKeys`, review INT-3, INT-U3-2) — every conflicting
+ *  key appears in the refusal exactly once, grouped as the table groups
+ *  them: the transform, mask, effect, look, region, and paint groups
+ *  spelled as flags, and the shape content group named as the "shape
+ *  parameters" family. A newly added option in one of these groups joins
+ *  both the rule and the refusal text automatically; the anchor-free axes
+ *  (--x, --y, --opacity) stay outside, and the plain content kinds
  *  (--image, --from-generation, --from-matte, --text) are named as
  *  "content replacement" in the refusal's prose, not as a flag list. */
 export function anchorConflictOptionList(): string {
-  const editKeysOfGroup = (group: LayerOptionDef["group"]): LayerOptionKey[] =>
-    LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === group).map((def) => def.key);
-  const flags = (keys: readonly LayerOptionKey[]): string => keys.map((key) => `--${key}`).join(", ");
-  const shape = `shape parameters (${SHAPE_CONTENT_KEYS.map((key) => `--${key}`).join(", ")})`;
-  return [
-    flags(editKeysOfGroup("paint")),
-    flags(editKeysOfGroup("transform")),
-    flags(editKeysOfGroup("region")),
-    flags(editKeysOfGroup("look")),
-    flags(editKeysOfGroup("effect")),
-    shape,
-    flags(editKeysOfGroup("text")),
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const conflicting = new Set(anchorConflictKeys());
+  const flags = (keys: readonly LayerOptionKey[]): string =>
+    keys.filter((key) => conflicting.has(key)).map((key) => `--${key}`).join(", ");
+  const group = (name: LayerOptionDef["group"]): string =>
+    flags(LAYER_OPTION_DEFS.filter((def) => def.editOption && def.group === name).map((def) => def.key));
+  const segments = [
+    group("paint"),
+    group("transform"),
+    group("region"),
+    group("mask"),
+    group("look"),
+    group("effect"),
+  ].filter(Boolean);
+  const shape = flags(SHAPE_CONTENT_KEYS);
+  if (shape !== "") segments.push(`shape parameters (${shape})`);
+  segments.push(group("text"));
+  return segments.filter(Boolean).join(", ");
 }
 
 /** The parsed values of the option surface, keyed by the option table's own
@@ -2662,7 +2683,7 @@ function applyMask(draft: SharedOptionDraft, value: unknown): void {
     delete draft.mask;
     return;
   }
-  if (typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(value)) {
+  if (typeof value === "string" && isValidUseName(value)) {
     draft.mask = value;
     return;
   }

@@ -536,3 +536,58 @@ test("the check completes with every browser network route aborted (offline evid
     await closeBrowser();
   }
 });
+
+// ---------------------------------------------------------------------------
+// The Layer mask (ADR-0025, #305): the check tests the ink that RENDERS —
+// a masked Layer's POST-clip extents (`maskedPainted`), with null (nothing
+// survives the clip) meaning no ink, never a fallback to pre-clip `painted`.
+// ---------------------------------------------------------------------------
+
+test("a region finding disappears once the offending ink is masked away (ADR-0025, #305)", async () => {
+  const img = path.join(tempDir, "banner.png");
+  await writeFile(img, solidPng(130, 70, RED));
+  await makeComp("masked-check");
+  // The banner pokes into the corner region.
+  await addImageLayer("masked-check", "banner", img, { x: 300, y: 220 });
+  // The mask use sits entirely clear of the region: a tall white rectangle
+  // covering everything LEFT of the region's x, so masking the banner keeps
+  // only the ink left of x=330 — outside the region — and the veil's own
+  // painted footprint never intersects the region either (edges touching
+  // are not an intersection).
+  await invoke([
+    "composition", "add", "masked-check", "veil",
+    "--shape", "rectangle", "--size", "330x300", "--fill", "#ffffff", "--x", "0", "--y", "0",
+    "--project", projDir, "--json",
+  ]);
+  const regions = await writeRegionFile("corner.json", regionFileBody([region("corner-box", { x: 330, y: 240, width: 30, height: 20 })]));
+
+  // Before the mask: the banner's pre-clip ink intersects the region —
+  // one finding, footprint = measure's painted extent.
+  const before = await check("masked-check", regions);
+  expect(before.res.code).toBe(0);
+  const bannerFindings = before.json.findings.filter((f: any) => f.layer === "banner");
+  expect(bannerFindings).toHaveLength(1);
+  expect(bannerFindings[0]!.footprint.x).toBeLessThan(330); // pre-clip ink spans the region edge
+
+  // Mask the banner: the clip keeps only the ink left of the region.
+  const set = await invoke(["layer", "edit", "masked-check/banner", "--mask", "veil", "--project", projDir, "--json"]);
+  expect(set.code).toBe(0);
+
+  const after = await check("masked-check", regions);
+  expect(after.res.code).toBe(0);
+  // The banner no longer produces a finding: the offending ink is masked
+  // away, and the check never falls back to the pre-clip painted extents.
+  expect(after.json.findings.filter((f: any) => f.layer === "banner")).toHaveLength(0);
+  // The veil itself paints nothing through the check (it is a mask use and
+  // its own painted footprint is clear of the region): no new findings.
+  expect(after.json.findings).toHaveLength(0);
+
+  // Measure agrees: the banner's post-clip ink exists, is clear of the
+  // region, and the finding's absence is the documented maskedPainted
+  // authority — not an empty-ink accident.
+  const m = await invoke(["composition", "measure", "masked-check", "banner", "--project", projDir, "--json"]);
+  const banner = JSON.parse(m.stdout).layers[0];
+  expect(banner.mask).toBe("veil");
+  expect(banner.painted.x).toBeLessThan(330); // pre-clip ink still pokes in
+  expect(banner.maskedPainted.x + banner.maskedPainted.width).toBeLessThanOrEqual(330);
+});

@@ -15,6 +15,7 @@ import {
   type ResolvedLayer,
   generateLayerId,
   computeRevisionHash,
+  isValidUseName,
   normalizeStoredMask,
   validateAndIngestImage,
   validateImageBytes,
@@ -720,7 +721,7 @@ export function sanitizeName(name: string): string {
   if (!trimmed) {
     throw new Error("Name cannot be empty.");
   }
-  if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+  if (!isValidUseName(trimmed)) {
     throw new Error(`Name "${name}" contains invalid characters (use alphanumeric, dash, or underscore).`);
   }
   return trimmed;

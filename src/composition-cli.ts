@@ -166,7 +166,10 @@ composition — Composition authoring and inspection
       A Layer's effects extend its painted ink: painted bounds, the on-canvas
       intersection, and clipped include the effect extent, and the effective
       shadow and outline settings are reported in the effects facts and in
-      compact text.
+      compact text. A masked Layer (ADR-0025) reports its stored mask use in
+      the facts and its POST-clip extents beside the pre-clip painted ones —
+      painted stays with-effects/pre-clip, and the masked segment names
+      what the clip keeps (on canvas) or that nothing survives it.
       Painted values are two-decimal rounded: ink is quantized to the
       capture window's pixel grid, while canvas offsets are layout-derived
       and may be fractional. Capture is bounded — one windowed screenshot
@@ -1708,6 +1711,16 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               if (layer.feather !== null && layer.feather !== undefined) {
                 facts.push(`feather ${layer.feather}px`);
               }
+              // The Layer mask (ADR-0025, #305): the stored fact, the
+              // post-clip extents it produces, and (for a mask use) the
+              // uses it serves — surfaced beside the painted facts so the
+              // human-readable line shows the ink that renders.
+              if (layer.mask !== null && layer.mask !== undefined) {
+                facts.push(`mask "${layer.mask}"`);
+              }
+              if (layer.masks.length > 0) {
+                facts.push(`masks ${layer.masks.map((n) => `"${n}"`).join(", ")}`);
+              }
               console.log(
                 `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height} ${paintedText(layer)}` +
                   (facts.length > 0 ? ` [${facts.join(", ")}]` : ""),
@@ -2041,18 +2054,40 @@ function contentLabel(layer: { kind: string; content: { width: number; height: n
  * box, plus the on-canvas intersection only when ink is clipped, or the
  * explicit no-visible-ink wording when there is nothing painted.
  */
-function paintedText(layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped" | "refused">): string {
+function paintedText(
+  layer: Pick<MeasuredLayerBounds, "painted" | "paintedOnCanvas" | "clipped" | "refused" | "mask" | "maskedPainted" | "maskedPaintedOnCanvas">,
+): string {
   if (layer.refused) return `refused (${layer.refused})`;
-  if (!layer.painted) return "painted: none (no visible ink)";
-  const p = layer.painted;
-  let segment = `painted (${p.x}, ${p.y}) ${p.width}×${p.height}`;
-  if (layer.clipped) {
-    // Ink can be clipped with an empty on-canvas footprint — entirely
-    // outside the canvas — so the intersection may be null.
-    const v = layer.paintedOnCanvas;
-    segment += v
-      ? `, on-canvas (${v.x}, ${v.y}) ${v.width}×${v.height} — clipped`
-      : " — clipped (entirely off-canvas)";
+  let segment: string;
+  if (!layer.painted) {
+    segment = "painted: none (no visible ink)";
+  } else {
+    const p = layer.painted;
+    segment = `painted (${p.x}, ${p.y}) ${p.width}×${p.height}`;
+    if (layer.clipped) {
+      // Ink can be clipped with an empty on-canvas footprint — entirely
+      // outside the canvas — so the intersection may be null.
+      const v = layer.paintedOnCanvas;
+      segment += v
+        ? `, on-canvas (${v.x}, ${v.y}) ${v.width}×${v.height} — clipped`
+        : " — clipped (entirely off-canvas)";
+    }
+  }
+  // The Layer mask (ADR-0025, #305): the pre-clip `painted` keeps its
+  // with-effects meaning; the ink that renders is the POST-clip extent,
+  // reported beside it — null when nothing survives the clip.
+  if (layer.mask !== null) {
+    segment += `; masked: painted stays pre-clip, the clip keeps`;
+    const m = layer.maskedPainted;
+    if (!m) {
+      segment += " nothing (no ink survives the clip)";
+    } else {
+      segment += ` (${m.x}, ${m.y}) ${m.width}×${m.height}`;
+      const mv = layer.maskedPaintedOnCanvas;
+      segment += mv
+        ? `, on-canvas (${mv.x}, ${mv.y}) ${mv.width}×${mv.height}`
+        : ", on-canvas: none (the clipped ink falls entirely outside the canvas)";
+    }
   }
   return segment;
 }

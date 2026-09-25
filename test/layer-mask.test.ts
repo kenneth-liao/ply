@@ -29,6 +29,7 @@ import path from "node:path";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { encodePngRgba, decodePng } from "../src/png.js";
+import { anchorConflictOptionList, isAnchorConflicting, LAYER_OPTION_DEFS } from "../src/layer-options.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -712,4 +713,159 @@ test("a stale mask fact fails loudly: render, measure, and replay refuse naming 
   const measureRes = await invoke(["composition", "measure", "stage", "--project", projDir]);
   expect(measureRes.code).toBe(1);
   expect(measureRes.stderr).toContain("cut");
+});
+
+// --- Review round 2 (INT-U3-1/2/3, PROD-U3-2) ------------------------------
+
+test("re-anchoring a masked Layer measures pre-effect, never-clipped ink; the placement matches the unmasked twin (#288, ADR-0025 §5)", async () => {
+  await makeComp("anch");
+  await addShape("anch", "bg", { size: "200x160", fill: "#333333", x: 0, y: 0 });
+  const img = path.join(tempDir, "anch-subject.png");
+  await writeFile(img, solidPng(160, 140, RED));
+  await addImageLayer("anch", "subject", img, { x: 20, y: 10 });
+  // A mask that cuts the subject's ink roughly in half: the clipped ink and
+  // the unclipped ink have very different boxes, so a silent fallback to
+  // either would move the placement.
+  await addShape("anch", "cut", { size: "200x80", fill: "#00ff00", x: 0, y: 80 });
+  await setMask("anch/subject", "cut");
+
+  await makeComp("anch-twin");
+  await addShape("anch-twin", "bg", { size: "200x160", fill: "#333333", x: 0, y: 0 });
+  const twinImg = path.join(tempDir, "twin-subject.png");
+  await writeFile(twinImg, solidPng(160, 140, RED));
+  await addImageLayer("anch-twin", "subject", twinImg, { x: 20, y: 10 });
+
+  // --anchor alone (with its required explicit targets) succeeds on the
+  // masked Layer, and the placement is the UNMASKED twin's: the anchor
+  // basis is the pre-effect ink, which the mask never clips. The target
+  // (100, 100) differs from the ink's current centre (100, 80), so the
+  // anchor genuinely moves the Layer — and a silent fallback to the
+  // clipped ink's centre would land elsewhere.
+  const masked = await invoke([
+    "layer", "edit", "anch/subject", "--anchor", "center,center", "--x", "100", "--y", "100",
+    "--project", projDir, "--json",
+  ]);
+  expect(masked.code, masked.stderr).toBe(0);
+  const unmasked = await invoke([
+    "layer", "edit", "anch-twin/subject", "--anchor", "center,center", "--x", "100", "--y", "100",
+    "--project", projDir, "--json",
+  ]);
+  expect(unmasked.code, unmasked.stderr).toBe(0);
+  const maskedPlacement = JSON.parse(masked.stdout).anchored.placement;
+  const unmaskedPlacement = JSON.parse(unmasked.stdout).anchored.placement;
+  expect(maskedPlacement).toEqual(unmaskedPlacement);
+  // The anchor genuinely moved the Layer (the target was not the ink's
+  // existing centre) — the assertion above is not vacuous.
+  expect(maskedPlacement.y).toBe(30);
+
+  // Anchor stability: moving the mask never moves the anchored placement.
+  await invoke(["layer", "edit", "anch/cut", "--y", "0", "--project", projDir]);
+  const m = await measure("anch");
+  const subject = m.layers.find((l: any) => l.name === "subject");
+  expect(subject.placement).toEqual({ x: maskedPlacement.x, y: maskedPlacement.y, opacity: 1 });
+});
+
+test("the anchor conflict refusal names --mask and spells every key the conflict rule tests (INT-U3-2)", () => {
+  const list = anchorConflictOptionList();
+  // The refusal names --mask.
+  expect(list).toContain("--mask");
+  // One derivation: every edit option the conflict rule treats as
+  // conflicting (minus the prose content kinds) appears exactly once in
+  // the refusal text, and nothing else does.
+  const prose = new Set(["image", "from-generation", "from-matte", "text"]);
+  const anchorFree = new Set(["x", "y", "opacity", "anchor"]);
+  const listed = list.match(/--[a-z-]+/g) ?? [];
+  const listedSet = new Set(listed);
+  let conflictingCount = 0;
+  for (const def of LAYER_OPTION_DEFS) {
+    if (!def.editOption) continue;
+    if (prose.has(def.key)) {
+      expect(listedSet.has(`--${def.key}`)).toBe(false); // named as prose
+      expect(isAnchorConflicting({ [def.key]: "v" } as any)).toBe(true); // still conflicting
+      continue;
+    }
+    if (anchorFree.has(def.key)) {
+      expect(isAnchorConflicting({ [def.key]: "v" } as any)).toBe(false);
+      continue;
+    }
+    conflictingCount++;
+    expect(isAnchorConflicting({ [def.key]: "v" } as any)).toBe(true);
+    expect(listedSet.has(`--${def.key}`)).toBe(true);
+  }
+  // No duplicates, no extras: the listed flags are exactly the conflicting
+  // keys (the shape family's flags included).
+  expect(listed.length).toBe(conflictingCount);
+});
+
+test("measure reports the clip on and off canvas, unmasked defaults, and refused masked ink (INT-U3-3)", async () => {
+  await makeStage();
+  await setMask("stage/subject", "cut");
+
+  // Unmasked defaults: the background reports the documented no-mask shape.
+  const m1 = await measure("stage");
+  const bg = m1.layers.find((l: any) => l.name === "bg");
+  expect(bg.mask).toBeNull();
+  expect(bg.maskedPainted).toBeNull();
+  expect(bg.maskedPaintedOnCanvas).toBeNull();
+  expect(bg.masks).toEqual([]);
+  // Fully on-canvas clip: the on-canvas post-clip extent equals the clip.
+  const subject = m1.layers.find((l: any) => l.name === "subject");
+  expect(subject.maskedPainted).toEqual({ x: 20, y: 100, width: 160, height: 40 });
+  expect(subject.maskedPaintedOnCanvas).toEqual(subject.maskedPainted);
+  // The mask use reports the uses it serves.
+  const cut = m1.layers.find((l: any) => l.name === "cut");
+  expect(cut.masks).toEqual(["subject"]);
+  expect(cut.mask).toBeNull();
+  expect(cut.maskedPainted).toBeNull();
+
+  // Partly off-canvas: the clip keeps ink that pokes past the canvas edge —
+  // maskedPainted is the full post-clip ink, maskedPaintedOnCanvas its
+  // canvas intersection (60px of the 160px-wide subject hang off the edge).
+  await makeComp("edge");
+  const wide = path.join(tempDir, "edge-subject.png");
+  await writeFile(wide, solidPng(160, 140, RED));
+  await addImageLayer("edge", "subject", wide, { x: 100, y: 10 });
+  await addShape("edge", "veil", { size: "200x160", fill: "#00ff00", x: 0, y: 0 });
+  await setMask("edge/subject", "veil");
+  const m2 = await measure("edge");
+  const edgeSubject = m2.layers.find((l: any) => l.name === "subject");
+  expect(edgeSubject.maskedPainted).toEqual({ x: 100, y: 10, width: 160, height: 140 });
+  expect(edgeSubject.maskedPaintedOnCanvas).toEqual({ x: 100, y: 10, width: 100, height: 140 });
+
+  // A refused capture on a masked Layer: maskedPainted is null like painted
+  // (uncaptured, not empty), and the measure exits 1. The refusal is the
+  // capture-window bound: a scale just under the 8192px publication cap
+  // with a long shadow's mapped reach pushes the window far past it.
+  await makeComp("refused");
+  const tiny = path.join(tempDir, "tiny.png");
+  await writeFile(tiny, solidPng(64, 48, RED));
+  await addImageLayer("refused", "subject", tiny, { x: 0, y: 0 });
+  const big = await invoke([
+    "layer", "edit", "refused/subject", "--scale", "126", "--shadow", "60,0,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+  expect(big.code, big.stderr).toBe(0);
+  await addShape("refused", "veil", { size: "200x160", fill: "#00ff00", x: 0, y: 0 });
+  await setMask("refused/subject", "veil");
+  const res = await invoke(["composition", "measure", "refused", "--project", projDir, "--json"]);
+  expect(res.code).toBe(1);
+  const refused = JSON.parse(res.stdout).layers.find((l: any) => l.name === "subject");
+  expect(refused.refused).toContain("capture window");
+  expect(refused.painted).toBeNull();
+  expect(refused.maskedPainted).toBeNull();
+  expect(refused.maskedPaintedOnCanvas).toBeNull();
+});
+
+test("the human-readable measure text surfaces the mask facts and the post-clip extents (PROD-U3-2)", async () => {
+  await makeStage();
+  await setMask("stage/subject", "cut");
+  const res = await invoke(["composition", "measure", "stage", "--project", projDir]);
+  expect(res.code).toBe(0);
+  const subjectLine = res.stdout.split("\n").find((l) => l.includes('"subject"'))!;
+  expect(subjectLine).toContain('mask "cut"');
+  expect(subjectLine).toContain("painted (20, 10) 160×140"); // pre-clip keeps its meaning
+  expect(subjectLine).toContain("the clip keeps (20, 100) 160×40");
+  const cutLine = res.stdout.split("\n").find((l) => l.includes('"cut"'))!;
+  expect(cutLine).toContain('masks "subject"');
+  expect(cutLine).not.toContain("the clip keeps");
 });
