@@ -125,7 +125,7 @@ test("layer edit: the generation/output block precedes the numeric parses", asyn
   await expectRefusal(
     ["layer", "edit", layerId, "--output", "2", "--project", projDir],
     2,
-    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --shape, --size, --corner-radius, --fill, --vector-color, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box, --x, --y, --opacity, --anchor, --resize, --resize-to, --cover-to, --scale, --rotate, --flip, --shadow, --outline, --visible-region, --visible-region-radius, --brightness, --contrast, --saturation, --warmth, --blend, --glow, or --fork.",
+    "No edit options provided: specify at least one of --image, --from-generation, --from-matte, --text, --shape, --size, --corner-radius, --fill, --vector-color, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box, --x, --y, --opacity, --anchor, --resize, --resize-to, --cover-to, --scale, --scale-to, --rotate, --flip, --shadow, --outline, --visible-region, --visible-region-radius, --brightness, --contrast, --saturation, --warmth, --blend, --glow, or --fork.",
   );
   // With a real edit option supplied, the output-selector check precedes it.
   await expectRefusal(

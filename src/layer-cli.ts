@@ -48,8 +48,10 @@ must match the address).
       absolute effective size (image and shape Layers only; one omitted axis
       preserves the aspect ratio), --cover-to <WxH|canvas> scales an image
       Layer to FILL a target box with the aspect preserved (the overflow
-      stays outside the canvas), and --scale <factor> sets the absolute
-      scale — the
+      stays outside the canvas), --scale <factor> sets the absolute
+      uniform scale, and --scale-to <XxY> sets the absolute per-axis scale
+      (one stored fact: either setter replaces the current scale; "1x1"
+      removes it) — the
       same command twice keeps the same scale (never compounding).
       --rotate sets an ABSOLUTE rotation in degrees: the
       same command twice is still the same angle (unlike the relative resize
@@ -178,8 +180,9 @@ Options:
                         pixel facts. Omitted keeps the current size. A
                         carried corner radius that exceeds the new range is
                         refused (pass --corner-radius in the same edit).
-                        Mutually exclusive with --resize, --resize-to, and
-                        --scale in one edit (the effective-size cap and the
+                        Mutually exclusive with --resize, --resize-to,
+                        --cover-to, --scale, and --scale-to in one edit (the
+                        effective-size cap and the
                         resize reference read the intrinsic size). Refused
                         on image and text Layers (kind stability).
   --corner-radius <px>  Set a shape rectangle's corner radius to an ABSOLUTE
@@ -275,7 +278,8 @@ Options:
                         referrers must agree). Centring is a separate
                         anchored-placement edit (on add, --anchor composes:
                         transforms apply before the anchor). Mutually
-                        exclusive with --resize, --resize-to, and --scale.
+                        exclusive with --resize, --resize-to, --scale, and
+                        --scale-to.
   --scale <factor>      Set the Layer's scale to an ABSOLUTE factor: replaces
                         the current scale (uniform, both axes), so the same
                         command twice keeps the same scale — never compounding
@@ -284,7 +288,20 @@ Options:
                         canonical scale (no
                         second scale field), and never changes retained
                         pixels. Mutually exclusive with --resize,
-                        --resize-to, and --cover-to.
+                        --resize-to, --cover-to, and --scale-to.
+  --scale-to <XxY>      Set the Layer's scale to ABSOLUTE per-axis factors
+                        (e.g. "1.3x0.8" stretches 1.3× horizontally, 0.8×
+                        vertically): the same command twice keeps the same
+                        scale — never compounding. Works on
+                        ${SCALE_HELP_KINDS}. "<X>x" or "x<Y>"
+                        sets one axis and keeps the Layer's current scale on
+                        the omitted axis. This and --scale are ONE stored
+                        fact (the canonical scaleX/scaleY): either setter
+                        wholly replaces the current scale, and "1x1"
+                        removes it (the render returns to scale 1
+                        byte-for-byte). Never changes retained pixels.
+                        Mutually exclusive with --resize, --resize-to,
+                        --cover-to, and --scale.
   --rotate <deg>        Rotate the Layer to an ABSOLUTE angle in degrees,
                         replacing any previous rotation: --rotate 45 twice is
                         still 45° (never 90° — unlike the relative --resize

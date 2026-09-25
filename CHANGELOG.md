@@ -1,6 +1,24 @@
 # Changelog
 
 ## [Unreleased]
+- Added an absolute per-axis scale setter for every Layer kind:
+  `--scale-to <XxY>` on `composition add` and `layer edit` writes the SAME
+  canonical `scaleX`/`scaleY` facts the uniform `--scale` sets (one stored
+  fact, no text-only field, ADR-0016 amendment) — `--scale-to 1.3x0.8`
+  stretches a Layer 1.3× horizontally and 0.8× vertically, so text Layers
+  take non-uniform scale through the one canonical transform path their
+  per-axis scale was previously unreachable through (`--resize-to` needs an
+  intrinsic pixel size text does not have). Repeating the command never
+  compounds; one omitted axis (`1.3x`, `x0.8`) keeps the Layer's current
+  scale on that axis; the per-axis factors share the uniform setter's
+  bounds wording and cap verbatim; and either setter wholly replaces the
+  current scale, with `--scale-to 1x1` removing it (the render returns to
+  scale 1 byte-for-byte). Wrap width and fit box stay layout px before the
+  transform (#294/#295): the per-axis scale maps the wrapped layout box
+  into canvas space and never re-wraps. `measure` reports both factors;
+  the fact joins the property × kind matrix, the add/edit refusal parity
+  tests, and the offline reversibility and replay suite (spec #285
+  US-030, ISC-51, DEC-005/DEC-006, TEST-002) (#296).
 - Added a fit box as a text revision fact: `--fit-box <WxH|none>` on
   `composition add` and `layer edit` is an ABSOLUTE setter in layout px
   (before the canonical transform) — with a box set, the font size shrinks

@@ -131,7 +131,7 @@ export interface LayerOptionDef {
   /** The ONE boundary parse for the option (DEC-001, #263): the shared
    *  validator both command boundaries dispatch through, keyed by the
    *  option's own key — no per-option parse block exists on either
-   *  surface. The resize family's four forms are the one cross-option
+   *  surface. The resize family's five forms are the one cross-option
    *  exclusivity parse (`parseResizeOptions`), dispatched as one step by
    *  each surface's order list. An option whose value carries no boundary
    *  shape (the content markers --image/--text, --font, and --color, whose
@@ -180,6 +180,7 @@ export type LayerOptionKey =
   | "resize-to"
   | "cover-to"
   | "scale"
+  | "scale-to"
   | "rotate"
   | "flip"
   | "shadow"
@@ -274,7 +275,7 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "y", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: (raw) => parseLayerCoordinate("y", raw) },
   { key: "opacity", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerOpacity },
   { key: "anchor", group: "placement", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerAnchor, apply: applyAnchor },
-  // The resize family: four mutually exclusive forms through the ONE
+  // The resize family: five mutually exclusive forms through the ONE
   // cross-option exclusivity parse (`parseResizeOptions`) — each surface's
   // order list dispatches it as one step at the family's established check
   // position, and each form has its own ONE application case.
@@ -293,6 +294,13 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // agreeing referrers only).
   { key: "cover-to", group: "transform", appliesTo: ["image"], editOption: true, apply: applyCoverTo },
   { key: "scale", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, apply: applyScale },
+  // The absolute per-axis scale setter (#296, spec #285 US-030, DEC-005,
+  // ADR-0016 amendment): the two factors ARE the canonical scaleX/scaleY,
+  // shared by every kind — including text, whose per-axis scale was
+  // previously unreachable (--resize-to needs an intrinsic pixel size).
+  // The uniform --scale and this setter are ONE stored fact, so either
+  // wholly replaces the other; --scale-to 1x1 is the removal form.
+  { key: "scale-to", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, apply: applyScaleTo },
   { key: "rotate", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerRotation, apply: applyRotation },
   { key: "flip", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerFlip, apply: applyFlip },
   { key: "shadow", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerShadow, apply: applyShadow },
@@ -382,6 +390,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   warmth: { type: "string" },
   blend: { type: "string" },
   glow: { type: "string" },
+  "scale-to": { type: "string" },
 } as const satisfies Record<LayerOptionKey, { type: "string" }>;
 
 /** The parsed-CLI shape of this option surface: every key is a raw string
@@ -942,7 +951,7 @@ export function parseGenerationOutputValue(raw: string): OptionParse<string> {
 
 /**
  * The one validation path for the resize/scale family (--resize,
- * --resize-to, --cover-to, --scale): the four forms are mutually
+ * --resize-to, --cover-to, --scale, --scale-to): the five forms are mutually
  * exclusive — one
  * intent per edit — then each form's shape. Scale semantics, caps, and
  * kind conflicts stay in the ingestion paths (`resolveEditScale`, whose
@@ -953,8 +962,9 @@ export function parseResizeOptions(
   resizeTo: string | undefined,
   scale?: string,
   coverTo?: string,
-): OptionParse<{ resizeFactor?: number; resizeTo?: { width?: number; height?: number }; scale?: number; coverTo?: CoverTarget }> {
-  const supplied = [resize !== undefined, resizeTo !== undefined, coverTo !== undefined, scale !== undefined].filter(Boolean).length;
+  scaleTo?: string,
+): OptionParse<{ resizeFactor?: number; resizeTo?: { width?: number; height?: number }; scale?: number; coverTo?: CoverTarget; scaleTo?: { scaleX?: number; scaleY?: number } }> {
+  const supplied = [resize !== undefined, resizeTo !== undefined, coverTo !== undefined, scale !== undefined, scaleTo !== undefined].filter(Boolean).length;
   if (supplied > 1) {
     // Pair-specific wording, shared with resolveEditScale's ONE exclusivity
     // rule — the boundary and the publication path refuse with the same
@@ -987,6 +997,30 @@ export function parseResizeOptions(
       return {
         ok: false,
         error: "--resize and --scale are mutually exclusive: use one resize form per edit (--resize is relative, --scale sets the absolute scale).",
+      };
+    }
+    if (scaleTo !== undefined && resize !== undefined) {
+      return {
+        ok: false,
+        error: "--resize and --scale-to are mutually exclusive: use one resize form per edit (--resize is relative, --scale-to sets the absolute per-axis scale).",
+      };
+    }
+    if (scaleTo !== undefined && resizeTo !== undefined) {
+      return {
+        ok: false,
+        error: "--resize-to and --scale-to are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale-to sets the absolute per-axis scale).",
+      };
+    }
+    if (scaleTo !== undefined && coverTo !== undefined) {
+      return {
+        ok: false,
+        error: "--cover-to and --scale-to are mutually exclusive: use one resize form per edit (--cover-to sets a cover-fit size, --scale-to sets the absolute per-axis scale).",
+      };
+    }
+    if (scaleTo !== undefined && scale !== undefined) {
+      return {
+        ok: false,
+        error: "--scale and --scale-to are mutually exclusive: use one resize form per edit (--scale sets a uniform absolute scale, --scale-to sets the absolute per-axis scale).",
       };
     }
     return {
@@ -1052,7 +1086,24 @@ export function parseResizeOptions(
       };
     }
   }
-  return { ok: true, value: { ...(resizeFactor !== undefined ? { resizeFactor } : {}), ...(target !== undefined ? { resizeTo: target } : {}), ...(cover !== undefined ? { coverTo: cover } : {}), ...(scaleValue !== undefined ? { scale: scaleValue } : {}) } };
+  let scaleToFactors: { scaleX?: number; scaleY?: number } | undefined;
+  if (scaleTo !== undefined) {
+    const raw = scaleTo.trim();
+    const m = raw.match(/^(\d+(?:\.\d+)?)?x(\d+(?:\.\d+)?)?$/);
+    if (!m || (m[1] === undefined && m[2] === undefined)) {
+      return {
+        ok: false,
+        error:
+          `--scale-to takes "<X>x<Y>" (both axes: independent absolute factors) or "<X>x" / "x<Y>" ` +
+          `(one axis: the omitted axis keeps the Layer's current scale), e.g. "1.3x0.8" — got "${scaleTo}".`,
+      };
+    }
+    scaleToFactors = {
+      ...(m[1] !== undefined ? { scaleX: Number(m[1]) } : {}),
+      ...(m[2] !== undefined ? { scaleY: Number(m[2]) } : {}),
+    };
+  }
+  return { ok: true, value: { ...(resizeFactor !== undefined ? { resizeFactor } : {}), ...(target !== undefined ? { resizeTo: target } : {}), ...(cover !== undefined ? { coverTo: cover } : {}), ...(scaleValue !== undefined ? { scale: scaleValue } : {}), ...(scaleToFactors !== undefined ? { scaleTo: scaleToFactors } : {}) } };
 }
 
 /** --rotate: a finite number of degrees, clockwise positive. */
@@ -1315,11 +1366,11 @@ export function anchorConflictOptionList(): string {
  *  per-option member exists to name. */
 export type ParsedLayerOptionValues = Partial<Record<LayerOptionKey, unknown>>;
 
-/** The resize family's keys: four mutually exclusive forms through the ONE
+/** The resize family's keys: five mutually exclusive forms through the ONE
  *  cross-option exclusivity parse (`parseResizeOptions`), which each
  *  surface's order list dispatches as one step at the family's established
  *  check position. */
-export const RESIZE_FAMILY_KEYS: readonly LayerOptionKey[] = ["resize", "resize-to", "cover-to", "scale"];
+export const RESIZE_FAMILY_KEYS: readonly LayerOptionKey[] = ["resize", "resize-to", "cover-to", "scale", "scale-to"];
 
 /** The parsed `--cover-to` target: a concrete pixel box (the --resize-to
  *  grammar) or the "canvas" keyword, resolved to the concrete Composition
@@ -1332,7 +1383,7 @@ export type CoverTarget = { width?: number; height?: number } | "canvas";
  * single runner both command boundaries dispatch through, driven by the
  * surface's order list and the option table's parse registrations. Each
  * supplied option's value normalizes through its table-carried parse; the
- * resize family's four forms normalize through the shared exclusivity
+ * resize family's five forms normalize through the shared exclusivity
  * parse as one step. Returns the parsed values keyed by the option keys, or
  * `undefined` when no listed option is supplied.
  *
@@ -1364,7 +1415,7 @@ export function parseSharedOption(
 }
 
 /**
- * The resize family's ONE cross-option step (DEC-001): the four mutually
+ * The resize family's ONE cross-option step (DEC-001): the five mutually
  * exclusive forms through the shared exclusivity parse, mapped into the
  * parsed record by the family's own keys. Both check paths run this one
  * step at the family's first check position.
@@ -1372,9 +1423,9 @@ export function parseSharedOption(
 export function parseResizeFamilyStep(
   values: LayerOptionArgs,
 ): OptionParse<ParsedLayerOptionValues | undefined> {
-  const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale, values["cover-to"]);
+  const resize = parseResizeOptions(values.resize, values["resize-to"], values.scale, values["cover-to"], values["scale-to"]);
   if (!resize.ok) return resize;
-  if (resize.value.resizeFactor === undefined && resize.value.resizeTo === undefined && resize.value.scale === undefined && resize.value.coverTo === undefined) {
+  if (resize.value.resizeFactor === undefined && resize.value.resizeTo === undefined && resize.value.scale === undefined && resize.value.coverTo === undefined && resize.value.scaleTo === undefined) {
     return { ok: true, value: undefined };
   }
   const mapped: ParsedLayerOptionValues = {};
@@ -1382,6 +1433,7 @@ export function parseResizeFamilyStep(
   if (resize.value.resizeTo !== undefined) mapped["resize-to"] = resize.value.resizeTo;
   if (resize.value.coverTo !== undefined) mapped["cover-to"] = resize.value.coverTo;
   if (resize.value.scale !== undefined) mapped.scale = resize.value.scale;
+  if (resize.value.scaleTo !== undefined) mapped["scale-to"] = resize.value.scaleTo;
   return { ok: true, value: mapped };
 }
 
@@ -1398,7 +1450,7 @@ export function parseLayerOptionSteps(
     supplied = true;
     if (RESIZE_FAMILY_KEYS.includes(key)) {
       // The resize family's cross-option exclusivity rule: one parse for the
-      // four forms, run once at the family's first check position.
+      // five forms, run once at the family's first check position.
       if (familyRan) continue;
       familyRan = true;
       const family = parseResizeFamilyStep(values);
@@ -1475,6 +1527,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "resize-to" },
   { option: "cover-to" },
   { option: "scale" },
+  { option: "scale-to" },
   { option: "rotate" },
   { option: "flip" },
   { option: "shape" },
@@ -1508,6 +1561,7 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "resize-to",
   "cover-to",
   "scale",
+  "scale-to",
   "rotate",
   "flip",
   "shadow",
@@ -1917,6 +1971,26 @@ function applyScale(
   draft.scaleY = scale.scaleY;
 }
 
+function applyScaleTo(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  // Absolute per-axis scale setter (#296, spec #285 US-030, DEC-005,
+  // ADR-0016 amendment): the two factors ARE the canonical scale, resolved
+  // through the edit path's ONE scale resolution — so the surfaces'
+  // refusals, bounds, and idempotence are identical by construction. The
+  // uniform --scale and this setter share the ONE stored scale fact: either
+  // wholly replaces the other; 1x1 is the removal form.
+  const scale = resolveEditScale(
+    { scaleTo: value as { scaleX?: number; scaleY?: number } },
+    context.base as ResolvedLayerRevision,
+    draft.layerId,
+  );
+  draft.scaleX = scale.scaleX;
+  draft.scaleY = scale.scaleY;
+}
+
 function applyRotation(
   draft: SharedOptionDraft,
   value: unknown,
@@ -2191,6 +2265,7 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "resize-to" },
   { option: "cover-to" },
   { option: "scale" },
+  { option: "scale-to" },
   { option: "rotate" },
   { option: "flip" },
   { option: "shadow" },

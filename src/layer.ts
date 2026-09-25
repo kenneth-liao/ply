@@ -3331,7 +3331,7 @@ export function roundEffective(px: number): number {
  * aspect rules are byte-identical to the edit surface's by construction —
  * including the text-Layer refusal for --resize-to (identical wording).
  */
-/** The resize/scale intent a scale resolution reads: the four mutually
+/** The resize/scale intent a scale resolution reads: the five mutually
  *  exclusive forms plus the content-replacement presence the domain
  *  re-check reads (the shared application cases pass one form; the edit
  *  path's domain re-check passes the content flags too). */
@@ -3340,6 +3340,7 @@ export interface LayerResizeIntent {
   resizeTo?: { width?: number; height?: number };
   coverTo?: { width?: number; height?: number } | "canvas";
   scale?: number;
+  scaleTo?: { scaleX?: number; scaleY?: number };
   image?: string;
   fromGeneration?: unknown;
   fromMatte?: unknown;
@@ -3354,15 +3355,17 @@ export function resolveEditScale(
   const hasTarget = options.resizeTo !== undefined;
   const hasCover = options.coverTo !== undefined;
   const hasScale = options.scale !== undefined;
-  if (!hasFactor && !hasTarget && !hasCover && !hasScale) {
+  const hasScaleTo = options.scaleTo !== undefined;
+  if (!hasFactor && !hasTarget && !hasCover && !hasScale && !hasScaleTo) {
     return { scaleX: prevRev.scaleX, scaleY: prevRev.scaleY };
   }
 
   // The ONE resize-form exclusivity rule (#133, extended by #231 to the
-  // absolute --scale setter and by #293 to --cover-to): at most one of the
-  // four forms per edit. The refusal runs before any staging, so a
+  // absolute --scale setter, by #293 to --cover-to, and by #296 to the
+  // absolute per-axis --scale-to): at most one of the
+  // five forms per edit. The refusal runs before any staging, so a
   // conflicting request never advances live state.
-  const formCount = [hasFactor, hasTarget, hasCover, hasScale].filter(Boolean).length;
+  const formCount = [hasFactor, hasTarget, hasCover, hasScale, hasScaleTo].filter(Boolean).length;
   if (formCount > 1) {
     if (hasFactor && hasTarget) {
       throw new Error("--resize and --resize-to are mutually exclusive resize forms: use one per edit.");
@@ -3378,18 +3381,41 @@ export function resolveEditScale(
         "--cover-to and --scale are mutually exclusive: use one resize form per edit (--cover-to sets a cover-fit size, --scale sets the absolute scale).",
       );
     }
+    if (hasFactor && hasScale) {
+      throw new Error(
+        "--resize and --scale are mutually exclusive: use one resize form per edit (--resize is relative, --scale sets the absolute scale).",
+      );
+    }
+    if (hasScaleTo && hasFactor) {
+      throw new Error(
+        "--resize and --scale-to are mutually exclusive: use one resize form per edit (--resize is relative, --scale-to sets the absolute per-axis scale).",
+      );
+    }
+    if (hasScaleTo && hasTarget) {
+      throw new Error(
+        "--resize-to and --scale-to are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale-to sets the absolute per-axis scale).",
+      );
+    }
+    if (hasScaleTo && hasCover) {
+      throw new Error(
+        "--cover-to and --scale-to are mutually exclusive: use one resize form per edit (--cover-to sets a cover-fit size, --scale-to sets the absolute per-axis scale).",
+      );
+    }
+    if (hasScaleTo && hasScale) {
+      throw new Error(
+        "--scale and --scale-to are mutually exclusive: use one resize form per edit (--scale sets a uniform absolute scale, --scale-to sets the absolute per-axis scale).",
+      );
+    }
     throw new Error(
-      hasFactor && hasScale
-        ? "--resize and --scale are mutually exclusive: use one resize form per edit (--resize is relative, --scale sets the absolute scale)."
-        : "--resize-to and --scale are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale sets the absolute scale).",
+      "--resize-to and --scale are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale sets the absolute scale).",
     );
   }
   const replacesContent =
     options.image !== undefined || options.fromGeneration !== undefined || options.fromMatte !== undefined;
   if (replacesContent) {
     throw new Error(
-      hasScale
-        ? `Scale and content replacement are separate edits: Layer "${layerId}" cannot replace its source and set --scale in one edit, because the effective-size cap reads the retained content's intrinsic size.`
+      hasScale || hasScaleTo
+        ? `Scale and content replacement are separate edits: Layer "${layerId}" cannot replace its source and set ${hasScale ? "--scale" : "--scale-to"} in one edit, because the effective-size cap reads the retained content's intrinsic size.`
         : `Resize and content replacement are separate edits: Layer "${layerId}" cannot replace its source and resize in one edit, because the resize reference size would be ambiguous.`,
     );
   }
@@ -3405,6 +3431,30 @@ export function resolveEditScale(
       );
     }
     return boundedScale({ scaleX: scale, scaleY: scale }, prevRev, layerId);
+  }
+
+  if (hasScaleTo) {
+    // Absolute per-axis scale setter (#296, spec #285 US-030, DEC-005,
+    // ADR-0016 amendment): the two factors ARE the canonical scale, so
+    // repeating the command is idempotent by construction and the uniform
+    // --scale's whole-fact replacement holds in reverse (one fact, never
+    // two). One omitted axis keeps the Layer's current scale on that axis —
+    // the --resize-to one-axis rule at factor semantics. The per-axis
+    // factors share the uniform setter's bounds wording verbatim, on every
+    // kind (text included: its per-axis scale was previously unreachable).
+    const { scaleX, scaleY } = options.scaleTo!;
+    for (const factor of [scaleX, scaleY]) {
+      if (factor !== undefined && (!Number.isFinite(factor) || factor <= 0 || factor > MAX_DIMENSION)) {
+        throw new Error(
+          `Invalid scale ${factor}: must be a finite number between 0 and ${MAX_DIMENSION}.`,
+        );
+      }
+    }
+    return boundedScale(
+      { scaleX: scaleX ?? prevRev.scaleX, scaleY: scaleY ?? prevRev.scaleY },
+      prevRev,
+      layerId,
+    );
   }
 
   if (hasFactor) {
@@ -3852,10 +3902,10 @@ async function buildEditedRevision(
     // never advances live state.
     if (
       options.size !== undefined &&
-      (shared.resize !== undefined || shared["resize-to"] !== undefined || shared["cover-to"] !== undefined || shared.scale !== undefined)
+      (shared.resize !== undefined || shared["resize-to"] !== undefined || shared["cover-to"] !== undefined || shared.scale !== undefined || shared["scale-to"] !== undefined)
     ) {
       throw new Error(
-        `--size and the resize forms (--resize, --resize-to, --cover-to, --scale) are separate edits: Layer "${layerId}" cannot set the geometry's intrinsic size and resize in one edit, because the effective-size cap and the resize reference read the geometry's intrinsic size.`,
+        `--size and the resize forms (--resize, --resize-to, --cover-to, --scale, --scale-to) are separate edits: Layer "${layerId}" cannot set the geometry's intrinsic size and resize in one edit, because the effective-size cap and the resize reference read the geometry's intrinsic size.`,
       );
     }
     const mergedGeometry = options.shape ?? prevRev.shape;
@@ -4432,6 +4482,9 @@ export async function editLayerInternal(
               ? { coverTo: shared["cover-to"] as { width?: number; height?: number } | "canvas" }
               : {}),
             ...(shared.scale !== undefined ? { scale: shared.scale as number } : {}),
+            ...(shared["scale-to"] !== undefined
+              ? { scaleTo: shared["scale-to"] as { scaleX?: number; scaleY?: number } }
+              : {}),
             image: options.image,
             fromGeneration: options.fromGeneration,
             fromMatte: options.fromMatte,
@@ -4492,7 +4545,7 @@ export async function editLayerInternal(
         }
       : { scaleX: draft.scaleX, scaleY: draft.scaleY };
   const hasResize =
-    shared.resize !== undefined || shared["resize-to"] !== undefined || shared["cover-to"] !== undefined || shared.scale !== undefined;
+    shared.resize !== undefined || shared["resize-to"] !== undefined || shared["cover-to"] !== undefined || shared.scale !== undefined || shared["scale-to"] !== undefined;
   const hasRotate = shared.rotate !== undefined;
   const rotatedReport = { rotationDeg: draft.rotationDeg };
   // Narrowed once: a defined flip is always a validated literal mode, so the

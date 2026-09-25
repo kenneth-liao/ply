@@ -89,6 +89,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "resize-to",
       "cover-to",
       "scale",
+      "scale-to",
       "rotate",
       "flip",
       "shadow",
@@ -104,6 +105,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     ]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
+    expect(anyOneCommandOptionProvided({ "scale-to": "1.3x0.8" })).toBe(true);
     expect(anyOneCommandOptionProvided({ "vector-color": "#22c55e" })).toBe(true);
     expect(anyOneCommandOptionProvided({ brightness: "1.2" })).toBe(true);
     expect(anyOneCommandOptionProvided({ opacity: "0.5" })).toBe(false);
@@ -119,6 +121,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize-to")!.appliesTo).toEqual(["image", "shape"]);
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "resize")!.appliesTo).toEqual(["image", "text", "shape"]);
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "scale")!.appliesTo).toEqual(["image", "text", "shape"]);
+    // Per-axis scale (#296, spec #285 US-030): the same kind set as the
+    // uniform setter — one canonical scale fact, every kind.
+    expect(LAYER_OPTION_DEFS.find((def) => def.key === "scale-to")!.appliesTo).toEqual(["image", "text", "shape"]);
     // Cover fit (#293, DEC-011) is an image-Layer option: no intrinsic pixel
     // fact on text, and a shape's sizing goes through --resize-to/--scale.
     expect(LAYER_OPTION_DEFS.find((def) => def.key === "cover-to")!.appliesTo).toEqual(["image"]);
@@ -150,7 +155,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "vector-color",
       "font", "font-file", "font-size", "color",
       "weight", "width", "tracking", "line-height", "wrap-width", "fit-box", "x", "y", "opacity", "anchor",
-      "resize", "resize-to", "cover-to", "scale", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
+      "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
       "brightness", "contrast", "saturation", "warmth", "blend", "glow",
     ]);
   });
@@ -354,6 +359,47 @@ describe("shared option validators: both surfaces' established texts", () => {
       error: 'Scale (--scale) must be a finite number greater than 0 (got "abc").',
     });
     expect(parseResizeOptions(undefined, undefined, "2")).toEqual({ ok: true, value: { scale: 2 } });
+  });
+
+  it("resize family: --scale-to grammar, bounds, and exclusivity texts (#296)", () => {
+    expect(parseResizeOptions(undefined, undefined, undefined, undefined, "1.3x0.8")).toEqual({
+      ok: true,
+      value: { scaleTo: { scaleX: 1.3, scaleY: 0.8 } },
+    });
+    expect(parseResizeOptions(undefined, undefined, undefined, undefined, "2x")).toEqual({
+      ok: true,
+      value: { scaleTo: { scaleX: 2 } },
+    });
+    expect(parseResizeOptions(undefined, undefined, undefined, undefined, "x0.5")).toEqual({
+      ok: true,
+      value: { scaleTo: { scaleY: 0.5 } },
+    });
+    expect(parseResizeOptions(undefined, undefined, undefined, undefined, "banana")).toEqual({
+      ok: false,
+      error:
+        '--scale-to takes "<X>x<Y>" (both axes: independent absolute factors) or "<X>x" / "x<Y>" (one axis: the omitted axis keeps the Layer\'s current scale), e.g. "1.3x0.8" — got "banana".',
+    });
+    expect(parseResizeOptions(undefined, undefined, undefined, undefined, "1.3")).toEqual({
+      ok: false,
+      error:
+        '--scale-to takes "<X>x<Y>" (both axes: independent absolute factors) or "<X>x" / "x<Y>" (one axis: the omitted axis keeps the Layer\'s current scale), e.g. "1.3x0.8" — got "1.3".',
+    });
+    expect(parseResizeOptions("2", undefined, undefined, undefined, "2x2")).toEqual({
+      ok: false,
+      error: "--resize and --scale-to are mutually exclusive: use one resize form per edit (--resize is relative, --scale-to sets the absolute per-axis scale).",
+    });
+    expect(parseResizeOptions(undefined, "96x", undefined, undefined, "2x")).toEqual({
+      ok: false,
+      error: "--resize-to and --scale-to are mutually exclusive: use one resize form per edit (--resize-to sets an absolute size, --scale-to sets the absolute per-axis scale).",
+    });
+    expect(parseResizeOptions(undefined, undefined, undefined, "96x96", "x2")).toEqual({
+      ok: false,
+      error: "--cover-to and --scale-to are mutually exclusive: use one resize form per edit (--cover-to sets a cover-fit size, --scale-to sets the absolute per-axis scale).",
+    });
+    expect(parseResizeOptions(undefined, undefined, "2", undefined, "2x2")).toEqual({
+      ok: false,
+      error: "--scale and --scale-to are mutually exclusive: use one resize form per edit (--scale sets a uniform absolute scale, --scale-to sets the absolute per-axis scale).",
+    });
   });
 
   it("rotate, flip, shadow, outline, anchor keep their texts", () => {

@@ -12,6 +12,7 @@
  * | ------------------------------- | -------------------- | ------------------------------ | ----------------------------- |
  * | relative resize (--resize)      | "image Layer --resize advances revision" | "text Layer resizes by factor, refuses --resize-to" | test/layer-resize.test.ts |
  * | absolute resize (--resize-to)   | "--resize-to normalizes to scale with documented aspect-ratio behavior" | (refusal owned by the same text test) | test/layer-resize.test.ts |
+ * | per-axis scale (--scale-to)     | "--scale-to sets absolute per-axis factors on image Layers; repeating it is idempotent" | "a text Layer scaled 1.3 by 0.8 renders stretched and measure reports both factors"; removal and replay cells | test/layer-scale-to.test.ts |
  * | rotation (--rotate)             | "image Layer --rotate sets an absolute angle" | "text Layer rotates and keeps its retained font bytes" | test/layer-rotate.test.ts |
  * | reflection (--flip)             | "image Layer --flip sets an absolute reflection state" | "text Layer flips vertically / horizontally" | test/layer-flip.test.ts |
  * | layout/content measurement      | "measure reports an identity image Layer's layout box" | "text measurement uses the retained face" | test/composition-measure.test.ts |
@@ -43,6 +44,15 @@ const audit: Array<{ suite: string; markers: string[] }> = [
       "--resize-to normalizes to scale with documented aspect-ratio behavior",
       "text Layer resizes by factor, refuses --resize-to",
       "resizes never touch retained generation lineage or source bytes",
+    ],
+  },
+  {
+    suite: "layer-scale-to.test.ts",
+    markers: [
+      "a text Layer scaled 1.3 by 0.8 renders stretched and measure reports both factors",
+      "--scale-to sets absolute per-axis factors on image Layers; repeating it is idempotent",
+      "removing the per-axis scale with --scale-to 1x1 restores the render byte-for-byte",
+      "a Render retained before the --scale-to edit replays byte-identically",
     ],
   },
   {

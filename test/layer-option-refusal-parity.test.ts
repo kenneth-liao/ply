@@ -142,6 +142,7 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "resize-to", bad: ["--resize-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--resize-to takes" },
   { key: "cover-to", bad: ["--cover-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--cover-to takes" },
   { key: "scale", bad: ["--scale", "0"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Scale (--scale)" },
+  { key: "scale-to", bad: ["--scale-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--scale-to takes" },
   { key: "rotate", bad: ["--rotate", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Rotation (--rotate)" },
   { key: "flip", bad: ["--flip", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Flip (--flip)" },
   { key: "shadow", bad: ["--shadow", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid shadow "banana"' },
