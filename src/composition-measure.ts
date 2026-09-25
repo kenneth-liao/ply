@@ -113,6 +113,7 @@ import {
   normalizeStoredBlur,
   normalizeStoredChoke,
   normalizeStoredFeather,
+  readEffectStack,
   storedTextRunSlices,
   type LayerTextRun,
   type SnapshotRunFont,
@@ -432,14 +433,16 @@ type Box = { x: number; y: number; width: number; height: number };
  * terms already cover.
  */
 function localEffectReachPx(revision: TransformFactsSource): number {
-  // Stacked effects (#302, ADR-0027): the stored stack fold folds here too —
-  // the reach ADDS over every stacked effect (each outline dilates the
-  // accumulated composite; each shadow is cast from the accumulated ink),
-  // the same additive list the paint chain's function order builds.
-  const outlines = revision.outline === undefined ? [] : Array.isArray(revision.outline) ? revision.outline : [revision.outline];
-  const shadows = revision.shadow === undefined ? [] : Array.isArray(revision.shadow) ? revision.shadow : [revision.shadow];
-  const outline = outlines.reduce((sum, o) => sum + o.width, 0);
-  const shadow = shadows.reduce((sum, s) => sum + Math.abs(s.dx) + Math.abs(s.dy) + 2 * s.blur, 0);
+  // Stacked effects (#302, ADR-0027): the fold is `readEffectStack`'s (the
+  // ONE read-side shape interpreter, layer.ts) — the reach ADDS over every
+  // stacked effect (each outline dilates the accumulated composite; each
+  // shadow is cast from the accumulated ink), the same additive list the
+  // paint chain's function order builds.
+  const outline = (readEffectStack(revision.outline) ?? []).reduce((sum, o) => sum + o.width, 0);
+  const shadow = (readEffectStack(revision.shadow) ?? []).reduce(
+    (sum, s) => sum + Math.abs(s.dx) + Math.abs(s.dy) + 2 * s.blur,
+    0,
+  );
   const blur = normalizeStoredBlur(revision) ?? 0;
   const blurReach = blur > 0 ? Math.ceil(3 * blur) : 0;
   return outline + shadow + blurReach;

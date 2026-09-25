@@ -1003,6 +1003,21 @@ function canonicalizeEffectColor(color: string): string {
 }
 
 /**
+ * The ONE read-side shape fold for a stack value (#302, review INT-1,
+ * ADR-0027): a list passes through, a single object folds to a one-element
+ * list — object-vs-list is interpreted HERE and nowhere else on the read
+ * direction. The stored normalizers layer validation and the stored
+ * length-1 refusal on top of this (a storage-shape rule, not a fold); the
+ * reach reader (`localEffectReachPx`, shared with the publication gate)
+ * uses it directly — its inputs are already-validated stored documents or
+ * resolved revisions, whose one-effect fields are one-element lists.
+ */
+export function readEffectStack<T>(value: T | T[] | undefined): T[] | undefined {
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
  * The stored stack fold for a repeatable effect field (#302, spec #285
  * US-011, ISC-50, DEC-005, ADR-0027): ONE canonical home per fact — one
  * effect stores today's single object; two or more store a list in the
@@ -1010,8 +1025,7 @@ function canonicalizeEffectColor(color: string): string {
  * answer for the same fact (the object form IS the one-effect shape), so
  * it is a malformed document, refused loudly (the #297 text-runs
  * precedent). Absence IS the no-effect form. Both stored normalizers fold
- * through this one helper; the hash and the reach reader work on the same
- * shapes.
+ * through this one helper, whose shape decision is `readEffectStack`'s.
  */
 function foldStoredEffectStack<T>(
   raw: unknown,
@@ -1021,15 +1035,17 @@ function foldStoredEffectStack<T>(
   if (raw === undefined) {
     return undefined;
   }
-  if (Array.isArray(raw)) {
-    if (raw.length < 2) {
-      throw new Error(
-        `Malformed revision document: ${label} must be the single object form when one effect is stored — a one-element list is a second answer for the same fact (got ${JSON.stringify(raw)}).`,
-      );
-    }
-    return raw.map((entry, i) => validate(entry, `${label}[${i + 1}]`));
+  if (Array.isArray(raw) && raw.length < 2) {
+    // The stored-shape refusal, layered on the shared fold: the object form
+    // IS the one-effect shape, so a stored length-1 list is a second answer
+    // for the same fact.
+    throw new Error(
+      `Malformed revision document: ${label} must be the single object form when one effect is stored — a one-element list is a second answer for the same fact (got ${JSON.stringify(raw)}).`,
+    );
   }
-  return [validate(raw, label)];
+  return readEffectStack(raw)!.map((entry, i) =>
+    validate(entry, Array.isArray(raw) ? `${label}[${i + 1}]` : label),
+  );
 }
 
 /**
@@ -4663,13 +4679,11 @@ export function storedEffectStack<T>(value: T | T[] | undefined): T | T[] | unde
 }
 
 function shadowStackOf(value: LayerShadow | LayerShadow[] | undefined): LayerShadow[] | undefined {
-  if (value === undefined) return undefined;
-  return Array.isArray(value) ? value : [value];
+  return readEffectStack(value);
 }
 
 function outlineStackOf(value: LayerOutline | LayerOutline[] | undefined): LayerOutline[] | undefined {
-  if (value === undefined) return undefined;
-  return Array.isArray(value) ? value : [value];
+  return readEffectStack(value);
 }
 
 /** Field-wise shadow-stack equality for the no-op check (#139; stacking
