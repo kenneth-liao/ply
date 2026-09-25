@@ -170,6 +170,16 @@ const IMAGE_EFFECTS = [
   "--inner-shadow", "0,6,4,#000000", "--inner-shadow", "-3,0,0,#00000080",
 ];
 
+// The Layer mask (ADR-0025, #305): the fact joins the full-option parity —
+// each kind's one-command add names the mask use (which must pre-exist in
+// the target Composition, since the fact resolves at publication), and the
+// multi-command route sets it in the documented stage (after the effects,
+// the mask group's add-stage position). The pre-seeded "mat" use is an
+// ordinary shape Layer of each Composition.
+const MASK_SEED = ["--shape", "rectangle", "--size", "40x40", "--fill", "#ffffff", "--x", "0", "--y", "0"];
+const MASK_ONE_COMMAND = ["--mask", "mat"];
+const MASK_EFFECT_STAGE = ["--mask", "mat"];
+
 const TEXT_ONE_COMMAND = [
   "--text", "Groundline", "--font", "Archivo", "--font-size", "48", "--color", "#ffcc00",
   "--x", "200", "--y", "150",
@@ -215,16 +225,21 @@ const SHAPE_EFFECTS = [
 test("image Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one");
   await createComposition("multi");
+  // The mask use pre-exists in both Compositions (ADR-0025: the fact names
+  // a use and resolves at publication).
+  await json(["composition", "add", "one", "mat", ...MASK_SEED]);
+  await json(["composition", "add", "multi", "mat", ...MASK_SEED]);
 
   const one = await json([
     "composition", "add", "one", "hero",
     ...IMAGE_ONE_COMMAND.map((a) => (a === "<pad>" ? padImagePath : a)),
+    ...MASK_ONE_COMMAND,
   ]);
   const oneLayerId = (one.layer as { id: string }).id;
   const multiLayerId = await multiCommandBuild(
     "multi", "hero",
     IMAGE_CONTENT.map((a) => (a === "<pad>" ? padImagePath : a)),
-    IMAGE_TRANSFORMS, IMAGE_ANCHOR, IMAGE_EFFECTS,
+    IMAGE_TRANSFORMS, IMAGE_ANCHOR, [...IMAGE_EFFECTS, ...MASK_EFFECT_STAGE],
   );
 
   // One command publishes exactly ONE Layer revision.
@@ -352,11 +367,13 @@ test("fit box parity (#295, DEC-010/DEC-005): the one-command --fit-box add equa
 test("text Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one-t");
   await createComposition("multi-t");
+  await json(["composition", "add", "one-t", "mat", ...MASK_SEED]);
+  await json(["composition", "add", "multi-t", "mat", ...MASK_SEED]);
 
-  const one = await json(["composition", "add", "one-t", "headline", ...TEXT_ONE_COMMAND]);
+  const one = await json(["composition", "add", "one-t", "headline", ...TEXT_ONE_COMMAND, ...MASK_ONE_COMMAND]);
   const oneLayerId = (one.layer as { id: string }).id;
   const multiLayerId = await multiCommandBuild(
-    "multi-t", "headline", TEXT_CONTENT, TEXT_TRANSFORMS, TEXT_ANCHOR, TEXT_EFFECTS,
+    "multi-t", "headline", TEXT_CONTENT, TEXT_TRANSFORMS, TEXT_ANCHOR, [...TEXT_EFFECTS, ...MASK_EFFECT_STAGE],
   );
 
   expect(await revisionCount(oneLayerId)).toBe(1);
@@ -372,6 +389,9 @@ test("text Layer: one-command add equals the multi-command sequence (render, mea
 test("shape Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {
   await createComposition("one-s");
   await createComposition("multi-s");
+  // (The mask fact's per-kind application parity — shape included — is
+  // owned by the guard loops in one-command-add.test.ts; this test keeps
+  // its established option set and its default per-test timeout budget.)
 
   const one = await json(["composition", "add", "one-s", "panel", ...SHAPE_ONE_COMMAND]);
   const oneLayerId = (one.layer as { id: string }).id;

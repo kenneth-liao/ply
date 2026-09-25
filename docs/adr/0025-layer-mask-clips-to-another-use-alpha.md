@@ -3,8 +3,10 @@
 - Status: Accepted — decided by Kenny in the #304 interview (2026-09-23)
   for [spec #285](https://github.com/kenneth-liao/ply/issues/285) DEC-007
   (US-009, ISC-48); §5's derived rules were written by the agent from
-  those decisions (see Context). Implementation is ticket #305; nothing
-  here has shipped.
+  those decisions (see Context). Shipped by ticket #305 (7.2.0): the
+  `--mask` revision fact, the after-effects clip in paint, the measure
+  clip facts, and the §3 lifecycle (import relink, fork, relocation,
+  replay) — with the §5 strict-whitelist reading recorded below.
 
 ## Context
 
@@ -138,6 +140,14 @@ These follow from §1–§4 and from existing invariants.
   edge glow, outline, shadow, blend, and any mask of its own do not
   contribute. A mask use does not paint, so these facts have no visible
   effect while the use serves as a mask.
+  - **Reading recorded at implementation (#305, approved):** the whitelist
+    is exhaustive — "content alpha, visible region, placement, and
+    transform" is the complete set. The §2/§5 effect lists never claimed to
+    be the only excluded facts: choke, feather, and inner shadow (alpha-edge
+    and interior effects) and blur are excluded too, because none of them is
+    the content alpha DEC-007 names. A soft clip edge comes from soft
+    CONTENT alpha in the mask (an anti-aliased cutout, feathered-by-content
+    glyphs), not from the mask's effects.
 - **Which uses are masks.** A use is a mask when at least one other use in
   the same Composition names it. Several masked Layers may name the same
   mask use.

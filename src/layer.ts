@@ -350,6 +350,29 @@ interface LayerRevisionBase {
    * present, so revisions written before #300 keep their exact ids.
    */
   feather?: number;
+  /**
+   * Canonical Layer mask (ADR-0025, spec #285 US-009, DEC-007, #305): the
+   * Composition-LOCAL use name of another Layer use in the same
+   * Composition whose alpha clips this Layer's final pixels (after its
+   * effects, before blend — ADR-0025 §4). The fact names a use, never a
+   * Layer: the same Composition may hold several uses with different
+   * targets, and the name resolves separately in every Composition that
+   * uses this Layer (ADR-0013 constrained, ADR-0025 §5).
+   *
+   * An ABSOLUTE setter stored only when set: absence IS the no-mask form,
+   * so set-then-remove publishes the exact prior revision and renders
+   * byte-for-byte like never-set, and revisions written before masks keep
+   * their exact ids. The documented removal value on both command surfaces
+   * is `:none` — the colon-keyword form (the `--position before:<use>`
+   * family) can never name a use, because use names admit only
+   * `[a-zA-Z0-9_-]` (the one name rule, sanitizeName).
+   *
+   * A mask use does not paint (ADR-0025 §2) and gives only its content
+   * alpha, cropped by its visible region and placed by its placement and
+   * transform — never its opacity, grade, effects, blend, or its own mask
+   * (the §5 strict whitelist).
+   */
+  mask?: string;
 }
 
 /** The documented blend modes (#220, spec #218 US-003, ADR-0024). */
@@ -1627,6 +1650,27 @@ export function normalizeStoredFeather(revision: { feather?: unknown }): number 
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0 || raw > MAX_EDGE_RADIUS_PX) {
     throw new Error(
       `Malformed revision document: feather must be a finite number of px between 0 (exclusive, the removal form) and ${MAX_EDGE_RADIUS_PX} when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  return raw;
+}
+
+/**
+ * Canonical Layer mask (ADR-0025, #305): the Composition-local use name of
+ * the Layer use whose alpha clips this Layer, validated and normalized at
+ * this same one boundary — a malformed stored name is refused loudly before
+ * the revision hash is consulted. Absence IS the no-mask form. The stored
+ * name must satisfy the one name rule for Project-visible names (the same
+ * grammar `sanitizeName` enforces at the command boundary), so a stored
+ * fact can never read as anything but a use name — and never as the
+ * removal value `:none`, whose colon the grammar refuses.
+ */
+export function normalizeStoredMask(revision: { mask?: unknown }): string | undefined {
+  if (revision.mask === undefined) return undefined;
+  const raw = revision.mask;
+  if (typeof raw !== "string" || !/^[a-zA-Z0-9_-]+$/.test(raw)) {
+    throw new Error(
+      `Malformed revision document: mask must be a use name (alphanumeric, dash, or underscore) when present (got ${JSON.stringify(raw)}).`,
     );
   }
   return raw;
@@ -3228,6 +3272,11 @@ export function computeRevisionHash(rev: LayerRevision): string {
   const choke = normalizeStoredChoke(rev);
   const chokeField = choke !== undefined ? `:choke(${choke})` : "";
   const feather = normalizeStoredFeather(rev);
+  // The Layer mask (ADR-0025, #305): appended only when the fact is set —
+  // use names are hash-safe (the one name rule grammar), so revisions
+  // written before masks keep their exact ids.
+  const mask = normalizeStoredMask(rev);
+  const maskField = mask !== undefined ? `:mask(${mask})` : "";
   const featherField = feather !== undefined ? `:feather(${feather})` : "";
   // The text layout rule (#287, spec #285 DEC-001, ADR-0017 amendment):
   // appended only when "natural", so revisions written before #287 keep their
@@ -3275,7 +3324,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
           })
           .join(";")})`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${innerShadowField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${chokeField}${featherField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${innerShadowField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${chokeField}${featherField}${maskField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -3591,6 +3640,10 @@ export async function readRevisionInternalFull(
   // consulted. Absence IS the no-fact form for both.
   const choke = normalizeStoredChoke(revision);
   const feather = normalizeStoredFeather(revision);
+  // Canonical Layer mask (ADR-0025, #305): validated and normalized at this
+  // same one boundary — a malformed stored name is refused loudly before the
+  // revision hash is consulted. Absence IS the no-mask form.
+  const mask = normalizeStoredMask(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -3691,6 +3744,7 @@ export async function readRevisionInternalFull(
             ...(blur !== undefined ? { blur } : {}),
             ...(choke !== undefined ? { choke } : {}),
             ...(feather !== undefined ? { feather } : {}),
+            ...(mask !== undefined ? { mask } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -3727,6 +3781,7 @@ export async function readRevisionInternalFull(
           ...(blur !== undefined ? { blur } : {}),
           ...(choke !== undefined ? { choke } : {}),
           ...(feather !== undefined ? { feather } : {}),
+          ...(mask !== undefined ? { mask } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -3775,6 +3830,7 @@ export async function readRevisionInternalFull(
           ...(blur !== undefined ? { blur } : {}),
           ...(choke !== undefined ? { choke } : {}),
           ...(feather !== undefined ? { feather } : {}),
+          ...(mask !== undefined ? { mask } : {}),
         };
 
   // Run font bytes (#297): every distinct run font override's retained
@@ -5674,6 +5730,7 @@ async function buildEditedRevision(
       ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
       ...(draft.choke !== undefined ? { choke: draft.choke } : {}),
       ...(draft.feather !== undefined ? { feather: draft.feather } : {}),
+      ...(draft.mask !== undefined ? { mask: draft.mask } : {}),
       ...carried,
     };
     const unchanged =
@@ -5695,6 +5752,7 @@ async function buildEditedRevision(
       normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
       normalizeStoredChoke(draft) === normalizeStoredChoke(prevRev) &&
       normalizeStoredFeather(draft) === normalizeStoredFeather(prevRev) &&
+      normalizeStoredMask(draft) === normalizeStoredMask(prevRev) &&
       Object.keys(carried).length === 0;
     // The divergent-perspective publication gate (PROD-1, #298 review):
     // the image extent is the retained content's intrinsic box — run before
@@ -5820,6 +5878,7 @@ async function buildEditedRevision(
       ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
       ...(draft.choke !== undefined ? { choke: draft.choke } : {}),
       ...(draft.feather !== undefined ? { feather: draft.feather } : {}),
+      ...(draft.mask !== undefined ? { mask: draft.mask } : {}),
       ...carried,
     };
     const unchanged =
@@ -5851,6 +5910,7 @@ async function buildEditedRevision(
       normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
       normalizeStoredChoke(draft) === normalizeStoredChoke(prevRev) &&
       normalizeStoredFeather(draft) === normalizeStoredFeather(prevRev) &&
+      normalizeStoredMask(draft) === normalizeStoredMask(prevRev) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
     // --size change the content box, so the kept region re-validates against
@@ -6104,6 +6164,7 @@ async function buildEditedRevision(
       ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
       ...(draft.choke !== undefined ? { choke: draft.choke } : {}),
       ...(draft.feather !== undefined ? { feather: draft.feather } : {}),
+      ...(draft.mask !== undefined ? { mask: draft.mask } : {}),
       ...carried,
     };
     // The runs edits replace the whole-text fact: the stored text is the
@@ -6147,6 +6208,7 @@ async function buildEditedRevision(
       normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
       normalizeStoredChoke(draft) === normalizeStoredChoke(prevRev) &&
       normalizeStoredFeather(draft) === normalizeStoredFeather(prevRev) &&
+      normalizeStoredMask(draft) === normalizeStoredMask(prevRev) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a text edit (#211 review PROD-1): the text
     // content box is the measured line-box extent, so a text edit that can

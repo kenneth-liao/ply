@@ -94,6 +94,7 @@ import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
 import {
   applyTextFit,
   buildCompositionHtml,
+  paintMaskRasters,
   rejectUnresolvedFonts,
   sizeEffectFilterRegions,
   type SnapshotLayer,
@@ -150,6 +151,14 @@ export interface MeasuredLayerBounds {
   clipped: boolean;
   /** Actionable refusal message when the Layer's own capture window exceeds the bound (max 8192px per axis or 16,777,216px total); null when within bounds. Distinguishes uncaptured from empty ink (painted: null). */
   refused: string | null;
+  /** The Layer mask (ADR-0025, #305): the Composition-local use name this Layer's revision stores as its clip, or null. The clip applies to the Layer's final pixels (after its effects, before blend). */
+  mask: string | null;
+  /** The POST-CLIP painted extents: the masked Layer's ink after the mask clip (the pre-clip `painted` keeps its with-effects meaning). Null for unmasked Layers, for empty post-clip ink, or when capture is refused. */
+  maskedPainted: { x: number; y: number; width: number; height: number } | null;
+  /** The post-clip extent's intersection with the canvas rectangle; null when empty or when capture is refused. */
+  maskedPaintedOnCanvas: { x: number; y: number; width: number; height: number } | null;
+  /** The uses in this Composition whose revision names this use as their mask (ADR-0025 §5: a use is a mask when at least one other use names it). A mask use's ink is its own — it measures and anchors like any Layer — but it never paints. */
+  masks: string[];
   /** The revision's placement facts, verbatim. */
   placement: { x: number; y: number; opacity: number };
   /** The revision's normalized canonical transform facts, verbatim. */
@@ -306,8 +315,15 @@ const MEASURE_PROBE = (regions: ({ x: number; y: number; width: number; height: 
   }
   const origin = canvasEl.getBoundingClientRect();
   return Array.from(canvasEl.children, (el, i) => {
-    const saved = (el as HTMLElement).style.transform;
-    const computed = getComputedStyle(el).transform;
+    // The mask wrapper (ADR-0025, #305): a masked Layer's direct #canvas
+    // child is the full-canvas clip wrapper; the geometry probe measures the
+    // layer element inside it — placement, transform, and the content box
+    // are the Layer's own facts, and the wrapper carries none of them.
+    const layerEl = ((el as HTMLElement).hasAttribute("data-ply-mask")
+      ? (el as HTMLElement).firstElementChild
+      : el) as HTMLElement;
+    const saved = layerEl.style.transform;
+    const computed = getComputedStyle(layerEl).transform;
     let matrix: DOMMatrixReadOnly;
     try {
       matrix = computed !== "none" && computed !== "" ? new DOMMatrixReadOnly(computed) : new DOMMatrixReadOnly();
@@ -317,12 +333,12 @@ const MEASURE_PROBE = (regions: ({ x: number; y: number; width: number; height: 
     // Untransformed content box: transform removal never reflows other
     // Layers (they are absolutely positioned), so one element's measurement
     // cannot disturb another's.
-    (el as HTMLElement).style.transform = "none";
-    const plain = el.getBoundingClientRect();
+    (layerEl as HTMLElement).style.transform = "none";
+    const plain = layerEl.getBoundingClientRect();
     const content = { width: plain.width, height: plain.height };
     const lx = plain.left - origin.left;
     const ly = plain.top - origin.top;
-    (el as HTMLElement).style.transform = saved;
+    (layerEl as HTMLElement).style.transform = saved;
     // The markup always sets transform-origin: 0 0, so the transform maps
     // local coordinates about the element's own top-left layout corner.
     const corner = (u: number, v: number) => {
@@ -779,10 +795,16 @@ async function measureSnapshot(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
   options: { page?: Page; captureUseName?: string; layoutOnly?: boolean } = {},
-): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null; refused: string | null; fit: TextFitProbe | null }[]> {
+): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null; maskedPainted: Box | null; refused: string | null; fit: TextFitProbe | null }[]> {
   const run = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
-    await page.setContent(buildCompositionHtml(canvas, layers), { waitUntil: "load" });
+    // The Layer mask (ADR-0025, #305): the mask pass runs on the SAME page
+    // flow as painting — it resolves every masked Layer's stored name in
+    // this Composition (loud refusal naming the missing use), and supplies
+    // the clip rasters the markup embeds. Measuring never paints unclipped
+    // as a fallback.
+    const maskImages = await paintMaskRasters(canvas, layers, { page, supersample: 1 });
+    await page.setContent(buildCompositionHtml(canvas, layers, 1, maskImages), { waitUntil: "load" });
     // Awaited decode: a partially painted or broken image is never measured.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     // Per-Layer outline-filter region sizing (#140, ADR-0019): the paint
@@ -834,6 +856,10 @@ async function measureSnapshot(
     // sizing and the loud-refusal cap, so an effected Layer's full painted
     // extent is captured or refused, never clipped into a smaller report.
     const painted: (Box | null)[] = new Array(measured.length).fill(null);
+    // The post-clip painted extents (ADR-0025 §5, #305): a second capture
+    // for a masked Layer, with the clip wrapper's mask restored; null for
+    // unmasked Layers.
+    const maskedPainted: (Box | null)[] = new Array(measured.length).fill(null);
     const refused: (string | null)[] = new Array(measured.length).fill(null);
     if (measured.length > 0) {
       // Per-Layer capture window (#185): sized from THAT Layer's own box,
@@ -922,17 +948,51 @@ async function measureSnapshot(
             el.style.visibility = j === idx ? "" : "hidden";
           });
         }, i);
+        // The Layer mask (ADR-0025 §5, #305): `painted` keeps its pre-clip
+        // meaning, so a masked Layer's capture first DISABLES the clip
+        // wrapper's mask; the post-clip extents are a SECOND capture with
+        // the saved declaration restored (the style attribute IS the CSSOM —
+        // blanking the property would lose the original raster), reported
+        // separately as `maskedPainted`. The capture window already covers
+        // both: post-clip ink is a subset of the pre-clip ink the window was
+        // sized from.
+        const masked = layers[i]!.revision.mask !== undefined;
+        const savedMask = masked
+          ? await page.evaluate((idx) => {
+              const el = (document.getElementById("canvas") as HTMLElement).children[idx] as HTMLElement;
+              if (!el.hasAttribute("data-ply-mask")) return null;
+              const saved = {
+                maskImage: el.style.maskImage,
+                webkitMaskImage: el.style.getPropertyValue("-webkit-mask-image"),
+              };
+              el.style.maskImage = "none";
+              el.style.setProperty("-webkit-mask-image", "none");
+              return saved;
+            }, i)
+          : null;
         const shot = await page.screenshot({ type: "png", omitBackground: true });
         painted[i] = inkBounds(decodePng(Buffer.from(shot)), left, top);
+        if (savedMask !== null) {
+          await page.evaluate(
+            ({ idx, saved }) => {
+              const el = (document.getElementById("canvas") as HTMLElement).children[idx] as HTMLElement;
+              el.style.maskImage = saved.maskImage;
+              el.style.setProperty("-webkit-mask-image", saved.webkitMaskImage);
+            },
+            { idx: i, saved: savedMask },
+          );
+          const maskedShot = await page.screenshot({ type: "png", omitBackground: true });
+          maskedPainted[i] = inkBounds(decodePng(Buffer.from(maskedShot)), left, top);
+        }
       }
     }
 
     // The painted-ink pass is skippable (#295): the fit-refusal probe needs
     // only the layout derivation, never the per-Layer ink screenshots.
     if (options.layoutOnly === true) {
-      return measured.map((m, i) => ({ ...m, painted: null, refused: null, fit: fitProbes[i] ?? null }));
+      return measured.map((m, i) => ({ ...m, painted: null, maskedPainted: null, refused: null, fit: fitProbes[i] ?? null }));
     }
-    return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null, refused: refused[i] ?? null, fit: fitProbes[i] ?? null }));
+    return measured.map((m, i) => ({ ...m, painted: painted[i] ?? null, maskedPainted: maskedPainted[i] ?? null, refused: refused[i] ?? null, fit: fitProbes[i] ?? null }));
   };
   return options.page ? run(options.page) : withRenderPage(run);
 }
@@ -971,6 +1031,14 @@ export async function measureCompositionLayers(
   const measured = await measureSnapshot(comp.canvas, layers, {
     ...options,
     captureUseName: useName,
+  });
+
+  // The post-clip painted boxes (ADR-0025 §5, #305): one home for the
+  // reported box, derived from the same rounded values the report carries
+  // (a refused capture reports null, like `painted`).
+  const maskedPaintedBoxes = layers.map((_, i) => {
+    const m = measured[i]!;
+    return m.refused !== null ? null : m.maskedPainted ? roundBox(m.maskedPainted) : null;
   });
 
   const bounds: MeasuredLayerBounds[] = layers.map((l, i) => {
@@ -1012,6 +1080,20 @@ export async function measureCompositionLayers(
         paintedOnCanvas,
         clipped,
         refused: m.refused,
+        // The Layer mask (ADR-0025 §5, #305): the stored use name rides
+        // beside the painted facts; the POST-CLIP extents are the mask
+        // clip's own reported fact (the clip comes after placement, so it
+        // changes neither the anchor basis nor `painted`). A use serving as
+        // a mask reports the uses that name it; its ink is its own (it
+        // measures and anchors like any Layer) — it just never paints.
+        mask: rev.mask ?? null,
+        maskedPainted: maskedPaintedBoxes[i],
+        maskedPaintedOnCanvas: maskedPaintedBoxes[i]
+          ? roundBox(clipToCanvas(maskedPaintedBoxes[i]!, comp.canvas))
+          : null,
+        masks: layers
+          .filter((other) => other.revision.mask === l.name)
+          .map((other) => other.name),
         corners: m.corners.map((c) => ({ x: round2(c.x), y: round2(c.y) })),
         placement: { x: rev.x, y: rev.y, opacity: rev.opacity },
         transform: {

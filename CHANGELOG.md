@@ -1,6 +1,34 @@
 # Changelog
 
 ## [Unreleased]
+- Added Layer masks (BREAKING: `measure --json` report shape grew — see
+  below; #305, spec #285 US-009, ISC-48, DEC-007,
+  ADR-0025): `--mask <use-name>` on `composition add` and `layer edit`
+  clips a Layer to ANOTHER Layer use's alpha in the same Composition,
+  stored as a revision fact with the removal spelling `:none` — a
+  colon-keyword form (the `--position before:<use>` family) that can never
+  name a use, so removing a clip is never read as naming one, and the
+  add/edit refusal parity pins it. The clip uses the mask's content alpha
+  after its OWN transforms and visible region, in canvas space, painted at
+  the delivery device scale (ADR-0022) — a masked hard edge is as sharp as
+  a directly painted edge — and cuts the masked Layer's FINAL pixels after
+  its effects and before its blend (ADR-0024 amendment): the clipped Layer
+  blends as one unit, anchored placement still resolves against pre-effect
+  ink (#288), and `measure`'s `painted` stays pre-clip with the POST-clip
+  extents reported as new `mask`/`maskedPainted`/`maskedPaintedOnCanvas`/
+  `masks` facts. A use serving as a mask does NOT paint; only its content
+  alpha, visible region, placement, and transform shape the clip (the
+  §5 strict whitelist — never its opacity, grade, effects, blend, or any
+  mask of its own; recorded in ADR-0025 §5 and README). Unresolved names,
+  self-masks, and cycles are refused loudly at set/add and at
+  paint/measure/render, naming the uses; an in-place mask edit resolves in
+  EVERY referring Composition (the refusal names each where it does not,
+  the result reports each resolved use), `composition remove` refuses to
+  remove a use a masked Layer still names, and the mask travels with the
+  masked Layer under import (cross-Project copies relink to the
+  destination copy), fork, relocation, and byte-identical replay
+  (set-then-remove renders byte-for-byte like never-set). The property ×
+  kind matrix covers every kind as masked Layer and as mask (#305).
 - Added inner shadows to Layers (#303, spec #285 US-011, ISC-64, DEC-005,
   ADR-0027/ADR-0024 fourth amendment): `--inner-shadow
   "<dx>,<dy>,<blur>,<color>"` on `composition add` and `layer edit` paints a

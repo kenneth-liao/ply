@@ -1547,3 +1547,115 @@ test("matrix: the inner shadow darkens the top inside edge on raster image, vect
     expect(l.painted).toEqual(plain.painted);
   }
 }, 60_000);
+
+// ---------------------------------------------------------------------------
+// The Layer mask (ADR-0025, #305): the property × kind matrix — every kind
+// can be MASKED (its final pixels clipped by another use's alpha, after its
+// effects, before blend), and every kind can SERVE as a mask (giving its
+// content alpha, visible region, placement, and transform — nothing else).
+// ---------------------------------------------------------------------------
+
+test("matrix: the mask clips raster image, vector image, text, and shape Layers (ADR-0025, #305)", async () => {
+  await makeComp("comp-masked", 200, 200);
+
+  // One shape mask use: a right-half band; its fill (pure green) must never
+  // appear — a mask use does not paint.
+  const pngPath = path.join(tempDir, "mask-red.png");
+  await writeFile(pngPath, solidPng(200, 200, [255, 0, 0, 255]));
+  const svgPath = path.join(tempDir, "mask-red.svg");
+  await writeFile(svgPath, solidSvg(200, 200, "#ff0000"));
+
+  // One Composition per kind so each masked Layer clips against the same
+  // mask independently.
+  const kinds: Array<{ comp: string; add: string[] }> = [
+    { comp: "masked-raster-c", add: ["--image", pngPath, "--x", "0", "--y", "0"] },
+    { comp: "masked-vector-c", add: ["--image", svgPath, "--x", "0", "--y", "0"] },
+    { comp: "masked-shape-c", add: ["--shape", "rectangle", "--size", "200x200", "--fill", "#ff0000", "--x", "0", "--y", "0"] },
+    { comp: "masked-text-c", add: ["--text", "MMMM", "--font", "Archivo", "--font-size", "140", "--color", "#ff0000", "--x", "10", "--y", "20"] },
+  ];
+  for (const k of kinds) {
+    await makeComp(k.comp, 200, 200);
+    await invoke(["composition", "add", k.comp, "hole", "--shape", "rectangle", "--size", "100x200", "--fill", "#00ff00", "--x", "100", "--y", "0", "--project", projDir]);
+    const added = await invoke(["composition", "add", k.comp, "subject", ...k.add, "--project", projDir, "--json"]);
+    expect(added.code).toBe(0);
+    const set = await invoke(["layer", "edit", `${k.comp}/subject`, "--mask", "hole", "--project", projDir, "--json"]);
+    expect(set.code).toBe(0);
+  }
+
+  for (const k of kinds) {
+    const png = await render(k.comp, `${k.comp}.png`);
+    // Inside the mask: the layer's red ink survives (some red pixel in the
+    // right half — the text case's glyph ink is sparse); outside the mask:
+    // nothing (no opaque pixel in the left half). The mask's green never
+    // appears (it does not paint).
+    let redInside = 0;
+    for (let y = 0; y < png.height; y += 2) {
+      for (let x = 100; x < png.width; x += 2) {
+        if (pixel(png, x, y)[0] > 200) redInside++;
+      }
+    }
+    expect(redInside).toBeGreaterThan(0);
+    for (let y = 0; y < png.height; y += 2) {
+      for (let x = 0; x < 100; x += 2) {
+        expect(pixel(png, x, y)[3]).toBe(0);
+      }
+    }
+    for (let y = 0; y < png.height; y += 5) {
+      for (let x = 0; x < png.width; x += 5) {
+        const p = pixel(png, x, y);
+        expect(p[1] > p[0] && p[1] > p[2]).toBe(false);
+      }
+    }
+    // Measure: the stored fact and the post-clip extents ride on every kind.
+    const measured = await invoke(["composition", "measure", k.comp, "--project", projDir, "--json"]);
+    const subject = (JSON.parse(measured.stdout).layers as Array<{ name: string; mask: string | null; maskedPainted: unknown }>).find((l) => l.name === "subject")!;
+    expect(subject.mask).toBe("hole");
+    expect(subject.maskedPainted).not.toBeNull();
+  }
+}, 60_000);
+
+test("matrix: raster image, vector image, text, and shape Layers each serve as a mask (ADR-0025, #305)", async () => {
+  // A red full-canvas subject, masked in turn by a raster, a vector, a
+  // text, and a shape Layer use — each mask's own alpha shapes the clip,
+  // and no mask paints.
+  const subjectPath = path.join(tempDir, "matrix-subject.png");
+  await writeFile(subjectPath, solidPng(200, 200, [255, 0, 0, 255]));
+  const rasterMask = path.join(tempDir, "mask-raster.png");
+  await writeFile(rasterMask, solidPng(100, 200, [255, 255, 255, 255]));
+  const vectorMask = path.join(tempDir, "mask-vector.svg");
+  await writeFile(vectorMask, solidSvg(100, 200, "#ffffff"));
+
+  const cases: Array<{ comp: string; maskAdd: string[] }> = [
+    { comp: "mask-from-raster", maskAdd: ["--image", rasterMask, "--x", "0", "--y", "0"] },
+    { comp: "mask-from-vector", maskAdd: ["--image", vectorMask, "--x", "0", "--y", "0"] },
+    { comp: "mask-from-text", maskAdd: ["--text", "IIII", "--font", "Archivo", "--font-size", "160", "--color", "#ffffff", "--x", "10", "--y", "160"] },
+    { comp: "mask-from-shape", maskAdd: ["--shape", "rectangle", "--size", "100x200", "--fill", "#ffffff", "--x", "0", "--y", "0"] },
+  ];
+  for (const c of cases) {
+    await makeComp(c.comp, 200, 200);
+    await invoke(["composition", "add", c.comp, "subject", "--image", subjectPath, "--x", "0", "--y", "0", "--project", projDir]);
+    const maskAdded = await invoke(["composition", "add", c.comp, "veil", ...c.maskAdd, "--project", projDir, "--json"]);
+    expect(maskAdded.code).toBe(0);
+    const set = await invoke(["layer", "edit", `${c.comp}/subject`, "--mask", "veil", "--project", projDir, "--json"]);
+    expect(set.code).toBe(0);
+  }
+
+  for (const c of cases) {
+    const png = await render(c.comp, `${c.comp}.png`);
+    // The subject's red survives only where the mask's alpha is; the mask
+    // use never paints (no white anywhere).
+    for (let y = 0; y < png.height; y += 4) {
+      for (let x = 0; x < png.width; x += 4) {
+        const p = pixel(png, x, y);
+        const isWhite = p[0] > 240 && p[1] > 240 && p[2] > 240;
+        expect(isWhite).toBe(false);
+      }
+    }
+    // The measured mask use reports the uses that name it, and keeps its
+    // own ink (it measures like any Layer).
+    const measured = await invoke(["composition", "measure", c.comp, "--project", projDir, "--json"]);
+    const veil = (JSON.parse(measured.stdout).layers as Array<{ name: string; masks: string[]; painted: unknown }>).find((l) => l.name === "veil")!;
+    expect(veil.masks).toEqual(["subject"]);
+    expect(veil.painted).not.toBeNull();
+  }
+}, 60_000);

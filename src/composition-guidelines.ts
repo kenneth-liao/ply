@@ -61,9 +61,11 @@ import type { Page } from "playwright";
 import {
   paintCompositionHtml,
   buildCompositionHtml,
+  paintMaskRasters,
   escapeHtml,
   type SnapshotLayer,
 } from "./composition-paint.js";
+import { withRenderPage } from "./browser.js";
 import { resolveCompositionSnapshot, resolveExportTarget } from "./composition-render.js";
 import { ingestRegionCanvas, readRegionFile, type Region } from "./composition-regions.js";
 import { renderOutputConflict } from "./manifest.js";
@@ -198,8 +200,9 @@ export function guidelinePageHtml(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
   regions: Region[],
+  maskImages: Map<string, string> = new Map(),
 ): string {
-  return buildCompositionHtml(canvas, layers).replace(
+  return buildCompositionHtml(canvas, layers, 1, maskImages).replace(
     "</body>",
     `${guidelineOverlayMarkup(regions)}\n</body>`,
   );
@@ -276,13 +279,22 @@ export async function renderCompositionGuidelines(
 
   // The paint (with the guideline-only callout placement pass) stays outside
   // the lock; everything that reads or writes Project-visible state happens
-  // under it, immediately before publishing.
-  const { png } = await paintCompositionHtml(
-    snapshot.canvas,
-    guidelinePageHtml(snapshot.canvas, snapshot.layers, regions),
-    snapshot.layers,
-    { page: options.page, beforeScreenshot: placeRegionCallouts },
-  );
+  // under it, immediately before publishing. The mask pass (ADR-0025, #305)
+  // runs on the same page first — the guideline view shows exactly what
+  // would render, clips included.
+  const paint = async (page: Page) => {
+    const maskImages = await paintMaskRasters(snapshot.canvas, snapshot.layers, {
+      page,
+      supersample: 1,
+    });
+    return paintCompositionHtml(
+      snapshot.canvas,
+      guidelinePageHtml(snapshot.canvas, snapshot.layers, regions, maskImages),
+      snapshot.layers,
+      { page, beforeScreenshot: placeRegionCallouts },
+    );
+  };
+  const { png } = await (options.page ? paint(options.page) : withRenderPage(paint));
 
   return withProjectLock(resolvedRoot, async () => {
     // One destination boundary for both the default and --out (PROD-1):

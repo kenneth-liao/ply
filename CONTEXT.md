@@ -167,6 +167,17 @@ balance reading is out of scope — but the vocabulary keeps a delta from ever
 reading as a receipt. A registry rate is never a charge measured on the
 request.
 
+**Mask**:
+A Layer revision fact (ADR-0025) naming another Layer **use** of the same
+Composition whose alpha clips the Layer's final pixels — after its effects,
+before its blend. The mask is an ordinary Layer: it is moved, transformed,
+and edited like any other, and the clip follows it. A use serving as a mask
+does not paint, and only its content alpha, visible region, placement, and
+transform shape the clip (never its opacity, grade, effects, blend, or any
+mask of its own). The fact's removal spelling is `:none` — a colon-keyword
+form that can never name a use.
+_Avoid_: masking the file, baking the clip
+
 ## Cross-cutting invariants
 
 - A Layer is the only composition primitive. Anything requiring independent

@@ -641,6 +641,17 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         only and painted extents never grow. The px are
                         Layer-LOCAL like the choke's. "0" removes it.
                         Never changes retained pixels.
+  --mask <use-name>     Clip the new Layer to another Layer use's alpha
+                        (ADR-0025): <use-name> is a use of the SAME
+                        Composition (it must already exist there — the
+                        name resolves before anything publishes), stored
+                        as a revision fact on the one-command add's single
+                        revision. The clip uses the mask use's content
+                        alpha after its own transforms and visible region
+                        and cuts the new Layer's final pixels; the mask
+                        use does not paint. The removal spelling ":none"
+                        can never name a use. The result reports the
+                        resolved use.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -696,6 +707,7 @@ function oneCommandFacts(
     blur?: number;
     choke?: number;
     feather?: number;
+    mask?: string;
   },
   anchorSpec?: string,
 ): string {
@@ -743,6 +755,9 @@ function oneCommandFacts(
   }
   if (rev.blend) {
     facts.push(`blend ${rev.blend}`);
+  }
+  if (rev.mask) {
+    facts.push(`mask "${rev.mask}"`);
   }
   if (anchorSpec !== undefined) {
     facts.push(`anchored ${anchorSpec} -> placement (${rev.x}, ${rev.y})`);
@@ -1136,7 +1151,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           );
           mutationCommitted = true;
           output(
-            { ok: true, composition: res.composition, use: res.use, layer: res.layer, generatedFrom: res.generatedFrom },
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer, generatedFrom: res.generatedFrom, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
             isJson,
             () => {
               const rev = res.layer.currentRevision;
@@ -1173,6 +1188,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               use: res.use,
               layer: res.layer,
               mattedFrom: res.mattedFrom,
+              ...(res.masked !== undefined ? { masked: res.masked } : {}),
               ...(res.generatedFrom ? { generatedFrom: res.generatedFrom } : {}),
             },
             isJson,
@@ -1333,7 +1349,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           );
           mutationCommitted = true;
           output(
-            { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
             isJson,
             () => {
               const rev = res.layer.currentRevision;
@@ -1399,7 +1415,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           );
           mutationCommitted = true;
           output(
-            { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
             isJson,
             () => {
               const rev = res.layer.currentRevision;
@@ -1417,7 +1433,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         const res = await addLayerToComposition(targetProj, compName, localName, values.image!, { x, y, opacity, oneCommand, position: stackPosition });
         mutationCommitted = true;
         output(
-          { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+          { ok: true, composition: res.composition, use: res.use, layer: res.layer, ...(res.masked !== undefined ? { masked: res.masked } : {}) },
           isJson,
           () => {
             const rev = res.layer.currentRevision;

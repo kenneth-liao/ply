@@ -87,6 +87,13 @@ beforeEach(async () => {
   projDir = path.join(tempDir, "proj");
   await spawn(["project", "init", projDir]);
   await spawn(["composition", "create", "poster", "--width", "400", "--height", "300", "--project", projDir]);
+  // The mask-use seed (ADR-0025, #305): the guard's --mask leg names a use
+  // that must already exist in the target Composition.
+  await spawn([
+    "composition", "add", "poster", "mat",
+    "--shape", "rectangle", "--size", "40x40", "--fill", "#ffffff", "--x", "0", "--y", "0",
+    "--project", projDir,
+  ]);
   imagePath = path.join(tempDir, "red.png");
   await writeFile(imagePath, solidPng(64, 48, RED));
   svgPath = path.join(tempDir, "mark.svg");
@@ -149,6 +156,7 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "choke": return ["4"];
     case "feather": return ["3"];
     case "inner-shadow": return ["0,6,4,#000000"];
+    case "mask": return ["mat"];
     case "fit-box": return ["600x200"];
     // The runs options (#297) never reach this guardValue: they are text
     // CONTENT (the --run occurrences), not layer-level style setters, so
@@ -264,6 +272,7 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
     case "blur": expect(rev.blur).toBe(6); break;
     case "choke": expect(rev.choke).toBe(4); break;
     case "feather": expect(rev.feather).toBe(3); break;
+    case "mask": expect(rev.mask).toBe("mat"); break;
     case "inner-shadow": expect((rev.innerShadow as Array<{ dy: number }> | undefined)?.[0]?.dy).toBe(6); break;
     case "font-size": expect(rev.fontSize).toBe(64); break;
     case "color": expect(rev.color).toBe("#ffcc00"); break;
