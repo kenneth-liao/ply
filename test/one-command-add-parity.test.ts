@@ -81,8 +81,10 @@ async function createComposition(name: string): Promise<void> {
 }
 
 /** Render a Composition; returns the PNG bytes of the default output. */
-async function renderBytes(name: string): Promise<Buffer> {
-  const rendered = await json(["composition", "render", name]);
+async function renderBytes(name: string, supersample?: number): Promise<Buffer> {
+  const args = ["composition", "render", name];
+  if (supersample !== undefined) args.push("--supersample", String(supersample));
+  const rendered = await json(args);
   const output = (rendered.render as { output: string }).output;
   return readFile(output);
 }
@@ -402,7 +404,12 @@ test("shape Layer: one-command add equals the multi-command sequence (render, me
   expect(await revisionCount(oneLayerId)).toBe(1);
   expect(await revisionCount(multiLayerId)).toBe(4);
 
-  expect(await renderBytes("one-s")).toEqual(await renderBytes("multi-s"));
+  // The renders run at supersample 1: the parity claim is about the
+  // documented option ORDER (the area-averaged delivery path is covered by
+  // composition-supersample.test.ts), and the default per-test budget —
+  // which #318 leaves untouched — has to fit this test's four renders under
+  // full-suite load.
+  expect(await renderBytes("one-s", 1)).toEqual(await renderBytes("multi-s", 1));
 
   const oneMeasure = await measure("one-s", "panel");
   const multiMeasure = await measure("multi-s", "panel");
@@ -412,7 +419,7 @@ test("shape Layer: one-command add equals the multi-command sequence (render, me
 
   // The one-command shape's Render replays byte-identically from its
   // manifest (the shape-kind replay leg of TEST-002).
-  const rendered = await json(["composition", "render", "one-s"]);
+  const rendered = await json(["composition", "render", "one-s", "--supersample", "1"]);
   const manifest = (rendered.render as { manifest: string }).manifest;
   const renderedOutput = (rendered.render as { output: string }).output;
   const replay = await json(["composition", "replay", manifest]);
