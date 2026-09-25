@@ -463,6 +463,27 @@ test("one-command add accepts --scale-to on image, vector, text, and shape Layer
   expect(shapeRev.scaleX).toBe(2);
   expect(shapeRev.scaleY).toBe(0.5);
 
+  // One-axis forms on the add surface (INT-1): the omitted axis keeps the
+  // created Layer's scale-1 base — the provisional scale context the add
+  // path resolves against, exactly as the edit surface's one-axis rule.
+  const oneAxis = await invoke([
+    "composition", "add", "poster", "p-one-axis", "--image", imagePath, "--scale-to", "2x", "--y", "240",
+    "--project", projDir, "--json",
+  ]);
+  expect(oneAxis.code).toBe(0);
+  const oneAxisRev = JSON.parse(oneAxis.stdout).layer.currentRevision;
+  expect(oneAxisRev.scaleX).toBe(2);
+  expect(oneAxisRev.scaleY).toBe(1);
+
+  const mirror = await invoke([
+    "composition", "add", "poster", "p-one-axis-y", "--image", imagePath, "--scale-to", "x0.5", "--y", "320",
+    "--project", projDir, "--json",
+  ]);
+  expect(mirror.code).toBe(0);
+  const mirrorRev = JSON.parse(mirror.stdout).layer.currentRevision;
+  expect(mirrorRev.scaleX).toBe(1);
+  expect(mirrorRev.scaleY).toBe(0.5);
+
   const measured = await measureUse("p-txt");
   expect(measured.scaleX).toBe(1.3);
   expect(measured.scaleY).toBe(0.8);
