@@ -94,7 +94,6 @@ import { MAX_DIMENSION, MAX_PIXELS, decodePng } from "./png.js";
 import {
   applyTextFit,
   buildCompositionHtml,
-  layerMaxScale,
   rejectUnresolvedFonts,
   sizeEffectFilterRegions,
   type SnapshotLayer,
@@ -106,9 +105,15 @@ import {
   normalizeStoredTextWrapWidth,
   normalizeStoredTextFitBox,
   normalizeStoredTextRuns,
+  normalizeStoredScale,
+  normalizeStoredFlip,
+  normalizeStoredRotation,
+  normalizeStoredSkew,
+  normalizeStoredPerspective,
   storedTextRunSlices,
   type LayerTextRun,
   type SnapshotRunFont,
+  type LayerRevision,
   type LayerOutline,
   type LayerShadow,
   type LayerTextTypography,
@@ -116,6 +121,7 @@ import {
   type LayerGrade,
   type LayerGlow,
   type StoredLayerBlendMode,
+  PERSPECTIVE_DISTANCE_PX,
 } from "./layer.js";
 import type { Page } from "playwright";
 import { type LayerFill, normalizeStoredTextFill } from "./fill.js";
@@ -142,7 +148,7 @@ export interface MeasuredLayerBounds {
   /** The revision's placement facts, verbatim. */
   placement: { x: number; y: number; opacity: number };
   /** The revision's normalized canonical transform facts, verbatim. */
-  transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean };
+  transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number };
   /** The revision's effective effect facts (#139/#140): `shadow` and
    * `outline` are the stored effect parameters (or null when the Layer has
    * none of that effect) — the same facts painting applies, reported for
@@ -254,6 +260,14 @@ export interface MeasureCompositionResult {
  * so the bounded ink-capture window and its centering judge the ink the
  * region leaves visible, never the full layout box. Layers without a
  * region report null and keep the full layout box exactly as before.
+ *
+ * The transform authority is the COMPUTED transform (#298): the browser's
+ * own resolved matrix — percentages in the perspective pivot's translate()
+ * resolved against the element's border box, the perspective distance and
+ * every 3D factor folded into one matrix3d — so the corners map through
+ * exactly the matrix the render paints with, projective divide included.
+ * The inline style is still what gets cleared and restored; the computed
+ * matrix is read before clearing.
  */
 const MEASURE_PROBE = (regions: ({ x: number; y: number; width: number; height: number } | null)[]) => {
   const canvasEl = document.getElementById("canvas");
@@ -263,7 +277,13 @@ const MEASURE_PROBE = (regions: ({ x: number; y: number; width: number; height: 
   const origin = canvasEl.getBoundingClientRect();
   return Array.from(canvasEl.children, (el, i) => {
     const saved = (el as HTMLElement).style.transform;
-    const matrix = saved ? new DOMMatrixReadOnly(saved) : new DOMMatrixReadOnly();
+    const computed = getComputedStyle(el).transform;
+    let matrix: DOMMatrixReadOnly;
+    try {
+      matrix = computed !== "none" && computed !== "" ? new DOMMatrixReadOnly(computed) : new DOMMatrixReadOnly();
+    } catch (err) {
+      throw new Error(`measure probe: unparseable computed transform "${computed}": ${err}`);
+    }
     // Untransformed content box: transform removal never reflows other
     // Layers (they are absolutely positioned), so one element's measurement
     // cannot disturb another's.
@@ -277,7 +297,12 @@ const MEASURE_PROBE = (regions: ({ x: number; y: number; width: number; height: 
     // local coordinates about the element's own top-left layout corner.
     const corner = (u: number, v: number) => {
       const p = matrix.transformPoint(new DOMPoint(u, v));
-      return { x: lx + p.x, y: ly + p.y };
+      // The projective divide (#298): transformPoint applies the full 4x4
+      // without dividing by w — a perspective transform reports the
+      // pre-divide point — so the projected corner divides by w here. For a
+      // 2D matrix w is 1 and the divide is a no-op.
+      const w = p.w === 0 ? 1 : p.w;
+      return { x: lx + p.x / w, y: ly + p.y / w };
     };
     const corners = [
       corner(0, 0),
@@ -366,11 +391,10 @@ type Box = { x: number; y: number; width: number; height: number };
  * The px a Layer's effects may extend its ink beyond the layout box, in
  * every canvas direction (#139/#140, ADR-0018/0019). The effects paint in
  * the Layer's LOCAL space — before the canonical transform — so the LOCAL
- * reach maps through the transform: rotation preserves lengths, and the
- * AABB of a transformed reach ball is bounded by its largest semi-axis, so
- * the canvas-space reach is the local reach × max(scaleX, scaleY), derived
- * from the revision facts alone (deterministic, never
- * rendering-consulted).
+ * reach maps through the transform: the canvas-space reach is the local
+ * reach × the transform's worst-case magnification, derived from the
+ * revision facts and the measured content extent alone (deterministic,
+ * never rendering-consulted).
  *
  * The combined local reach is ADDITIVE (DEC-006/ADR-0019 ordering): the
  * outline dilates the content by `width` px in every direction, and the
@@ -379,13 +403,194 @@ type Box = { x: number; y: number; width: number; height: number };
  * extent) — so a shadowed Layer's total local reach is width + the shadow
  * reach, never the max of the two.
  */
-function effectReachPx(revision: ResolvedLayerRevision): number {
+function effectReachPx(
+  revision: ResolvedLayerRevision,
+  content: { width: number; height: number },
+): number {
   const outline = revision.outline?.width ?? 0;
   const shadow = revision.shadow
     ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
     : 0;
-  if (outline === 0 && shadow === 0) return 0;
-  return (outline + shadow) * layerMaxScale(revision);
+  const localReach = outline + shadow;
+  if (localReach === 0) return 0;
+  return localReach * transformedStretch(revision, content, localReach);
+}
+
+type Mat2 = [number, number, number, number]; // row-major [a, b; c, d], column vectors
+
+/** The transform facts the depth/stretch helpers read — the stored OR
+ *  resolved revision shape, since the publication boundary (PROD-1) gates
+ *  the stored-shape document before it is ever resolved. */
+interface TransformFactsSource {
+  scaleX?: unknown;
+  scaleY?: unknown;
+  rotationDeg?: unknown;
+  flipX?: unknown;
+  flipY?: unknown;
+  skewXDeg?: unknown;
+  skewYDeg?: unknown;
+  perspectiveTiltXDeg?: unknown;
+  perspectiveTiltYDeg?: unknown;
+  outline?: LayerOutline | undefined;
+  shadow?: LayerShadow | undefined;
+}
+
+/** Compose two linear maps: (m·n)·p applies n first. */
+function mul2(m: Mat2, n: Mat2): Mat2 {
+  return [
+    m[0]! * n[0]! + m[1]! * n[2]!, m[0]! * n[1]! + m[1]! * n[3]!,
+    m[2]! * n[0]! + m[3]! * n[2]!, m[2]! * n[1]! + m[3]! * n[3]!,
+  ];
+}
+
+/**
+ * The pre-tilt affine's linear part (row-major 2x2, column vectors), exact:
+ * the content maps through scale (flip folded in — both diagonal), then
+ * rotation, then the skews, before the perspective tilt (#298) — the linear
+ * map the paint applies first. Both facts read through the ONE stored-field
+ * readers: a fresh provisional revision (the one-command add path) may
+ * carry absent fields, which normalize to identity here.
+ */
+function preTiltLinear(revision: TransformFactsSource): Mat2 {
+  const scale = normalizeStoredScale(revision);
+  const flip = normalizeStoredFlip(revision);
+  const rotation = normalizeStoredRotation(revision);
+  const skew = normalizeStoredSkew(revision);
+  const sx = flip.flipX ? -scale.scaleX : scale.scaleX;
+  const sy = flip.flipY ? -scale.scaleY : scale.scaleY;
+  const r = (rotation * Math.PI) / 180;
+  const rc = Math.cos(r), rs = Math.sin(r);
+  const tx = Math.tan((skew.skewXDeg * Math.PI) / 180);
+  const ty = Math.tan((skew.skewYDeg * Math.PI) / 180);
+  let m: Mat2 = [sx, 0, 0, sy];
+  m = mul2([rc, -rs, rs, rc], m); // rotation
+  m = mul2([1, 0, ty, 1], m);     // skewY (applied before skewX, per the emitted order)
+  m = mul2([1, tx, 0, 1], m);     // skewX
+  return m;
+}
+
+/**
+ * The pre-tilt affine's worst-case stretch: the largest singular value of
+ * the linear part, exact (closed form for the 2x2 MᵀM eigenvalue). This is
+ * the canvas-space magnification of a local length — a reach ball of
+ * radius r maps to an ellipse with semi-axes up to this factor.
+ */
+function affineMagnification(m: Mat2): number {
+  const s11 = m[0]! * m[0]! + m[2]! * m[2]!;
+  const s12 = m[0]! * m[1]! + m[2]! * m[3]!;
+  const s22 = m[1]! * m[1]! + m[3]! * m[3]!;
+  const lambda = (s11 + s22 + Math.sqrt((s11 - s22) ** 2 + 4 * s12 * s12)) / 2;
+  return Math.sqrt(Math.max(lambda, 0));
+}
+
+/**
+ * The ONE perspective-depth reader (INT-3, #298): the greatest depth the
+ * Layer's content — plus `extraLocalReach` px of local effect extent
+ * around it — can reach toward the viewer under the perspective tilt.
+ *
+ * The tilt applies to points ALREADY mapped by the pre-tilt affine (flip,
+ * scale, rotation, skew), so the depth is derived from the post-affine
+ * extents, never the raw layout box: with L the affine linear part, c the
+ * fixed layout-space content centre the tilt pivots about, and the emitted
+ * order applying rotateY then rotateX, the depth of a content point is
+ * exactly the linear functional `z(p) = −sin(tiltY)·cos(tiltX)·qx +
+ * sin(tiltX)·qy` on q = L·p − c. A linear functional over a box maximizes
+ * at a corner, and the extra local reach adds `‖Lᵀk‖·r` (k the
+ * functional's gradient) — so the bound is exact, never estimated.
+ *
+ * Used by BOTH the canvas-space effect-reach sizing and the divergent-
+ * projection refusal (and, through the exported refusal, the add/edit
+ * publication boundary) — one reader, never a second copy of the formula.
+ */
+function perspectiveDepth(
+  revision: TransformFactsSource,
+  content: { width: number; height: number },
+  extraLocalReach = 0,
+): number {
+  const perspective = normalizeStoredPerspective(revision);
+  if (perspective.perspectiveTiltXDeg === 0 && perspective.perspectiveTiltYDeg === 0) {
+    // No perspective function is emitted at identity tilt: there is no
+    // divide and no depth.
+    return 0;
+  }
+  const L = preTiltLinear(revision);
+  const cx = content.width / 2, cy = content.height / 2;
+  const kx = -Math.sin((perspective.perspectiveTiltYDeg * Math.PI) / 180) *
+    Math.cos((perspective.perspectiveTiltXDeg * Math.PI) / 180);
+  const ky = Math.sin((perspective.perspectiveTiltXDeg * Math.PI) / 180);
+  let maxDepth = 0;
+  for (const [u, v] of [[0, 0], [content.width, 0], [content.width, content.height], [0, content.height]] as const) {
+    const qx = L[0]! * u + L[1]! * v - cx;
+    const qy = L[2]! * u + L[3]! * v - cy;
+    maxDepth = Math.max(maxDepth, Math.abs(kx * qx + ky * qy));
+  }
+  // The reach extends the local extent around every content point; its
+  // depth contribution is the functional's operator norm over the affine
+  // map, exact for the linear functional.
+  const reachDepth =
+    extraLocalReach *
+    Math.hypot(kx * L[0]! + ky * L[2]!, kx * L[1]! + ky * L[3]!);
+  return maxDepth + reachDepth;
+}
+
+/**
+ * The stretch a Layer's transform applies to the canvas-space effect reach
+ * (#298): the pre-tilt affine's exact worst-case stretch (the largest
+ * singular value of the flip/scale/rotation/skew linear part — for
+ * scale-only Layers this is exactly max(scaleX, scaleY)) times the
+ * perspective divide's near-side magnification `d / (d − depth)`, with the
+ * depth derived from the post-affine extents (perspectiveDepth) so a
+ * scaled-then-tilted Layer's magnification is never underestimated. When
+ * the depth reaches the fixed perspective distance the projection diverges
+ * and the factor is infinite — `transformBlowupRefusal` refuses the Layer
+ * loudly before any capture, so callers never see the divide taken.
+ */
+function transformedStretch(
+  revision: TransformFactsSource,
+  content: { width: number; height: number },
+  extraLocalReach = 0,
+): number {
+  const depth = perspectiveDepth(revision, content, extraLocalReach);
+  if (depth >= PERSPECTIVE_DISTANCE_PX) {
+    return Infinity;
+  }
+  return affineMagnification(preTiltLinear(revision)) *
+    (PERSPECTIVE_DISTANCE_PX / (PERSPECTIVE_DISTANCE_PX - depth));
+}
+
+/**
+ * The actionable refusal when a Layer's perspective tilt projects its
+ * content — plus its own effect extent — deeper than the fixed 1000px
+ * perspective distance: the divide would blow up (infinite or negative
+ * magnification). Returns null when the projection stays bounded. This is
+ * the ONE refusal computation, shared by the measure seam and — through
+ * `refuseDivergentPerspectiveProjection` — the add/edit publication
+ * boundary (PROD-1), so a Layer that measure would refuse can never be
+ * stored.
+ */
+export function transformBlowupRefusal(
+  revision: TransformFactsSource,
+  content: { width: number; height: number },
+  name: string,
+): string | null {
+  const perspective = normalizeStoredPerspective(revision);
+  if (perspective.perspectiveTiltXDeg === 0 && perspective.perspectiveTiltYDeg === 0) {
+    return null;
+  }
+  const localReach =
+    (revision.outline?.width ?? 0) +
+    (revision.shadow
+      ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
+      : 0);
+  const depth = perspectiveDepth(revision, content, localReach);
+  if (depth < PERSPECTIVE_DISTANCE_PX) return null;
+  return (
+    `Layer "${name}" is ${Math.ceil(content.width)}×${Math.ceil(content.height)}px` +
+    (localReach > 0 ? ` plus up to ${localReach}px of effect extent` : "") +
+    `; its perspective tilt (${perspective.perspectiveTiltXDeg}° about X, ${perspective.perspectiveTiltYDeg}° about Y) ` +
+    `projects that extent deeper than the fixed ${PERSPECTIVE_DISTANCE_PX}px perspective distance, so the ` +
+    `projection diverges. Reduce the tilt (--perspective) or the Layer's effective size.`
+  );
 }
 
 /** Round every component of an optional box for reporting. */
@@ -554,13 +759,13 @@ async function measureSnapshot(
     // (outline width + |dx| + |dy| + 2·blur px — additive, the shadow is
     // cast from the outlined composite) MAPPED THROUGH the canonical
     // transform — the effects paint before the transform, so the
-    // canvas-space reach is the local reach scaled by max(scaleX, scaleY)
-    // (rotation preserves lengths; the transformed reach ball's AABB is
-    // bounded by its largest semi-axis). The reach is derived from the
-    // revision facts — deterministic, no rendering consulted — and widened
-    // into the window sizing and the loud-refusal cap, so an effected
-    // Layer's full painted extent is captured or refused, never clipped
-    // into a smaller report.
+    // canvas-space reach is the local reach × the transform's worst-case
+    // magnification (the scale's largest factor, widened by the skew's
+    // transvection bound and the perspective tilt's near-side
+    // magnification, #298). The reach is derived from the revision facts —
+    // deterministic, no rendering consulted — and widened into the window
+    // sizing and the loud-refusal cap, so an effected Layer's full painted
+    // extent is captured or refused, never clipped into a smaller report.
     const painted: (Box | null)[] = new Array(measured.length).fill(null);
     const refused: (string | null)[] = new Array(measured.length).fill(null);
     if (measured.length > 0) {
@@ -569,7 +774,19 @@ async function measureSnapshot(
       // Layers' extremes, so a Layer's measured numbers stay the same
       // whatever other Layers are in the Composition, and two Layers that
       // each fit alone can no longer combine into a window that does not.
-      const reaches = layers.map((l) => effectReachPx(l.revision));
+      const reaches = layers.map((l, i) => effectReachPx(l.revision, measured[i]!.content));
+      // Perspective blowup (#298): a tilt whose content depth reaches the
+      // fixed perspective distance is refused per-Layer, before the window
+      // math can divide by a non-positive magnification.
+      for (let i = 0; i < measured.length; i++) {
+        if (options.captureUseName !== undefined && layers[i]!.name !== options.captureUseName) {
+          continue;
+        }
+        const blowup = transformBlowupRefusal(layers[i]!.revision, measured[i]!.content, layers[i]!.name);
+        if (blowup !== null) {
+          refused[i] = blowup;
+        }
+      }
       // The capture window judges the VISIBLE ink (#211, ADR-0023, DEC-006):
       // a Layer with a region is windowed around its region box (the
       // transformed region rectangle), never its full layout box — so a
@@ -736,6 +953,10 @@ export async function measureCompositionLayers(
           rotationDeg: rev.rotationDeg,
           flipX: rev.flipX,
           flipY: rev.flipY,
+          skewXDeg: rev.skewXDeg,
+          skewYDeg: rev.skewYDeg,
+          perspectiveTiltXDeg: rev.perspectiveTiltXDeg,
+          perspectiveTiltYDeg: rev.perspectiveTiltYDeg,
         },
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
         grade: rev.grade ?? null,

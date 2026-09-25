@@ -111,6 +111,10 @@ export function provisionalScaleContext(context: SharedOptionApplyContext): Reso
         rotationDeg: 0,
         flipX: false,
         flipY: false,
+        skewXDeg: 0,
+        skewYDeg: 0,
+        perspectiveTiltXDeg: 0,
+        perspectiveTiltYDeg: 0,
       } as unknown as ResolvedLayerRevision)
-    : ({ kind: "text", scaleX: 1, scaleY: 1, rotationDeg: 0, flipX: false, flipY: false, layoutRule: "natural" } as unknown as ResolvedLayerRevision);
+    : ({ kind: "text", scaleX: 1, scaleY: 1, rotationDeg: 0, flipX: false, flipY: false, skewXDeg: 0, skewYDeg: 0, perspectiveTiltXDeg: 0, perspectiveTiltYDeg: 0, layoutRule: "natural" } as unknown as ResolvedLayerRevision);
 }

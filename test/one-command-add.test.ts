@@ -132,6 +132,8 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "scale-to": return ["1.3x0.8"];
     case "rotate": return ["12"];
     case "flip": return ["horizontal"];
+    case "skew": return ["15x0"];
+    case "perspective": return ["0x20"];
     case "shadow": return ["2,3,4,#000000"];
     case "outline": return ["2,#00ff00"];
     case "visible-region": return ["10,10,20,20"];
@@ -223,6 +225,14 @@ function expectAppliedFact(key: LayerOptionKey, rev: Record<string, unknown>): v
     case "flip":
       expect(rev.flipX).toBe(true);
       expect(rev.flipY).toBe(false);
+      break;
+    case "skew":
+      expect(rev.skewXDeg).toBe(15);
+      expect(rev.skewYDeg).toBe(0);
+      break;
+    case "perspective":
+      expect(rev.perspectiveTiltXDeg).toBe(0);
+      expect(rev.perspectiveTiltYDeg).toBe(20);
       break;
     case "shadow": expect((rev.shadow as { dx: number } | undefined)?.dx).toBe(2); break;
     case "outline": expect((rev.outline as { width: number } | undefined)?.width).toBe(2); break;
@@ -352,6 +362,8 @@ test("every edit option applicable to a shape Layer is accepted and APPLIED on a
   expect(applicable).toContain("scale");
   expect(applicable).toContain("rotate");
   expect(applicable).toContain("flip");
+  expect(applicable).toContain("skew");
+  expect(applicable).toContain("perspective");
   expect(applicable).toContain("shadow");
   expect(applicable).toContain("outline");
   expect(applicable).toContain("visible-region");
@@ -513,6 +525,6 @@ test("composition add: --anchor requires explicit targets for the anchored axes"
 
 test("the one-command application order comes from the option table (transform, anchor, effect)", () => {
   expect(
-    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", "cover-to": "1", scale: "1", outline: "1", flip: "1", "visible-region": "1", "visible-region-radius": "1" }),
-  ).toEqual(["resize", "resize-to", "cover-to", "scale", "rotate", "flip", "visible-region", "visible-region-radius", "anchor", "shadow", "outline"]);
+    oneCommandApplicationOrder({ shadow: "1", rotate: "1", anchor: "1", resize: "1", "resize-to": "1", "cover-to": "1", scale: "1", outline: "1", flip: "1", skew: "1", perspective: "1", "visible-region": "1", "visible-region-radius": "1" }),
+  ).toEqual(["resize", "resize-to", "cover-to", "scale", "rotate", "flip", "skew", "perspective", "visible-region", "visible-region-radius", "anchor", "shadow", "outline"]);
 });

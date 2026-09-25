@@ -350,7 +350,7 @@ test("composition measure reports the shape's content box, transformed box, and 
   expect(bar.paintedOnCanvas).not.toBeNull();
   expect(bar.clipped).toBe(false);
   // The transform facts ride along like any other kind.
-  expect(bar.transform).toEqual({ scaleX: 0.5, scaleY: 0.5, rotationDeg: 90, flipX: false, flipY: false });
+  expect(bar.transform).toEqual({ scaleX: 0.5, scaleY: 0.5, rotationDeg: 90, flipX: false, flipY: false, skewXDeg: 0, skewYDeg: 0, perspectiveTiltXDeg: 0, perspectiveTiltYDeg: 0 });
 });
 
 test("layer review reports the shape's parameters as a parameter sheet", async () => {

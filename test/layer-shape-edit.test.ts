@@ -458,7 +458,7 @@ test("flip on a shape mirrors the painted geometry and records the fact", async 
   expectPixel(after, 44, 47, [0x1d, 0x4e, 0xd8, 255]);
   expectPixel(after, 131, 97, [0, 0, 0, 0]);
   const m = await measureLayer("spin");
-  expect(m.transform).toEqual({ scaleX: 1, scaleY: 1, rotationDeg: 30, flipX: true, flipY: false });
+  expect(m.transform).toEqual({ scaleX: 1, scaleY: 1, rotationDeg: 30, flipX: true, flipY: false, skewXDeg: 0, skewYDeg: 0, perspectiveTiltXDeg: 0, perspectiveTiltYDeg: 0 });
   // The mirrored rotated rect's bounding box: corners (100,50), (13,0),
   // (75,93), (-12,43) — flipped past the placement corner to the left.
   expect((m.box as { x: number }).x).toBeCloseTo(-11.6, 0);

@@ -94,7 +94,7 @@ interface MeasuredEntry {
   box: { x: number; y: number; width: number; height: number };
   painted: { x: number; y: number; width: number; height: number } | null;
   placement: { x: number; y: number; opacity: number };
-  transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean };
+  transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number };
   effects: { shadow: unknown; outline: unknown };
   typography: Record<string, unknown>;
   axes: { weight: number; width: number } | null;
@@ -155,11 +155,12 @@ const IMAGE_ONE_COMMAND = [
   "--image", "<pad>",
   "--x", "120", "--y", "90", "--opacity", "0.85",
   "--resize", "1.5", "--rotate", "15", "--flip", "horizontal",
+  "--skew", "10x0", "--perspective", "0x12",
   "--anchor", "center,center",
   "--shadow", "3,4,5,#000000", "--outline", "2,#00ff00",
 ];
 const IMAGE_CONTENT = ["--image", "<pad>", "--x", "120", "--y", "90", "--opacity", "0.85"];
-const IMAGE_TRANSFORMS = ["--resize", "1.5", "--rotate", "15", "--flip", "horizontal"];
+const IMAGE_TRANSFORMS = ["--resize", "1.5", "--rotate", "15", "--flip", "horizontal", "--skew", "10x0", "--perspective", "0x12"];
 const IMAGE_ANCHOR = ["--anchor", "center,center", "--x", "120", "--y", "90"];
 const IMAGE_EFFECTS = ["--shadow", "3,4,5,#000000", "--outline", "2,#00ff00"];
 

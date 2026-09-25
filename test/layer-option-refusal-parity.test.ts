@@ -153,6 +153,8 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "scale-to", bad: ["--scale-to", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--scale-to takes" },
   { key: "rotate", bad: ["--rotate", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Rotation (--rotate)" },
   { key: "flip", bad: ["--flip", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Flip (--flip)" },
+  { key: "skew", bad: ["--skew", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--skew takes" },
+  { key: "perspective", bad: ["--perspective", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--perspective takes" },
   { key: "shadow", bad: ["--shadow", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid shadow "banana"' },
   { key: "outline", bad: ["--outline", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid outline "banana"' },
   { key: "visible-region", bad: ["--visible-region", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid visible region "banana"' },
