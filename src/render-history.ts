@@ -263,8 +263,14 @@ export async function resolveHistoricalLayers(
 ): Promise<SnapshotLayer[]> {
   const layers: SnapshotLayer[] = [];
   for (const entry of manifest.layers) {
-    const { revision, contentBytes } = await readRevisionInternalFull(resolvedRoot, entry.layerId, entry.revisionId);
-    layers.push({ name: entry.name, layerId: entry.layerId, revision, contentBytes });
+    const { revision, contentBytes, runFonts } = await readRevisionInternalFull(resolvedRoot, entry.layerId, entry.revisionId);
+    layers.push({
+      name: entry.name,
+      layerId: entry.layerId,
+      revision,
+      contentBytes,
+      ...(runFonts !== undefined && runFonts.length > 0 ? { runFonts } : {}),
+    });
   }
   return layers;
 }

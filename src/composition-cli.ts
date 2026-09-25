@@ -54,6 +54,15 @@ import {
   validateTextFitBox,
   SHAPE_CONTENT_KEYS,
   TEXT_CONTENT_KEYS,
+  RUN_OPTION_KEYS,
+  parseLayerRunColor,
+  parseLayerRunFont,
+  parseLayerRunFontFile,
+  parseLayerRunWeight,
+  parseLayerRunText,
+  parseLayerRuns,
+  parseLayerRunWidth,
+  type LayerRunStyleEdit,
   type LayerOptionArgs,
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
@@ -345,6 +354,17 @@ Options:
                         like "linear:90deg,#ff0000,#00ff00" or
                         "radial:#ff0000,#00ff00" (the shared fill grammar,
                         default: #ffffff)
+  --run <text>          One run of a multi-run text Layer (#297, ADR-0021
+                        amendment): repeatable — each occurrence is one run,
+                        in command order, whose concatenation is the Layer
+                        text (mutually exclusive with --text; one occurrence
+                        is the single-run form; requires a font). Per-run
+                        style: --run-color <i>=<spec>, --run-font <i>=<family>,
+                        --run-font-file <i>=<path>, --run-weight <i>=<num>,
+                        --run-width <i>=<num> (1-based run indices; each an
+                        override of the Layer-level default, stored only when
+                        set; no style is synthesized — a static face stores
+                        no axes and an italic look comes from an italic face)
   --shape <geometry>    Shape geometry for a shape Layer (#208): rectangle
                         or ellipse. Requires --size and --fill.
   --size <W>x<H>        The shape geometry's width and height in canvas px,
@@ -742,7 +762,10 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         help: { type: "boolean", short: "h", default: false },
       },
     });
-    values = parsed.values;
+    // The repeatable --run occurrences (#297) arrive as a parseArgs array
+    // beside the single-string option values; the surface's declared shape
+    // narrows them to the ordered occurrence list.
+    values = parsed.values as unknown as NonNullable<typeof values>;
     positionals = parsed.positionals;
   } catch (err) {
     output({ ok: false, error: usageMessage((err as Error).message, "composition") }, isJson);
@@ -864,9 +887,38 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         outputSelectorValue = outputValue.value;
       }
       // The text style options (and the canvas --width value this surface's
-      // established checks read as the text width axis) require --text.
-      if (values.text === undefined && someLayerOptionProvided(values, TEXT_CONTENT_KEYS.filter((key) => key !== "text"))) {
-        output({ ok: false, error: "--font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, and --wrap-width require --text <str>." }, isJson);
+      // established checks read as the text width axis) require text
+      // content: --text, or runs (#297) authored with --run.
+      const hasRunContent = values.run !== undefined;
+      if (values.text === undefined && !hasRunContent && someLayerOptionProvided(values, TEXT_CONTENT_KEYS.filter((key) => key !== "text" && !RUN_OPTION_KEYS.includes(key)))) {
+        output({ ok: false, error: "--font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, and --wrap-width require --text <str> or --run <text>." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      // The runs forms vs the whole-text form are one content (#297).
+      if (values.text !== undefined && hasRunContent) {
+        output({ ok: false, error: "--text and --run are mutually exclusive content options: --text is the single-run form; author runs with one or more --run occurrences." }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      // The runs edit forms are edit-only (#297) — checked AFTER the shared
+      // boundary parse, so a malformed value refuses with the same shared
+      // wording on both surfaces and only a well-formed edit-only option
+      // names the surface rule.
+      const parsedRunTextAdd = parseLayerRunText(values["run-text"]);
+      if (!parsedRunTextAdd.ok) {
+        output({ ok: false, error: parsedRunTextAdd.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      const parsedRunsAdd = parseLayerRuns(values.runs);
+      if (!parsedRunsAdd.ok) {
+        output({ ok: false, error: parsedRunsAdd.error }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      if (parsedRunTextAdd.value !== undefined || parsedRunsAdd.value !== undefined) {
+        output({ ok: false, error: "--run-text and --runs are edit-only options: they name runs an existing Layer carries. Author runs with --run <text> on add." }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -876,7 +928,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         process.exitCode = 2;
         return;
       }
-      if (!values.image && values.text === undefined && values["from-generation"] === undefined && values["from-matte"] === undefined && values.shape === undefined) {
+      if (!values.image && values.text === undefined && !hasRunContent && values["from-generation"] === undefined && values["from-matte"] === undefined && values.shape === undefined) {
         output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
         process.exitCode = 2;
         return;
@@ -1025,7 +1077,8 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
           );
           return;
         }
-        if (values.text !== undefined) {
+        const runTexts = values.run as string[] | undefined;
+        if (values.text !== undefined || runTexts !== undefined) {
           if (!values.font && !values["font-file"]) {
             output({ ok: false, error: "Missing required option: a font — --font <family> (bundled) or --font-file <path> (caller-supplied) — is required with --text" }, isJson);
             process.exitCode = 2;
@@ -1140,10 +1193,72 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
             process.exitCode = 2;
             return;
           }
+          // The runs facts (#297): each per-run style option's boundary parse
+          // is the shared registration; the per-run setters merge per index
+          // here (a later occurrence wins, like a repeated setter), and the
+          // semantic resolutions — colour grammar, font resolution, run
+          // axes, index range — run in the ONE ingestion point before
+          // anything is retained.
+          const runStyles: LayerRunStyleEdit[] = [];
+          // The five per-run setters' boundary parses: each repeatable,
+          // each refusing its malformed occurrence at this boundary (exit
+          // 2) before anything reaches the ingestion path. The parsed
+          // lists merge per 1-based index here (a later occurrence wins,
+          // like a repeated layer-level setter); the semantic resolutions
+          // — colour grammar, font resolution, run axes, index range —
+          // run in the ONE ingestion point before anything is retained.
+          const runColorParsed = parseLayerRunColor(values["run-color"]);
+          if (!runColorParsed.ok) { output({ ok: false, error: runColorParsed.error }, isJson); process.exitCode = 2; return; }
+          const runFontParsed = parseLayerRunFont(values["run-font"]);
+          if (!runFontParsed.ok) { output({ ok: false, error: runFontParsed.error }, isJson); process.exitCode = 2; return; }
+          const runFontFileParsed = parseLayerRunFontFile(values["run-font-file"]);
+          if (!runFontFileParsed.ok) { output({ ok: false, error: runFontFileParsed.error }, isJson); process.exitCode = 2; return; }
+          const runWeightParsed = parseLayerRunWeight(values["run-weight"]);
+          if (!runWeightParsed.ok) { output({ ok: false, error: runWeightParsed.error }, isJson); process.exitCode = 2; return; }
+          const runWidthParsed = parseLayerRunWidth(values["run-width"]);
+          if (!runWidthParsed.ok) { output({ ok: false, error: runWidthParsed.error }, isJson); process.exitCode = 2; return; }
+          const applyList = (
+            list: Array<{ index: number; value: string }> | undefined,
+            field: "colorSpec" | "font" | "fontFile",
+          ) => {
+            for (const entry of list ?? []) {
+              const existing = runStyles.find((style) => style.index === entry.index);
+              const style = existing ?? { index: entry.index };
+              (style as unknown as Record<string, unknown>)[field] = entry.value;
+              if (existing === undefined) runStyles.push(style);
+            }
+          };
+          applyList(runColorParsed.value, "colorSpec");
+          applyList(runFontParsed.value, "font");
+          applyList(runFontFileParsed.value, "fontFile");
+          for (const entry of runWeightParsed.value ?? []) {
+            const existing = runStyles.find((style) => style.index === entry.index);
+            const style = existing ?? { index: entry.index };
+            style.weight = entry.value;
+            if (existing === undefined) runStyles.push(style);
+          }
+          for (const entry of runWidthParsed.value ?? []) {
+            const existing = runStyles.find((style) => style.index === entry.index);
+            const style = existing ?? { index: entry.index };
+            style.width = entry.value;
+            if (existing === undefined) runStyles.push(style);
+          }
+          // A run text's emptiness is a boundary refusal (exit 2), shared
+          // with the edit surface's parse (#297).
+          if (runTexts !== undefined) {
+            for (const occurrence of runTexts) {
+              if (occurrence.length === 0) {
+                output({ ok: false, error: "--run takes the run's text (a nonempty string); a run cannot be empty." }, isJson);
+                process.exitCode = 2;
+                return;
+              }
+            }
+          }
           const res = await addTextLayerToComposition(
             targetProj, compName, localName,
             {
-              text: values.text,
+              ...(values.text !== undefined ? { text: values.text } : {}),
+              ...(runTexts !== undefined ? { runs: { runTexts, ...(runStyles.length > 0 ? { styles: runStyles } : {}) } } : {}),
               ...(values.font !== undefined ? { font: values.font } : {}),
               ...(values["font-file"] !== undefined ? { fontFile: values["font-file"] } : {}),
               color: values.color, weight, width, tracking, lineHeight,

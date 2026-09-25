@@ -144,6 +144,9 @@ function guardValue(key: LayerOptionKey, imgPath: string): string[] {
     case "blend": return ["multiply"];
     case "glow": return ["6,2,#ff9900"];
     case "fit-box": return ["600x200"];
+    // The runs options (#297) never reach this guardValue: they are text
+    // CONTENT (the --run occurrences), not layer-level style setters, so
+    // the text guard skips them and the dedicated runs test exercises them.
     default: throw new Error(`guard test: no value for option "${key}"`);
   }
 }
@@ -161,6 +164,7 @@ test("the guard table: every edit option is an accepted add option (TEST-003)", 
     "image", "from-generation", "from-matte", "output", "text", "x", "y", "opacity",
     "shape", "size", "corner-radius", "fill",
     "font", "font-file", "font-size", "color", "weight", "width", "tracking", "line-height", "wrap-width", "fit-box",
+    "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
   ];
   for (const key of editOptions) {
     expect(oneCommand.includes(key) || established.includes(key)).toBe(true);
@@ -284,9 +288,14 @@ test("every edit option applicable to a text Layer is accepted and APPLIED on a 
   const applicable = layerOptionsApplicableTo("text");
   expect(applicable).not.toContain("resize-to");
   expect(applicable).not.toContain("cover-to");
+  // The runs options (#297) are TEXT CONTENT, not layer-level style: --run
+  // authors runs (mutually exclusive with --text), and the per-run setters
+  // name runs the --text form does not have. They are exercised below.
+  const runKeys = ["run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width"];
+  expect(applicable).toEqual(expect.arrayContaining(runKeys));
   let n = 0;
   for (const key of applicable) {
-    if (["image", "from-generation", "from-matte", "output", "text", "font", "font-file"].includes(key)) continue;
+    if (["image", "from-generation", "from-matte", "output", "text", "font", "font-file", ...runKeys].includes(key)) continue;
     const extra = key === "anchor"
       ? ["--x", "80", "--y", "60"]
       : key === "visible-region-radius"
@@ -298,6 +307,36 @@ test("every edit option applicable to a text Layer is accepted and APPLIED on a 
     ]);
     expectAppliedFact(key, revision);
   }
+}, 30_000);
+
+test("the runs options author runs on a text add and the edit-only forms refuse (TEST-003, #297)", async () => {
+  const { revision } = await addJson("runs-guard", [
+    "--run", "Ground", "--run", "line ", "--run", "runs", "--font", "Archivo",
+    "--run-color", "2=#ffcc00",
+    "--run-weight", "2=800",
+    "--run-width", "2=122",
+    "--run-font", "3=Archivo Black", // a static face: no axes are stored for it
+  ]);
+  expect(revision.text).toBe("Groundline runs");
+  const runs = (revision as { runs?: Array<Record<string, unknown>> }).runs!;
+  expect(runs).toHaveLength(3);
+  expect(runs[1]).toMatchObject({ start: 6, color: "#ffcc00", weight: 800, width: 122 });
+  expect(runs[2]).toMatchObject({ start: 11 });
+  expect(typeof (runs[2] as { contentHash?: string }).contentHash).toBe("string");
+  // The edit-only forms refuse on add: a new Layer carries no runs to
+  // rewrite or collapse.
+  const res = await spawn([
+    "composition", "add", "poster", "edit-only", "--text", "hi", "--font", "Archivo",
+    "--run-text", "1=nope", "--project", projDir, "--json",
+  ]);
+  expect(res.code).toBe(2);
+  expect(res.stderr + res.stdout).toContain("edit-only");
+  const res2 = await spawn([
+    "composition", "add", "poster", "edit-only-2", "--text", "hi", "--font", "Archivo",
+    "--runs", "none", "--project", projDir, "--json",
+  ]);
+  expect(res2.code).toBe(2);
+  expect(res2.stderr + res2.stdout).toContain("edit-only");
 }, 30_000);
 
 test("every edit option applicable to a shape Layer is accepted and APPLIED on a shape add (TEST-003, #259)", async () => {

@@ -571,6 +571,13 @@ function toSnapshotLayer(use: {
   layerId: string;
   revision: SnapshotLayer["revision"];
   contentBytes: Buffer;
+  runFonts?: SnapshotLayer["runFonts"];
 }): SnapshotLayer {
-  return { name: use.name, layerId: use.layerId, revision: use.revision, contentBytes: use.contentBytes };
+  return {
+    name: use.name,
+    layerId: use.layerId,
+    revision: use.revision,
+    contentBytes: use.contentBytes,
+    ...(use.runFonts !== undefined && use.runFonts.length > 0 ? { runFonts: use.runFonts } : {}),
+  };
 }

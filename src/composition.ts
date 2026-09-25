@@ -35,6 +35,15 @@ import { readCallerFontFile } from "./font-file.js";
 import { measureTextFit } from "./composition-measure.js";
 import { type LayerFill, canonicalizeTextFillForStorage } from "./fill.js";
 import {
+  type LayerTextRun,
+  type ResolvedTextInputRuns,
+  resolveTextInputRuns,
+  runIndexOutOfRangeRefusal,
+  runRemovalOnAddRefusal,
+  type SnapshotRunFont,
+  type TextInputRuns,
+} from "./layer.js";
+import {
   oneCommandApplicationOrder,
   applyLayerOption,
   type SharedOptionApplyContext,
@@ -675,8 +684,10 @@ export async function addTextLayerToComposition(
   compName: string,
   localName: string,
   input: {
-    /** Rendered string content (nonempty, ≤ MAX_TEXT_LENGTH). */
-    text: string;
+    /** Rendered string content (nonempty, ≤ MAX_TEXT_LENGTH). With runs
+     *  (#297), the --run occurrences' concatenation is the text — one form
+     *  or the other, never both. */
+    text?: string;
     /**
      * A bundled font family name — resolved once at add, never re-consulted.
      * Mutually exclusive with `fontFile`: one font source per Layer (#232).
@@ -726,6 +737,15 @@ export async function addTextLayerToComposition(
      * on add — there is no previous value — and stores nothing).
      */
     fitBox?: { width: number; height: number } | null;
+    /**
+     * Text runs (#297, spec #285 US-017, ISC-54, ADR-0021 amendment): the
+     * run texts whose concatenation IS the Layer text, plus per-run style
+     * edits by 1-based index. One occurrence normalizes to the single-run
+     * form at the ONE ingestion point (`resolveTextInputRuns`); fewer than
+     * two runs means no runs field — a single-run Layer is today's text
+     * Layer. Omitted: the plain `--text` form.
+     */
+    runs?: TextInputRuns;
   },
   options: AddLayerOptions & { fontSize?: number } = {},
 ): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
@@ -740,13 +760,81 @@ export async function addTextLayerToComposition(
       "--font and --font-file name one font per edit — pass a bundled family (--font) or a local font file (--font-file), not both.",
     );
   }
+  // Runs vs plain text (#297): the run occurrences and the whole-text form
+  // are one content — the command boundary refuses the pair, the domain
+  // re-checks so no caller of the functions can bypass it.
+  if (input.text !== undefined && input.runs !== undefined) {
+    throw new Error(
+      "--text and --run are mutually exclusive content options: --text is the single-run form; author runs with one or more --run occurrences.",
+    );
+  }
 
   const { x, y, opacity } = parsePlacement(options);
   const fontSize = options.fontSize ?? 48;
-  const rawColor = input.color ?? "#ffffff";
+
+  // The runs facts (#297) resolve at the ONE ingestion point. A single
+  // occurrence with per-run style edits folds into the Layer-level facts
+  // (run 1 IS the Layer): the stored revision keeps today's exact shape.
+  let resolvedRuns: ResolvedTextInputRuns = { runFonts: [] };
+  let runsField: LayerTextRun[] | undefined;
+  let runFontsToRetain: SnapshotRunFont[] = [];
+  let text: string;
+  let layerInput: {
+    font?: string;
+    fontFile?: string;
+    color?: string;
+    weight?: number;
+    width?: number;
+  } = {
+    ...(input.font !== undefined ? { font: input.font } : {}),
+    ...(input.fontFile !== undefined ? { fontFile: input.fontFile } : {}),
+    ...(input.color !== undefined ? { color: input.color } : {}),
+    ...(input.weight !== undefined ? { weight: input.weight } : {}),
+    ...(input.width !== undefined ? { width: input.width } : {}),
+  };
+  if (input.runs !== undefined) {
+    if (input.runs.runTexts.length <= 1) {
+      // A per-run setter naming any other run is out of range: there is one
+      // run, and it folds into the Layer-level facts.
+      for (const style of input.runs.styles ?? []) {
+        if (style.index !== 1) {
+          throw new Error(runIndexOutOfRangeRefusal(style.index, input.runs.runTexts.length));
+        }
+      }
+      const only = input.runs.styles?.find((style) => style.index === 1);
+      if (only !== undefined) {
+        if (only.colorSpec !== undefined) {
+          if (only.colorSpec === null) throw new Error(runRemovalOnAddRefusal("--run-color"));
+          layerInput = { ...layerInput, color: only.colorSpec };
+        }
+        if (only.font !== undefined) {
+          if (only.font === null) throw new Error(runRemovalOnAddRefusal("--run-font"));
+          layerInput = { ...layerInput, font: only.font, fontFile: undefined };
+        }
+        if (only.fontFile !== undefined) {
+          if (only.fontFile === null) throw new Error(runRemovalOnAddRefusal("--run-font-file"));
+          layerInput = { ...layerInput, fontFile: only.fontFile, font: undefined };
+        }
+        if (only.weight !== undefined) {
+          if (only.weight === null) throw new Error(runRemovalOnAddRefusal("--run-weight"));
+          layerInput = { ...layerInput, weight: only.weight };
+        }
+        if (only.width !== undefined) {
+          if (only.width === null) throw new Error(runRemovalOnAddRefusal("--run-width"));
+          layerInput = { ...layerInput, width: only.width };
+        }
+      }
+      text = input.runs.runTexts[0] ?? input.text ?? "";
+    } else {
+      text = input.runs.runTexts.join("");
+    }
+  } else {
+    text = input.text ?? "";
+  }
+  const rawColor = layerInput.color ?? "#ffffff";
   // Canonical text validation at the ingestion boundary; the stored-revision
   // parser reuses the same validator.
-  const fill = validateTextContent(input.text, fontSize, rawColor);
+  const fill = validateTextContent(text, fontSize, rawColor);
   const color = canonicalizeTextFillForStorage(fill);
 
   const resolvedRoot = await resolveProjectRoot(projectPath);
@@ -765,18 +853,34 @@ export async function addTextLayerToComposition(
       let face: ReturnType<typeof resolveFace>;
       let callerFont: CallerFontFacts | undefined;
       let bytes: Buffer;
-      if (input.fontFile !== undefined) {
-        const ingested = await readCallerFontFile(input.fontFile);
+      if (layerInput.fontFile !== undefined) {
+        const ingested = await readCallerFontFile(layerInput.fontFile);
         bytes = ingested.bytes;
         callerFont = ingested.facts;
         face = callerFontFace(callerFont);
       } else {
-        face = resolveFace(input.font!);
+        face = resolveFace(layerInput.font!);
         bytes = fontAssetBytes(face);
       }
       // Axes resolve BEFORE any retention, so a refused control publishes
       // nothing — not even a stray content blob (#179, ADR-0021).
-      const axes = resolveTextAxes(face, { weight: input.weight, width: input.width });
+      const axes = resolveTextAxes(face, { weight: layerInput.weight, width: layerInput.width });
+      // The runs facts (#297): boundaries, per-run overrides, and every run
+      // font resolve at the ONE ingestion point — after the face and the
+      // layer axes are known, BEFORE any retention, so a refused run
+      // publishes nothing. The run font dedupe compares against the layer
+      // font's content identity, computed here first.
+      const layerContentHash = createHash("sha256").update(bytes).digest("hex");
+      resolvedRuns = await resolveTextInputRuns({
+        text,
+        ...(input.runs !== undefined ? { runs: input.runs } : {}),
+        layerFace: face,
+        ...(callerFont !== undefined ? { layerCallerFont: callerFont } : {}),
+        layerContentHash,
+        layerAxes: axes.weight !== undefined ? axes : undefined,
+      });
+      runsField = resolvedRuns.runs;
+      runFontsToRetain = resolvedRuns.runFonts;
       // Typography resolves at the same one boundary (#187, ADR-0021) — a
       // refused tracking/line-height publishes nothing, and a set value is
       // stored only when set (a tracking of 0 is the same look as absent).
@@ -797,7 +901,7 @@ export async function addTextLayerToComposition(
       if (fitBox !== undefined && wrapWidth !== undefined && fitBox.width < wrapWidth) {
         throw new Error(textFitBoxNarrowerThanWrapRefusal(fitBox.width, wrapWidth));
       }
-      const contentHash = createHash("sha256").update(bytes).digest("hex");
+      const contentHash = layerContentHash;
       if (callerFont !== undefined) {
         // The render probe's family-resolution gate applies to caller fonts
         // BEFORE publication (#232): a file the browser cannot resolve
@@ -813,7 +917,7 @@ export async function addTextLayerToComposition(
           createdAt,
           kind: "text",
           contentHash,
-          text: input.text,
+          text,
           fontSize,
           color,
           layoutRule: "natural",
@@ -823,6 +927,7 @@ export async function addTextLayerToComposition(
           ...(wrapWidth !== undefined ? { wrapWidth } : {}),
           ...(fitBox !== undefined ? { fitWidth: fitBox.width, fitHeight: fitBox.height } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
+          ...(runsField !== undefined ? { runs: runsField } : {}),
           x,
           y,
           opacity,
@@ -837,6 +942,7 @@ export async function addTextLayerToComposition(
           composition: sanitizedComp,
           canvas: comp.canvas,
           contentBytes: bytes,
+          ...(runFontsToRetain.length > 0 ? { runFonts: runFontsToRetain } : {}),
         },
       );
       // Fit-to-box validation (#295, spec #285 US-016, DEC-010): the box is
@@ -846,7 +952,11 @@ export async function addTextLayerToComposition(
       // cannot fit at the minimum size is refused, naming the box and the
       // size needed. A refused add leaves no Layer, no use, and no content.
       if (revision.kind === "text" && revision.fitWidth !== undefined) {
-        const fit = await measureTextFit({ ...revision, x: 0, y: 0 } as ResolvedLayerRevision, bytes);
+        const fit = await measureTextFit(
+          { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
+          bytes,
+          { ...(runFontsToRetain.length > 0 ? { runFonts: runFontsToRetain } : {}) },
+        );
         if (fit !== null && !fit.fits) {
           throw new Error(
             textFitRefusal(revision.text, revision.fitWidth, revision.fitHeight!, fit.neededFontSize ?? revision.fontSize),
@@ -854,6 +964,12 @@ export async function addTextLayerToComposition(
         }
       }
       await storeContentBlob(projectPath, contentHash, bytes);
+      // Run font retention (#297): the SAME content-store path, AFTER the
+      // final revision has validated — a refused add leaves no Layer, no
+      // use, and no content blob, layer or run.
+      for (const runFont of runFontsToRetain) {
+        await storeContentBlob(projectPath, runFont.contentHash, runFont.bytes);
+      }
       return revision;
     }, options.position).then(({ layerId, layer }) => ({
       composition: sanitizedComp,
@@ -1174,6 +1290,11 @@ export async function addMattedLayerToComposition(
 export interface ResolvedCompositionLayerFull extends ResolvedCompositionLayer {
   /** The Layer's verified retained content bytes. Internal projection — never serialized. */
   contentBytes: Buffer;
+  /** The Layer's run font bytes (#297): every distinct run font override's
+   *  verified retained bytes — the @font-face inputs paint and measurement
+   *  declare for run font overrides. Present only for text Layers with run
+   *  font overrides. Internal projection — never serialized. */
+  runFonts?: SnapshotRunFont[];
 }
 
 export interface ResolvedCompositionFull extends Omit<ResolvedComposition, "layers"> {
@@ -1205,6 +1326,7 @@ export async function readCompositionInternalFull(
       kind: layer.currentRevision.kind,
       revision: layer.currentRevision,
       contentBytes: layer.contentBytes,
+      ...(layer.runFonts !== undefined && layer.runFonts.length > 0 ? { runFonts: layer.runFonts } : {}),
     });
   }
 
@@ -1478,6 +1600,9 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ...(source.wrapWidth !== undefined ? { wrapWidth: source.wrapWidth } : {}),
       ...(source.fitWidth !== undefined ? { fitWidth: source.fitWidth, fitHeight: source.fitHeight } : {}),
       ...(source.callerFont !== undefined ? { callerFont: source.callerFont } : {}),
+      // Text runs (#297): validated stored facts — boundaries and overrides
+      // — copied verbatim, the same carry the other revision facts get.
+      ...(source.runs !== undefined ? { runs: source.runs } : {}),
       x: source.x,
       y: source.y,
       opacity: source.opacity,

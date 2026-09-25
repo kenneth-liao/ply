@@ -105,6 +105,10 @@ import {
   normalizeStoredTextTypography,
   normalizeStoredTextWrapWidth,
   normalizeStoredTextFitBox,
+  normalizeStoredTextRuns,
+  storedTextRunSlices,
+  type LayerTextRun,
+  type SnapshotRunFont,
   type LayerOutline,
   type LayerShadow,
   type LayerTextTypography,
@@ -208,6 +212,23 @@ export interface MeasuredLayerBounds {
    *  shrank it (DEC-010: shrink-only). Derived at read time, never stored.
    *  Text Layers only; every other kind reports null. */
   effectiveFontSize: number | null;
+  /** The revision's text runs (#297, spec #285 US-017, ISC-54, ADR-0021
+   *  amendment), reported for auditability beside the layer-level facts:
+   *  each run's 1-based index, its text slice, its resolved colour (the
+   *  canonical fill object painting it — the layer colour for a run
+   *  without an override), its font identity (the caller font's family and
+   *  caller flag, null for bundled and legacy faces — the retained bytes
+   *  are their identity), and its effective axes (the run's resolved
+   *  weight/width, null when the run paints the layer axes or a static
+   *  face). Present if and only if the revision carries runs — a single-run
+   *  Layer's report is today's report, field for field. */
+  runs?: Array<{
+    index: number;
+    text: string;
+    color: LayerFill;
+    font: { family: string; caller: true } | null;
+    axes: { weight: number; width: number } | null;
+  }>;
 }
 
 export interface MeasureCompositionResult {
@@ -368,6 +389,45 @@ function effectReachPx(revision: ResolvedLayerRevision): number {
 }
 
 /** Round every component of an optional box for reporting. */
+/**
+ * Build a multi-run text Layer's per-run report (#297, ADR-0021 amendment):
+ * each run's 1-based index, text slice (boundaries re-derived from the ONE
+ * reader — `text` is the only home of the characters), resolved colour, and
+ * font/axes facts. A run's font report follows the layer-level rule: a
+ * caller font reports the family its own file declares; a bundled face has
+ * no stored family — the retained bytes are its identity — and reports null.
+ */
+function buildRunReports(
+  rev: Extract<ResolvedLayerRevision, { kind: "text" }>,
+  runs: LayerTextRun[],
+): Array<{
+  index: number;
+  text: string;
+  color: LayerFill;
+  font: { family: string; caller: true } | null;
+  axes: { weight: number; width: number } | null;
+}> {
+  const slices = storedTextRunSlices(rev);
+  const layerAxes = normalizeStoredTextAxes(rev) ?? null;
+  void layerAxes;
+  return runs.map((run, i) => {
+    // A run's axes are its stored overrides — a run without one paints the
+    // layer axes, so it reports null (absence IS the layer-default form).
+    const axes = run.weight !== undefined ? { weight: run.weight, width: run.width! } : null;
+    const font =
+      run.contentHash !== undefined && run.callerFont !== undefined
+        ? { family: run.callerFont.family, caller: true as const }
+        : null;
+    return {
+      index: i + 1,
+      text: slices[i]!,
+      color: normalizeStoredTextFill(run.color ?? rev.color),
+      font,
+      axes,
+    };
+  });
+}
+
 function roundBox(box: Box | null): Box | null {
   return box ? { x: round2(box.x), y: round2(box.y), width: round2(box.width), height: round2(box.height) } : null;
 }
@@ -617,6 +677,7 @@ export async function measureCompositionLayers(
       layerId: use.layerId,
       revision: use.revision,
       contentBytes: use.contentBytes,
+      ...(use.runFonts !== undefined && use.runFonts.length > 0 ? { runFonts: use.runFonts } : {}),
     }));
     return { comp, layers };
   });
@@ -711,6 +772,14 @@ export async function measureCompositionLayers(
           rev.kind === "text"
             ? m.fit?.effectiveFontSize ?? rev.fontSize
             : null,
+        // The per-run facts (#297): boundaries re-derived from the ONE
+        // reader, overrides resolved per run — the same facts painting
+        // applies, reported for auditability.
+        ...(rev.kind === "text" && normalizeStoredTextRuns(rev) !== undefined
+          ? {
+              runs: buildRunReports(rev, normalizeStoredTextRuns(rev)!),
+            }
+          : {}),
       };
     });
 
@@ -775,13 +844,14 @@ export async function measureStandaloneLayer(
 export async function measureStandaloneSnapshot(
   currentRevision: ResolvedLayerRevision,
   contentBytes: Buffer,
-  options: { page?: Page } = {},
+  options: { page?: Page; runFonts?: SnapshotRunFont[] } = {},
 ): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null; fit: TextFitProbe | null }> {
   const standalone: SnapshotLayer = {
     name: currentRevision.layerId,
     layerId: currentRevision.layerId,
     revision: { ...currentRevision, x: 0, y: 0 },
     contentBytes,
+    ...(options.runFonts !== undefined && options.runFonts.length > 0 ? { runFonts: options.runFonts } : {}),
   };
   const canvas = { width: STANDALONE_CANVAS_PX, height: STANDALONE_CANVAS_PX };
   const [measured] = await measureSnapshot(canvas, [standalone], options);
@@ -824,7 +894,7 @@ export async function measureStandaloneSnapshot(
 export async function measureTextFit(
   currentRevision: ResolvedLayerRevision,
   contentBytes: Buffer,
-  options: { page?: Page } = {},
+  options: { page?: Page; runFonts?: SnapshotRunFont[] } = {},
 ): Promise<TextFitProbe | null> {
   if (currentRevision.kind !== "text") return null;
   if (normalizeStoredTextFitBox(currentRevision) === undefined) return null;
@@ -833,6 +903,7 @@ export async function measureTextFit(
     layerId: currentRevision.layerId,
     revision: { ...currentRevision, x: 0, y: 0 },
     contentBytes,
+    ...(options.runFonts !== undefined && options.runFonts.length > 0 ? { runFonts: options.runFonts } : {}),
   };
   const canvas = { width: STANDALONE_CANVAS_PX, height: STANDALONE_CANVAS_PX };
   const [measured] = await measureSnapshot(canvas, [standalone], { ...options, layoutOnly: true });

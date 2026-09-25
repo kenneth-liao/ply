@@ -154,7 +154,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "image", "from-generation", "from-matte", "text", "shape", "size", "corner-radius", "fill",
       "vector-color",
       "font", "font-file", "font-size", "color",
-      "weight", "width", "tracking", "line-height", "wrap-width", "fit-box", "x", "y", "opacity", "anchor",
+      "weight", "width", "tracking", "line-height", "wrap-width", "fit-box",
+      "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
+      "x", "y", "opacity", "anchor",
       "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "shadow", "outline", "visible-region", "visible-region-radius",
       "brightness", "contrast", "saturation", "warmth", "blend", "glow",
     ]);
@@ -213,7 +215,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "add")).toBeUndefined();
     // The edit surface reads presence exactly: the exclusivity refusal fires.
     expect(layerContentKindConflict({ image: "", text: "hi" }, "image", "edit")).toBe(
-      "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box) are mutually exclusive.",
+      "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box, --run, --run-text, --runs, --run-color, --run-font, --run-font-file, --run-weight, --run-width) are mutually exclusive.",
     );
     // The other content kinds keep strict presence on both surfaces: a
     // blank --image still conflicts with --from-generation/--from-matte.

@@ -18,6 +18,7 @@ import {
   RESIZE_TO_HELP_KINDS,
   SCALE_HELP_KINDS,
   COVER_TO_HELP_KINDS,
+  buildRunStyleEdits,
 } from "./layer-options.js";
 import { reviewRetainedLayer } from "./evidence-review.js";
 import { formatFill, normalizeStoredTextFill, type LayerFill } from "./fill.js";
@@ -168,6 +169,20 @@ Options:
                         color like #ffffff, #fff, or #ffffff80, or a gradient
                         like "linear:90deg,#ff0000,#00ff00" or
                         "radial:#ff0000,#00ff00" (the shared fill grammar)
+  --run <text>          Append one run to the Layer's text (#297, ADR-0021
+                        amendment): repeatable, each occurrence one run at
+                        the Layer defaults. Per-run absolute setters:
+                        --run-color <i>=<spec>, --run-font <i>=<family>,
+                        --run-font-file <i>=<path>, --run-weight <i>=<num>,
+                        --run-width <i>=<num> (1-based run indices; "none"
+                        removes that run's override); --run-text <i>=<text>
+                        rewrites one run's characters (later boundaries
+                        shift); --runs none collapses the Layer to a
+                        single run at the Layer defaults. Bare --text is
+                        refused on a multi-run Layer (it would discard the
+                        runs). No style is synthesized: a static face
+                        stores no axes, and an italic look comes from an
+                        italic face
   --shape <geometry>    Set a shape Layer's geometry to an ABSOLUTE value:
                         rectangle or ellipse (#209). Omitted keeps the
                         current geometry; switching to ellipse drops a
@@ -571,7 +586,10 @@ try {
       ...LAYER_OPTION_PARSE_ARGS,
     },
   });
-  values = parsed.values;
+  // The repeatable --run occurrences (#297) arrive as a parseArgs array
+  // beside the single-string option values; the surface's declared shape
+  // narrows them to the ordered occurrence list.
+  values = parsed.values as unknown as NonNullable<typeof values>;
   positionals = parsed.positionals;
 } catch (err) {
   output({ ok: false, error: usageMessage((err as Error).message, "layer") }, isJson);
@@ -844,6 +862,12 @@ async function run() {
           lineHeight: parsed["line-height"] as number | null | undefined,
           wrapWidth: parsed["wrap-width"] as number | null | undefined,
           fitBox: parsed["fit-box"] as { width: number; height: number } | null | undefined,
+          ...(values.run !== undefined ? { runAppend: values.run as string[] } : {}),
+          ...(parsed["run-text"] !== undefined
+            ? { runText: parsed["run-text"] as Array<{ index: number; text: string }> }
+            : {}),
+          ...(buildRunStyleEdits(parsed).length > 0 ? { runStyles: buildRunStyleEdits(parsed) } : {}),
+          ...(parsed.runs === null ? { runsNone: true } : {}),
           x: editX,
           y: editY,
           opacity: parsed.opacity as number | undefined,
