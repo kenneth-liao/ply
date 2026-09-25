@@ -28,7 +28,7 @@ import { escapesDirReal, outsideDir } from "./paths.js";
 import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js";
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
-import { measureStandaloneSnapshot, measureTextFit } from "./composition-measure.js";
+import { measureStandaloneSnapshot, measureTextFit, transformBlowupRefusal } from "./composition-measure.js";
 import { parseCompositionDocument, readMutableComposition, readCompositionInternalFull, type Composition } from "./composition.js";
 import { staticFaceAcceptedAxes, faceByContentHash, callerFontFace, verifyCallerFontResolves, resolveFace, resolveTextAxes, fontAssetBytes, type CallerFontFacts, type FontFace, type TextAxes } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
@@ -4824,6 +4824,60 @@ function perspectiveStored(d: { perspectiveTiltXDeg?: number; perspectiveTiltYDe
   return (d.perspectiveTiltXDeg ?? 0) !== 0 || (d.perspectiveTiltYDeg ?? 0) !== 0;
 }
 
+/**
+ * The divergent-perspective publication gate (PROD-1, #298 review): the
+ * ONE refusal the add and edit publication paths share, run on the
+ * would-be revision BEFORE anything is staged — so a Layer that measure
+ * would refuse (its content, plus its own effect extent, projects deeper
+ * than the fixed 1000px perspective distance) can never be stored. The
+ * render path emits the perspective CSS unconditionally, so storage is the
+ * only place the loud refusal can live.
+ *
+ * The content extent is the revision's own for image and shape kinds; a
+ * text Layer's extent is its measured line box (the same fact the visible
+ * region validates against), measured only when the resulting tilt is
+ * nonzero — the only case where a refusal is possible.
+ */
+export async function refuseDivergentPerspectiveProjection(
+  revision: LayerRevision,
+  extent: { width: number; height: number } | undefined,
+  contentBytes?: Buffer,
+  runFonts?: SnapshotRunFont[],
+): Promise<void> {
+  const tilt = normalizeStoredPerspective(revision);
+  if (tilt.perspectiveTiltXDeg === 0 && tilt.perspectiveTiltYDeg === 0) {
+    return;
+  }
+  let content: { width: number; height: number };
+  if (revision.kind === "text") {
+    if (contentBytes === undefined) {
+      throw new Error(
+        `Layer "${revision.layerId}" carries a perspective tilt but its content bytes are unavailable — refusing to validate the projection.`,
+      );
+    }
+    // The text extent is the measured line box, from the bytes the new
+    // revision pins (the same standalone measure the region and fit
+    // validations run).
+    const standalone = await measureStandaloneSnapshot(
+      { ...revision, x: 0, y: 0 } as unknown as ResolvedLayerRevision,
+      contentBytes,
+      { ...(runFonts !== undefined && runFonts.length > 0 ? { runFonts } : {}) },
+    );
+    content = standalone.content;
+  } else {
+    if (extent === undefined) {
+      throw new Error(
+        `Layer "${revision.layerId}" carries a perspective tilt but its content extent is unavailable — refusing to validate the projection.`,
+      );
+    }
+    content = extent;
+  }
+  const refusal = transformBlowupRefusal(revision, content, revision.layerId);
+  if (refusal !== null) {
+    throw new Error(refusal);
+  }
+}
+
 async function buildEditedRevision(
   resolvedRoot: string,
   prevRev: ResolvedLayerRevision,
@@ -4904,6 +4958,9 @@ async function buildEditedRevision(
     }
 
     let contentHash = prevRev.contentHash;
+    // The content extent the gate validates the projection against (PROD-1):
+    // the retained content's intrinsic box, updated by every replacement.
+    let contentExtent: { width: number; height: number } = { width: prevRev.width, height: prevRev.height };
     let mattedFrom: EditLayerResult["mattedFrom"];
     let retainedGeneration: RetainedGenerationProvenance | null = null;
     // A region KEPT across a content edit (#211 review PROD-1): the region
@@ -4995,6 +5052,7 @@ async function buildEditedRevision(
       vectorColorRasterGate({ given: shared["vector-color"] !== undefined, value: draft.vectorColor }, ingested.format, layerId);
       await storeContentBlob(resolvedRoot, ingested.contentHash, ingested.bytes);
       contentHash = ingested.contentHash;
+      contentExtent = { width: ingested.width, height: ingested.height };
     }
 
     const carried = carryAppliedSharedFacts(draft, prevRev);
@@ -5041,6 +5099,10 @@ async function buildEditedRevision(
       draft.blend === prevRev.blend &&
       glowEq(draft.glow, prevRev.glow) &&
       Object.keys(carried).length === 0;
+    // The divergent-perspective publication gate (PROD-1, #298 review):
+    // the image extent is the retained content's intrinsic box — run before
+    // anything stages.
+    await refuseDivergentPerspectiveProjection(revision, contentExtent, prevContentBytes);
     return { revision, unchanged, mattedFrom, retainedGeneration, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
 
@@ -5199,6 +5261,9 @@ async function buildEditedRevision(
       );
       regionCarried = { visibleRegion: draft.visibleRegion };
     }
+    // The divergent-perspective publication gate (PROD-1, #298 review):
+    // the shape extent is its own geometry — run before anything stages.
+    await refuseDivergentPerspectiveProjection(revision, { width: revision.width, height: revision.height });
     return {
       revision,
       unchanged,
@@ -5526,6 +5591,15 @@ async function buildEditedRevision(
         }
       }
     }
+    // The divergent-perspective publication gate (PROD-1, #298 review):
+    // the text extent is the measured line box, from the bytes the new
+    // revision pins — run before anything stages.
+    await refuseDivergentPerspectiveProjection(
+      revision,
+      undefined,
+      newTextBytes ?? prevContentBytes,
+      runEdits.runFonts,
+    );
     return { revision, unchanged, retainedGeneration: null, ...(regionCarried !== undefined ? { regionCarried } : {}) };
   }
 

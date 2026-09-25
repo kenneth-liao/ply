@@ -204,9 +204,13 @@ function expectedTransform(opts: {
   if (opts.flipX) m = mul4(scale4(-1, 1), m);
   // Then rotation about the placement point.
   if (opts.rotateDeg) m = mul4(rotateZ4(opts.rotateDeg), m);
-  // Then skew (emitted skewX then skewY; they commute).
-  if (opts.skewXDeg) m = mul4(skewX4(opts.skewXDeg), m);
+  // Then skew. The emitted string is `skewX(ax) skewY(ay)` — CSS composes
+  // left-to-right as function composition, so the point shears along y
+  // FIRST, then along x: the matrix is skewX·skewY·(inner). The two do not
+  // commute (the products differ by t1·t2 on the diagonal), so this order
+  // is load-bearing and pinned by the two-axis case below.
   if (opts.skewYDeg) m = mul4(skewY4(opts.skewYDeg), m);
+  if (opts.skewXDeg) m = mul4(skewX4(opts.skewXDeg), m);
   // Then the perspective tilt, pivoted about the content centre, and the
   // perspective divide outermost. The CSS string
   // `perspective(d) translate(50%,50%) rotateX rotateY translate(-50%,-50%)`
@@ -344,7 +348,7 @@ test("skew and perspective compose with flip, scale, and rotation in the documen
   const { layerId } = await addLayer("tile", ["--image", imagePath, "--x", "150", "--y", "120"]);
 
   const edit = await editJson(layerId, [
-    "--flip", "horizontal", "--scale-to", "1.5x1", "--rotate", "10", "--skew", "12x0", "--perspective", "0x18",
+    "--flip", "horizontal", "--scale-to", "1.5x1", "--rotate", "10", "--skew", "12x7", "--perspective", "0x18",
   ]);
   expect(edit.code).toBe(0);
 
@@ -354,7 +358,10 @@ test("skew and perspective compose with flip, scale, and rotation in the documen
     scaleX: 1.5, scaleY: 1,
     flipX: true,
     rotateDeg: 10,
-    skewXDeg: 12,
+    // TWO axes: the point shears along y first, then along x (the emitted
+    // `skewX(12deg) skewY(7deg)` applies right-to-left) — the order regression
+    // a single-axis case cannot catch (INT-1).
+    skewXDeg: 12, skewYDeg: 7,
     perspectiveTiltYDeg: 18,
   });
   expectCornersNear(
@@ -556,6 +563,78 @@ test("a Render retained before the skew/perspective edit replays byte-identicall
   expect(replay.code).toBe(0);
   const replayOutput = JSON.parse(replay.stdout).replay.output as string;
   expect(readFile(replayOutput)).resolves.toEqual(originalPng);
+}, 30_000);
+
+// ---------------------------------------------------------------------------
+// The divergent-projection publication gate (PROD-1, #298 review): the same
+// refusal measure applies runs at the add and edit publication boundary, so
+// a Layer that measure would refuse can never be stored. The discriminating
+// case is scale-magnified depth: a 500x100 source at scale 4 and tilt 45°
+// about Y projects its affine-mapped corner ~1237px deep — the raw layout extents
+// alone reach only ~212px, so only the post-affine depth (INT-2) catches it.
+// ---------------------------------------------------------------------------
+
+test("a divergent projection is refused at the add and edit boundary before anything publishes", async () => {
+  const wide = path.join(tempDir, "wide.png");
+  await writeFile(wide, solidPng(500, 100, RED));
+
+  // Add path: one command, refused before anything is published.
+  const add = await invoke([
+    "composition", "add", "poster", "nope", "--image", wide, "--x", "10", "--y", "10",
+    "--scale-to", "4x1", "--perspective", "0x45", "--project", projDir, "--json",
+  ]);
+  expect(add.code).toBe(1);
+  const addError = JSON.parse(add.stdout).error as string;
+  expect(addError).toContain("projects that extent deeper than the fixed 1000px perspective distance");
+
+  // Edit path: same facts, refused before publish — the same refusal the
+  // measure seam carries (one shared computation), and the live state never
+  // advances.
+  const { layerId, revisionId } = await addLayer("tile", ["--image", wide, "--x", "10", "--y", "10"]);
+  const scaled = await editJson(layerId, ["--scale-to", "4x1"]);
+  expect(scaled.code).toBe(0);
+
+  const tiltOnly = await editJson(layerId, ["--perspective", "0x45"]);
+  expect(tiltOnly.code).toBe(1);
+  // The same refusal the measure seam carries (one shared computation);
+  // each names its own Layer id, so the parity check strips it.
+  const withoutId = (s: string) => s.replace(/^Layer "[^"]+" is /, "Layer is ");
+  expect(withoutId(JSON.parse(tiltOnly.stdout).error)).toBe(withoutId(addError));
+  expect(await revisionIdOf(layerId)).not.toBe(revisionId); // the scale edit published
+  const scaledRevisionId = await revisionIdOf(layerId);
+
+  // A tilt that measure accepts stores, and content replacement under it is
+  // gated by the NEW content's extent: a wide replacement diverges and is
+  // refused; a small one stays storable.
+  const tilted = await editJson(layerId, ["--perspective", "0x20"]);
+  expect(tilted.code).toBe(0);
+  const tiltedRevisionId = await revisionIdOf(layerId);
+  const wide2 = path.join(tempDir, "wide2.png");
+  await writeFile(wide2, solidPng(2000, 100, [0, 0, 255, 255]));
+  const replaced = await editJson(layerId, ["--image", wide2]);
+  expect(replaced.code).toBe(1);
+  expect(withoutId(JSON.parse(replaced.stdout).error)).toContain(
+    "projects that extent deeper than the fixed 1000px perspective distance",
+  );
+  expect(await revisionIdOf(layerId)).toBe(tiltedRevisionId);
+  const small = path.join(tempDir, "small.png");
+  await writeFile(small, solidPng(100, 100, [0, 0, 255, 255]));
+  const smallOk = await editJson(layerId, ["--image", small]);
+  expect(smallOk.code).toBe(0);
+
+  // The boundary is exact, not conservative: the same source at a shallower
+  // tilt stores, and measure agrees the projection is bounded.
+  const ok = await invoke([
+    "composition", "add", "poster", "fine", "--image", wide, "--x", "10", "--y", "10",
+    "--scale-to", "4x1", "--perspective", "0x20", "--project", projDir, "--json",
+  ]);
+  expect(ok.code).toBe(0);
+  const fineId = JSON.parse(ok.stdout).use.layerId as string;
+  const tiltEdit = await editJson(fineId, ["--perspective", "0x20"]);
+  expect(tiltEdit.code).toBe(0);
+  const measure = await invoke(["composition", "measure", "poster", "fine", "--project", projDir, "--json"]);
+  expect(measure.code).toBe(0);
+  expect(JSON.parse(measure.stdout).layers[0].refused).toBeNull();
 }, 30_000);
 
 // ---------------------------------------------------------------------------

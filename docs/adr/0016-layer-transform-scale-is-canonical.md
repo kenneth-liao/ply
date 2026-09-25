@@ -187,11 +187,21 @@ partial pair is malformed and refused loudly at the one revision-reader
 boundary. Angles are bounded to `|angle| ≤ 89` degrees: the skew tangent
 diverges at ±90°, and a ±90° perspective tilt is edge-on; the same bound
 is enforced at the parser (usage error), the resolver (domain refusal),
-and the stored reader (malformed document). measure refuses loudly when a
-tilt would project the content deeper than the 1000px distance (the
-divide would diverge), and the effect-reach magnification widens the
-painted-extent capture window for skew and perspective so an effected
-Layer's full extent is captured or refused, never clipped.
+and the stored reader (malformed document). The divergent-projection
+refusal — a tilt projecting the content, plus its own effect extent,
+deeper than the fixed 1000px distance — is computed from the POST-AFFINE
+extents (the tilt applies to points already mapped by the pre-tilt affine
+flip/scale/rotation/skew, so the depth is the exact tilt functional over
+the affine-mapped content corners plus the affine-mapped reach, never the
+raw layout box) through ONE shared reader, `perspectiveDepth`, that backs
+both the capture-window sizing and the refusal. The refusal runs at the
+measure seam AND at the add/edit publication boundary — on the would-be
+revision, before anything stages — so a Layer that measure would refuse
+can never be stored (the render path emits the perspective CSS
+unconditionally, so storage is the only place the loud refusal can live).
+The effect-reach magnification widens the painted-extent capture window
+for skew and perspective so an effected Layer's full extent is captured or
+refused, never clipped.
 
 ### Full transform order
 

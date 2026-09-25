@@ -33,6 +33,7 @@ import {
 import { resolveFace, resolveTextAxes, fontAssetBytes, callerFontFace, verifyCallerFontResolves, type CallerFontFacts } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
 import { measureTextFit } from "./composition-measure.js";
+import { refuseDivergentPerspectiveProjection } from "./layer.js";
 import { type LayerFill, canonicalizeTextFillForStorage } from "./fill.js";
 import {
   type ResolvedTextInputRuns,
@@ -494,6 +495,19 @@ async function applyOneCommandOptions(
     // here, never silently dropped.
     await applyLayerOption(key, rev, options![key], applyContext);
   }
+  // The divergent-perspective publication gate (PROD-1, #298 review): the
+  // ONE refusal the add and edit publication paths share, run on the
+  // resulting revision before anything stages — the tilt can only come
+  // from the supplied options on this surface, and the fresh revision
+  // pins the fresh content's bytes. The extent is the fresh content's
+  // intrinsic size (every non-text add dispatcher supplies it); a text
+  // Layer's extent is measured from its bytes inside the gate.
+  await refuseDivergentPerspectiveProjection(
+    rev as unknown as LayerRevision,
+    context.intrinsic,
+    context.contentBytes,
+    context.runFonts,
+  );
   return rev as unknown as LayerRevision;
 }
 
