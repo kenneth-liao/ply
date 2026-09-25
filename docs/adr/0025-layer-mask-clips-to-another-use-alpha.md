@@ -171,13 +171,18 @@ These follow from §1–§4 and from existing invariants.
     use rename all go through the same resolution check. They are refused
     rather than leaving a masked Layer with nothing to resolve to.
 - **Placement and measurement.** The clip comes after placement (step 9).
-  Anchored placement (ADR-0017) therefore keeps resolving against each
-  Layer's own unclipped painted extents, and moving a mask never moves the
-  Layer it clips.
-  - `measure` keeps each Layer's `painted` extents as its own pre-clip ink,
-    the box ADR-0017 anchors to.
-  - For a masked Layer, `measure` reports the clip and the post-clip
-    extents as separate, additional facts.
+  Masking therefore changes neither the anchor basis nor `painted`, and
+  moving a mask never moves the Layer it clips. These two are different
+  boxes today, and masking keeps them apart:
+  - **Anchored placement** keeps resolving against the Layer's
+    **pre-effect ink**, as the ADR-0017 amendment (spec #285 #288,
+    DEC-002) defines it. That ink has shadow and outline stripped, is
+    still clipped by the visible region, and is never mask-clipped.
+  - **`measure`'s `painted` extents** keep their meaning: they include the
+    effects' ink (#139/#140) and are taken before the mask clip.
+  - **The mask clip is reported separately.** For a masked Layer,
+    `measure` reports the clip and the post-clip extents as additional
+    facts.
   - A mask use has ink of its own (its alpha from §1), so it measures and
     anchors like any Layer. It is reported as a mask, and its ink is not
     painted.
@@ -201,9 +206,10 @@ applied. It overrides none of them.
   Layer: its region still crops content before the effects. The mask's own
   visible region shapes the clip (§1), so the mask's ink and its clip alpha
   are the same thing.
-- **ADR-0017 (anchored placement) — unchanged.** The anchor still
-  resolves against the unclipped `painted` extents, which keep their
-  meaning. The clip's extents are reported separately (§5).
+- **ADR-0017 (anchored placement, as amended by #288) — unchanged.** The
+  anchor still resolves against the pre-effect ink, which the mask never
+  clips. `measure`'s `painted` extents keep their with-effects meaning,
+  also before the clip. The clip's extents are reported separately (§5).
 
 ## Consequences
 
@@ -218,6 +224,9 @@ applied. It overrides none of them.
 - A Composition can contain a use that is not painted. The painted-ink pass,
   measurement, and the one-element-per-Layer markup under `#canvas` all
   assume every use is painted. Each must learn which uses are masks.
+- The mask fact's removal spelling must not be a possible use name (§1).
+  The add/edit refusal-parity tests should pin that the removal value is
+  never read as naming a use.
 - A copied mask gives the existing import refusal of colliding use names one
   more reason to fire. Import needs no new copying logic.
 - Out of scope:
