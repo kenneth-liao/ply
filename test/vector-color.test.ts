@@ -344,6 +344,13 @@ test("the revision hash appends the colour only when present (DEC-010: existing 
   // the pinned id, and only a PRESENT colour moves it.
   const colourless = { ...before.currentRevision } as Record<string, unknown>;
   delete colourless.vectorColor;
+  // The skew/perspective pairs are stored only when set (#298): the RESOLVED
+  // view carries their normalized identities, the stored document does not,
+  // so the hash proxy strips them to the stored shape.
+  delete colourless.skewXDeg;
+  delete colourless.skewYDeg;
+  delete colourless.perspectiveTiltXDeg;
+  delete colourless.perspectiveTiltYDeg;
   delete colourless.revisionId;
   const baseHash = computeRevisionHash(colourless as never);
   // The pin (INT-3): the colourless hash IS the revision id the tool actually
