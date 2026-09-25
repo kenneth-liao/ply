@@ -734,3 +734,37 @@ test("one-sided glow on a large Layer paints its lit side like the even glow, no
   const m = await invoke(["composition", "measure", "wide", "--project", projDir, "--json"]);
   expect(JSON.parse(m.stdout).layers[0].painted).toEqual(basePainted);
 }, 60_000);
+
+test("one-sided glow at a diagonal angle on a non-square box keeps the ramp's aspect math (DEC-008)", async () => {
+  // Angle 90 tests cannot see the ramp's geometry: the gradient clamps mask
+  // endpoint regressions on an axis-aligned ramp. This 400x80 box at 45
+  // degrees pins the aspect-scaled projection: the light comes FROM the upper
+  // right, so the lit extent is the TOP-RIGHT corner and the far extent the
+  // BOTTOM-LEFT corner — and the bottom edge's middle rides the mid-ramp
+  // (u ≈ 0.20), which collapses to the zero stop if the |d̂|² normalization
+  // or the endpoint projection breaks. At strength 1 the lit corner keeps
+  // the full band and the far corner is unlit to within the 0.05 tolerance.
+  await makeComp("diag", 600, 300);
+  const imgFile = path.join(tempDir, "img.png");
+  await writeFile(imgFile, solidPng(400, 80, [34, 136, 204, 255]));
+  const addRes = await addImageLayer("diag", "hero", imgFile, { x: 100, y: 110 });
+  const layerId = addRes.use.layerId as string;
+
+  const from: [number, number, number] = [34, 136, 204];
+  const target: [number, number, number] = [255, 153, 0];
+  const change = (png: ReturnType<typeof decodePng>, x: number, y: number) =>
+    toward(pixel(png, x, y).slice(0, 3) as [number, number, number], from, target);
+
+  await invoke(["layer", "edit", layerId, "--glow", "12,4,#ff9900,from 45,1", "--project", projDir]);
+  const out = path.join(tempDir, "diag.png");
+  const dir = await render("diag", out);
+
+  // Lit corner (top-right) keeps the band; far corner (bottom-left) unlit.
+  expect(change(dir, 499, 110)).toBeGreaterThan(0.5);
+  expect(change(dir, 100, 189)).toBeLessThan(0.05);
+  // The mid-ramp on both horizontal edges discriminates the aspect math:
+  // the top edge's middle is near the lit stop, the bottom edge's middle
+  // rides the mid-ramp (u ≈ 0.20) — not clamped to either stop.
+  expect(change(dir, 300, 110)).toBeGreaterThan(0.5);
+  expect(change(dir, 300, 189)).toBeGreaterThan(0.1);
+}, 60_000);

@@ -1056,10 +1056,19 @@ export async function sizeEffectFilterRegions(page: Page, layers: SnapshotLayer[
         // deterministic rewrite in both page flows, so render and painted
         // extents stay identical and pinned replay stays byte-identical.
         if (spec.direction !== undefined) {
-          const image = filter.querySelector("feImage");
+          // Scoped to the ramp's own feImage (PROD-2): the result marker, not
+          // the element tag, is the contract.
+          const image = filter.querySelector('feImage[result="grad"]');
           if (!image) {
             problems.push(
               `Layer "${spec.name}": effect filter ${spec.id} carries a direction but no feImage ramp`,
+            );
+          } else if (!box.width || !box.height) {
+            // A zero-area box would divide by zero in the ramp math below and
+            // mint NaN gradient coordinates — refuse with a named problem and
+            // keep the inert placeholder (PROD-1).
+            problems.push(
+              `Layer "${spec.name}": zero-size box (${box.width}x${box.height}), directional ramp skipped`,
             );
           } else {
             // The ramp builder lives HERE, in-page (the box is only knowable
