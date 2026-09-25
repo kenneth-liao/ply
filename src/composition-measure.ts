@@ -153,9 +153,9 @@ export interface MeasuredLayerBounds {
   refused: string | null;
   /** The Layer mask (ADR-0025, #305): the Composition-local use name this Layer's revision stores as its clip, or null. The clip applies to the Layer's final pixels (after its effects, before blend). */
   mask: string | null;
-  /** The POST-CLIP painted extents: the masked Layer's ink after the mask clip (the pre-clip `painted` keeps its with-effects meaning). Null for unmasked Layers, for empty post-clip ink, or when capture is refused. */
+  /** The POST-CLIP painted extents: the masked Layer's ink after the mask clip. The clip is defined where the mask's alpha is — the canvas rectangle (ADR-0025 §1) — so off-canvas ink has no mask alpha and does not survive: this is the ink the render shows, in canvas space. Equal to maskedPaintedOnCanvas by construction (kept parallel to painted/paintedOnCanvas for consumers). Null for unmasked Layers, for empty post-clip ink, or when capture is refused. */
   maskedPainted: { x: number; y: number; width: number; height: number } | null;
-  /** The post-clip extent's intersection with the canvas rectangle; null when empty or when capture is refused. */
+  /** The post-clip extent's intersection with the canvas rectangle (equal to maskedPainted by construction — see its note); null when empty or when capture is refused. */
   maskedPaintedOnCanvas: { x: number; y: number; width: number; height: number } | null;
   /** The uses in this Composition whose revision names this use as their mask (ADR-0025 §5: a use is a mask when at least one other use names it). A mask use's ink is its own — it measures and anchors like any Layer — but it never paints. */
   masks: string[];

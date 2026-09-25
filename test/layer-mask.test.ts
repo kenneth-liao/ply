@@ -818,9 +818,11 @@ test("measure reports the clip on and off canvas, unmasked defaults, and refused
   expect(cut.mask).toBeNull();
   expect(cut.maskedPainted).toBeNull();
 
-  // Partly off-canvas: the clip keeps ink that pokes past the canvas edge —
-  // maskedPainted is the full post-clip ink, maskedPaintedOnCanvas its
-  // canvas intersection (60px of the 160px-wide subject hang off the edge).
+  // Partly off-canvas: the clip is defined where the mask's alpha is — the
+  // canvas rectangle — so off-canvas ink has no mask alpha and does NOT
+  // survive the clip: maskedPainted is the on-canvas post-clip ink (the ink
+  // the render shows), and maskedPaintedOnCanvas is its canvas intersection
+  // (equal by construction, kept parallel to painted/paintedOnCanvas).
   await makeComp("edge");
   const wide = path.join(tempDir, "edge-subject.png");
   await writeFile(wide, solidPng(160, 140, RED));
@@ -829,8 +831,9 @@ test("measure reports the clip on and off canvas, unmasked defaults, and refused
   await setMask("edge/subject", "veil");
   const m2 = await measure("edge");
   const edgeSubject = m2.layers.find((l: any) => l.name === "subject");
-  expect(edgeSubject.maskedPainted).toEqual({ x: 100, y: 10, width: 160, height: 140 });
-  expect(edgeSubject.maskedPaintedOnCanvas).toEqual({ x: 100, y: 10, width: 100, height: 140 });
+  expect(edgeSubject.painted).toEqual({ x: 100, y: 10, width: 160, height: 140 }); // pre-clip keeps its meaning
+  expect(edgeSubject.maskedPainted).toEqual({ x: 100, y: 10, width: 100, height: 140 });
+  expect(edgeSubject.maskedPaintedOnCanvas).toEqual(edgeSubject.maskedPainted);
 
   // A refused capture on a masked Layer: maskedPainted is null like painted
   // (uncaptured, not empty), and the measure exits 1. The refusal is the
@@ -865,7 +868,7 @@ test("the human-readable measure text surfaces the mask facts and the post-clip 
   expect(subjectLine).toContain('mask "cut"');
   expect(subjectLine).toContain("painted (20, 10) 160×140"); // pre-clip keeps its meaning
   expect(subjectLine).toContain("the clip keeps (20, 100) 160×40");
-  const cutLine = res.stdout.split("\n").find((l) => l.includes('"cut"'))!;
-  expect(cutLine).toContain('masks "subject"');
+  const cutLine = res.stdout.split("\n").find((l) => l.includes('masks "subject"'))!;
+  expect(cutLine).toContain('"cut"');
   expect(cutLine).not.toContain("the clip keeps");
 });

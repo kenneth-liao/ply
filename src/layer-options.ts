@@ -1778,26 +1778,28 @@ export function parseLayerAnchor(raw: string | undefined): OptionParse<ParsedAnc
   }
 }
 
-/** The keys `isAnchorConflicting` treats as conflicting, in the table's
- *  order, MINUS the plain content kinds the refusal names as prose
- *  ("content replacement"): the shape parameters stay in (they are named
- *  as the "shape parameters" family in the refusal text). ONE derivation
- *  home (review INT-3, INT-U3-2): `isAnchorConflicting` tests presence
- *  against THIS key set and `anchorConflictOptionList` spells it — the
- *  two can never disagree, and a newly added option (the mask group's
- *  `--mask` included) joins both automatically. */
-const ANCHOR_CONFLICT_PROSE_KEYS: readonly LayerOptionKey[] = ["image", "from-generation", "from-matte", "text"];
-
+/** The keys --anchor cannot combine with, in the table's order: every
+ *  edit option except the anchor's own axes (--x, --y), --opacity, and
+ *  --anchor itself. ONE derivation home (review INT-3, INT-U3-2):
+ *  `isAnchorConflicting` tests presence against THIS key set and
+ *  `anchorConflictOptionList` spells the same set minus the plain content
+ *  kinds (which the refusal names as prose) — the two can never disagree,
+ *  and a newly added option (the mask group's `--mask` included) joins
+ *  both automatically. */
 function anchorConflictKeys(): LayerOptionKey[] {
   const anchorFree = new Set<LayerOptionKey>(["x", "y", "opacity", "anchor"]);
   return LAYER_OPTION_DEFS
-    .filter((def) => def.editOption && !anchorFree.has(def.key) && !ANCHOR_CONFLICT_PROSE_KEYS.includes(def.key))
+    .filter((def) => def.editOption && !anchorFree.has(def.key))
     .map((def) => def.key);
 }
 
+/** The plain content kinds the anchor refusal names as prose
+ *  ("content replacement"), never as flags. */
+const ANCHOR_CONFLICT_PROSE_KEYS: readonly LayerOptionKey[] = ["image", "from-generation", "from-matte", "text"];
+
 /** The options --anchor cannot combine with: every edit option except the
- *  anchor's own axes (--x, --y) and --opacity, which combine freely, and
- *  the plain content kinds, which the refusal names as prose.
+ *  anchor's own axes (--x, --y) and --opacity, which combine freely — the
+ *  plain content kinds included (the refusal names them as prose).
  *  Derived from the option table through `anchorConflictKeys` — the same
  *  derivation the refusal text reads — so a newly added option
  *  automatically joins the conflict rule. */
@@ -1807,17 +1809,19 @@ export function isAnchorConflicting(args: LayerOptionArgs): boolean {
 
 /** The option-name segment of the edit surface's `--anchor` exclusivity
  *  refusal, derived from the SAME key set `isAnchorConflicting` derives
- *  from (`anchorConflictKeys`, review INT-3, INT-U3-2) — every conflicting
- *  key appears in the refusal exactly once, grouped as the table groups
- *  them: the transform, mask, effect, look, region, and paint groups
- *  spelled as flags, and the shape content group named as the "shape
- *  parameters" family. A newly added option in one of these groups joins
- *  both the rule and the refusal text automatically; the anchor-free axes
- *  (--x, --y, --opacity) stay outside, and the plain content kinds
- *  (--image, --from-generation, --from-matte, --text) are named as
- *  "content replacement" in the refusal's prose, not as a flag list. */
+ *  from (`anchorConflictKeys`, review INT-3, INT-U3-2) minus the plain
+ *  content kinds: every non-prose conflicting key appears in the refusal
+ *  exactly once, grouped as the table groups them — the paint, transform,
+ *  region, mask, look, and effect groups spelled as flags, and the shape
+ *  content group named as the "shape parameters" family. A newly added
+ *  option in one of these groups joins both the rule and the refusal text
+ *  automatically; the anchor-free axes (--x, --y, --opacity) stay outside,
+ *  and the plain content kinds (--image, --from-generation, --from-matte,
+ *  --text) are named as "content replacement" in the refusal's prose, not
+ *  as a flag list. */
 export function anchorConflictOptionList(): string {
-  const conflicting = new Set(anchorConflictKeys());
+  const prose = new Set<string>(ANCHOR_CONFLICT_PROSE_KEYS);
+  const conflicting = new Set(anchorConflictKeys().filter((key) => !prose.has(key)));
   const flags = (keys: readonly LayerOptionKey[]): string =>
     keys.filter((key) => conflicting.has(key)).map((key) => `--${key}`).join(", ");
   const group = (name: LayerOptionDef["group"]): string =>
