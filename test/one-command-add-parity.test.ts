@@ -95,7 +95,7 @@ interface MeasuredEntry {
   painted: { x: number; y: number; width: number; height: number } | null;
   placement: { x: number; y: number; opacity: number };
   transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number };
-  effects: { shadow: unknown; outline: unknown };
+  effects: { shadow: unknown; outline: unknown; innerShadow: unknown };
   typography: Record<string, unknown>;
   axes: { weight: number; width: number } | null;
 }
@@ -159,6 +159,7 @@ const IMAGE_ONE_COMMAND = [
   "--anchor", "center,center",
   "--shadow", "3,4,5,#000000", "--shadow", "-2,0,0,#00ffcc",
   "--outline", "2,#00ff00", "--outline", "1,#0000cc", "--blur", "6", "--choke", "2", "--feather", "2",
+  "--inner-shadow", "0,6,4,#000000", "--inner-shadow", "-3,0,0,#00000080",
 ];
 const IMAGE_CONTENT = ["--image", "<pad>", "--x", "120", "--y", "90", "--opacity", "0.85"];
 const IMAGE_TRANSFORMS = ["--resize", "1.5", "--rotate", "15", "--flip", "horizontal", "--skew", "10x0", "--perspective", "0x12"];
@@ -166,6 +167,7 @@ const IMAGE_ANCHOR = ["--anchor", "center,center", "--x", "120", "--y", "90"];
 const IMAGE_EFFECTS = [
   "--shadow", "3,4,5,#000000", "--shadow", "-2,0,0,#00ffcc",
   "--outline", "2,#00ff00", "--outline", "1,#0000cc", "--blur", "6", "--choke", "2", "--feather", "2",
+  "--inner-shadow", "0,6,4,#000000", "--inner-shadow", "-3,0,0,#00000080",
 ];
 
 const TEXT_ONE_COMMAND = [
@@ -174,6 +176,7 @@ const TEXT_ONE_COMMAND = [
   "--resize", "1.25", "--rotate", "-12",
   "--anchor", "center,center",
   "--shadow", "3,3,5,#000000", "--shadow", "-2,0,0,#00ffcc",
+  "--inner-shadow", "0,5,3,#000000",
 ];
 const TEXT_CONTENT = [
   "--text", "Groundline", "--font", "Archivo", "--font-size", "48", "--color", "#ffcc00",
@@ -181,7 +184,7 @@ const TEXT_CONTENT = [
 ];
 const TEXT_TRANSFORMS = ["--resize", "1.25", "--rotate", "-12"];
 const TEXT_ANCHOR = ["--anchor", "center,center", "--x", "200", "--y", "150"];
-const TEXT_EFFECTS = ["--shadow", "3,3,5,#000000", "--shadow", "-2,0,0,#00ffcc"];
+const TEXT_EFFECTS = ["--shadow", "3,3,5,#000000", "--shadow", "-2,0,0,#00ffcc", "--inner-shadow", "0,5,3,#000000"];
 
 // Shape (#259, finding A226-004): the same full-option parity for a shape
 // Layer — the kind-shared controls production supports on shapes (absolute
@@ -195,6 +198,7 @@ const SHAPE_ONE_COMMAND = [
   "--anchor", "center,center",
   "--shadow", "3,4,5,#000000", "--shadow", "-2,0,0,#00ffcc",
   "--outline", "2,#00ff00", "--outline", "1,#0000cc", "--blur", "6", "--choke", "2", "--feather", "2",
+  "--inner-shadow", "0,6,4,#000000", "--inner-shadow", "-3,0,0,#00000080",
 ];
 const SHAPE_CONTENT = [
   "--shape", "rectangle", "--size", "120x60", "--corner-radius", "12", "--fill", "#1d4ed8",
@@ -205,6 +209,7 @@ const SHAPE_ANCHOR = ["--anchor", "center,center", "--x", "160", "--y", "120"];
 const SHAPE_EFFECTS = [
   "--shadow", "3,4,5,#000000", "--shadow", "-2,0,0,#00ffcc",
   "--outline", "2,#00ff00", "--outline", "1,#0000cc", "--blur", "6", "--choke", "2", "--feather", "2",
+  "--inner-shadow", "0,6,4,#000000", "--inner-shadow", "-3,0,0,#00000080",
 ];
 
 test("image Layer: one-command add equals the multi-command sequence (render, measure, one revision)", async () => {

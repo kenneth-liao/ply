@@ -1590,6 +1590,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       // only when set, so an unblurred source's copy keeps its exact shape.
       ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
       ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
+      ...(source.innerShadow !== undefined ? { innerShadow: storedEffectStack(source.innerShadow) } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
@@ -1632,6 +1633,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       // only when set, so an unblurred source's copy keeps its exact shape.
       ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
       ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
+      ...(source.innerShadow !== undefined ? { innerShadow: storedEffectStack(source.innerShadow) } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
   }
@@ -1667,6 +1669,7 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
     // only when set, so an unblurred source's copy keeps its exact shape.
     ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
     ...(source.outline !== undefined ? { outline: storedEffectStack(source.outline) } : {}),
+    ...(source.innerShadow !== undefined ? { innerShadow: storedEffectStack(source.innerShadow) } : {}),
     ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     // The vector colour (#215, DEC-002 — a revision fact shared as a whole):
     // copied verbatim with the Layer. A source revision cannot carry the

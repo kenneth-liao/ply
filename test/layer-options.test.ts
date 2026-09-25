@@ -96,6 +96,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "perspective",
       "shadow",
       "outline",
+      "inner-shadow",
       "visible-region",
       "visible-region-radius",
       "brightness",
@@ -162,7 +163,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "weight", "width", "tracking", "line-height", "wrap-width", "fit-box",
       "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
       "x", "y", "opacity", "anchor",
-      "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "skew", "perspective", "shadow", "outline", "visible-region", "visible-region-radius",
+      "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "skew", "perspective", "shadow", "outline", "inner-shadow", "visible-region", "visible-region-radius",
       "brightness", "contrast", "saturation", "warmth", "blend", "glow", "blur", "choke", "feather",
     ]);
   });
@@ -192,8 +193,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // #295 adds --fit-box the same way (a negative axis is refused by the range validator);
     // #299 adds --blur (a negative radius is refused by the range validator);
     // #300 adds --choke and --feather the same way (negative radii are
-    // refused by the range validators).
-    expect(editFlags).toHaveLength(17);
+    // refused by the range validators); #303 adds --inner-shadow the same
+    // way (a negative offset is legitimate input).
+    expect(editFlags).toHaveLength(18);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--warmth");
   });

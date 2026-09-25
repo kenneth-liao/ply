@@ -43,7 +43,7 @@ import {
   RETAINED_MATTING_DIR,
   type RetainedMattingProvenance,
 } from "./matting-retention.js";
-import { readLayerInternalFull, formatGrade, formatGlow, type ResolvedLayer, type LayerOutline, type LayerShadow } from "./layer.js";
+import { readLayerInternalFull, formatGrade, formatGlow, type ResolvedLayer, type LayerOutline, type LayerShadow, type LayerInnerShadow } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock, atomicCreate } from "./project-lock.js";
 import { atomicReplace } from "./reference-import.js";
@@ -324,12 +324,15 @@ function factsForJob(job: GenerationJobRecord): [string, string][] {
 }
 
 /** The ONE per-entry effect-rows builder for the review facts (#302,
- *  review INT-2): one row per stacked effect, in paint order — outlines
- *  before shadows, the effects chain's function order — shared by the
- *  candidate facts and the shape parameter sheet so a future format change
- *  cannot split them. */
-function effectFactRows(rev: { outline?: LayerOutline[]; shadow?: LayerShadow[] }): [string, string][] {
+ *  review INT-2): one row per stacked effect, in paint order — inner
+ *  shadows (#303) before outlines before shadows, the effects chain's
+ *  function order — shared by the candidate facts and the shape parameter
+ *  sheet so a future format change cannot split them. */
+function effectFactRows(rev: { outline?: LayerOutline[]; shadow?: LayerShadow[]; innerShadow?: LayerInnerShadow[] }): [string, string][] {
   return [
+    ...(rev.innerShadow !== undefined
+      ? rev.innerShadow.map((s) => ["inner shadow", `${s.dx} ${s.dy} ${s.blur} ${s.color} (paint-time)`] as [string, string])
+      : []),
     ...(rev.outline !== undefined
       ? rev.outline.map((o) => ["outline", `${o.width} ${o.color} (paint-time)`] as [string, string])
       : []),

@@ -1420,3 +1420,109 @@ test("matrix: stacked shadows and outlines apply to raster image, vector image, 
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Inner shadow (#303, spec #285 US-011, ISC-64, DEC-005, ADR-0027): the
+// inner shadow applies to all 4 kinds and never extends painted extents.
+// ---------------------------------------------------------------------------
+
+test("matrix: the inner shadow darkens the top inside edge on raster image, vector image, text, and shape Layers, with painted extents unchanged", async () => {
+  await makeComp("comp-inner", 300, 200);
+
+  // One 60x60 solid ink block per kind, each with the same inner shadow:
+  // dy +6, blur 0 — the TOP inside edge darkens (the edge the offset moves
+  // away from, the CSS inset box-shadow convention).
+  const pngPath = path.join(tempDir, "raster-solid.png");
+  await writeFile(pngPath, solidPng(60, 60, [200, 60, 60, 255]));
+  await invoke([
+    "composition", "add", "comp-inner", "raster",
+    "--image", pngPath, "--x", "10", "--y", "10", "--inner-shadow", "0,6,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+
+  const svgPath = path.join(tempDir, "vector-solid.svg");
+  await writeFile(svgPath, solidSvg(60, 60, "#3c3cc8"));
+  await invoke([
+    "composition", "add", "comp-inner", "vector",
+    "--image", svgPath, "--x", "80", "--y", "10", "--inner-shadow", "0,6,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+
+  await invoke([
+    "composition", "add", "comp-inner", "text",
+    "--text", "MM", "--font", "Archivo", "--font-size", "40", "--color", "#2040a0",
+    "--x", "10", "--y", "90", "--inner-shadow", "0,6,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+
+  await invoke([
+    "composition", "add", "comp-inner", "shape",
+    "--shape", "rectangle", "--size", "60x60", "--fill", "#c8a232",
+    "--x", "80", "--y", "90", "--inner-shadow", "0,6,0,#000000",
+    "--project", projDir, "--json",
+  ]);
+
+  // A plain twin renders the same content without the effect.
+  await makeComp("comp-inner-base", 300, 200);
+  await invoke([
+    "composition", "add", "comp-inner-base", "raster",
+    "--image", pngPath, "--x", "10", "--y", "10",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-inner-base", "vector",
+    "--image", svgPath, "--x", "80", "--y", "10",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-inner-base", "text",
+    "--text", "MM", "--font", "Archivo", "--font-size", "40", "--color", "#2040a0",
+    "--x", "10", "--y", "90",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-inner-base", "shape",
+    "--shape", "rectangle", "--size", "60x60", "--fill", "#c8a232",
+    "--x", "80", "--y", "90",
+    "--project", projDir, "--json",
+  ]);
+
+  const shadowed = await render("comp-inner", "inner-matrix.png");
+  const base = await render("comp-inner-base", "inner-matrix-base.png");
+
+  // On every kind the top inside edge is darkened (the red/blue/amber
+  // channel drops well below its plain value) and nothing paints outside
+  // the box (the atop composite keeps the alpha exactly the source's).
+  // Raster top edge (x=40, y=12), vector top edge (x=110, y=12), shape top
+  // edge (x=110, y=92); the text glyph edge is asserted through the
+  // raster/vector/shape pixels and the text layer's stored fact.
+  for (const [x, y] of [[40, 12], [110, 12], [110, 92]] as const) {
+    expect(pixel(base, x, y)[3]).toBe(255);
+    expect(pixel(shadowed, x, y)[3]).toBe(255);
+    expect(pixel(shadowed, x, y)[0]).toBeLessThan(pixel(base, x, y)[0]!);
+    expect(pixel(shadowed, x, y - 3)[3]).toBe(0);
+  }
+  // The interiors stay the plain ink on every kind (dy 6, blur 0: the band
+  // is exactly the top 6 rows). The filter round-trip (linearRGB in, sRGB
+  // out) can shift a pass-through pixel by 1-2 8-bit units, so the
+  // comparison tolerates that — the band itself is asserted far above it.
+  for (const [x, y] of [[40, 40], [110, 40], [110, 120]] as const) {
+    const plain = pixel(base, x, y);
+    const inked = pixel(shadowed, x, y);
+    for (let c = 0; c < 4; c++) {
+      expect(Math.abs(inked[c]! - plain[c]!)).toBeLessThanOrEqual(2);
+    }
+  }
+
+  // Measure agrees on every kind: painted extents equal the no-shadow
+  // extents (zero reach), and the effects facts report the inner shadow.
+  const measured = await invoke(["composition", "measure", "comp-inner", "--project", projDir, "--json"]);
+  const baseMeasured = await invoke(["composition", "measure", "comp-inner-base", "--project", projDir, "--json"]);
+  const layers = (JSON.parse(measured.stdout).layers as { name: string; effects: { innerShadow: unknown }; painted: unknown }[]);
+  const baseLayers = (JSON.parse(baseMeasured.stdout).layers as { name: string; effects: { innerShadow: unknown }; painted: unknown }[]);
+  for (const l of layers) {
+    expect(l.effects.innerShadow).toEqual([{ dx: 0, dy: 6, blur: 0, color: "#000000" }]);
+    const plain = baseLayers.find((b) => b.name === l.name)!;
+    expect(l.painted).toEqual(plain.painted);
+  }
+}, 60_000);

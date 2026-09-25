@@ -51,7 +51,8 @@ representation (DEC-005):
   pre-#302 form, so existing revisions keep their exact ids and paint
   (TEST-003). A stack appends its entries inside the same `:shadow(...)`
   / `:outline(...)` field, `;`-joined in paint order.
-- **Which types stack.** Only `shadow` and `outline` (DEC-006). Glow stays
+- **Which types stack.** `shadow`, `outline`, and — joined by this ADR's
+  rule in #303 (spec #285 US-011, ISC-64) — `innerShadow`. Glow stays
   a single fact (its #301 change was direction, not count), as do blur,
   choke, feather, grade, and blend.
 - **Joining rule for future effect types (#303 inner shadow and beyond):**
@@ -59,7 +60,11 @@ representation (DEC-005):
   stored normalizer, ONE chain position in the documented ADR-0024 paint
   order, ONE reach term in `localEffectReachPx`, and ONE hash field — the
   same five registrations every effect fact already takes. No second
-  field, no second reader.
+  field, no second reader. #303's inner shadow is the first type to join
+  through this rule, and its reach term is ZERO (the #300 edge-step
+  precedent: the atop composite keeps the alpha exactly the input's, so
+  the inner-shadowed ink never exceeds the unshadowed ink — proven by the
+  ISC-64 extent-unchanged probe).
 
 ## Paint ordering
 
@@ -84,6 +89,27 @@ earlier ones:
 - **Shadow stack:** one `drop-shadow` function per entry, in stored
   order — the first is cast from the outlined composite, each later one
   from the ink accumulated before it.
+
+- **Inner-shadow stack (#303, spec #285 US-011, ISC-64, DEC-005):** one
+  referenced SVG-filter def per entry (deterministic id: the entry's facts
+  and Layer index, plus the entry's stack position from the second entry
+  on, so a single inner shadow's markup is byte-identical to a one-effect
+  form), in the chain position between the glow and the outlines. Each
+  entry offsets and blurs the input's alpha, takes the band as the input
+  alpha MINUS the shifted, blurred alpha (`feComposite operator="out"` —
+  the reverse operand order would select pixels outside the shape, which
+  the atop composite then erases), floods its colour into the band, and
+  composites ATOP the input graphic. Porter-Duff atop keeps the
+  composite's alpha EXACTLY the input's, so the effect darkens pixels just
+  inside the alpha edge without altering coverage. The offset direction
+  follows the CSS inset box-shadow convention: the band appears along the
+  edge the offset moves AWAY from (dy +4 darkens the top inside edge, dx
+  +4 the left inside edge; 0,0,blur rings all inside edges). Stacked
+  entries chain in stored order, each darkening the composite the earlier
+  ones accumulated — and because every entry's output preserves the
+  input's alpha exactly, the outline dilate and drop-shadow casting
+  geometry downstream are provably unchanged by the inner shadow's
+  presence.
 
 **Reach stays the ONE additive helper.** `localEffectReachPx` sums over
 every stacked effect — Σ outline widths + Σ per-shadow `|dx| + |dy| +

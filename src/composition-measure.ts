@@ -120,6 +120,7 @@ import {
   type LayerRevision,
   type LayerOutline,
   type LayerShadow,
+  type LayerInnerShadow,
   type LayerTextTypography,
   type ResolvedLayerRevision,
   type LayerGrade,
@@ -154,11 +155,13 @@ export interface MeasuredLayerBounds {
   /** The revision's normalized canonical transform facts, verbatim. */
   transform: { scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number };
   /** The revision's effective effect facts (#139/#140; stacked #302,
-   * ADR-0027): `shadow` and `outline` are the normalized effect LISTS in
-   * paint order (null when the Layer has none of that effect — absence IS
-   * the no-effect form; a one-effect Layer reports a one-element list) —
-   * the same facts painting applies, reported for auditability. */
-  effects: { shadow: LayerShadow[] | null; outline: LayerOutline[] | null };
+   * ADR-0027): `shadow`, `outline`, and `innerShadow` (#303) are the
+   * normalized effect LISTS in paint order (null when the Layer has none
+   * of that effect — absence IS the no-effect form; a one-effect Layer
+   * reports a one-element list) — the same facts painting applies,
+   * reported for auditability. The inner shadow never extends painted
+   * extents (DEC-005), so its fact rides beside them like the glow's. */
+  effects: { shadow: LayerShadow[] | null; outline: LayerOutline[] | null; innerShadow: LayerInnerShadow[] | null };
   /** The revision's effective grade controls (#219, spec #218 US-001, ADR-0024):
    * the stored grade parameters (or null when the Layer has no grade) — the
    * same facts painting applies, reported for auditability. */
@@ -430,14 +433,18 @@ type Box = { x: number; y: number; width: number; height: number };
  * ADR-0024 amendment): the edge step's `in` composite bounds its output by
  * the source alpha, so the shaped ink never exceeds the unshaped ink — the
  * edge step adds no reach, it only reshapes (or shrinks) what the other
- * terms already cover.
+ * terms already cover. #303's inner shadow adds NO term either (the same
+ * precedent): its atop composite keeps the alpha exactly the input's, so
+ * the inner-shadowed ink never exceeds the unshadowed ink — proven by the
+ * extent-unchanged probe (ISC-64).
  */
 function localEffectReachPx(revision: TransformFactsSource): number {
   // Stacked effects (#302, ADR-0027): the fold is `readEffectStack`'s (the
   // ONE read-side shape interpreter, layer.ts) — the reach ADDS over every
   // stacked effect (each outline dilates the accumulated composite; each
   // shadow is cast from the accumulated ink), the same additive list the
-  // paint chain's function order builds.
+  // paint chain's function order builds. The inner shadow (#303) takes no
+  // term here — see the #300 note above.
   const outline = (readEffectStack(revision.outline) ?? []).reduce((sum, o) => sum + o.width, 0);
   const shadow = (readEffectStack(revision.shadow) ?? []).reduce(
     (sum, s) => sum + Math.abs(s.dx) + Math.abs(s.dy) + 2 * s.blur,
@@ -1018,7 +1025,7 @@ export async function measureCompositionLayers(
           perspectiveTiltXDeg: rev.perspectiveTiltXDeg,
           perspectiveTiltYDeg: rev.perspectiveTiltYDeg,
         },
-        effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
+        effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null, innerShadow: rev.innerShadow ?? null },
         grade: rev.grade ?? null,
         glow: rev.glow ?? null,
         blur: normalizeStoredBlur(rev) ?? null,

@@ -126,6 +126,17 @@ const audit: Array<{ suite: string; markers: string[] }> = [
     ],
   },
   {
+    suite: "layer-inner-shadow.test.ts",
+    markers: [
+      "image Layer --inner-shadow darkens the top inside edge and leaves the painted extent unchanged",
+      "--inner-shadow dx +4 darkens the left inside edge only",
+      "--inner-shadow 0,0,blur rings all inside edges",
+      "inner shadows stack in command order; a stored length-1 list is refused",
+      "invalid --inner-shadow specs refuse identically and never mutate",
+      "inner shadow appears in compact output, inspect, and review facts",
+    ],
+  },
+  {
     suite: "layer-outline.test.ts",
     markers: [
       "image Layer --outline paints outline pixels and keeps content bytes",

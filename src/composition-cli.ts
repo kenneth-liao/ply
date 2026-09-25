@@ -74,7 +74,7 @@ import {
 import { parseOneCommandOptionValues } from "./one-command.js";
 import { addShapeLayerToComposition } from "./composition.js";
 import { formatFill, normalizeStoredTextFill } from "./fill.js";
-import { formatGrade, formatGlow, runRemovalOnAddRefusal, type LayerGrade, type LayerGlow, type LayerOutline, type LayerShadow, type StoredLayerBlendMode } from "./layer.js";
+import { formatGrade, formatGlow, runRemovalOnAddRefusal, type LayerGrade, type LayerGlow, type LayerOutline, type LayerShadow, type LayerInnerShadow, type StoredLayerBlendMode } from "./layer.js";
 import { measureCompositionLayers, type MeasuredLayerBounds } from "./composition-measure.js";
 import { checkCompositionRegions, type RegionFinding, type RegionRefusal } from "./composition-region-check.js";
 import { renderCompositionGuidelines } from "./composition-guidelines.js";
@@ -525,6 +525,19 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         occurrences stack nested rings in command order.
                         Width is px (0..256). Painted before the shadow,
                         which is cast from the outlined composite.
+  --inner-shadow <spec>
+                        Apply an inner shadow to the Layer's content (#303,
+                        ADR-0027): an absolute setter "<dx>,<dy>,<blur>,
+                        <color>" (e.g. "0,4,6,#000000CC") or "none" — the
+                        same grammar and bounds as --shadow. REPEATABLE
+                        (ADR-0027): several occurrences stack in command
+                        order. The band darkens pixels JUST INSIDE the
+                        alpha edge and never paints outside it: the offset
+                        follows the CSS inset box-shadow convention (dy +4
+                        darkens the TOP inside edge, dx +4 the left), and
+                        0,0,blur rings all inside edges. Painted after the
+                        edge glow and before the outlines; the painted
+                        extent is unchanged (no reach).
   --vector-color <hex|none>
                         Paint a vector image Layer's shape in one colour
                         (#215, spec #207 US-005): an absolute setter taking
@@ -674,6 +687,7 @@ function oneCommandFacts(
     perspectiveTiltYDeg?: number;
     shadow?: LayerShadow[] | null;
     outline?: LayerOutline[] | null;
+    innerShadow?: LayerInnerShadow[] | null;
     vectorColor?: string;
     visibleRegion?: { x: number; y: number; width: number; height: number; cornerRadius?: number };
     grade?: LayerGrade;
@@ -699,7 +713,10 @@ function oneCommandFacts(
   if (rev.perspectiveTiltXDeg !== undefined && (rev.perspectiveTiltXDeg !== 0 || rev.perspectiveTiltYDeg !== 0)) {
     facts.push(`perspective ${rev.perspectiveTiltXDeg}° ${rev.perspectiveTiltYDeg}°`);
   }
-  // Stacked effects (#302, ADR-0027): one fact per entry, in paint order.
+  // Stacked effects (#302, ADR-0027) and inner shadows (#303): one fact per
+  // entry, in paint order (the chain's function order — inner shadow before
+  // outline before shadow).
+  if (rev.innerShadow) for (const s of rev.innerShadow) facts.push(`inner shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
   if (rev.shadow) for (const s of rev.shadow) facts.push(`shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
   if (rev.outline) for (const o of rev.outline) facts.push(`outline ${o.width} ${o.color}`);
   if (rev.vectorColor) facts.push(`vector colour ${rev.vectorColor}`);

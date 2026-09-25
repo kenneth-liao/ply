@@ -614,6 +614,39 @@ ply layer edit <layerId> --outline none            # remove (its own edit)
 - Invalid settings fail at the command boundary (exit 2) through the same
   parser the edit path uses — nothing invalid ever mutates live state.
 
+## Layer inner shadows (new surface)
+
+`ply layer edit` and `ply composition add` accept `--inner-shadow` on image
+(raster and vector), text, and shape Layers (#303, spec #285 US-011,
+ADR-0027) — the inset counterpart of the drop shadow:
+
+```bash
+ply layer edit <layerId> --inner-shadow "0,6,8,#000000CC"   # dark top inside edge, soft
+ply layer edit <layerId> --inner-shadow "0,0,12,#00000080"  # an even inside vignette ring
+ply layer edit <layerId> --inner-shadow none                # remove (its own edit)
+```
+
+- The spec is an ABSOLUTE setter `"<dx>,<dy>,<blur>,<color>"` — the same
+  grammar and bounds as `--shadow` — that replaces any previous stack;
+  `"none"` removes it. **Stacked (ADR-0027):** the option is REPEATABLE —
+  two or more occurrences in one command set the whole stack, in command
+  order; one occurrence is the single-object form; `"none"` cannot combine
+  with value occurrences.
+- **Direction convention:** the CSS inset box-shadow's — the band appears
+  along the edge the offset moves AWAY from (dy `+4` darkens the TOP
+  inside edge, dx `+4` the left inside edge; `0,0,blur` rings all inside
+  edges).
+- **No reach:** the band darkens pixels JUST INSIDE the alpha edge and
+  never paints outside it — the atop composite keeps alpha coverage
+  exactly the source's, so painted extents are unchanged and
+  `--anchor`/relocation geometry is unaffected (DEC-005). Painted just
+  after the edge glow and before the outlines (ADR-0024 fourth
+  amendment); stacked entries chain in stored order.
+- **Revision fact (DEC-002):** shared as a whole, hashed only when present
+  (pre-#303 revisions keep their exact ids), retained bytes never change.
+- Invalid settings fail at the command boundary (exit 2) through the same
+  parser the edit path uses.
+
 ## Visible region (new surface)
 
 `ply layer edit --visible-region` shows only a rectangular part of a

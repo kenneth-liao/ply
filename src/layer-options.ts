@@ -58,6 +58,7 @@ import { parseAnchorSpec, type AnchorResolution, type ParsedAnchor, resolveAncho
 import {
   parseShadowSpec,
   parseOutlineSpec,
+  parseInnerShadowSpec,
   parseGlowSpec,
   parseVisibleRegionSpec,
   parseVisibleRegionRadiusSpec,
@@ -85,6 +86,7 @@ import {
   type SnapshotRunFont,
   type LayerShadow,
   type LayerOutline,
+  type LayerInnerShadow,
   type LayerVisibleRegion,
   type LayerGrade,
   type LayerGlow,
@@ -204,6 +206,7 @@ export type LayerOptionKey =
   | "perspective"
   | "shadow"
   | "outline"
+  | "inner-shadow"
   | "vector-color"
   | "visible-region"
   | "visible-region-radius"
@@ -350,6 +353,13 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "perspective", group: "transform", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerPerspective, apply: applyPerspective },
   { key: "shadow", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerShadow, apply: applyShadow },
   { key: "outline", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerOutline, apply: applyOutline },
+  // The inner shadow (#303, spec #285 US-011, ISC-64, ADR-0027): a
+  // repeatable effect option like the shadow's — the SAME absolute-setter
+  // grammar (N occurrences set the whole stack, "none" alone removes),
+  // the same hex colour and bounds, validated through the same shadow
+  // validators. It joins the anchor conflict rule and one-command add
+  // through the table and its group, like every effect option.
+  { key: "inner-shadow", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerInnerShadow, apply: applyInnerShadow },
   // The rectangular visible region (#211, spec #207 US-003, ADR-0023): a
   // Layer revision fact about what part of the content is ink — its own
   // group between the transform and effect groups, because one-command add
@@ -460,6 +470,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   flip: { type: "string" },
   shadow: { type: "string", multiple: true },
   outline: { type: "string", multiple: true },
+  "inner-shadow": { type: "string", multiple: true },
   "vector-color": { type: "string" },
   "visible-region": { type: "string" },
   "visible-region-radius": { type: "string" },
@@ -483,8 +494,8 @@ export const LAYER_OPTION_PARSE_ARGS = {
  *  ordered string array. Command-specific flags are intersected per
  *  surface; see each entry point's `values` type. */
 export type LayerOptionArgs = {
-  [K in Exclude<LayerOptionKey, "run" | "shadow" | "outline">]?: string;
-} & { run?: string[]; shadow?: string[]; outline?: string[] };
+  [K in Exclude<LayerOptionKey, "run" | "shadow" | "outline" | "inner-shadow">]?: string;
+} & { run?: string[]; shadow?: string[]; outline?: string[]; "inner-shadow"?: string[] };
 
 /** The `--text` content marker plus the text style options: the option set
  *  the content-kind exclusivity rules treat as "the text content kind". */
@@ -1479,6 +1490,33 @@ export function parseLayerOutline(raw: string | string[] | undefined): OptionPar
 }
 
 /**
+ * --inner-shadow: syntax and well-formedness through the SAME parser the
+ * edit path uses (#303, ADR-0027). Repeatable like --shadow; the collected
+ * occurrence list is the stack the application case stores. Returns the
+ * raw occurrences (the ingestion path re-resolves them).
+ */
+export function parseLayerInnerShadow(raw: string | string[] | undefined): OptionParse<string[] | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const occurrences = Array.isArray(raw) ? raw : [raw];
+  if (occurrences.length === 0) return { ok: true, value: undefined };
+  const hasNone = occurrences.some((o) => o.trim().toLowerCase() === "none");
+  if (hasNone && occurrences.length > 1) {
+    return {
+      ok: false,
+      error: '--inner-shadow "none" removes the whole inner-shadow stack and cannot combine with inner shadow values: one edit either removes the stack or replaces it.',
+    };
+  }
+  for (const occurrence of occurrences) {
+    try {
+      parseInnerShadowSpec(occurrence);
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+  return { ok: true, value: occurrences };
+}
+
+/**
  * --visible-region: syntax and well-formedness through the SAME parser the
  * edit path uses (#211, DEC-001), so the two boundaries never disagree.
  * Returns the raw spec (the ingestion path re-resolves it against the
@@ -1919,6 +1957,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "fill" },
   { option: "shadow" },
   { option: "outline" },
+  { option: "inner-shadow" },
   { option: "visible-region" },
   { option: "visible-region-radius" },
   { option: "vector-color" },
@@ -1954,6 +1993,7 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "perspective",
   "shadow",
   "outline",
+  "inner-shadow",
   "visible-region",
   "visible-region-radius",
   "vector-color",
@@ -2183,6 +2223,10 @@ export interface SharedOptionDraft {
    *  two or more the list in the same field. */
   shadow?: LayerShadow | LayerShadow[];
   outline?: LayerOutline | LayerOutline[];
+  /** The stored stack fold (#303, ADR-0027): the same one-home rule as the
+   *  shadow's — one effect the single object, several the list in the same
+   *  field. */
+  innerShadow?: LayerInnerShadow | LayerInnerShadow[];
   visibleRegion?: LayerVisibleRegion;
   vectorColor?: string;
   grade?: LayerGrade;
@@ -2543,6 +2587,19 @@ function applyOutline(draft: SharedOptionDraft, value: unknown): void {
   draft.outline = parsed.length === 1 ? parsed[0] : (parsed as LayerOutline[]);
 }
 
+function applyInnerShadow(draft: SharedOptionDraft, value: unknown): void {
+  // Stacked inner shadows (#303, ADR-0027): the occurrences are the whole
+  // stack — the same absolute-setter fold as the shadow's, through
+  // parseInnerShadowSpec. An omitted option preserves the current
+  // revision's inner shadows by construction (the draft starts there).
+  const parsed = (value as string[]).map((spec) => parseInnerShadowSpec(spec));
+  if (parsed.length === 0 || parsed[0] === undefined) {
+    delete draft.innerShadow;
+    return;
+  }
+  draft.innerShadow = parsed.length === 1 ? parsed[0] : (parsed as LayerInnerShadow[]);
+}
+
 async function applyAnchor(
   draft: SharedOptionDraft,
   value: unknown,
@@ -2842,6 +2899,7 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "perspective" },
   { option: "shadow" },
   { option: "outline" },
+  { option: "inner-shadow" },
   { policy: "region-content" },
   { option: "visible-region" },
   { option: "visible-region-radius" },
