@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+- Added blur as a Layer revision fact on every Layer kind (#299, spec #285
+  US-010, DEC-005, ADR-0024 amendment): `composition add` and `layer edit`
+  take `--blur <px>` (a Gaussian defocus radius, 0 to 256, `0` removes) —
+  the LAST function of the effects chain, after the edge glow, outline, and
+  shadow, so the whole Layer look reads out of focus. The px are Layer-local
+  (the defocus scales with `--scale`/`--scale-to` like the other effects);
+  the blur grows painted extents (the effect-reach reader adds the ceiled
+  3× kernel reach) and anchored placement still resolves against the
+  pre-effect ink, so the blur never moves a stored placement. Removal
+  restores the render byte-for-byte and pinned Renders replay
+  byte-identically; measure reports the radius and the grown painted extent;
+  the fact joins the property × kind matrix, the add/edit refusal parity
+  tests, and the offline reversibility and replay suite.
 - Added skew and perspective as Layer revision facts on every Layer kind
   (#298, spec #285 US-008, DEC-005, ADR-0016 amendment): `composition add`
   and `layer edit` take `--skew <Xdeg>x<Ydeg>` (absolute shear angles about

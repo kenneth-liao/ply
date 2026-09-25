@@ -76,6 +76,18 @@ const audit: Array<{ suite: string; markers: string[] }> = [
     ],
   },
   {
+    suite: "layer-blur.test.ts",
+    markers: [
+      "blur refuses non-numeric and out-of-range values before publication, naming the flag and range",
+      "blur changes the render on raster, vector, text, and shape Layers and --blur 0 restores each byte-for-byte",
+      "measure reports the blur fact and the grown painted extent",
+      "the painted extent of a blurred Layer equals the extent an unbounded capture margin sees",
+      "the blur never moves a stored placement: anchor parity on add and edit",
+      "blur px are Layer-local: a scaled Layer's defocus grows with the scale",
+      "blur composes with the other effects: the painted extent grows additively and removal restores",
+    ],
+  },
+  {
     suite: "layer-flip.test.ts",
     markers: [
       "image Layer --flip sets an absolute reflection state, keeps content bytes",

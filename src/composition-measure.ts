@@ -110,6 +110,7 @@ import {
   normalizeStoredRotation,
   normalizeStoredSkew,
   normalizeStoredPerspective,
+  normalizeStoredBlur,
   storedTextRunSlices,
   type LayerTextRun,
   type SnapshotRunFont,
@@ -163,6 +164,13 @@ export interface MeasuredLayerBounds {
    * same fact painting applies, reported for auditability. The glow never
    * extends painted extents (DEC-005), so this fact rides beside them. */
   glow: LayerGlow | null;
+  /** The revision's effective blur radius in px (#299, spec #285 US-010,
+   * DEC-005, ADR-0024 amendment): the stored radius (or null when the Layer
+   * has no blur) — the same fact painting applies as the last function of
+   * the effects chain, reported for auditability. The blur GROWS painted
+   * extents (by the Gaussian kernel's ~3σ visible reach, ceiled), which
+   * `painted`/`paintedOnCanvas`/`clipped` already reflect. */
+  blur: number | null;
   /** The revision's effective blend mode (#220, spec #218 US-003, ADR-0024):
    * the stored mix-blend-mode (or null when normal/unblended) — the same fact
    * painting applies, reported for auditability. */
@@ -397,11 +405,13 @@ type Box = { x: number; y: number; width: number; height: number };
  * never rendering-consulted).
  *
  * The combined local reach is ADDITIVE (DEC-006/ADR-0019 ordering): the
- * outline dilates the content by `width` px in every direction, and the
+ * outline dilates the content by `width` px in every direction, the
  * shadow is cast from the outlined composite, extending a further |dx| +
  * |dy| + 2·blur (the margin over the CSS blur radius's ~1.5× visible
- * extent) — so a shadowed Layer's total local reach is width + the shadow
- * reach, never the max of the two.
+ * extent), and the blur (#299, ADR-0024 amendment) blurs the whole
+ * composite, extending a further ceil(3 × blur) px — its own kernel reach
+ * (see the term below) — so a blurred Layer's total local reach is the SUM
+ * of the three, never the max of any two.
  */
 function effectReachPx(
   revision: ResolvedLayerRevision,
@@ -411,7 +421,17 @@ function effectReachPx(
   const shadow = revision.shadow
     ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
     : 0;
-  const localReach = outline + shadow;
+  // The blur (#299, ADR-0024 amendment): the last function of the effects
+  // chain blurs the composite with CSS blur(r) — r IS the Gaussian standard
+  // deviation, and Chrome's kernel reaches ~3σ — so the visible tail
+  // extends ceil(3 × blur) px beyond the ink in every local direction. The
+  // exact ceiled kernel reach, additive after outline+shadow (the chain is
+  // additive, DEC-006/ADR-0019 ordering) and mapped through the transform
+  // like the rest of the local reach. The ONE home for effect reach:
+  // #300's choke (negative) and feather (additive) extend this term list.
+  const blur = normalizeStoredBlur(revision) ?? 0;
+  const blurReach = blur > 0 ? Math.ceil(3 * blur) : 0;
+  const localReach = outline + shadow + blurReach;
   if (localReach === 0) return 0;
   return localReach * transformedStretch(revision, content, localReach);
 }
@@ -961,6 +981,7 @@ export async function measureCompositionLayers(
         effects: { shadow: rev.shadow ?? null, outline: rev.outline ?? null },
         grade: rev.grade ?? null,
         glow: rev.glow ?? null,
+        blur: normalizeStoredBlur(rev) ?? null,
         blend: rev.blend ?? null,
         visibleRegion: rev.visibleRegion ?? null,
         // The vector colour (#215): the stored canonical hex (or null —

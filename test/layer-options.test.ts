@@ -104,6 +104,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "warmth",
       "blend",
       "glow",
+      "blur",
     ]);
     expect(anyOneCommandOptionProvided({ rotate: "5" })).toBe(true);
     expect(anyOneCommandOptionProvided({ scale: "2" })).toBe(true);
@@ -160,7 +161,7 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       "run", "run-text", "runs", "run-color", "run-font", "run-font-file", "run-weight", "run-width",
       "x", "y", "opacity", "anchor",
       "resize", "resize-to", "cover-to", "scale", "scale-to", "rotate", "flip", "skew", "perspective", "shadow", "outline", "visible-region", "visible-region-radius",
-      "brightness", "contrast", "saturation", "warmth", "blend", "glow",
+      "brightness", "contrast", "saturation", "warmth", "blend", "glow", "blur",
     ]);
   });
 
@@ -186,8 +187,9 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
     // --visible-region-radius (a negative radius is refused by the parser,
     // but the boundary still accepts dash-leading values); #219 adds --warmth (-1..1);
     // #294 adds --wrap-width (a negative width is refused by the range validator);
-    // #295 adds --fit-box the same way (a negative axis is refused by the range validator).
-    expect(editFlags).toHaveLength(14);
+    // #295 adds --fit-box the same way (a negative axis is refused by the range validator);
+    // #299 adds --blur (a negative radius is refused by the range validator).
+    expect(editFlags).toHaveLength(15);
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--corner-radius");
     expect(layerDashNumericFlags(layerEditOptionKeys())).toContain("--warmth");
   });

@@ -74,6 +74,8 @@ import {
   resolveEditFlip,
   resolveEditSkew,
   resolveEditPerspective,
+  resolveEditBlur,
+  MAX_BLUR_RADIUS_PX,
   type LayerRevision,
   type ResolvedLayerRevision,
   type LayerRunStyleEdit,
@@ -207,7 +209,8 @@ export type LayerOptionKey =
   | "saturation"
   | "warmth"
   | "blend"
-  | "glow";
+  | "glow"
+  | "blur";
 
 /**
  * The one option table (DEC-001), in the order the edit surface's
@@ -372,6 +375,15 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // content and under outline and shadow (ADR-0024's step 5) — applying to
   // image, text, and shape Layers. Removal value "none".
   { key: "glow", group: "look", appliesTo: ["image", "text", "shape"], editOption: true, parse: parseLayerGlow, apply: applyGlow },
+  // The blur radius (#299, spec #285 US-010, DEC-005, ADR-0024 amendment):
+  // an absolute revision-fact setter on every kind — a Gaussian defocus
+  // painted as the LAST function of the outer effects filter chain (after
+  // shadow), so the whole Layer look reads out of focus. The px are
+  // Layer-local (the transform maps content+effects together); the blur
+  // grows painted extents and never moves anchored placement (the #288
+  // pre-effect-ink rule). 0 is the removal form; the identity is never
+  // stored.
+  { key: "blur", group: "effect", appliesTo: ["image", "text", "shape"], editOption: true, dashNumeric: true, parse: parseLayerBlur, apply: applyBlur },
 ];
 
 /** The one parseArgs declaration per option: `satisfies` makes a missing
@@ -437,6 +449,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   warmth: { type: "string" },
   blend: { type: "string" },
   glow: { type: "string" },
+  blur: { type: "string" },
   "scale-to": { type: "string" },
   skew: { type: "string" },
   perspective: { type: "string" },
@@ -1564,6 +1577,24 @@ export function parseLayerGlow(raw: string | undefined): OptionParse<string | un
 }
 
 /**
+ * --blur: the absolute defocus radius in px (#299, ADR-0024 amendment).
+ * The boundary parse of the ONE grammar both command surfaces run, so the
+ * add and edit refusals can never disagree: a finite number of px in
+ * 0..256, where 0 is the documented removal form.
+ */
+export function parseLayerBlur(raw: string | undefined): OptionParse<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const value = parseNumericArgument(raw);
+  if (!Number.isFinite(value) || value < 0 || value > MAX_BLUR_RADIUS_PX) {
+    return {
+      ok: false,
+      error: `Blur (--blur) takes a finite radius of px between 0 and ${MAX_BLUR_RADIUS_PX} — 0 removes the blur — got "${raw}".`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/**
  * --anchor: syntax and well-formedness through the SAME parser the edit
  * path uses, so the two boundaries never disagree. Semantic refusals (no
  * visible ink, divergent multi-Composition geometry) happen in the
@@ -1812,6 +1843,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { option: "warmth" },
   { option: "blend" },
   { option: "glow" },
+  { option: "blur" },
   { option: "anchor" },
   { policy: "anchor-conflict" },
   { policy: "anchor-targets" },
@@ -1844,6 +1876,7 @@ export const ADD_PARSE_ORDER: readonly LayerOptionKey[] = [
   "warmth",
   "blend",
   "glow",
+  "blur",
   "anchor",
 ];
 
@@ -2064,6 +2097,10 @@ export interface SharedOptionDraft {
   grade?: LayerGrade;
   blend?: StoredLayerBlendMode;
   glow?: LayerGlow;
+  /** Canonical blur radius in px (#299, ADR-0024 amendment): the resolved
+   *  absolute setter when the fact is set — 0 (the removal form) deletes
+   *  the key, so the identity is never stored. */
+  blur?: number;
   /** Anything else the application cases set — including a shared option's
    *  own revision fact (the probe's stamp) — flows into the published
    *  revision through the applied-fact carry (DEC-001). */
@@ -2614,6 +2651,22 @@ function applyGlow(
   draft.glow = parseGlowSpec(value as string);
 }
 
+function applyBlur(
+  draft: SharedOptionDraft,
+  value: unknown,
+  context: SharedOptionApplyContext,
+): void {
+  // Absolute blur setter (#299, ADR-0024 amendment): the resolved radius IS
+  // the canonical blur fact. The removal form (0) deletes the key — stored
+  // only when set — so an unblurred revision keeps its exact document shape.
+  const blur = resolveEditBlur({ blurTo: value as number }, context.base as ResolvedLayerRevision);
+  if (blur === undefined) {
+    delete draft.blur;
+    return;
+  }
+  draft.blur = blur;
+}
+
 /**
  * The edit surface's established application order (spec #226 DEC-002 as
  * the edit path resolves it, #263): the resize family's domain re-checks,
@@ -2651,6 +2704,7 @@ export const EDIT_APPLICATION_ORDER: readonly LayerApplyStep[] = [
   { option: "warmth" },
   { option: "blend" },
   { option: "glow" },
+  { option: "blur" },
 ];
 
 export type { LayerRunStyleEdit } from "./layer.js";

@@ -528,6 +528,20 @@ Options:
                         the current glow. It is a revision fact: sharing
                         propagates it, forks isolate it, and removal is its
                         own edit. Never changes retained pixels.
+  --blur <px>           Blur the Layer — a Gaussian defocus radius in px
+                        (0 to 256) painted as the LAST function of the
+                        effects chain, after the edge glow, outline, and
+                        shadow: the whole Layer look reads out of focus
+                        (defocus, not a glow or grade). The px are
+                        Layer-LOCAL: the defocus scales with the Layer's
+                        scale/scale-to like the other effects. The blur
+                        GROWS painted extents; anchored placement resolves
+                        against the pre-effect ink, so the blur never moves
+                        a stored placement. An ABSOLUTE setter — 0 removes
+                        the blur; an omitted --blur preserves the current
+                        radius. It is a revision fact: sharing propagates
+                        it, forks isolate it, and removal is its own edit.
+                        Never changes retained pixels.
   --out <path>          Destination for the layer review sheet (required;
                         parent directory must exist; outside the Project an
                         existing file is the documented overwrite case —
@@ -1179,7 +1193,11 @@ async function run() {
               rev.glow === undefined
                 ? ""
                 : `, Glow: ${formatGlow(rev.glow)}`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${shadow}${outline}${region}${grade}${glow}${blend}`);
+            const blur =
+              rev.blur === undefined
+                ? ""
+                : `, Blur: ${rev.blur}px`;
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${shadow}${outline}${region}${grade}${glow}${blur}${blend}`);
           },
         );
       } catch (err) {
