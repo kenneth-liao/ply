@@ -645,6 +645,88 @@ test("matrix: edge glow applies to raster image, vector image, text, and shape L
   }
 }, 30_000);
 
+test("matrix: the one-sided glow direction applies to raster image, vector image, text, and shape Layers (#301, ISC-53)", async () => {
+  await makeComp("comp-glow-dir", 300, 300);
+
+  const from: [number, number, number] = [34, 136, 204];
+  const target: [number, number, number] = [255, 153, 0];
+  const change = (p: number[]) =>
+    toward(p.slice(0, 3) as [number, number, number], from, target);
+
+  // The same four kinds as the even-glow matrix, each with the one-sided
+  // direction: light FROM 90° (the right) — the right edge lit, the left
+  // edge unlit to within the 0.05 tolerance (ISC-53).
+  const pngPath = path.join(tempDir, "raster-blue.png");
+  await writeFile(pngPath, solidPng(80, 80, [34, 136, 204, 255]));
+  await invoke([
+    "composition", "add", "comp-glow-dir", "raster",
+    "--image", pngPath, "--x", "20", "--y", "20",
+    "--glow", "12,4,#ff9900,from 90,1",
+    "--project", projDir, "--json",
+  ]);
+
+  const svgPath = path.join(tempDir, "vector-blue.svg");
+  await writeFile(svgPath, solidSvg(80, 80, "#2288cc"));
+  await invoke([
+    "composition", "add", "comp-glow-dir", "vector",
+    "--image", svgPath, "--x", "150", "--y", "20",
+    "--glow", "12,4,#ff9900,from 90,1",
+    "--project", projDir, "--json",
+  ]);
+
+  await invoke([
+    "composition", "add", "comp-glow-dir", "text",
+    "--text", "OO", "--font", "Archivo", "--font-size", "50", "--color", "#2288cc",
+    "--x", "20", "--y", "150",
+    "--glow", "8,2,#ff9900,from 90,1",
+    "--project", projDir, "--json",
+  ]);
+
+  await invoke([
+    "composition", "add", "comp-glow-dir", "shape",
+    "--shape", "rectangle", "--size", "80x80", "--fill", "#2288cc",
+    "--x", "150", "--y", "150",
+    "--glow", "12,4,#ff9900,from 90,1",
+    "--project", projDir, "--json",
+  ]);
+
+  const rendered = await render("comp-glow-dir", "glow-dir.png");
+
+  // Raster, vector, and shape: right edge lit, left edge unlit.
+  const kinds: [string, number, number][] = [
+    ["raster", 20, 20],
+    ["vector", 150, 20],
+    ["shape", 150, 150],
+  ];
+  for (const [name, x0, y0] of kinds) {
+    expect(change(pixel(rendered, x0 + 79, y0 + 40))).toBeGreaterThan(0.25);
+    expect(change(pixel(rendered, x0, y0 + 40))).toBeLessThan(0.05);
+    // Interior untouched.
+    expect(pixel(rendered, x0 + 40, y0 + 40)).toEqual([34, 136, 204, 255]);
+  }
+
+  // Text: some pixel of the glyphs moves toward the glow colour.
+  let tGlowShift = false;
+  for (let y = 150; y < 220; y++) {
+    for (let x = 20; x < 120; x++) {
+      const px = pixel(rendered, x, y);
+      if (px[3] > 0 && change(px) > 0.2) {
+        tGlowShift = true;
+        break;
+      }
+    }
+    if (tGlowShift) break;
+  }
+  expect(tGlowShift).toBe(true);
+
+  // Measure reports the stored direction fact on every kind.
+  const measured = await invoke(["composition", "measure", "comp-glow-dir", "--project", projDir, "--json"]);
+  const dirLayers = JSON.parse(measured.stdout).layers as { glow: { direction?: { angle: number; strength: number } } | null }[];
+  for (const l of dirLayers) {
+    expect(l.glow?.direction).toEqual({ angle: 90, strength: 1 });
+  }
+}, 30_000);
+
 // ---------------------------------------------------------------------------
 // 7. Vector Layer Paint Order: --vector-color applies BEFORE grade (DEC-002)
 // ---------------------------------------------------------------------------

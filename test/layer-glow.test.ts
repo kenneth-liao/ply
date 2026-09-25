@@ -9,6 +9,11 @@
  * - Painted extents equal the no-glow extents (DEC-005, TEST-003).
  * - With a direction, the lit side changes more than the far side; without
  *   one, the glow is even (TEST-003, DEC-006).
+ * - One-sided direction model (#301, ISC-53, DEC-008): at angle 90 and full
+ *   strength the left edge of a rectangle is unlit (far-edge band change
+ *   below the 0.05 tolerance); between 0 and 1 the far side dims; the legacy
+ *   pair's markup and revision ids stay byte-identical, and a document or
+ *   flag carrying both direction forms is refused.
  * - The glow follows the visible region's edge, including rounded corners,
  *   and transforms with the Layer (#212, ADR-0023).
  * - Absolute setter: "none" removes the stored fact; set-then-remove renders
@@ -26,7 +31,8 @@ import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { encodePngRgba, decodePng } from "../src/png.js";
-import { normalizeStoredGlow, parseGlowSpec } from "../src/layer.js";
+import { computeRevisionHash, normalizeStoredGlow, parseGlowSpec } from "../src/layer.js";
+import { buildCompositionHtml, type SnapshotLayer } from "../src/composition-paint.js";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -522,3 +528,209 @@ test("a glow coexists with outline and shadow: painted extents still equal the n
   // Outside the outline's reach nothing appears (the glow added no ink).
   expect(pixel(rendered, 30, 150)).toEqual([0, 0, 0, 0]);
 }, 30_000);
+
+const GLOW_FROM = "14,4,#ff9900,from 90,1";
+const GLOW_FROM_HALF = "14,4,#ff9900,from 90,0.5";
+
+/** The one-sided direction model's probe (ISC-53, DEC-008, ADR-0024 third
+ *  amendment): angle 90 is light FROM the right, so at strength 1 the LEFT
+ *  edge of a rectangle is unlit — its band pixels keep no visible glow
+ *  (change toward the glow colour below the 0.05 tolerance — the far edge
+ *  holds at most ~0.5/box-width of the band from the gradient's half-pixel
+ *  sample, ~13/255 of the band after the filter's linear-space compositing,
+ *  no visible glow) while the right edge is fully lit. The glow still alters no alpha: painted extents equal the no-glow
+ *  extents, and removing the glow restores the render byte-for-byte. */
+test("one-sided glow: angle 90 strength 1 leaves the left edge unlit; removal restores the render (ISC-53, DEC-008)", async () => {
+  await makeComp("poster", 300, 300);
+  const imgFile = path.join(tempDir, "img.png");
+  await writeFile(imgFile, solidPng(200, 200, [34, 136, 204, 255]));
+  const addRes = await addImageLayer("poster", "hero", imgFile, { x: 50, y: 50 });
+  const layerId = addRes.use.layerId as string;
+
+  const baseOut = path.join(tempDir, "base.png");
+  const base = await render("poster", baseOut);
+  const m1 = await invoke(["composition", "measure", "poster", "--project", projDir, "--json"]);
+  const basePainted = JSON.parse(m1.stdout).layers[0].painted;
+
+  const from: [number, number, number] = [34, 136, 204];
+  const target: [number, number, number] = [255, 153, 0];
+  const change = (png: ReturnType<typeof decodePng>, x: number, y: number) =>
+    toward(pixel(png, x, y).slice(0, 3) as [number, number, number], from, target);
+
+  await invoke(["layer", "edit", layerId, "--glow", GLOW_FROM, "--project", projDir]);
+  const dirOut = path.join(tempDir, "one-sided.png");
+  const dir = await render("poster", dirOut);
+  // The lit (right) edge pixel carries the band; the far (left) edge pixel
+  // is unlit to within the stated 0.05 tolerance (~13/255 of band alpha —
+  // the gradient's zero stop at the box extent, sampled at the pixel
+  // centre, then amplified by the filter's linear-space compositing).
+  expect(change(dir, 249, 150)).toBeGreaterThan(0.3);
+  expect(change(dir, 50, 150)).toBeLessThan(0.05);
+  // The glow alters no alpha coverage: painted extents equal the no-glow
+  // extents, and measure reports the stored direction fact.
+  const m2 = await invoke(["composition", "measure", "poster", "--project", projDir, "--json"]);
+  expect(JSON.parse(m2.stdout).layers[0].painted).toEqual(basePainted);
+  expect(JSON.parse(m2.stdout).layers[0].glow).toEqual({
+    width: 14,
+    softness: 4,
+    color: "#ff9900",
+    direction: { angle: 90, strength: 1 },
+  });
+
+  // Removal restores the render byte-for-byte.
+  await invoke(["layer", "edit", layerId, "--glow", "none", "--project", projDir]);
+  const removedOut = path.join(tempDir, "removed.png");
+  const removed = await render("poster", removedOut);
+  expect(removedOut && readFile(removedOut)).resolves.toEqual(await readFile(baseOut));
+}, 30_000);
+
+test("one-sided glow at half strength dims the far side without unlighting it (DEC-008)", async () => {
+  await makeComp("poster", 300, 300);
+  const imgFile = path.join(tempDir, "img.png");
+  await writeFile(imgFile, solidPng(200, 200, [34, 136, 204, 255]));
+  const addRes = await addImageLayer("poster", "hero", imgFile, { x: 50, y: 50 });
+  const layerId = addRes.use.layerId as string;
+
+  const from: [number, number, number] = [34, 136, 204];
+  const target: [number, number, number] = [255, 153, 0];
+  const change = (png: ReturnType<typeof decodePng>, x: number, y: number) =>
+    toward(pixel(png, x, y).slice(0, 3) as [number, number, number], from, target);
+
+  await invoke(["layer", "edit", layerId, "--glow", GLOW_FROM_HALF, "--project", projDir]);
+  const out = path.join(tempDir, "half.png");
+  const half = await render("poster", out);
+  const litRight = change(half, 249, 150);
+  const farLeft = change(half, 50, 150);
+  expect(litRight).toBeGreaterThan(0.3);
+  // The far side is dimmed but present: above the unlit tolerance, below the
+  // lit side.
+  expect(farLeft).toBeGreaterThan(0.05);
+  expect(farLeft).toBeLessThan(litRight);
+}, 30_000);
+
+test("the legacy direction pair's markup and revision id stay byte-identical (DEC-008)", () => {
+  // Pinned from the pre-#301 code (scratch capture): the legacy pair's filter
+  // def and revision hash must not change when the one-sided model lands.
+  const rev = {
+    schemaVersion: 1,
+    layerId: "layer_pin",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    x: 50,
+    y: 50,
+    opacity: 1,
+    scaleX: 1,
+    scaleY: 1,
+    rotationDeg: 0,
+    flipX: false,
+    flipY: false,
+    kind: "image" as const,
+    contentHash: "a".repeat(64),
+    glow: { width: 14, softness: 4, color: "#ff9900", angle: 90, strength: 1 },
+    revisionId: "pin",
+    format: "png" as const,
+    width: 200,
+    height: 200,
+    bytes: 4,
+  };
+  // The literal mirrors the pre-#301 capture exactly (no skew/perspective
+  // fields — the hash covers them only when present); the cast is type-level
+  // only.
+  const legacyMarkup =
+    `<filter id="ply-g-e782caa4b1cd93c2" x="-300%" y="-300%" width="700%" height="700%">` +
+    `<feMorphology in="SourceAlpha" operator="erode" radius="14" result="ger"/>` +
+    `<feOffset in="ger" dx="-14.0000" dy="0.0000" result="goff"/>` +
+    `<feGaussianBlur in="goff" stdDeviation="4" result="gblur"/>` +
+    `<feComposite in="SourceAlpha" in2="gblur" operator="out" result="gband"/>` +
+    `<feFlood flood-color="#ff9900" result="gflood"/>` +
+    `<feComposite in="gflood" in2="gband" operator="in" result="gglow"/>` +
+    `<feComposite in="gglow" in2="SourceGraphic" operator="atop"/></filter>`;
+  const layer = {
+    name: "pin",
+    layerId: "layer_pin",
+    revision: rev as unknown as SnapshotLayer["revision"],
+    contentBytes: Buffer.alloc(16),
+  };
+  const html = buildCompositionHtml({ width: 300, height: 300 }, [layer], 1);
+  expect(html).toContain(legacyMarkup);
+  expect(computeRevisionHash(rev)).toBe("rev_c0cf486e0ceffa04");
+});
+
+test("the one-sided direction fact validates and normalizes at the one glow home (DEC-008)", () => {
+  // Canonical angle storage in [0, 360).
+  expect(normalizeStoredGlow({ glow: { width: 8, softness: 2, color: "#ffffff", direction: { angle: -90, strength: 1 } } })).toEqual({
+    width: 8,
+    softness: 2,
+    color: "#ffffff",
+    direction: { angle: 270, strength: 1 },
+  });
+  // Strength 0 is the even glow: the direction drops, like the legacy pair.
+  expect(normalizeStoredGlow({ glow: { width: 8, softness: 2, color: "#ffffff", direction: { angle: 45, strength: 0 } } })).toEqual({
+    width: 8,
+    softness: 2,
+    color: "#ffffff",
+  });
+  // The two direction models are mutually exclusive — in a stored document...
+  expect(() =>
+    normalizeStoredGlow({ glow: { width: 8, softness: 2, color: "#ffffff", angle: 90, strength: 1, direction: { angle: 90, strength: 1 } } }),
+  ).toThrow(/direction is one model/);
+  // ...and in the compact value grammar — the `from` pair is one pair.
+  expect(() => parseGlowSpec("8,2,#ffffff,from 90")).toThrow(/Invalid glow/);
+  expect(() => parseGlowSpec("8,2,#ffffff,from banana,1")).toThrow(/from/);
+  expect(() => parseGlowSpec("8,2,#ffffff,from 90,2")).toThrow(/strength/);
+  expect(() => parseGlowSpec("8,2,#ffffff,from 90,1,extra")).toThrow(/Invalid glow/);
+  // The `from` pair parses into the one-sided fact, never both forms.
+  expect(parseGlowSpec("8,2,#ffffff,from 90,1")).toEqual({
+    width: 8,
+    softness: 2,
+    color: "#ffffff",
+    direction: { angle: 90, strength: 1 },
+  });
+});
+
+test("one-sided glow on a large Layer paints its lit side like the even glow, no softening or offset (DEC-008)", async () => {
+  // The in-page ramp sizing must survive a large filter surface: objectBoundingBox
+  // percentage regions clip silently for large elements (ADR-0019), so the
+  // direction's ramp is sized from the measured box — proven here on a
+  // 1600x900 Layer, where a placeholder-region paint would misplace or
+  // soften the band.
+  await makeComp("wide", 2000, 1200);
+  const imgFile = path.join(tempDir, "img.png");
+  await writeFile(imgFile, solidPng(1600, 900, [34, 136, 204, 255]));
+  const addRes = await addImageLayer("wide", "hero", imgFile, { x: 200, y: 150 });
+  const layerId = addRes.use.layerId as string;
+  const m1 = await invoke(["composition", "measure", "wide", "--project", projDir, "--json"]);
+  const basePainted = JSON.parse(m1.stdout).layers[0].painted;
+
+  const from: [number, number, number] = [34, 136, 204];
+  const target: [number, number, number] = [255, 153, 0];
+  const change = (png: ReturnType<typeof decodePng>, x: number, y: number) =>
+    toward(pixel(png, x, y).slice(0, 3) as [number, number, number], from, target);
+
+  await invoke(["layer", "edit", layerId, "--glow", "12,3,#ff9900", "--project", projDir]);
+  const evenOut = path.join(tempDir, "wide-even.png");
+  const even = await render("wide", evenOut);
+
+  await invoke(["layer", "edit", layerId, "--glow", "12,3,#ff9900,from 90,1", "--project", projDir]);
+  const dirOut = path.join(tempDir, "wide-dir.png");
+  const dir = await render("wide", dirOut);
+
+  // Lit (right) edge at several heights: the one-sided band equals the even
+  // band there (the lit side keeps the full band — no offset, no softening).
+  const litSamples: [number, number][] = [
+    [1799, 400],
+    [1799, 600],
+    [1799, 800],
+  ];
+  for (const [x, y] of litSamples) {
+    const dirChange = change(dir, x, y);
+    expect(dirChange).toBeGreaterThan(0.3);
+    expect(Math.abs(dirChange - change(even, x, y))).toBeLessThan(0.05);
+  }
+  // Far (left) edge: unlit to within the stated 0.05 tolerance, where the
+  // even glow is fully lit.
+  expect(change(dir, 200, 600)).toBeLessThan(0.05);
+  expect(change(even, 200, 600)).toBeGreaterThan(0.3);
+  // Painted extents equal the no-glow extents (DEC-005).
+  const m = await invoke(["composition", "measure", "wide", "--project", projDir, "--json"]);
+  expect(JSON.parse(m.stdout).layers[0].painted).toEqual(basePainted);
+}, 60_000);

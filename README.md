@@ -1187,6 +1187,8 @@ vector), text, and shape Layers (#221, spec #218 US-002):
 ```bash
 # Directional amber rim light from the right:
 ply layer edit <layerId> --glow "16,8,#ffaa33,75,0.75" -p ~/projects/my-poster
+# One-sided rim light FROM the right (at full strength the left edge is unlit):
+ply layer edit <layerId> --glow "14,6,#ffaa33,from 90,1" -p ~/projects/my-poster
 # Even neon cyan rim light (no direction pair):
 ply layer edit <layerId> --glow "14,6,#00e5ff" -p ~/projects/my-poster
 ply layer edit <layerId> --glow none -p ~/projects/my-poster  # removes glow
@@ -1197,6 +1199,13 @@ ply layer edit <layerId> --glow none -p ~/projects/my-poster  # removes glow
 - `color`: hex colour (`#RGB`, `#RRGGBB`, `#RRGGBBAA`).
 - `angle` and `strength`: optional direction pair — angle in degrees clockwise
   from top (`-360` to `360`) and strength `0` to `1` (strength `0` drops the pair).
+- **One-sided rim light (#301):** spell the pair `from <angle>,<strength>` and
+  the light comes FROM that angle: the far side's band fades to `1 − strength`
+  of the even band along the light axis across the Layer's box, so at strength
+  `1` the opposite edge is unlit (angle `90` is light from the right — the left
+  edge goes dark). Strength `0` is the even glow, and the two direction forms
+  cannot be combined. The stored direction angle is canonical (`[0, 360)`),
+  the same convention as the pair.
 - **Not relighting:** Edge glow is a 2D edge effect on the Layer's own alpha edge,
   painted just inside the alpha edge over graded content. It transforms with the
   Layer and never alters alpha coverage or painted extents (DEC-005). Changing

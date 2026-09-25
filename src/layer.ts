@@ -331,13 +331,22 @@ export const LAYER_BLEND_MODES = [
 export type LayerBlendMode = (typeof LAYER_BLEND_MODES)[number];
 export type StoredLayerBlendMode = Exclude<LayerBlendMode, "normal">;
 
-/** Canonical edge-glow parameters (#221, spec #218 US-002, ADR-0024). */
+/**
+ * Canonical edge-glow parameters (#221, spec #218 US-002, ADR-0024). The
+ * optional `direction` (#301, ISC-53, DEC-008, ADR-0024 third amendment) is
+ * the one-sided direction model — light FROM `angle` degrees clockwise from
+ * top dimming the far side to `1 − strength` of the even band, fading
+ * linearly across the Layer's untransformed box. It is mutually exclusive
+ * with the legacy `angle`/`strength` pair (the offset model), whose meaning
+ * never changes: stored facts keep today's semantics.
+ */
 export interface LayerGlow {
   width: number;
   softness: number;
   color: string;
   angle?: number;
   strength?: number;
+  direction?: { angle: number; strength: number };
 }
 
 /** Canonical grade parameters (#219, spec #218 US-001, ADR-0024). */
@@ -1296,6 +1305,13 @@ export const MAX_GLOW_PX = 256;
  *   ±360 degrees (clockwise from top) and a finite strength between 0 and 1.
  *   One without the other is a malformed document; strength 0 (an even
  *   glow) drops the pair, the same neutral-dropping rule the setter applies.
+ *   This pair is the LEGACY direction model (the offset model): its stored
+ *   meaning never changes (#301, DEC-008).
+ * - `direction`: the optional one-sided direction model (#301, ISC-53,
+ *   DEC-008) — an object `{ angle, strength }` with the same ranges and the
+ *   same strength-0 neutral rule. Mutually exclusive with the legacy pair:
+ *   a document carrying both forms is malformed. Canonicalizes its angle
+ *   into [0, 360), the same canonical direction form.
  *
  * Extra or non-conformant properties are refused loudly as malformed
  * documents before the revision hash is consulted.
@@ -1311,7 +1327,7 @@ export function normalizeStoredGlow(revision: { glow?: unknown }): LayerGlow | u
     );
   }
   const rawObj = raw as Record<string, unknown>;
-  const allowedKeys = new Set(["width", "softness", "color", "angle", "strength"]);
+  const allowedKeys = new Set(["width", "softness", "color", "angle", "strength", "direction"]);
   for (const key of Object.keys(rawObj)) {
     if (!allowedKeys.has(key)) {
       throw new Error(
@@ -1319,7 +1335,7 @@ export function normalizeStoredGlow(revision: { glow?: unknown }): LayerGlow | u
       );
     }
   }
-  const { width, softness, color, angle, strength } = rawObj;
+  const { width, softness, color, angle, strength, direction } = rawObj;
   if (typeof width !== "number" || !Number.isFinite(width) || width < 0 || width > MAX_GLOW_PX) {
     throw new Error(
       `Malformed revision document: glow.width must be a finite number between 0 and ${MAX_GLOW_PX} when present (got ${JSON.stringify(width)}).`,
@@ -1341,6 +1357,11 @@ export function normalizeStoredGlow(revision: { glow?: unknown }): LayerGlow | u
     color: canonicalizeEffectColor(color),
   };
   if (angle !== undefined || strength !== undefined) {
+    if (direction !== undefined) {
+      throw new Error(
+        "Malformed revision document: the glow direction is one model — the legacy angle/strength pair and the one-sided direction cannot be combined.",
+      );
+    }
     if (angle === undefined || strength === undefined) {
       throw new Error(
         "Malformed revision document: glow.angle and glow.strength are one direction pair — both must be present or both absent.",
@@ -1368,6 +1389,47 @@ export function normalizeStoredGlow(revision: { glow?: unknown }): LayerGlow | u
       normalized.strength = strength;
     }
   }
+  if (direction !== undefined) {
+    if (!direction || typeof direction !== "object" || Array.isArray(direction)) {
+      throw new Error(
+        `Malformed revision document: glow.direction must be an object when present (got ${JSON.stringify(direction)}).`,
+      );
+    }
+    const directionObj = direction as Record<string, unknown>;
+    const directionAllowed = new Set(["angle", "strength"]);
+    for (const key of Object.keys(directionObj)) {
+      if (!directionAllowed.has(key)) {
+        throw new Error(
+          `Malformed revision document: unknown glow.direction property ${JSON.stringify(key)}.`,
+        );
+      }
+    }
+    const { angle: dAngle, strength: dStrength } = directionObj;
+    if (dAngle === undefined || dStrength === undefined) {
+      throw new Error(
+        "Malformed revision document: glow.direction.angle and glow.direction.strength are one pair — both must be present.",
+      );
+    }
+    if (
+      typeof dAngle !== "number" ||
+      !Number.isFinite(dAngle) ||
+      dAngle < -360 ||
+      dAngle > 360 ||
+      typeof dStrength !== "number" ||
+      !Number.isFinite(dStrength) ||
+      dStrength < 0 ||
+      dStrength > 1
+    ) {
+      throw new Error(
+        `Malformed revision document: glow.direction.angle must be a finite number between -360 and 360 and glow.direction.strength a finite number between 0 and 1 when present (got ${JSON.stringify(dAngle)}, ${JSON.stringify(dStrength)}).`,
+      );
+    }
+    if (dStrength !== 0) {
+      // The same canonical direction form and the same strength-0 neutral
+      // rule as the legacy pair.
+      normalized.direction = { angle: ((dAngle % 360) + 360) % 360, strength: dStrength };
+    }
+  }
   return normalized;
 }
 
@@ -1378,13 +1440,19 @@ export function glowEq(a: LayerGlow | undefined, b: LayerGlow | undefined): bool
     a.softness === b.softness &&
     a.color === b.color &&
     a.angle === b.angle &&
-    a.strength === b.strength
+    a.strength === b.strength &&
+    a.direction?.angle === b.direction?.angle &&
+    a.direction?.strength === b.direction?.strength
   );
 }
 
 export function formatGlow(glow: LayerGlow): string {
   const direction =
-    glow.angle !== undefined ? `, from ${glow.angle}° (strength ${glow.strength})` : "";
+    glow.direction !== undefined
+      ? `, one-sided from ${glow.direction.angle}° (strength ${glow.direction.strength})`
+      : glow.angle !== undefined
+        ? `, from ${glow.angle}° (strength ${glow.strength})`
+        : "";
   return `glow width ${glow.width}px, softness ${glow.softness}px, ${glow.color}${direction}`;
 }
 
@@ -2990,13 +3058,16 @@ export function computeRevisionHash(rev: LayerRevision): string {
   const blend = normalizeStoredBlend(rev);
   const blendField = blend !== undefined ? `:blend(${blend})` : "";
   // The edge glow (#221, spec #218 US-002, ADR-0024): appended only when
-  // present, in fixed order (width, softness, color, then the direction pair
-  // when present), so revisions written before #221 keep their exact ids.
+  // present, in fixed order (width, softness, color, then the one direction
+  // model — the legacy pair or the one-sided direction (#301, DEC-008),
+  // never both), so revisions written before #221 keep their exact ids and
+  // legacy direction revisions keep theirs across #301.
   const glow = normalizeStoredGlow(rev);
   const glowField =
     glow !== undefined
       ? `:glow(${glow.width},${glow.softness},${glow.color}` +
         (glow.angle !== undefined ? `,a${glow.angle},s${glow.strength}` : "") +
+        (glow.direction !== undefined ? `,from${glow.direction.angle},s${glow.direction.strength}` : "") +
         `)`
       : "";
   // The blur radius (#299, spec #285 US-010, ADR-0024 amendment): appended
@@ -4311,9 +4382,13 @@ export function parseOutlineSpec(spec: string): LayerOutline | undefined {
  * ±360, strength between 0 and 1, supplied together; strength 0 (an even
  * glow) drops the pair. The angle is stored canonically in [0, 360), so
  * equivalent spellings of the same direction cannot mint redundant
- * revisions. Exported for the CLI boundary: the command classifies
- * malformed specs as usage errors (exit 2) with this same parser, so the
- * two never disagree.
+ * revisions. The one-sided direction model (#301, ISC-53, DEC-008, ADR-0024
+ * third amendment) spells its pair "from <angle>,<strength>" — light FROM
+ * that angle, the far side dimmed to 1 − strength; strength 0 drops it the
+ * same way, and the two direction forms are mutually exclusive (passing
+ * both is one error, not two facts). Exported for the CLI boundary: the
+ * command classifies malformed specs as usage errors (exit 2) with this
+ * same parser, so the two never disagree.
  */
 export function parseGlowSpec(spec: string): LayerGlow | undefined {
   const raw = spec.trim();
@@ -4324,7 +4399,8 @@ export function parseGlowSpec(spec: string): LayerGlow | undefined {
   if (parts.length !== 3 && parts.length !== 5) {
     throw new Error(
       `Invalid glow "${raw}": --glow takes "<width>,<softness>,<color>" or ` +
-        `"<width>,<softness>,<color>,<angle>,<strength>" (e.g. "12,4,#ff9900,45,0.8"), or "none".`,
+        `"<width>,<softness>,<color>,<angle>,<strength>" (e.g. "12,4,#ff9900,45,0.8"), ` +
+        `"<width>,<softness>,<color>,from <angle>,<strength>" (e.g. "12,4,#ff9900,from 90,1"), or "none".`,
     );
   }
   const [widthRaw, softnessRaw, colorRaw, angleRaw, strengthRaw] = parts;
@@ -4358,6 +4434,29 @@ export function parseGlowSpec(spec: string): LayerGlow | undefined {
       throw new Error(
         `Invalid glow "${raw}": the direction is one pair — pass both <angle> (degrees clockwise from top, -360 to 360) and <strength> (0 to 1), or neither.`,
       );
+    }
+    const fromMatch = /^from\s+(\S+)$/i.exec(angleRaw);
+    if (fromMatch !== null) {
+      // The one-sided direction model (#301, DEC-008): "from <angle>,<strength>"
+      // — light FROM the angle, the far side dimmed to 1 − strength. Same
+      // ranges and the same strength-0 neutral rule as the legacy pair; the
+      // two direction forms are mutually exclusive.
+      const angle = Number(fromMatch[1]);
+      const strength = Number(strengthRaw);
+      if (!Number.isFinite(angle) || angle < -360 || angle > 360) {
+        throw new Error(
+          `Invalid glow angle ${fromMatch[1]}: must be a finite number of degrees between -360 and 360 (clockwise from top; the light comes FROM that direction).`,
+        );
+      }
+      if (!Number.isFinite(strength) || strength < 0 || strength > 1) {
+        throw new Error(
+          `Invalid glow strength ${strengthRaw}: must be a finite number between 0 and 1.`,
+        );
+      }
+      if (strength !== 0) {
+        glow.direction = { angle: ((angle % 360) + 360) % 360, strength };
+      }
+      return glow;
     }
     const angle = Number(angleRaw);
     const strength = Number(strengthRaw);

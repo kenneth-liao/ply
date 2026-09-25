@@ -63,13 +63,16 @@ and shadow (ADR-0024).
 A coloured rim of light painted just INSIDE a Layer's alpha edge, over the
 graded content — the two-dimensional rim light that makes a cutout read as
 lit by its scene. One absolute setter (`--glow`) carries the colour (with
-alpha), the width and softness in px, and an optional direction (one angle
-clockwise from top plus a strength, never a light model); `none` removes the
-stored fact. The glow follows the visible region's edge, including its
-rounded corners, and transforms with the Layer, and it never extends painted
-extents or changes alpha coverage. It is a two-dimensional edge effect on the
-Layer's own alpha, not relighting: changing the direction or shape of light
-on a subject is generation, not a Layer parameter.
+alpha), the width and softness in px, and an optional direction in one of
+two mutually exclusive forms: the offset pair (one angle clockwise from top
+plus a strength) or the one-sided rim light (`from <angle>,<strength>`,
+#301 — the far side's band fades to 1 − strength along the light axis, so
+at strength 1 the opposite edge is unlit); `none` removes the stored fact.
+The glow follows the visible region's edge, including its rounded corners,
+and transforms with the Layer, and it never extends painted extents or
+changes alpha coverage. It is a two-dimensional edge effect on the Layer's
+own alpha, not relighting: changing the direction or shape of light on a
+subject is generation, not a Layer parameter.
 _Avoid_: relighting, cast shadows, outer glow, a light model
 
 **Blend mode**:

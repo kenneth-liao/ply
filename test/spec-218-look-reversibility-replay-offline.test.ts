@@ -538,6 +538,20 @@ test("one Composition using every look parameter replays byte-identically after 
   );
   expect(addCut.code).toBe(0);
 
+  // Shape Layer with the one-sided glow direction (#301, DEC-008): the
+  // direction fact joins the relocation/offline replay with the rest.
+  const addRim = await invokeOffline(
+    [
+      "composition", "add", "thumb", "rim",
+      "--shape", "rectangle", "--size", "30x30", "--fill", "#22d3ee",
+      "--x", "20", "--y", "60",
+      "--glow", "6,2,#fde047,from 90,1",
+      "-p", proj, "--json",
+    ],
+    root,
+  );
+  expect(addRim.code).toBe(0);
+
   // Initial render
   const render = await invokeOffline(["composition", "render", "thumb", "-p", proj, "--json"], root);
   expect(render.code).toBe(0);
