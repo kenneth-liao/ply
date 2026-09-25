@@ -428,7 +428,9 @@ retrying is always safe.
 ---
 
 Other bounded inputs — shadow offsets ±256 px and blur 0–256 px
-([Layer shadows](../../README.md#layer-shadows-new-surface)), tracking
+([Layer shadows](../../README.md#layer-shadows-new-surface)), the Layer
+blur radius 0–256 px (`--blur`, #299 — the defocus fact, whose removal
+form is `0`), tracking
 −0.5–1 em and line-height 0.5–3
 ([Text tracking and line height](../../README.md#text-tracking-and-line-height-new-surface)),
 the wrap width 1–8192 layout px

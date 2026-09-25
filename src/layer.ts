@@ -252,6 +252,27 @@ interface LayerRevisionBase {
    * present, so revisions written before #220 keep their exact ids.
    */
   blend?: StoredLayerBlendMode;
+  /**
+   * Canonical Layer blur (#299, spec #285 US-010, DEC-005, ADR-0024
+   * amendment): a Gaussian defocus radius in px, applied as the LAST
+   * function of the outer element's effects filter chain — the whole Layer
+   * look (content, edge glow, outline, shadow) reads out of focus, inside
+   * the blend unit and before the transform and opacity. The px are
+   * Layer-LOCAL: the canonical transform maps content+effects together, so
+   * the defocus scales with the Layer's scale like the other effects.
+   *
+   * The blur grows painted extents (unlike grade or glow, DEC-005) and its
+   * reach reader lives beside the outline/shadow terms it composes with
+   * (#300's choke and feather extend the same reader). An effect, never
+   * placement: anchored placement resolves against the pre-effect ink
+   * (#288, ADR-0025).
+   *
+   * Present ⟺ a positive radius exists: absence IS the canonical no-blur
+   * form, so `--blur 0` drops the field and every reader treats absence as
+   * none. The revision hash appends it only when present, so revisions
+   * written before #299 keep their exact ids.
+   */
+  blur?: number;
 }
 
 /** The documented blend modes (#220, spec #218 US-003, ADR-0024). */
@@ -883,6 +904,11 @@ export function normalizeStoredPerspective(revision: {
 const MAX_SHADOW_OFFSET_PX = 256;
 const MAX_SHADOW_BLUR_PX = 256;
 const MAX_OUTLINE_WIDTH_PX = 256;
+/** The blur radius bound (#299, ADR-0024 amendment): the same bounded-effect
+ *  footprint the other effects keep, so painted-extent capture stays bounded
+ *  (DEC-006). Exported for the option-table boundary parse — the ONE grammar
+ *  both command surfaces run. */
+export const MAX_BLUR_RADIUS_PX = 256;
 
 /** Effect hex color: #RGB, #RRGGBB, or #RRGGBBAA. */
 const EFFECT_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
@@ -1313,6 +1339,25 @@ export function formatGlow(glow: LayerGlow): string {
   const direction =
     glow.angle !== undefined ? `, from ${glow.angle}° (strength ${glow.strength})` : "";
   return `glow width ${glow.width}px, softness ${glow.softness}px, ${glow.color}${direction}`;
+}
+
+/**
+ * Canonical stored-blur validation and normalization (#299, spec #285
+ * US-010, DEC-005, ADR-0024 amendment). The one normalization boundary for
+ * the blur fact: documents written before #299 lack the field, and absence
+ * IS the canonical no-blur form — a stored `0` normalizes to `undefined`,
+ * keeping the identity out of every stored document and hash. A present
+ * value must be a finite number of px in (0, MAX_BLUR_RADIUS_PX].
+ */
+export function normalizeStoredBlur(revision: { blur?: unknown }): number | undefined {
+  if (revision.blur === undefined) return undefined;
+  const raw = revision.blur;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0 || raw > MAX_BLUR_RADIUS_PX) {
+    throw new Error(
+      `Malformed revision document: blur must be a finite number of px between 0 (exclusive, the removal form) and ${MAX_BLUR_RADIUS_PX} when present (got ${JSON.stringify(raw)}).`,
+    );
+  }
+  return raw;
 }
 
 export type ResolvedLayerRevision =
@@ -2873,6 +2918,10 @@ export function computeRevisionHash(rev: LayerRevision): string {
         (glow.angle !== undefined ? `,a${glow.angle},s${glow.strength}` : "") +
         `)`
       : "";
+  // The blur radius (#299, spec #285 US-010, ADR-0024 amendment): appended
+  // only when present, so revisions written before #299 keep their exact ids.
+  const blur = normalizeStoredBlur(rev);
+  const blurField = blur !== undefined ? `:blur(${blur})` : "";
   // The text layout rule (#287, spec #285 DEC-001, ADR-0017 amendment):
   // appended only when "natural", so revisions written before #287 keep their
   // exact ids.
@@ -2919,7 +2968,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
           })
           .join(";")})`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -3219,6 +3268,11 @@ export async function readRevisionInternalFull(
   // normalized at this same one boundary — malformed parameters are refused
   // loudly before the revision hash is consulted. Absence IS the no-glow form.
   const glow = normalizeStoredGlow(revision);
+  // Canonical blur radius (#299, spec #285 US-010, ADR-0024 amendment):
+  // validated and normalized at this same one boundary — a malformed stored
+  // radius is refused loudly before the revision hash is consulted. Absence
+  // IS the no-blur form.
+  const blur = normalizeStoredBlur(revision);
 
   // The stored document must hash to exactly the pinned revision id
   if (computeRevisionHash(revision) !== revisionId) {
@@ -3315,6 +3369,7 @@ export async function readRevisionInternalFull(
             ...(grade !== undefined ? { grade } : {}),
             ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
             ...(glow !== undefined ? { glow } : {}),
+            ...(blur !== undefined ? { blur } : {}),
             format: meta.format,
             width: meta.width,
             height: meta.height,
@@ -3347,6 +3402,7 @@ export async function readRevisionInternalFull(
           ...(grade !== undefined ? { grade } : {}),
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
           ...(glow !== undefined ? { glow } : {}),
+          ...(blur !== undefined ? { blur } : {}),
           text: revision.text,
           fontSize: revision.fontSize,
           color: revision.color,
@@ -3391,6 +3447,7 @@ export async function readRevisionInternalFull(
           ...(grade !== undefined ? { grade } : {}),
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
           ...(glow !== undefined ? { glow } : {}),
+          ...(blur !== undefined ? { blur } : {}),
         };
 
   // Run font bytes (#297): every distinct run font override's retained
@@ -3936,6 +3993,30 @@ export function resolveEditSkew(
     }
   }
   return { skewXDeg, skewYDeg };
+}
+
+/**
+ * Canonical blur resolution (#299, spec #285 US-010, DEC-005, ADR-0024
+ * amendment): `--blur <px>` is an ABSOLUTE radius setter in px, replacing
+ * any previous blur — `0` is the removal form and the identity is never
+ * stored. An omitted option preserves the Layer's current blur. The refusal
+ * runs before any staging. Exported as the ONE blur path for one-command
+ * `composition add` too, like every effect application case.
+ */
+export function resolveEditBlur(
+  options: { blurTo?: number },
+  prevRev: ResolvedLayerRevision,
+): number | undefined {
+  const blurTo = options.blurTo;
+  if (blurTo === undefined) {
+    return normalizeStoredBlur(prevRev);
+  }
+  if (typeof blurTo !== "number" || !Number.isFinite(blurTo) || blurTo < 0 || blurTo > MAX_BLUR_RADIUS_PX) {
+    throw new Error(
+      `Blur (--blur) takes a finite radius of px between 0 and ${MAX_BLUR_RADIUS_PX} — 0 removes the blur — got ${JSON.stringify(blurTo)}.`,
+    );
+  }
+  return blurTo > 0 ? blurTo : undefined;
 }
 
 /**
@@ -5081,6 +5162,7 @@ async function buildEditedRevision(
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
+      ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
       ...carried,
     };
     const unchanged =
@@ -5098,6 +5180,7 @@ async function buildEditedRevision(
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
       glowEq(draft.glow, prevRev.glow) &&
+      normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
       Object.keys(carried).length === 0;
     // The divergent-perspective publication gate (PROD-1, #298 review):
     // the image extent is the retained content's intrinsic box — run before
@@ -5219,6 +5302,7 @@ async function buildEditedRevision(
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
+      ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
       ...carried,
     };
     const unchanged =
@@ -5246,6 +5330,7 @@ async function buildEditedRevision(
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
       glowEq(draft.glow, prevRev.glow) &&
+      normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a geometry edit (#211 review PROD-1): --shape and
     // --size change the content box, so the kept region re-validates against
@@ -5495,6 +5580,7 @@ async function buildEditedRevision(
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
       ...(draft.glow !== undefined ? { glow: draft.glow } : {}),
+      ...(draft.blur !== undefined ? { blur: draft.blur } : {}),
       ...carried,
     };
     // The runs edits replace the whole-text fact: the stored text is the
@@ -5534,6 +5620,7 @@ async function buildEditedRevision(
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
       glowEq(draft.glow, prevRev.glow) &&
+      normalizeStoredBlur(draft) === normalizeStoredBlur(prevRev) &&
       Object.keys(carried).length === 0;
     // A region KEPT across a text edit (#211 review PROD-1): the text
     // content box is the measured line-box extent, so a text edit that can

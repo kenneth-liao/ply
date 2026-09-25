@@ -1586,6 +1586,9 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
         ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
         : {}),
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+      // Blur (#299, ADR-0024 amendment): the radius copied verbatim — stored
+      // only when set, so an unblurred source's copy keeps its exact shape.
+      ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
@@ -1625,6 +1628,9 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
         ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
         : {}),
       ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+      // Blur (#299, ADR-0024 amendment): the radius copied verbatim — stored
+      // only when set, so an unblurred source's copy keeps its exact shape.
+      ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
       ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
       ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     };
@@ -1657,6 +1663,9 @@ function buildCopiedRevision(newLayerId: string, createdAt: string, source: Reso
       ? { perspectiveTiltXDeg: source.perspectiveTiltXDeg, perspectiveTiltYDeg: source.perspectiveTiltYDeg }
       : {}),
     ...(source.shadow !== undefined ? { shadow: { ...source.shadow } } : {}),
+    // Blur (#299, ADR-0024 amendment): the radius copied verbatim — stored
+    // only when set, so an unblurred source's copy keeps its exact shape.
+    ...(source.blur !== undefined && source.blur > 0 ? { blur: source.blur } : {}),
     ...(source.outline !== undefined ? { outline: { ...source.outline } } : {}),
     ...(source.visibleRegion !== undefined ? { visibleRegion: { ...source.visibleRegion } } : {}),
     // The vector colour (#215, DEC-002 — a revision fact shared as a whole):

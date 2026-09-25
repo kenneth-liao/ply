@@ -597,6 +597,14 @@ and reported by 'measure' exactly as a multi-command Layer's are.
                         together; without the pair the glow is even all
                         round. "none" removes it. Never changes retained
                         pixels.
+  --blur <px>           Blur the Layer — a Gaussian defocus radius in px
+                        (0 to 256) painted as the LAST function of the
+                        effects chain: the whole Layer look reads out of
+                        focus. The px are Layer-LOCAL (they scale with
+                        --scale/--scale-to like the other effects); the
+                        blur grows painted extents and never moves anchored
+                        placement. "0" removes it. Never changes retained
+                        pixels.
   --from-project <dir>  Import source: copy Layers from a Composition in
                         another Project (default: same-Project import)
   --json                Emit machine-readable JSON output on stdout
@@ -648,6 +656,7 @@ function oneCommandFacts(
     grade?: LayerGrade;
     blend?: StoredLayerBlendMode;
     glow?: LayerGlow;
+    blur?: number;
   },
   anchorSpec?: string,
 ): string {
@@ -679,6 +688,9 @@ function oneCommandFacts(
   }
   if (rev.glow) {
     facts.push(formatGlow(rev.glow));
+  }
+  if (rev.blur !== undefined) {
+    facts.push(`blur ${rev.blur}px`);
   }
   if (rev.blend) {
     facts.push(`blend ${rev.blend}`);
@@ -1617,6 +1629,9 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
               }
               if (t.perspectiveTiltXDeg !== undefined && (t.perspectiveTiltXDeg !== 0 || t.perspectiveTiltYDeg !== 0)) {
                 facts.push(`perspective ${t.perspectiveTiltXDeg}° ${t.perspectiveTiltYDeg}°`);
+              }
+              if (layer.blur !== null && layer.blur !== undefined) {
+                facts.push(`blur ${layer.blur}px`);
               }
               console.log(
                 `  ${idx + 1}. "${layer.name}" (${contentLabel(layer)}) box (${layer.box.x}, ${layer.box.y}) ${layer.box.width}×${layer.box.height} ${paintedText(layer)}` +

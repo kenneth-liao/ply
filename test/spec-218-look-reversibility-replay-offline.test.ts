@@ -180,6 +180,7 @@ test("reversibility and lineage: raster image Layer", async () => {
     "--brightness", "1.4", "--contrast", "1.2", "--saturation", "1.3", "--warmth", "0.3",
     "--blend", "multiply",
     "--glow", "8,3,#ff0000,45,0.7",
+    "--blur", "6",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -196,6 +197,7 @@ test("reversibility and lineage: raster image Layer", async () => {
     "--brightness", "1", "--contrast", "1", "--saturation", "1", "--warmth", "0",
     "--blend", "normal",
     "--glow", "none",
+    "--blur", "0",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -213,6 +215,7 @@ test("reversibility and lineage: raster image Layer", async () => {
   expect(restoredRev.grade).toBeUndefined();
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
+  expect(restoredRev.blur).toBeUndefined();
 });
 
 test("reversibility and lineage: vector image Layer (SVG)", async () => {
@@ -251,6 +254,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
     "--brightness", "1.5", "--contrast", "1.3", "--saturation", "1.2", "--warmth", "-0.2",
     "--blend", "screen",
     "--glow", "6,2,#00ffff,90,0.6",
+    "--blur", "6",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -265,6 +269,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
     "--brightness", "1", "--contrast", "1", "--saturation", "1", "--warmth", "0",
     "--blend", "normal",
     "--glow", "none",
+    "--blur", "0",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -279,6 +284,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
   expect(restoredRev.grade).toBeUndefined();
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
+  expect(restoredRev.blur).toBeUndefined();
 });
 
 test("reversibility and lineage: text Layer (including gradient fill)", async () => {
@@ -315,6 +321,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
     "--brightness", "1.3", "--contrast", "1.2", "--saturation", "1.4", "--warmth", "0.2",
     "--blend", "overlay",
     "--glow", "6,2,#ff8800,0,0.5",
+    "--blur", "6",
     "--color", "linear:90deg,#ff0000,#0000ff",
     "-p", proj, "--json",
   ]);
@@ -330,6 +337,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
     "--brightness", "1", "--contrast", "1", "--saturation", "1", "--warmth", "0",
     "--blend", "normal",
     "--glow", "none",
+    "--blur", "0",
     "--color", "#ffffff",
     "-p", proj, "--json",
   ]);
@@ -345,6 +353,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
   expect(restoredRev.grade).toBeUndefined();
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
+  expect(restoredRev.blur).toBeUndefined();
   expect(restoredRev.color).toBe("#ffffff");
 });
 
@@ -378,6 +387,7 @@ test("reversibility and lineage: shape Layer", async () => {
     "--brightness", "0.8", "--contrast", "1.2", "--saturation", "0.5", "--warmth", "-0.4",
     "--blend", "soft-light",
     "--glow", "10,4,#ffff00,180,0.8",
+    "--blur", "6",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -392,6 +402,7 @@ test("reversibility and lineage: shape Layer", async () => {
     "--brightness", "1", "--contrast", "1", "--saturation", "1", "--warmth", "0",
     "--blend", "normal",
     "--glow", "none",
+    "--blur", "0",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -405,6 +416,7 @@ test("reversibility and lineage: shape Layer", async () => {
   expect(restoredRev.grade).toBeUndefined();
   expect(restoredRev.blend).toBeUndefined();
   expect(restoredRev.glow).toBeUndefined();
+  expect(restoredRev.blur).toBeUndefined();
 });
 
 // ---------------------------------------------------------------------------
@@ -475,6 +487,7 @@ test("one Composition using every look parameter replays byte-identically after 
       "--resize-to", "40x40", "--x", "10", "--y", "10",
       "--brightness", "1.2", "--contrast", "1.1", "--blend", "screen",
       "--glow", "6,2,#ff00ff,45,0.7",
+      "--blur", "2",
       "-p", proj, "--json",
     ],
     root,

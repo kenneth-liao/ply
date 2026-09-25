@@ -1068,3 +1068,90 @@ test("matrix: skew and perspective apply to raster, vector, text, and shape Laye
   expect(pixel(png, 78, 55)).toEqual([255, 0, 0, 255]); // right of the unsheared edge (local (64,45) reaches 64+tan(10°)·45 ≈ 71.9)
   expect(pixel(png, 60, 130)).toEqual([0, 0, 255, 255]); // inside the tilted vector
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// N. Matrix: Blur on all 4 kinds (#299, spec #285 US-010, ADR-0024 amendment)
+// ---------------------------------------------------------------------------
+
+test("matrix: blur applies to raster image, vector image, text, and shape Layers", async () => {
+  await makeComp("comp-blur", 200, 200);
+
+  // One 60x60 solid ink block per kind, hard-edged against the canvas.
+  // 1a. Raster image: solid red [200, 60, 60, 255]
+  const pngPath = path.join(tempDir, "raster-solid.png");
+  await writeFile(pngPath, solidPng(60, 60, [200, 60, 60, 255]));
+  await invoke([
+    "composition", "add", "comp-blur", "raster",
+    "--image", pngPath, "--x", "10", "--y", "10", "--blur", "8",
+    "--project", projDir, "--json",
+  ]);
+
+  // 1b. Vector image: solid #3c3cc8
+  const svgPath = path.join(tempDir, "vector-solid.svg");
+  await writeFile(svgPath, solidSvg(60, 60, "#3c3cc8"));
+  await invoke([
+    "composition", "add", "comp-blur", "vector",
+    "--image", svgPath, "--x", "80", "--y", "10", "--blur", "8",
+    "--project", projDir, "--json",
+  ]);
+
+  // 1c. Text: solid blue glyphs
+  await invoke([
+    "composition", "add", "comp-blur", "text",
+    "--text", "MM", "--font", "Archivo", "--font-size", "40", "--color", "#2040a0",
+    "--x", "10", "--y", "90", "--blur", "8",
+    "--project", projDir, "--json",
+  ]);
+
+  // 1d. Shape: rectangle 60x60 #c8a232
+  await invoke([
+    "composition", "add", "comp-blur", "shape",
+    "--shape", "rectangle", "--size", "60x60", "--fill", "#c8a232",
+    "--x", "80", "--y", "90", "--blur", "8",
+    "--project", projDir, "--json",
+  ]);
+
+  // A blurless twin renders the same content hard-edged: each kind's ink
+  // edge pixel must be fully opaque without the blur.
+  await makeComp("comp-blur-base", 200, 200);
+  await invoke([
+    "composition", "add", "comp-blur-base", "raster",
+    "--image", pngPath, "--x", "10", "--y", "10",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-blur-base", "vector",
+    "--image", svgPath, "--x", "80", "--y", "10",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-blur-base", "text",
+    "--text", "MM", "--font", "Archivo", "--font-size", "40", "--color", "#2040a0",
+    "--x", "10", "--y", "90",
+    "--project", projDir, "--json",
+  ]);
+  await invoke([
+    "composition", "add", "comp-blur-base", "shape",
+    "--shape", "rectangle", "--size", "60x60", "--fill", "#c8a232",
+    "--x", "80", "--y", "90",
+    "--project", projDir, "--json",
+  ]);
+
+  const blurred = await render("comp-blur", "blur-matrix.png");
+  const base = await render("comp-blur-base", "blur-matrix-base.png");
+
+  // Each kind's hard ink edge (just outside its box) gains alpha from the
+  // defocus; the defocus is the LAST function of the effects chain, so the
+  // whole look softens on every kind. Raster right edge (x=70, y=40),
+  // vector right edge (x=140, y=40), text glyph edge region, shape right
+  // edge (x=140, y=120).
+  for (const [x, y] of [[70, 40], [140, 40], [140, 120]] as const) {
+    expect(pixel(base, x, y)[3]).toBe(0);
+    expect(pixel(blurred, x, y)[3]).toBeGreaterThan(0);
+  }
+  // The interior stays opaque on every kind (the defocus of a solid block
+  // keeps its core fully covered at radius 8 on a 60px block).
+  for (const [x, y] of [[40, 40], [110, 40], [110, 120]] as const) {
+    expect(pixel(blurred, x, y)[3]).toBe(255);
+  }
+}, 30_000);

@@ -1137,9 +1137,10 @@ export function buildCompositionHtml(
       // (see glowFilterDef) — then the outline's feMorphology dilate filter
       // hugs the composite's alpha/glyph ink and composites the ring under
       // the source graphic (def above, referenced by id), and the shadow's
-      // single drop-shadow comes LAST, so it is cast from the outlined
-      // composite. CSS filter-list chaining feeds each function's output to
-      // the next, so the chain builds the union exactly once per primitive —
+      // single drop-shadow is cast from the outlined composite (since #299
+      // the blur follows it as the chain's last function). CSS filter-list
+      // chaining feeds each function's output to the next, so the chain
+      // builds the union exactly once per primitive —
       // dilate extends exactly `width` px in every direction with no scallop
       // and no compounding. The transform above then maps
       // content+glow+outline+shadow together, and the element's opacity
@@ -1168,7 +1169,19 @@ export function buildCompositionHtml(
         rev.shadow !== undefined
           ? `drop-shadow(${rev.shadow.dx}px ${rev.shadow.dy}px ${rev.shadow.blur}px ${rev.shadow.color})`
           : "";
-      const effectsFns = [glowFn, outlineFn, shadowFn].filter(Boolean).join(" ");
+      // The blur (#299, spec #285 US-010, DEC-005, ADR-0024 amendment): the
+      // LAST function of the outer element's filter chain — after glow,
+      // outline, and shadow — so the whole Layer look (content, glow band,
+      // outline ring, shadow) reads out of focus together, inside the blend
+      // unit and before the transform and opacity. The px are Layer-local:
+      // the transform below maps content+effects together, so the defocus
+      // scales with the Layer's scale. The blur grows painted extents (the
+      // ONE reach reader in composition-measure.ts sizes the capture window
+      // from the same kernel reach the paint emits). Emitted only when a
+      // blur fact exists, so pre-#299 revisions paint exactly as before.
+      const blurFn =
+        rev.blur !== undefined ? `blur(${rev.blur}px)` : "";
+      const effectsFns = [glowFn, outlineFn, shadowFn, blurFn].filter(Boolean).join(" ");
       const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
       // The blend mode (#220, spec #218 US-003, ADR-0024): applied to the
       // OUTER element via CSS mix-blend-mode in the DEC-002 paint order,
