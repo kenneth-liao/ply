@@ -124,8 +124,16 @@ The unit Layer takes the Layer facts that apply across Layer kinds
 (ADR-0016), opacity, visible region (ADR-0023), grade and the effects
 (ADR-0024; shadow ADR-0018, outline ADR-0019), blend, and mask
 (ADR-0025). Kind-specific facts (text, vector colour, shape geometry) do
-not apply. Which facts #307 ships first is its scope; none may be refused
-on the unit for being a unit.
+not apply. This is the destination. #307 ships part of it:
+
+- **#307 must ship** the unit transforms (move, rotate, scale, and flip)
+  and the adjustments (opacity, blend, and grade). These are the
+  "transform and adjust as one unit" of US-018.
+- **Any other fact** in the list above that is not yet supported on a
+  unit Layer is refused explicitly, naming the fact, until a later ticket
+  ships it. It is never silently ignored.
+- **Any fact that ships** on a unit Layer behaves as this section
+  describes.
 
 - **One edit moves or turns the unit.** `layer edit` on the unit's use
   changes the unit Layer's placement or transform. The members' own
@@ -206,7 +214,9 @@ What follows:
   Composition that uses it, or any retained Render.
 - A name that clashes with an existing Composition is refused before
   anything is published, never silently renamed (the rule ADR-0025 §3
-  applies to use names). The fork runs the cycle check.
+  applies to use names). The fork also runs the cycle check. Like a name
+  clash, a cycle refusal publishes neither the Layer fork nor the inner
+  copy.
 
 #### Import, relocation, and delete
 
@@ -225,6 +235,13 @@ What follows:
   second outer Composition that shares it is refused today (see
   Consequences). Cross-Project links stay unsupported: a unit never
   references a Composition in another Project.
+
+  #307 does not build cross-Project import of units. Until a later
+  ticket does, a cross-Project import of a Composition that uses a unit
+  is refused, naming the unit uses. A unit Layer is never copied without
+  its inner Composition. The rules and refusals in this bullet are the
+  contract that later ticket must meet. A rule that recognises an
+  earlier copy is further future work, beyond that ticket's contract.
 - **Relocation** moves the whole Project. Composition names and Layer
   identities are Project-local, so units move unchanged.
 - **`composition delete`** (#290) refuses while any unit Layer in the
@@ -339,7 +356,8 @@ adds a refusal to the #290 delete.
 - `composition delete` and cross-Project import gain refusals for
   referenced and clashing Compositions. Importing two outer Compositions
   that share an inner Composition into another Project is refused on the
-  second import until a later rule recognises an earlier copy.
+  second import. A rule that recognises an earlier copy is future work,
+  not #307, which does not build cross-Project import of units (§4).
 - Ply has no command that deletes a Layer: `composition delete` and
   `composition remove` keep the Layers they drop. So deleting the outer
   Composition, or removing the unit's use, leaves an unused unit Layer
