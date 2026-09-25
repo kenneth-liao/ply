@@ -1494,14 +1494,35 @@ test("matrix: the inner shadow darkens the top inside edge on raster image, vect
   // channel drops well below its plain value) and nothing paints outside
   // the box (the atop composite keeps the alpha exactly the source's).
   // Raster top edge (x=40, y=12), vector top edge (x=110, y=12), shape top
-  // edge (x=110, y=92); the text glyph edge is asserted through the
-  // raster/vector/shape pixels and the text layer's stored fact.
+  // edge (x=110, y=92); the text glyph edge is probed below (review INT-2).
   for (const [x, y] of [[40, 12], [110, 12], [110, 92]] as const) {
     expect(pixel(base, x, y)[3]).toBe(255);
     expect(pixel(shadowed, x, y)[3]).toBe(255);
     expect(pixel(shadowed, x, y)[0]).toBeLessThan(pixel(base, x, y)[0]!);
     expect(pixel(shadowed, x, y - 3)[3]).toBe(0);
   }
+
+  // Text glyph edge (review INT-2): the glyph ink is #2040a0 (r 32). Scan
+  // the text's region over BOTH renders: some solid glyph pixel darkens
+  // far below its plain red channel (the band crosses the glyph's top
+  // edge — the effect applies to the text content element), and some solid
+  // glyph pixel stays the plain ink (the glyph extends below the 6px band).
+  // Exact glyph geometry varies, so both are existence probes over solid
+  // (alpha 255) pixels only.
+  let darkenedGlyphPx = false;
+  let plainGlyphPx = false;
+  for (let y = 85; y < 140; y++) {
+    for (let x = 10; x < 70; x++) {
+      const plain = pixel(base, x, y);
+      const inked = pixel(shadowed, x, y);
+      if (plain[3] !== 255) continue;
+      if (inked[3] !== 255) continue; // the atop composite never lowers alpha
+      if (inked[0]! < plain[0]! - 10) darkenedGlyphPx = true;
+      if (Math.abs(inked[0]! - plain[0]!) <= 2) plainGlyphPx = true;
+    }
+  }
+  expect(darkenedGlyphPx).toBe(true);
+  expect(plainGlyphPx).toBe(true);
   // The interiors stay the plain ink on every kind (dy 6, blur 0: the band
   // is exactly the top 6 rows). The filter round-trip (linearRGB in, sRGB
   // out) can shift a pass-through pixel by 1-2 8-bit units, so the

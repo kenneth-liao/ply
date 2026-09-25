@@ -1244,20 +1244,21 @@ async function run() {
               (rev.perspectiveTiltXDeg ?? 0) === 0 && (rev.perspectiveTiltYDeg ?? 0) === 0
                 ? ""
                 : `, Perspective: ${rev.perspectiveTiltXDeg ?? 0}° ${rev.perspectiveTiltYDeg ?? 0}°`;
-            // Stacked effects (#302, ADR-0027): each effect of a type on
-            // its own entry, in paint order (the chain's function order).
-            const shadow =
-              rev.shadow === undefined
-                ? ""
-                : rev.shadow.map((s) => `, Shadow: ${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("");
-            const outline =
-              rev.outline === undefined
-                ? ""
-                : rev.outline.map((o) => `, Outline: ${o.width} ${o.color}`).join("");
+            // Stacked effects (#302, ADR-0027; inner shadow #303): each
+            // effect of a type on its own entry, in paint order (the chain's
+            // function order — inner shadow, then outlines, then shadows).
             const innerShadow =
               rev.innerShadow === undefined
                 ? ""
                 : rev.innerShadow.map((s) => `, Inner shadow: ${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("");
+            const outline =
+              rev.outline === undefined
+                ? ""
+                : rev.outline.map((o) => `, Outline: ${o.width} ${o.color}`).join("");
+            const shadow =
+              rev.shadow === undefined
+                ? ""
+                : rev.shadow.map((s) => `, Shadow: ${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("");
             const region =
               rev.visibleRegion === undefined
                 ? ""
@@ -1289,9 +1290,9 @@ async function run() {
               rev.feather === undefined
                 ? ""
                 : `, Feather: ${rev.feather}px`;
-            // Report order matches the chain's function order (#303, review
-            // CRAFT-6): shadow, inner shadow, outline.
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${shadow}${innerShadow}${outline}${region}${grade}${glow}${blur}${choke}${feather}${blend}`);
+            // Report order matches the chain's function order (review INT-1):
+            // inner shadow, then outlines, then shadows.
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${innerShadow}${outline}${shadow}${region}${grade}${glow}${blur}${choke}${feather}${blend}`);
           },
         );
       } catch (err) {

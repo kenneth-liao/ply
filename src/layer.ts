@@ -1098,11 +1098,14 @@ export function normalizeStoredShadow(revision: { shadow?: unknown }): LayerShad
 }
 
 /** One stored shadow object's validation, label-parameterized so a stack
- *  entry's failure names its position (`shadow[2].dx`). */
-function validateStoredShadowObject(raw: unknown, label: string): LayerShadow {
+ *  entry's failure names its position (`shadow[2].dx`), and noun-
+ *  parameterized so the inner shadow's re-use names its own fact — the
+ *  stored-document refusal says what the field IS, not which validator ran
+ *  (review PROD-2). */
+function validateStoredShadowObject(raw: unknown, label: string, objectNoun = "a shadow object"): LayerShadow {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(
-      `Malformed revision document: ${label} must be a shadow object when present (got ${JSON.stringify(raw)}).`,
+      `Malformed revision document: ${label} must be ${objectNoun} when present (got ${JSON.stringify(raw)}).`,
     );
   }
   const { dx, dy, blur, color } = raw as Record<string, unknown>;
@@ -1177,8 +1180,9 @@ function validateStoredOutlineObject(raw: unknown, label: string): LayerOutline 
  * consulted). Returns the normalized LIST a stack reader consumes.
  */
 export function normalizeStoredInnerShadow(revision: { innerShadow?: unknown }): LayerInnerShadow[] | undefined {
-  return foldStoredEffectStack(revision.innerShadow, "innerShadow", validateStoredShadowObject) as
-    LayerInnerShadow[] | undefined;
+  return foldStoredEffectStack(revision.innerShadow, "innerShadow", (raw, label) =>
+    validateStoredShadowObject(raw, label, "an inner-shadow object"),
+  ) as LayerInnerShadow[] | undefined;
 }
 
 /**

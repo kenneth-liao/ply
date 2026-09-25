@@ -442,6 +442,21 @@ test("inner shadow appears in compact output, inspect, and review facts", async 
   expect(inspect.code).toBe(0);
   expect(inspect.stdout).toContain("Inner shadow: 0 4 2 #000000");
 
+  // Inspect's Placement line emits effects in PAINT order (review INT-1):
+  // inner shadow, then outline, then shadow.
+  await invoke([
+    "layer", "edit", layerId, "--outline", "2,#00ff00", "--shadow", "3,3,0,#000000", "--project", projDir,
+  ]);
+  const orderedInspect = await invoke(["layer", "inspect", layerId, "--project", projDir]);
+  expect(orderedInspect.code).toBe(0);
+  const placementLine =
+    (orderedInspect.stdout.split("\n").find((l) => l.includes("Placement:")) ?? "") as string;
+  expect(placementLine.indexOf("Inner shadow:")).toBeGreaterThan(-1);
+  expect(placementLine.indexOf("Outline:")).toBeGreaterThan(-1);
+  expect(placementLine.indexOf("Shadow:")).toBeGreaterThan(-1);
+  expect(placementLine.indexOf("Inner shadow:")).toBeLessThan(placementLine.indexOf("Outline:"));
+  expect(placementLine.indexOf("Outline:")).toBeLessThan(placementLine.indexOf("Shadow:"));
+
   // The layer review's facts sheet carries one row per effect, in paint
   // order (the ONE effectFactRows builder) — a shape Layer reviews without
   // generation/matting lineage (its content IS its parameters).

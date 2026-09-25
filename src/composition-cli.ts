@@ -717,8 +717,8 @@ function oneCommandFacts(
   // entry, in paint order (the chain's function order — inner shadow before
   // outline before shadow).
   if (rev.innerShadow) for (const s of rev.innerShadow) facts.push(`inner shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
-  if (rev.shadow) for (const s of rev.shadow) facts.push(`shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
   if (rev.outline) for (const o of rev.outline) facts.push(`outline ${o.width} ${o.color}`);
+  if (rev.shadow) for (const s of rev.shadow) facts.push(`shadow ${s.dx} ${s.dy} ${s.blur} ${s.color}`);
   if (rev.vectorColor) facts.push(`vector colour ${rev.vectorColor}`);
   if (rev.visibleRegion) {
     facts.push(
