@@ -1137,9 +1137,10 @@ export function buildCompositionHtml(
       // (see glowFilterDef) — then the outline's feMorphology dilate filter
       // hugs the composite's alpha/glyph ink and composites the ring under
       // the source graphic (def above, referenced by id), and the shadow's
-      // single drop-shadow comes LAST, so it is cast from the outlined
-      // composite. CSS filter-list chaining feeds each function's output to
-      // the next, so the chain builds the union exactly once per primitive —
+      // single drop-shadow is cast from the outlined composite (since #299
+      // the blur follows it as the chain's last function). CSS filter-list
+      // chaining feeds each function's output to the next, so the chain
+      // builds the union exactly once per primitive —
       // dilate extends exactly `width` px in every direction with no scallop
       // and no compounding. The transform above then maps
       // content+glow+outline+shadow together, and the element's opacity

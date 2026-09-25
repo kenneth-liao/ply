@@ -382,3 +382,39 @@ test("blur composes with the other effects: the painted extent grows additively 
   const restored = await renderBytes("stack", "stack-restored.png");
   expect(restored.equals(base)).toBe(true);
 });
+// ---------------------------------------------------------------------------
+// The blur reaches the divergent-perspective publication gate (INT-1)
+// ---------------------------------------------------------------------------
+
+test("a tilt that publishes without blur is refused once the blur is added", async () => {
+  await makeComp("gate", 400, 400);
+  // The gate depth is exact: max |sin(tiltX)·qy| over the content box plus
+  // the local reach's depth contribution. A 100x2300 shape tilted 60° about
+  // X reaches 0.866·1150 ≈ 995.9px of the 1000px perspective distance — it
+  // publishes. The blur's ceiled 3× kernel reach (18px for radius 6) adds
+  // ≈15.6px of depth — past 1000, the projection diverges and the edit must
+  // refuse before anything stages.
+  const p = path.join(tempDir, "gate-shape.png");
+  void p;
+  const add = await invoke([
+    "composition", "add", "gate", "tall",
+    "--shape", "rectangle", "--size", "100x2300", "--fill", "#345678",
+    "--project", projDir, "--json",
+  ]);
+  expect(add.code).toBe(0);
+  const layerId = (JSON.parse(add.stdout).layer as { id: string }).id;
+
+  const tilt = await invoke(["layer", "edit", layerId, "--perspective", "60x0", "--project", projDir, "--json"]);
+  expect(tilt.code).toBe(0);
+  expect((await revisionOf(layerId)).perspectiveTiltXDeg).toBe(60);
+
+  const blur = await invoke(["layer", "edit", layerId, "--blur", "6", "--project", projDir, "--json"]);
+  expect(blur.code).toBe(1);
+  const err = JSON.parse(blur.stdout).error as string;
+  expect(err).toContain("effect extent");
+  expect(err).toContain("perspective distance");
+  // Nothing published: the blurred revision never stages.
+  const rev = await revisionOf(layerId);
+  expect(rev.blur).toBeUndefined();
+  expect(rev.perspectiveTiltXDeg).toBe(60);
+}, 30000);

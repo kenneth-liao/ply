@@ -396,6 +396,31 @@ export const STANDALONE_CANVAS_PX = MAX_INK_VIEWPORT_PX - 2 * INK_PAD_PX;
 type Box = { x: number; y: number; width: number; height: number };
 
 /**
+ * The pre-stretch LOCAL effect reach (#298/#299, ADR-0018/0019 + ADR-0024
+ * amendment): the px a Layer's effects may extend its ink beyond the layout
+ * box in every local direction, BEFORE the transform maps it — the outline's
+ * `width` dilation, the shadow's |dx| + |dy| + 2·blur (the margin over the
+ * CSS drop-shadow radius's ~1.5× visible extent), and the blur's ceiled
+ * 3× kernel reach (CSS blur(r) sets σ = r; Chrome's kernel reaches ~3σ),
+ * ADDITIVE per the effects-chain order (DEC-006/ADR-0019 ordering).
+ *
+ * This is the ONE local-reach list: `effectReachPx` maps it through the
+ * transform for capture sizing, and `transformBlowupRefusal` feeds it to
+ * the perspective-divergence depth so the publication gate sees the same
+ * extent measure does. #300's choke and feather extend this term list,
+ * never a second sum.
+ */
+function localEffectReachPx(revision: TransformFactsSource): number {
+  const outline = revision.outline?.width ?? 0;
+  const shadow = revision.shadow
+    ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
+    : 0;
+  const blur = normalizeStoredBlur(revision) ?? 0;
+  const blurReach = blur > 0 ? Math.ceil(3 * blur) : 0;
+  return outline + shadow + blurReach;
+}
+
+/**
  * The px a Layer's effects may extend its ink beyond the layout box, in
  * every canvas direction (#139/#140, ADR-0018/0019). The effects paint in
  * the Layer's LOCAL space — before the canonical transform — so the LOCAL
@@ -404,34 +429,15 @@ type Box = { x: number; y: number; width: number; height: number };
  * revision facts and the measured content extent alone (deterministic,
  * never rendering-consulted).
  *
- * The combined local reach is ADDITIVE (DEC-006/ADR-0019 ordering): the
- * outline dilates the content by `width` px in every direction, the
- * shadow is cast from the outlined composite, extending a further |dx| +
- * |dy| + 2·blur (the margin over the CSS blur radius's ~1.5× visible
- * extent), and the blur (#299, ADR-0024 amendment) blurs the whole
- * composite, extending a further ceil(3 × blur) px — its own kernel reach
- * (see the term below) — so a blurred Layer's total local reach is the SUM
- * of the three, never the max of any two.
+ * The combined local reach is the ONE additive list `localEffectReachPx`
+ * (see above) — the sum of the outline, shadow, and blur terms, never the
+ * max of any two.
  */
 function effectReachPx(
   revision: ResolvedLayerRevision,
   content: { width: number; height: number },
 ): number {
-  const outline = revision.outline?.width ?? 0;
-  const shadow = revision.shadow
-    ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
-    : 0;
-  // The blur (#299, ADR-0024 amendment): the last function of the effects
-  // chain blurs the composite with CSS blur(r) — r IS the Gaussian standard
-  // deviation, and Chrome's kernel reaches ~3σ — so the visible tail
-  // extends ceil(3 × blur) px beyond the ink in every local direction. The
-  // exact ceiled kernel reach, additive after outline+shadow (the chain is
-  // additive, DEC-006/ADR-0019 ordering) and mapped through the transform
-  // like the rest of the local reach. The ONE home for effect reach:
-  // #300's choke (negative) and feather (additive) extend this term list.
-  const blur = normalizeStoredBlur(revision) ?? 0;
-  const blurReach = blur > 0 ? Math.ceil(3 * blur) : 0;
-  const localReach = outline + shadow + blurReach;
+  const localReach = localEffectReachPx(revision);
   if (localReach === 0) return 0;
   return localReach * transformedStretch(revision, content, localReach);
 }
@@ -453,6 +459,10 @@ interface TransformFactsSource {
   perspectiveTiltYDeg?: unknown;
   outline?: LayerOutline | undefined;
   shadow?: LayerShadow | undefined;
+  /** The blur radius (#299, ADR-0024 amendment), unknown-typed because a
+   *  fresh provisional revision may carry any stored shape — always read
+   *  through `normalizeStoredBlur`. */
+  blur?: unknown;
 }
 
 /** Compose two linear maps: (m·n)·p applies n first. */
@@ -597,11 +607,11 @@ export function transformBlowupRefusal(
   if (perspective.perspectiveTiltXDeg === 0 && perspective.perspectiveTiltYDeg === 0) {
     return null;
   }
-  const localReach =
-    (revision.outline?.width ?? 0) +
-    (revision.shadow
-      ? Math.abs(revision.shadow.dx) + Math.abs(revision.shadow.dy) + 2 * revision.shadow.blur
-      : 0);
+  // The ONE local-reach reader (INT-1): the gate must see the same effect
+  // extent measure sizes capture windows from — outline + shadow + the
+  // blur's kernel reach — so a tilted + blurred Layer near the divergence
+  // boundary is refused, never stored with an underestimated depth.
+  const localReach = localEffectReachPx(revision);
   const depth = perspectiveDepth(revision, content, localReach);
   if (depth < PERSPECTIVE_DISTANCE_PX) return null;
   return (
