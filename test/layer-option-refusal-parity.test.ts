@@ -157,6 +157,7 @@ const PARITY_ROWS: ReadonlyArray<{
   { key: "perspective", bad: ["--perspective", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "--perspective takes" },
   { key: "shadow", bad: ["--shadow", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid shadow "banana"' },
   { key: "outline", bad: ["--outline", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid outline "banana"' },
+  { key: "inner-shadow", bad: ["--inner-shadow", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid inner shadow "banana"' },
   { key: "visible-region", bad: ["--visible-region", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: 'Invalid visible region "banana"' },
   { key: "visible-region-radius", bad: ["--visible-region", "10,10,20,20", "--visible-region-radius", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: ["--visible-region", "10,10,20,20"], editId: "imageId", names: 'Invalid visible-region corner radius "banana"' },
   { key: "brightness", bad: ["--brightness", "banana"], addContext: ["--image", "SET_AT_RUNTIME"], editContext: [], editId: "imageId", names: "Brightness (--brightness)" },
@@ -233,6 +234,8 @@ test(
       { name: "bad second occurrence", bad: ["--shadow", "1,1,0,#000000", "--shadow", "banana"] },
       { name: "mixed none outline", bad: ["--outline", "none", "--outline", "2,#000000"] },
       { name: "bad second outline occurrence", bad: ["--outline", "2,#000000", "--outline", "banana"] },
+      { name: "mixed none inner shadow", bad: ["--inner-shadow", "none", "--inner-shadow", "0,4,0,#000000"] },
+      { name: "bad second inner-shadow occurrence", bad: ["--inner-shadow", "0,4,0,#000000", "--inner-shadow", "banana"] },
     ];
     let n = 0;
     for (const c of cases) {

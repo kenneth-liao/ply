@@ -182,6 +182,7 @@ test("reversibility and lineage: raster image Layer", async () => {
     "--glow", "8,3,#ff0000,45,0.7",
     "--blur", "6",
     "--choke", "3", "--feather", "2",
+    "--inner-shadow", "0,6,3,#000000",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -200,6 +201,7 @@ test("reversibility and lineage: raster image Layer", async () => {
     "--glow", "none",
     "--blur", "0",
     "--choke", "0", "--feather", "0",
+    "--inner-shadow", "none",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -220,6 +222,7 @@ test("reversibility and lineage: raster image Layer", async () => {
   expect(restoredRev.blur).toBeUndefined();
   expect(restoredRev.choke).toBeUndefined();
   expect(restoredRev.feather).toBeUndefined();
+  expect(restoredRev.innerShadow).toBeUndefined();
 });
 
 test("reversibility and lineage: vector image Layer (SVG)", async () => {
@@ -260,6 +263,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
     "--glow", "6,2,#00ffff,90,0.6",
     "--blur", "6",
     "--choke", "3", "--feather", "2",
+    "--inner-shadow", "0,6,3,#000000",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -276,6 +280,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
     "--glow", "none",
     "--blur", "0",
     "--choke", "0", "--feather", "0",
+    "--inner-shadow", "none",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -293,6 +298,7 @@ test("reversibility and lineage: vector image Layer (SVG)", async () => {
   expect(restoredRev.blur).toBeUndefined();
   expect(restoredRev.choke).toBeUndefined();
   expect(restoredRev.feather).toBeUndefined();
+  expect(restoredRev.innerShadow).toBeUndefined();
 });
 
 test("reversibility and lineage: text Layer (including gradient fill)", async () => {
@@ -331,6 +337,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
     "--glow", "6,2,#ff8800,0,0.5",
     "--blur", "6",
     "--choke", "3", "--feather", "2",
+    "--inner-shadow", "0,6,3,#000000",
     "--color", "linear:90deg,#ff0000,#0000ff",
     "-p", proj, "--json",
   ]);
@@ -348,6 +355,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
     "--glow", "none",
     "--blur", "0",
     "--choke", "0", "--feather", "0",
+    "--inner-shadow", "none",
     "--color", "#ffffff",
     "-p", proj, "--json",
   ]);
@@ -366,6 +374,7 @@ test("reversibility and lineage: text Layer (including gradient fill)", async ()
   expect(restoredRev.blur).toBeUndefined();
   expect(restoredRev.choke).toBeUndefined();
   expect(restoredRev.feather).toBeUndefined();
+  expect(restoredRev.innerShadow).toBeUndefined();
   expect(restoredRev.color).toBe("#ffffff");
 });
 
@@ -401,6 +410,7 @@ test("reversibility and lineage: shape Layer", async () => {
     "--glow", "10,4,#ffff00,180,0.8",
     "--blur", "6",
     "--choke", "3", "--feather", "2",
+    "--inner-shadow", "0,6,3,#000000",
     "-p", proj, "--json",
   ]);
   expect(editRes.code).toBe(0);
@@ -417,6 +427,7 @@ test("reversibility and lineage: shape Layer", async () => {
     "--glow", "none",
     "--blur", "0",
     "--choke", "0", "--feather", "0",
+    "--inner-shadow", "none",
     "-p", proj, "--json",
   ]);
   expect(removeRes.code).toBe(0);
@@ -433,6 +444,7 @@ test("reversibility and lineage: shape Layer", async () => {
   expect(restoredRev.blur).toBeUndefined();
   expect(restoredRev.choke).toBeUndefined();
   expect(restoredRev.feather).toBeUndefined();
+  expect(restoredRev.innerShadow).toBeUndefined();
 });
 
 // ---------------------------------------------------------------------------

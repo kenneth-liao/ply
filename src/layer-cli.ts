@@ -407,6 +407,28 @@ Options:
                         (the anchor resolves the pre-effect ink — the
                         outline's ring is an effect, not anchor ink; make
                         the effect edits separate).
+  --inner-shadow <spec>
+                        Apply an inner shadow to the Layer's content (#303,
+                        ADR-0027), on image alpha and text glyphs alike: an
+                        ABSOLUTE setter "<dx>,<dy>,<blur>,<color>" — the
+                        same grammar and bounds as --shadow — that replaces
+                        any previous stack, and "none" removes it.
+                        REPEATABLE (ADR-0027): occurrences stack in command
+                        order, one occurrence is the single-object form,
+                        and "none" cannot combine with value occurrences.
+                        The band darkens pixels JUST INSIDE the alpha edge
+                        and never paints outside it: the offset direction
+                        follows the CSS inset box-shadow convention (dy +4
+                        darkens the TOP inside edge, dx +4 the left — the
+                        edge the offset moves away from), 0,0,blur rings
+                        all inside edges. Painted in the Layer's LOCAL
+                        coordinate space, after the edge glow and before
+                        the outlines — an alpha-preserving effect, so the
+                        painted extent is unchanged (no reach). It is a
+                        revision fact: sharing propagates it, forks
+                        isolate it, and removal is its own edit. Never
+                        changes retained pixels. Cannot combine with
+                        --anchor.
   --vector-color <hex|none>
                         Paint a vector image Layer's shape in one colour
                         (#215, spec #207 US-005): an ABSOLUTE setter taking
@@ -996,6 +1018,9 @@ async function run() {
         if (res.outlined) {
           resultBody.outlined = res.outlined;
         }
+        if (res.innerShadowed) {
+          resultBody.innerShadowed = res.innerShadowed;
+        }
         if (res.regionSet) {
           resultBody.regionSet = res.regionSet;
         }
@@ -1053,6 +1078,11 @@ async function run() {
                 ? `; outline ${res.outlined.outline.map((o) => `${o.width} ${o.color}`).join("; ")}`
                 : "; outline none"
               : "";
+            const innerShadowed = res.innerShadowed
+              ? res.innerShadowed.innerShadow
+                ? `; inner shadow ${res.innerShadowed.innerShadow.map((s) => `${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("; ")}`
+                : "; inner shadow none"
+              : "";
             const regionSet = res.regionSet
               ? res.regionSet.visibleRegion
                 ? `; visible region (${res.regionSet.visibleRegion.x}, ${res.regionSet.visibleRegion.y}, ${res.regionSet.visibleRegion.width}, ${res.regionSet.visibleRegion.height})` +
@@ -1090,10 +1120,10 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${shapeEdited}${anchorSummary}`);
             }
           },
         );
@@ -1214,16 +1244,21 @@ async function run() {
               (rev.perspectiveTiltXDeg ?? 0) === 0 && (rev.perspectiveTiltYDeg ?? 0) === 0
                 ? ""
                 : `, Perspective: ${rev.perspectiveTiltXDeg ?? 0}° ${rev.perspectiveTiltYDeg ?? 0}°`;
-            // Stacked effects (#302, ADR-0027): each effect of a type on
-            // its own entry, in paint order (the chain's function order).
-            const shadow =
-              rev.shadow === undefined
+            // Stacked effects (#302, ADR-0027; inner shadow #303): each
+            // effect of a type on its own entry, in paint order (the chain's
+            // function order — inner shadow, then outlines, then shadows).
+            const innerShadow =
+              rev.innerShadow === undefined
                 ? ""
-                : rev.shadow.map((s) => `, Shadow: ${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("");
+                : rev.innerShadow.map((s) => `, Inner shadow: ${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("");
             const outline =
               rev.outline === undefined
                 ? ""
                 : rev.outline.map((o) => `, Outline: ${o.width} ${o.color}`).join("");
+            const shadow =
+              rev.shadow === undefined
+                ? ""
+                : rev.shadow.map((s) => `, Shadow: ${s.dx} ${s.dy} ${s.blur} ${s.color}`).join("");
             const region =
               rev.visibleRegion === undefined
                 ? ""
@@ -1255,7 +1290,9 @@ async function run() {
               rev.feather === undefined
                 ? ""
                 : `, Feather: ${rev.feather}px`;
-            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${shadow}${outline}${region}${grade}${glow}${blur}${choke}${feather}${blend}`);
+            // Report order matches the chain's function order (review INT-1):
+            // inner shadow, then outlines, then shadows.
+            console.log(`  Placement: (${rev.x}, ${rev.y}), Opacity: ${rev.opacity}${scale}${rotation}${flip}${skew}${perspective}${innerShadow}${outline}${shadow}${region}${grade}${glow}${blur}${choke}${feather}${blend}`);
           },
         );
       } catch (err) {

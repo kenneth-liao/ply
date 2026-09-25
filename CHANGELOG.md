@@ -1,6 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+- Added inner shadows to Layers (#303, spec #285 US-011, ISC-64, DEC-005,
+  ADR-0027/ADR-0024 fourth amendment): `--inner-shadow
+  "<dx>,<dy>,<blur>,<color>"` on `composition add` and `layer edit` paints a
+  darkening JUST INSIDE the Layer's alpha edge — the inset counterpart of
+  the drop shadow, with the same grammar and bounds. It stacks per ADR-0027
+  (repeatable; occurrences set the whole stack in command order; `none`
+  removes; a stored length-1 list is refused), paints after the edge glow
+  and before the outlines, and adds NO reach: the atop composite keeps
+  alpha coverage exactly the source's, so the painted extent is unchanged
+  and removing it restores the render byte-for-byte. The offset direction
+  follows the CSS inset box-shadow convention — dy +4 darkens the TOP
+  inside edge, dx +4 the left; 0,0,blur rings all inside edges. Reports
+  (measure `effects` facts, `layer inspect`, `layer review`, the edit
+  result's `innerShadowed`) carry the normalized list in paint order (#303).
 - Added stacked effects to Layers (BREAKING: `measure`/`inspect`/
   `layer review` `--json` report shape changed — see below; #302, spec #285
   US-011, ISC-50, DEC-005/DEC-006, ADR-0027): `--shadow` and `--outline` are

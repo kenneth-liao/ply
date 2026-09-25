@@ -13,7 +13,10 @@
   chain (see the second amendment below). Amended a third time by the same
   spec's ticket #301 (US-014, DEC-008): the one-sided direction model joins
   the edge glow as a second, mutually exclusive direction form (see the
-  third amendment below).
+  third amendment below). Amended a fourth time by the same spec's ticket
+  #303 (US-011, ISC-64, DEC-005, ADR-0027): the inner shadow joins the
+  look paint order between the edge glow and the outlines (see the fourth
+  amendment below).
 
 ## Context
 
@@ -71,16 +74,29 @@ space apply in one fixed, canonical sequence (DEC-002, DEC-003):
    edge; it paints over the graded content), weights by one angle plus
    strength (DEC-006), and never extends painted extents or alters alpha
    coverage (DEC-005).
-6. **Outline**: local stroke dilation around visible ink (ADR-0019).
-7. **Shadow**: local drop-shadow cast from the outlined composite (ADR-0018).
+6. **Inner shadow (#303)**: a darkening painted just INSIDE the Layer's
+   alpha edge — the inset counterpart of the shadow — after the glow and
+   before the outlines. It is an alpha-edge-reading effect, so it sits
+   after the edge step; its atop composite preserves the input's alpha
+   exactly, so it sits before the first alpha-extending effect (the
+   outlines), keeping the outline dilate and drop-shadow casting geometry
+   provably unchanged; among the alpha-preserving edge effects, light
+   precedes shade — the darkening reads on the lit composite. Stacked
+   (ADR-0027): entries paint in stored order. It never extends painted
+   extents or alters alpha coverage (DEC-005) — the #300 edge-step
+   precedent's zero reach. The offset direction follows the CSS inset
+   box-shadow convention: the band appears along the edge the offset
+   moves AWAY from (dy +4 darkens the top inside edge, dx +4 the left).
+7. **Outline**: local stroke dilation around visible ink (ADR-0019).
+8. **Shadow**: local drop-shadow cast from the outlined composite (ADR-0018).
    Within the outline and shadow steps, STACKED effects (#302, ADR-0027)
    paint in stored order — each later function operates on the composite
    the earlier ones accumulated; the steps' positions in this order are
    unchanged.
-8. **Blur (#299)**: a Gaussian defocus over the whole Layer look — the LAST
+9. **Blur (#299)**: a Gaussian defocus over the whole Layer look — the LAST
    function of the effects chain (the amendment below).
-9. **Transform & Opacity**: scale, flip, rotation, and Layer-level opacity.
-10. **Blend against backdrop (#220)**: composite unit against underlying canvas.
+10. **Transform & Opacity**: scale, flip, rotation, and Layer-level opacity.
+11. **Blend against backdrop (#220)**: composite unit against underlying canvas.
 
 ### 3. Deterministic CSS filter chain & DOM structure
 
@@ -362,3 +378,35 @@ side, the opposite edge is unlit. It amends this ADR's accepted glow decision
 - **Not included**: a per-edge rim (two directions on one Layer), a ramp
   shaped by the ink rather than the box, or a falloff curve other than
   linear — each is fog until specified.
+
+## Fourth amendment: the inner shadow joins the paint order (#303)
+
+Spec #285's ticket #303 (US-011, ISC-64, DEC-005, ADR-0027) adds the inner
+shadow — the inset counterpart of the drop shadow — as a stacked Layer
+revision fact (`innerShadow`, one object or a stored list of two or more in
+paint order), painting in the chain position between the edge glow and the
+outlines:
+
+- **Why there.** The inner shadow reads the alpha edge, so it sits after
+  the edge step (its band hugs the shaped edge). Its filter's final
+  `feComposite operator="atop"` keeps the composite's alpha EXACTLY the
+  input's, so the effect preserves alpha coverage everywhere — placing it
+  before the first alpha-extending effect (the outlines) keeps the outline
+  dilate and drop-shadow casting geometry provably unchanged by its
+  presence. Among the alpha-preserving edge effects, light precedes shade:
+  the glow band paints first, and the darkening reads on the lit
+  composite.
+- **Why no reach term**: the atop composite bounds the output's alpha by
+  the input's — the inner-shadowed ink never exceeds the unshadowed ink —
+  so `localEffectReachPx` gains no term (the #300 edge-step precedent).
+  The ISC-64 probe pins the extent-unchanged proof.
+- **Direction convention**: the CSS inset box-shadow's — the band appears
+  along the edge the offset moves AWAY from (dy +4 darkens the TOP inside
+  edge, dx +4 the left inside edge; 0,0,blur rings all inside edges).
+  The band is the input alpha MINUS the shifted, blurred alpha
+  (`feComposite in="SourceAlpha" in2=<offset+blurred> operator="out"`);
+  the reverse operand order selects pixels outside the shape, which the
+  atop composite then erases, so nothing would paint.
+- **Reporting**: `composition measure`'s `effects` facts, `layer inspect`,
+  and `layer review` carry the normalized list per ADR-0027 (Reports are
+  lists).

@@ -72,6 +72,7 @@ import {
   normalizeStoredSkew,
   normalizeStoredPerspective,
   type LayerOutline,
+  type LayerInnerShadow,
   type LayerVisibleRegion,
   type ResolvedLayerRevision,
   type LayerGrade,
@@ -652,6 +653,63 @@ function glowFilterDef(
 }
 
 /**
+ * The inner shadow's SVG-filter id and def (#303, spec #285 US-011,
+ * ISC-64, DEC-005, ADR-0027): a darkening painted JUST INSIDE the Layer's
+ * alpha edge — the inset counterpart of the drop shadow, in the CSS inset
+ * box-shadow direction convention: the band appears along the edge the
+ * offset moves AWAY from (dy +4 darkens the top inside edge, dx +4 the
+ * left inside edge; 0,0,blur rings all inside edges). The chain operates
+ * on the filter input's alpha — for the outer element's filter chain that
+ * input is the region-clipped, graded, edge-shaped, glowed composite — in
+ * the chain position between the glow and the outlines (ADR-0024
+ * amendment):
+ *
+ * 1. `feOffset` the source alpha by (dx, dy) px (LOCAL px, before the
+ *    transform) and `feGaussianBlur` the shifted alpha by `blur` px.
+ * 2. `feComposite in="SourceAlpha" in2=<shifted, blurred> operator="out"`:
+ *    the band is the source alpha MINUS the shifted, blurred alpha — the
+ *    ring of pixels the offset moved away from. The reverse operand order
+ *    would select pixels OUTSIDE the shape, which the atop composite
+ *    below then erases, so nothing would paint.
+ * 3. `feFlood` the colour and `feComposite operator="in"` the band.
+ * 4. `feComposite operator="atop"` the coloured band onto the source
+ *    graphic — Porter-Duff atop keeps the composite's alpha EXACTLY the
+ *    input's alpha everywhere (the shadow darkens pixels without raising
+ *    alpha, DEC-005), so painted extents equal the no-inner-shadow
+ *    extents at every transform: the effect adds ZERO reach (the #300
+ *    edge-step precedent), the outline dilate and drop-shadow casting
+ *    geometry downstream are unchanged, and the extent-unchanged probe
+ *    (ISC-64) holds.
+ *
+ * One filter per stack entry, the same recipe as the glow's def (its
+ * region is padded by the antialiasing 1px only — the output never leaves
+ * the element's box), with a deterministic id hashed from the entry's
+ * facts plus the Layer's snapshot index; the entry's stack position joins
+ * the hash input ONLY from the second entry on, so a single inner
+ * shadow's markup is byte-identical to a one-effect world. Emitted only
+ * when an inner-shadow fact exists, so pre-#303 revisions paint exactly
+ * as before.
+ */
+function innerShadowFilterId(innerShadow: LayerInnerShadow, layerIndex: number, entryIndex = 0): string {
+  const stackPart = entryIndex === 0 ? "" : `:${entryIndex}`;
+  return `ply-is-${createHash("sha256").update(`${innerShadow.dx}:${innerShadow.dy}:${innerShadow.blur}:${innerShadow.color}:${layerIndex}${stackPart}`).digest("hex").slice(0, 16)}`;
+}
+
+function innerShadowFilterDef(innerShadow: LayerInnerShadow, layerIndex: number, entryIndex = 0): string {
+  const id = innerShadowFilterId(innerShadow, layerIndex, entryIndex);
+  return (
+    `<filter id="${id}" x="-300%" y="-300%" width="700%" height="700%">` +
+    `<feOffset in="SourceAlpha" dx="${innerShadow.dx}" dy="${innerShadow.dy}" result="isoff"/>` +
+    `<feGaussianBlur in="isoff" stdDeviation="${innerShadow.blur}" result="isblur"/>` +
+    `<feComposite in="SourceAlpha" in2="isblur" operator="out" result="isband"/>` +
+    `<feFlood flood-color="${innerShadow.color}" result="isflood"/>` +
+    `<feComposite in="isflood" in2="isband" operator="in" result="isink"/>` +
+    `<feComposite in="isink" in2="SourceGraphic" operator="atop"/>` +
+    `</filter>`
+  );
+}
+
+/**
  * The edge choke and feather's SVG-filter id and def (#300, spec #285
  * US-013, ADR-0024 amendment): the alpha-edge shaper — erode the source
  * alpha INWARD by the choke px, Gaussian-soften it by the feather px, then
@@ -949,6 +1007,14 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
         l.revision.glow !== undefined
           ? glowFilterDef(l.revision.glow, i, l.revision, supersample)
           : "";
+      // Stacked inner shadows (#303, ADR-0027): one def per stack entry, in
+      // paint order; a single inner shadow emits exactly today's one def.
+      const innerShadow =
+        l.revision.innerShadow !== undefined
+          ? l.revision.innerShadow
+              .map((s, entry) => innerShadowFilterDef(s, i, entry))
+              .join("")
+          : "";
       // The edge choke and feather (#300, ADR-0024 amendment): one def for
       // the pair — the facts are independent setters, the filter is one
       // alpha-edge shape. Emitted when either fact exists.
@@ -964,7 +1030,7 @@ function paintDefs(layers: SnapshotLayer[], supersample = 1): string {
         l.revision.grade?.warmth !== undefined
           ? warmthFilterDef(l.revision.grade.warmth, i)
           : "";
-      return outline + glow + edge + region + warmth;
+      return outline + glow + innerShadow + edge + region + warmth;
     })
     .join("");
   if (defs === "") return "";
@@ -1009,6 +1075,13 @@ function outlineFilterSpecs(
           : {}),
       });
     }
+    // The inner shadow filters' (#303, ADR-0027) output is bounded by the
+    // input's alpha (the atop composite), so like the glow they never
+    // leave the element's box: the antialiasing 1px pad is enough. One
+    // spec per stack entry, in paint order.
+    (l.revision.innerShadow ?? []).forEach((s, entry) => {
+      specs.push({ id: innerShadowFilterId(s, i, entry), pad: 1, name: l.name, index: i });
+    });
     // The edge filter's output is bounded by the source graphic (the `in`
     // composite), so like the glow it never leaves the element's box: the
     // antialiasing 1px pad is enough.
@@ -1457,6 +1530,21 @@ export function buildCompositionHtml(
         rev.shadow !== undefined
           ? rev.shadow.map((s) => `drop-shadow(${s.dx}px ${s.dy}px ${s.blur}px ${s.color})`).join(" ")
           : "";
+      // The inner shadow stack (#303, ADR-0027): the THIRD function group —
+      // after the edge step and the glow, BEFORE the outlines. It is an
+      // alpha-edge-reading effect, so it sits after the edge step; its
+      // atop composite preserves the input's alpha exactly, so it must sit
+      // before the first alpha-extending effect (the outlines) to keep the
+      // outline dilate and drop-shadow casting geometry provably unchanged;
+      // among the alpha-preserving edge effects, light precedes shade — the
+      // darkening reads on the lit composite. Stacked entries chain in
+      // stored order, each darkening the composite the earlier ones
+      // accumulated. Emitted only when an inner-shadow fact exists, so
+      // pre-#303 revisions paint exactly as before.
+      const innerShadowFn =
+        rev.innerShadow !== undefined
+          ? rev.innerShadow.map((s, entry) => `url(#${innerShadowFilterId(s, layerIndex, entry)})`).join(" ")
+          : "";
       // The blur (#299, spec #285 US-010, DEC-005, ADR-0024 amendment): the
       // LAST function of the outer element's filter chain — after glow,
       // outline, and shadow — so the whole Layer look (content, glow band,
@@ -1482,7 +1570,7 @@ export function buildCompositionHtml(
         rev.choke !== undefined || rev.feather !== undefined
           ? `url(#${edgeFilterIdForRevision(rev, layerIndex)})`
           : "";
-      const effectsFns = [edgeFn, glowFn, outlineFn, shadowFn, blurFn].filter(Boolean).join(" ");
+      const effectsFns = [edgeFn, glowFn, innerShadowFn, outlineFn, shadowFn, blurFn].filter(Boolean).join(" ");
       const effectsFilter = effectsFns !== "" ? `filter:${effectsFns};` : "";
       // The blend mode (#220, spec #218 US-003, ADR-0024): applied to the
       // OUTER element via CSS mix-blend-mode in the DEC-002 paint order,

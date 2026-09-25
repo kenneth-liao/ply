@@ -324,7 +324,7 @@ test("measure includes the outline extent in painted bounds and clipping", async
   const measureRes = await invoke(["composition", "measure", "poster", "--project", projDir, "--json"]);
   expect(measureRes.code).toBe(0);
   const layer = JSON.parse(measureRes.stdout).layers[0];
-  expect(layer.effects).toEqual({ shadow: null, outline: [{ width: 10, color: "#0000ff" }] });
+  expect(layer.effects).toEqual({ shadow: null, outline: [{ width: 10, color: "#0000ff" }], innerShadow: null });
   expect(layer.box).toEqual({ x: 50, y: 50, width: 100, height: 60 });
   expect(layer.painted).toEqual({ x: 40, y: 40, width: 120, height: 80 });
   expect(layer.paintedOnCanvas).toEqual({ x: 40, y: 40, width: 120, height: 80 });
@@ -355,7 +355,7 @@ test("measure includes the outline extent in painted bounds and clipping", async
   expect(add3.use.layerId).toBeTruthy();
   const measure3 = await invoke(["composition", "measure", "poster", "plain", "--project", projDir, "--json"]);
   const plain = JSON.parse(measure3.stdout).layers[0];
-  expect(plain.effects).toEqual({ shadow: null, outline: null });
+  expect(plain.effects).toEqual({ shadow: null, outline: null, innerShadow: null });
   expect(plain.painted).toEqual({ x: 0, y: 0, width: 100, height: 60 });
 });
 

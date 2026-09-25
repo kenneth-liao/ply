@@ -209,6 +209,28 @@ interface LayerRevisionBase {
    */
   outline?: LayerOutline | LayerOutline[];
   /**
+   * Canonical Layer inner shadow (#303, spec #285 US-011, ISC-64, DEC-005,
+   * ADR-0027): a darkening painted JUST INSIDE the Layer's alpha edge, in
+   * its LOCAL coordinate space — the same parameters as the drop shadow
+   * (`dx`/`dy` offset, `blur` softening, hex `color`), but the band is the
+   * source alpha minus the offset, blurred alpha, composited ATOP the
+   * source graphic, so alpha coverage is never altered and the painted
+   * extent is exactly the no-inner-shadow extent (zero reach, the #300
+   * edge-step precedent). Offset direction follows the CSS inset
+   * box-shadow convention: the band appears along the edge the offset
+   * moves AWAY from (dy +4 darkens the top inside edge, dx +4 the left).
+   *
+   * Present ⟺ an inner shadow exists: absence IS the canonical
+   * no-inner-shadow form, so removal drops the field and every reader
+   * treats absence as none. The revision hash appends it only when
+   * present, so revisions written before #303 keep their exact ids.
+   *
+   * Stacked effects (#303, ADR-0027): the same ONE-home fold as the shadow
+   * — one inner shadow stores the single object, two or more a list in the
+   * SAME field, in paint order; a one-element list is never stored.
+   */
+  innerShadow?: LayerInnerShadow | LayerInnerShadow[];
+  /**
    * Canonical rectangular visible region (#211, spec #207 US-003, ADR-0023):
    * the part of the Layer's content that is ink, as a rectangle in the
    * Layer's OWN content pixels relative to the content box's top-left.
@@ -382,6 +404,16 @@ export interface LayerShadow {
 /** Canonical outline parameters (#140, ADR-0019): thickness, color. */
 export interface LayerOutline {
   width: number;
+  color: string;
+}
+
+/** Canonical inner-shadow parameters (#303, spec #285 US-011, ISC-64,
+ *  DEC-005, ADR-0027): offset, softening, colour — the same fields and
+ *  bounds as the drop shadow's, painted inside the alpha edge. */
+export interface LayerInnerShadow {
+  dx: number;
+  dy: number;
+  blur: number;
   color: string;
 }
 
@@ -1066,11 +1098,14 @@ export function normalizeStoredShadow(revision: { shadow?: unknown }): LayerShad
 }
 
 /** One stored shadow object's validation, label-parameterized so a stack
- *  entry's failure names its position (`shadow[2].dx`). */
-function validateStoredShadowObject(raw: unknown, label: string): LayerShadow {
+ *  entry's failure names its position (`shadow[2].dx`), and noun-
+ *  parameterized so the inner shadow's re-use names its own fact — the
+ *  stored-document refusal says what the field IS, not which validator ran
+ *  (review PROD-2). */
+function validateStoredShadowObject(raw: unknown, label: string, objectNoun = "a shadow object"): LayerShadow {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(
-      `Malformed revision document: ${label} must be a shadow object when present (got ${JSON.stringify(raw)}).`,
+      `Malformed revision document: ${label} must be ${objectNoun} when present (got ${JSON.stringify(raw)}).`,
     );
   }
   const { dx, dy, blur, color } = raw as Record<string, unknown>;
@@ -1129,6 +1164,25 @@ function validateStoredOutlineObject(raw: unknown, label: string): LayerOutline 
     );
   }
   return { width, color } as LayerOutline;
+}
+
+/**
+ * Canonical stored inner-shadow validation and normalization (#303, spec
+ * #285 US-011, ISC-64, DEC-005, ADR-0027). The one normalization boundary
+ * for the inner-shadow effect: documents written before #303 lack the
+ * field, and absence IS the canonical no-inner-shadow form — every
+ * downstream reader projects through this function and never re-derives a
+ * default. A present field is the stored stack fold through the ONE
+ * `foldStoredEffectStack` (a valid inner-shadow object — the same fields
+ * and bounds the drop shadow validates, through the same validator — or a
+ * list of two or more of them in paint order; a stored length-1 list is a
+ * malformed document, refused loudly before the revision hash is
+ * consulted). Returns the normalized LIST a stack reader consumes.
+ */
+export function normalizeStoredInnerShadow(revision: { innerShadow?: unknown }): LayerInnerShadow[] | undefined {
+  return foldStoredEffectStack(revision.innerShadow, "innerShadow", (raw, label) =>
+    validateStoredShadowObject(raw, label, "an inner-shadow object"),
+  ) as LayerInnerShadow[] | undefined;
 }
 
 /**
@@ -1585,12 +1639,13 @@ export function normalizeStoredFeather(revision: { feather?: unknown }): number 
 type ResolvedEffectStacks = {
   shadow?: LayerShadow[];
   outline?: LayerOutline[];
+  innerShadow?: LayerInnerShadow[];
 };
 
 export type ResolvedLayerRevision =
-  | (Omit<LayerImageRevision, "shadow" | "outline"> & ResolvedEffectStacks & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number })
-  | (Omit<LayerTextRevision, "shadow" | "outline"> & ResolvedEffectStacks & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number; layoutRule: NormalizedTextLayoutRule })
-  | (Omit<LayerShapeRevision, "shadow" | "outline"> & ResolvedEffectStacks & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number });
+  | (Omit<LayerImageRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number })
+  | (Omit<LayerTextRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number; layoutRule: NormalizedTextLayoutRule })
+  | (Omit<LayerShapeRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number });
 
 export interface ResolvedLayer {
   id: string;
@@ -3082,6 +3137,14 @@ export function computeRevisionHash(rev: LayerRevision): string {
     rev.outline === undefined
       ? ""
       : `:outline(${outlineStackOf(rev.outline)!.map((o) => `${o.width},${o.color}`).join(";")})`;
+  // The inner shadow (#303, ADR-0027): appended only when present, the same
+  // stack fold as the shadow's — one effect keeps the single-entry field
+  // string, a stack joins its entries with `;` in paint order — so
+  // revisions written before #303 keep their exact ids.
+  const innerShadowField =
+    rev.innerShadow === undefined
+      ? ""
+      : `:innershadow(${innerShadowStackOf(rev.innerShadow)!.map((s) => `${s.dx},${s.dy},${s.blur},${s.color}`).join(";")})`;
   const regionField =
     rev.visibleRegion !== undefined
       ? `:region(${rev.visibleRegion.x},${rev.visibleRegion.y},${rev.visibleRegion.width},${rev.visibleRegion.height}` +
@@ -3212,7 +3275,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
           })
           .join(";")})`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${chokeField}${featherField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${innerShadowField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${chokeField}${featherField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -3452,6 +3515,11 @@ export async function readRevisionInternalFull(
   // boundary (#140, ADR-0019) — a malformed stored field is refused loudly
   // before the revision hash is consulted. Absence IS the no-outline form.
   const outline = normalizeStoredOutline(revision);
+  // Canonical inner-shadow effect: validated and normalized at this same
+  // one boundary (#303, ADR-0027) — a malformed stored field is refused
+  // loudly before the revision hash is consulted. Absence IS the
+  // no-inner-shadow form.
+  const innerShadow = normalizeStoredInnerShadow(revision);
   // Canonical visible region: validated and normalized at this same one
   // boundary (#211, ADR-0023) — a malformed stored field is refused loudly
   // before the revision hash is consulted. Absence IS the no-region form.
@@ -3614,6 +3682,7 @@ export async function readRevisionInternalFull(
             perspectiveTiltYDeg: perspective.perspectiveTiltYDeg,
             ...(shadow !== undefined ? { shadow } : {}),
             ...(outline !== undefined ? { outline } : {}),
+            ...(innerShadow !== undefined ? { innerShadow } : {}),
             ...(visibleRegion !== undefined ? { visibleRegion } : {}),
             ...(vectorColor !== undefined ? { vectorColor } : {}),
             ...(grade !== undefined ? { grade } : {}),
@@ -3650,6 +3719,7 @@ export async function readRevisionInternalFull(
           perspectiveTiltYDeg: perspective.perspectiveTiltYDeg,
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
+          ...(innerShadow !== undefined ? { innerShadow } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
           ...(grade !== undefined ? { grade } : {}),
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
@@ -3697,6 +3767,7 @@ export async function readRevisionInternalFull(
           perspectiveTiltYDeg: perspective.perspectiveTiltYDeg,
           ...(shadow !== undefined ? { shadow } : {}),
           ...(outline !== undefined ? { outline } : {}),
+          ...(innerShadow !== undefined ? { innerShadow } : {}),
           ...(visibleRegion !== undefined ? { visibleRegion } : {}),
           ...(grade !== undefined ? { grade } : {}),
           ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
@@ -3962,6 +4033,10 @@ export interface EditLayerResult {
    * ADR-0027): the normalized outline list, in paint order (null when
    * removed). */
   outlined?: { outline: LayerOutline[] | null };
+  /** Present when the edit set or removed the inner shadow (#303,
+   * ADR-0027): the normalized inner-shadow list, in paint order (null when
+   * removed). */
+  innerShadowed?: { innerShadow: LayerInnerShadow[] | null };
   /** Present when the edit set or removed the visible region (#211): the
    * absolute region state now recorded on the revision (null when removed). */
   regionSet?: { visibleRegion: LayerVisibleRegion | null };
@@ -4370,14 +4445,16 @@ export function resolveEditPerspective(
 }
 
 /**
- * Canonical shadow normalization (#139, ADR-0018): `--shadow` sets an ABSOLUTE
- * shadow, replacing any previous one; `"none"` removes it. Omitted option
- * preserves the current revision's shadow. Every refusal runs before any
- * staging, so an invalid shadow never advances live state. Exported for the
- * CLI boundary: the command classifies malformed specs as usage errors
- * (exit 2) with this same parser, so the two never disagree.
+ * The parameterized shadow-spec validator (#303, review CRAFT-1): ONE
+ * grammar and ONE bound set, label-selected refusal wording — the drop
+ * shadow's established texts name "--shadow", the inner shadow's name
+ * "--inner-shadow" — so the two option boundaries can never drift and a
+ * future message cannot leak across options (no post-hoc string surgery).
+ * The drop-shadow wording is byte-identical to the pre-#303 form.
  */
-export function parseShadowSpec(spec: string): LayerShadow | undefined {
+function parseShadowSpecLabeled(spec: string, option: "shadow" | "inner shadow"): LayerShadow | undefined {
+  const flag = option === "shadow" ? "--shadow" : "--inner-shadow";
+  const name = (subject: string) => `Invalid ${option} ${subject}`;
   const raw = spec.trim();
   if (raw.toLowerCase() === "none") {
     return undefined;
@@ -4385,7 +4462,7 @@ export function parseShadowSpec(spec: string): LayerShadow | undefined {
   const parts = raw.split(",").map((p) => p.trim());
   if (parts.length !== 4) {
     throw new Error(
-      `Invalid shadow "${raw}": --shadow takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".`,
+      `${name(`"${raw}"`)}: ${flag} takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".`,
     );
   }
   const [dxRaw, dyRaw, blurRaw, colorRaw] = parts;
@@ -4395,27 +4472,39 @@ export function parseShadowSpec(spec: string): LayerShadow | undefined {
   const color = colorRaw ?? "";
   if (dxRaw === "" || dyRaw === "" || blurRaw === "" || color === "") {
     throw new Error(
-      `Invalid shadow "${raw}": --shadow takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".`,
+      `${name(`"${raw}"`)}: ${flag} takes "<dx>,<dy>,<blur>,<color>" (e.g. "10,10,4,#000000") or "none".`,
     );
   }
   for (const [label, value] of [["dx", dx], ["dy", dy]] as const) {
     if (!Number.isFinite(value) || Math.abs(value) > MAX_SHADOW_OFFSET_PX) {
       throw new Error(
-        `Invalid shadow offset ${label} ${dxRaw}: must be a finite number of px within ±${MAX_SHADOW_OFFSET_PX}.`,
+        `${name("offset")} ${label} ${dxRaw}: must be a finite number of px within ±${MAX_SHADOW_OFFSET_PX}.`,
       );
     }
   }
   if (!Number.isFinite(blur) || blur < 0 || blur > MAX_SHADOW_BLUR_PX) {
     throw new Error(
-      `Invalid shadow blur ${blurRaw}: must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX}.`,
+      `${name("blur")} ${blurRaw}: must be a finite number of px between 0 and ${MAX_SHADOW_BLUR_PX}.`,
     );
   }
   if (!EFFECT_COLOR_PATTERN.test(color)) {
     throw new Error(
-      `Invalid shadow color "${color}": must be a hex color like #000000, #000, or #00000080.`,
+      `${name(`color "${color}"`)}: must be a hex color like #000000, #000, or #00000080.`,
     );
   }
   return { dx, dy, blur, color: canonicalizeEffectColor(color) };
+}
+
+/**
+ * Canonical shadow normalization (#139, ADR-0018): `--shadow` sets an ABSOLUTE
+ * shadow, replacing any previous one; `"none"` removes it. Omitted option
+ * preserves the current revision's shadow. Every refusal runs before any
+ * staging, so an invalid shadow never advances live state. Exported for the
+ * CLI boundary: the command classifies malformed specs as usage errors
+ * (exit 2) with this same parser, so the two never disagree.
+ */
+export function parseShadowSpec(spec: string): LayerShadow | undefined {
+  return parseShadowSpecLabeled(spec, "shadow");
 }
 
 /**
@@ -4456,6 +4545,24 @@ export function parseOutlineSpec(spec: string): LayerOutline | undefined {
     );
   }
   return { width, color: canonicalizeEffectColor(color) };
+}
+
+/**
+ * Canonical inner-shadow normalization (#303, spec #285 US-011, ISC-64,
+ * DEC-005, ADR-0027): `--inner-shadow` sets an ABSOLUTE inner shadow,
+ * replacing any previous stack; `"none"` removes it. Omitted option
+ * preserves the current revision's inner shadows. The spec grammar and
+ * bounds are the drop shadow's ("<dx>,<dy>,<blur>,<color>" — the offset
+ * direction convention is the CSS inset box-shadow's: the band appears
+ * along the edge the offset moves AWAY from), so the value validation is
+ * the SAME code path (the ONE parameterized shadow-spec validator — the
+ * drop shadow's established wording, name-selected) — the refusal wording
+ * names this option. Canonicalized by the same INT-2 rule. Exported for
+ * the CLI boundary: the command classifies malformed specs as usage errors
+ * (exit 2) with this same parser, so the two never disagree.
+ */
+export function parseInnerShadowSpec(spec: string): LayerInnerShadow | undefined {
+  return parseShadowSpecLabeled(spec, "inner shadow") as LayerInnerShadow | undefined;
 }
 
 /**
@@ -4686,6 +4793,10 @@ function outlineStackOf(value: LayerOutline | LayerOutline[] | undefined): Layer
   return readEffectStack(value);
 }
 
+function innerShadowStackOf(value: LayerInnerShadow | LayerInnerShadow[] | undefined): LayerInnerShadow[] | undefined {
+  return readEffectStack(value);
+}
+
 /** Field-wise shadow-stack equality for the no-op check (#139; stacking
  *  #302, ADR-0027): the flip precedent — re-issuing an identical shadow or
  *  stack is a detected no-op, never a redundant revision. Both sides fold
@@ -4718,6 +4829,21 @@ function outlineEq(a: LayerOutline | LayerOutline[] | undefined, b: LayerOutline
   if (as === undefined || bs === undefined) return as === bs;
   if (as.length !== bs.length) return false;
   return as.every((o, i) => o.width === bs[i]!.width && o.color === bs[i]!.color);
+}
+
+/** Field-wise inner-shadow-stack equality for the no-op check (#303,
+ *  ADR-0027): the shadow-stack equality folded the same way — both sides
+ *  through the one shape fold, so a single object and its one-element
+ *  resolved list describe the same fact. */
+function innerShadowEq(a: LayerInnerShadow | LayerInnerShadow[] | undefined, b: LayerInnerShadow | LayerInnerShadow[] | undefined): boolean {
+  const as = innerShadowStackOf(a);
+  const bs = innerShadowStackOf(b);
+  if (as === undefined || bs === undefined) return as === bs;
+  if (as.length !== bs.length) return false;
+  return as.every((s, i) => {
+    const o = bs[i]!;
+    return s.dx === o.dx && s.dy === o.dy && s.blur === o.blur && s.color === o.color;
+  });
 }
 
 /**
@@ -5374,6 +5500,9 @@ async function buildEditedRevision(
   // and every stored document below.
   const storedShadow = storedEffectStack(draft.shadow);
   const storedOutline = storedEffectStack(draft.outline);
+  // The inner shadow's stack fold (#303, ADR-0027): the same ONE fold
+  // between the draft and every stored document below.
+  const storedInnerShadow = storedEffectStack(draft.innerShadow);
 
   // Shape content options (#209, spec #207 US-002): each parameter is an
   // ABSOLUTE setter on a shape Layer; on image and text Layers every shape
@@ -5536,6 +5665,7 @@ async function buildEditedRevision(
         : {}),
       ...(storedShadow !== undefined ? { shadow: storedShadow } : {}),
       ...(storedOutline !== undefined ? { outline: storedOutline } : {}),
+      ...(storedInnerShadow !== undefined ? { innerShadow: storedInnerShadow } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.vectorColor !== undefined ? { vectorColor: draft.vectorColor } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
@@ -5556,6 +5686,7 @@ async function buildEditedRevision(
       (draft.perspectiveTiltYDeg ?? 0) === (prevRev.perspectiveTiltYDeg ?? 0) &&
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
+      innerShadowEq(draft.innerShadow, prevRev.innerShadow) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       draft.vectorColor === prevRev.vectorColor &&
       gradeEq(draft.grade, prevRev.grade) &&
@@ -5681,6 +5812,7 @@ async function buildEditedRevision(
         : {}),
       ...(storedShadow !== undefined ? { shadow: storedShadow } : {}),
       ...(storedOutline !== undefined ? { outline: storedOutline } : {}),
+      ...(storedInnerShadow !== undefined ? { innerShadow: storedInnerShadow } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
@@ -5711,6 +5843,7 @@ async function buildEditedRevision(
       (draft.perspectiveTiltYDeg ?? 0) === (prevRev.perspectiveTiltYDeg ?? 0) &&
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
+      innerShadowEq(draft.innerShadow, prevRev.innerShadow) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
@@ -5963,6 +6096,7 @@ async function buildEditedRevision(
         : {}),
       ...(storedShadow !== undefined ? { shadow: storedShadow } : {}),
       ...(storedOutline !== undefined ? { outline: storedOutline } : {}),
+      ...(storedInnerShadow !== undefined ? { innerShadow: storedInnerShadow } : {}),
       ...(draft.visibleRegion !== undefined ? { visibleRegion: draft.visibleRegion } : {}),
       ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
       ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
@@ -6005,6 +6139,7 @@ async function buildEditedRevision(
       (draft.perspectiveTiltYDeg ?? 0) === (prevRev.perspectiveTiltYDeg ?? 0) &&
       shadowEq(draft.shadow, prevRev.shadow) &&
       outlineEq(draft.outline, prevRev.outline) &&
+      innerShadowEq(draft.innerShadow, prevRev.innerShadow) &&
       visibleRegionEq(draft.visibleRegion, prevRev.visibleRegion) &&
       gradeEq(draft.grade, prevRev.grade) &&
       draft.blend === prevRev.blend &&
@@ -6329,6 +6464,8 @@ export async function editLayerInternal(
   const shadowedReport = { shadow: shadowStackOf(draft.shadow) ?? null };
   const hasOutline = shared.outline !== undefined;
   const outlinedReport = { outline: outlineStackOf(draft.outline) ?? null };
+  const hasInnerShadow = shared["inner-shadow"] !== undefined;
+  const innerShadowedReport = { innerShadow: innerShadowStackOf(draft.innerShadow) ?? null };
   const hasRegion = shared["visible-region"] !== undefined || shared["visible-region-radius"] !== undefined;
   const regionSetReport = { visibleRegion: draft.visibleRegion ?? null };
   const vectorColorSetReport = { vectorColor: draft.vectorColor ?? null };
@@ -6396,7 +6533,8 @@ export async function editLayerInternal(
     const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
     const withShadow = hasShadow ? { ...withFlipped, shadowed: shadowedReport } : withFlipped;
     const withOutline = hasOutline ? { ...withShadow, outlined: outlinedReport } : withShadow;
-    const withRegion = hasRegion ? { ...withOutline, regionSet: regionSetReport } : withOutline;
+    const withInnerShadow = hasInnerShadow ? { ...withOutline, innerShadowed: innerShadowedReport } : withOutline;
+    const withRegion = hasRegion ? { ...withInnerShadow, regionSet: regionSetReport } : withInnerShadow;
     const withColour = shared["vector-color"] !== undefined ? { ...withRegion, vectorColorSet: vectorColorSetReport } : withRegion;
     const withGrade = hasGrade ? { ...withColour, gradeSet: gradeSetReport } : withColour;
     const withBlend = hasBlend ? { ...withGrade, blendSet: blendSetReport } : withGrade;
@@ -6440,6 +6578,7 @@ export async function editLayerInternal(
       ...(flippedReport ? { flipped: flippedReport } : {}),
       ...(hasShadow ? { shadowed: shadowedReport } : {}),
       ...(hasOutline ? { outlined: outlinedReport } : {}),
+      ...(hasInnerShadow ? { innerShadowed: innerShadowedReport } : {}),
       ...(hasRegion ? { regionSet: regionSetReport } : {}),
       ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
       ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
@@ -6500,6 +6639,7 @@ export async function editLayerInternal(
     ...(flippedReport ? { flipped: flippedReport } : {}),
     ...(hasShadow ? { shadowed: shadowedReport } : {}),
     ...(hasOutline ? { outlined: outlinedReport } : {}),
+    ...(hasInnerShadow ? { innerShadowed: innerShadowedReport } : {}),
     ...(hasRegion ? { regionSet: regionSetReport } : {}),
     ...(shared["vector-color"] !== undefined ? { vectorColorSet: vectorColorSetReport } : {}),
     ...(hasGrade ? { gradeSet: gradeSetReport } : {}),
