@@ -33,17 +33,28 @@ likeness and third-party thumbnails. They are in the private
 ## Run it
 
 ```bash
-export CONTENT_ROOT=/path/to/ai-launchpad-content WORKSPACE=/path/to/empty-dir
-docs/qualification/285/rebuild.sh all        # generate needs AI_GATEWAY_API_KEY
+export CONTENT_ROOT=/path/to/ai-launchpad-content
+docs/qualification/285/rebuild.sh all        # offline: replays from the retained records
 ```
 
-Generation is not deterministic. The build pins each selected output by its
-short hash, so it replays from the retained Job records. A fresh
-workspace generates new candidates, which need a new review.
+The retained Generation Job and matte records (`out/`, 18 Jobs with 23
+outputs and 4 mattes) hold likeness outputs, so they live in the private
+content repository at
+`assets/creator-cutouts/qualification/ply-285-rebuild/workspace/out/`.
+`WORKSPACE` defaults to that directory. Only `out/` is committed there; the
+other directories the script writes are transient.
 
-**Replay check.** A fresh workspace was given only the retained `out/`
-(Jobs and mattes), with no Gateway key. Running `all` reproduced all eight
-renders, the recovered references, and the anchor crops byte-for-byte.
+Generation is not deterministic. The build pins each selected output by its
+short hash, so it replays from those records, and `generate` skips every
+Job that is already published. To generate new candidates instead, point
+`WORKSPACE` at an empty directory and set `AI_GATEWAY_API_KEY`; the new
+candidates need a new review and new pins.
+
+**Replay check.** From that content-repository location, with
+`AI_GATEWAY_API_KEY` unset and nothing there but the committed `out/`,
+`rebuild.sh all` reproduced all eight renders, the comparison sheet and the
+three likeness sheets byte-for-byte, with no failed step. That run hit
+#351 twice; each refusal was retried once and logged.
 
 | | |
 |---|---|
@@ -150,22 +161,24 @@ approval.
 ### Bugs (not fixed here; this ticket is qualification only)
 
 1. **`composition add` with `--fit-box` plus `--shadow` or `--outline`
-   crashes with a raw TypeError**:
+   crashes with a raw TypeError** (#349):
    `rev.shadow.map is not a function` or `rev.outline.map is not a function`.
    The same facts through `layer edit`, or `--wrap-width` in place of
    `--fit-box`, work. Minimal repro:
    `ply composition add c t --text "5 HERDR" --font Archivo --font-size 60 --color "#ffffff" --fit-box 300x100 --outline "3,#0a0a0a" --x 10 --y 150`.
    Nothing is published, but the error is not a clean refusal.
 2. **A `--fit-box` text Layer renders at about half the size that `measure`
-   reports.** This holds even when the text already fits. Example: "Founder
+   reports** (#350). This holds even when the text already fits. Example: "Founder
    of The AI Launchpad", Archivo 500 at 28 px, `--fit-box 410x44`.
    `measure` reports an effective size of 28 px and 367×26 painted, the
    same as without the box, but the render paints it at about 15 px. Render
    and measure disagree, so `--fit-box` was dropped from t5.
 3. **An anchored `composition add` of a perspective Layer is refused
-   intermittently** with "no visible painted ink". The repro was 1 in 12
-   identical adds of `--text "PostgreSQL" … --perspective 0x-20 --anchor center,center`.
-   Without perspective, 12 of 12 succeed. It hit a different t1 caption on
+   intermittently** with "no visible painted ink" (#351). It needs a large
+   image in the Composition: 4 of 40 identical adds of
+   `--text "PostgreSQL" … --perspective 0x-20 --anchor center,center` over a
+   2048×1536 image were refused, 0 of 30 without `--perspective`, and 0 of 50
+   with no large image. It hit a different t1 caption on
    different runs. The refusal mutates nothing, so `rebuild.sh` retries that
    one refusal once and logs it. Full builds during this run hit it on `t1/cap3`,
    `t1/cap5` and `t1/cap1`; the final build needed no retry.

@@ -10,10 +10,15 @@
 #
 #   CONTENT_ROOT  ai-launchpad-content checkout (identity photos, cutouts,
 #                 assets/logos, assets/products, the ply-285 baseline sheets)
-#   WORKSPACE     working directory: project/ (references, crops), refs/,
-#                 anchors/, builds/ (one Project per thumbnail), out/ (Jobs, mattes)
 #   OUT           where renders and sheets go
 #                 (default: $CONTENT_ROOT/assets/creator-cutouts/qualification/ply-285-rebuild)
+#   WORKSPACE     working directory (default: $CONTENT_ROOT/assets/creator-cutouts/
+#                 qualification/ply-285-rebuild/workspace). Its out/ holds the
+#                 Generation Job and matte records the build replays from; they
+#                 contain likeness outputs, so they live in the private content
+#                 repository, which commits only out/ there. Everything else
+#                 written here is transient: project/ (references, crops), refs/,
+#                 anchors/, builds/ (one Project per thumbnail), logs/.
 #
 # Usage: rebuild.sh [refs|anchors|generate|matte|build|render|sheet|all]...
 # `generate` needs AI_GATEWAY_API_KEY in the environment and skips any Job
@@ -23,8 +28,9 @@
 # new review and new pins. Probe commands that open the render page run
 # under a 180 s alarm so a hung page cannot stall the script.
 set -u
-: "${CONTENT_ROOT:?set CONTENT_ROOT}" "${WORKSPACE:?set WORKSPACE}"
+: "${CONTENT_ROOT:?set CONTENT_ROOT}"
 OUT=${OUT:-$CONTENT_ROOT/assets/creator-cutouts/qualification/ply-285-rebuild}
+WORKSPACE=${WORKSPACE:-$CONTENT_ROOT/assets/creator-cutouts/qualification/ply-285-rebuild/workspace}
 BASE=$CONTENT_ROOT/assets/creator-cutouts/qualification/ply-285-baseline
 ID=$CONTENT_ROOT/assets/creator-cutouts/identity
 CUT=$CONTENT_ROOT/assets/creator-cutouts/approved
