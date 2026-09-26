@@ -3519,115 +3519,55 @@ export async function readLayerInternalFull(
  * Both pinned identifiers are strictly validated BEFORE any filesystem path
  * is constructed. Callers must hold the Project lock.
  */
-export async function readRevisionInternalFull(
-  projectPath: string,
-  layerId: string,
-  revisionId: string,
-): Promise<{ revision: ResolvedLayerRevision; contentBytes: Buffer; runFonts?: SnapshotRunFont[] }> {
-  if (!/^layer_[a-zA-Z0-9_]+$/.test(layerId)) {
-    throw new Error(`Invalid Layer identity "${layerId}".`);
+/**
+ * The ONE stored→resolved conversion (#349): every reader of a revision in
+ * its stored shape — the published-read path (`readRevisionInternalFull`)
+ * and the would-be-revision probes (the add path's fit refusal, the edit
+ * path's kept-region and fit probes, the divergent-perspective gate's text
+ * measure) — projects through this function and only here. The stored
+ * normalizers (each fact's shape decision: `normalizeStoredShadow`,
+ * `normalizeStoredOutline`, `normalizeStoredInnerShadow`, the typography,
+ * runs, region, and mask readers, ...) run once here, in stored order, and
+ * their values build the per-kind resolved view — so markup, measurement,
+ * and the fit derivation only ever see the resolved shape (stacked effects
+ * as the normalized lists, canonical typography, the derived fit box),
+ * never the stored single-object fold. Exactly-once: a resolved view must
+ * never re-enter — the stored normalizers refuse a length-1 list (the
+ * resolved one-effect shape) by design.
+ *
+ * `resolution` supplies what the caller owns: the Layer identity and the
+ * pinned revision id (probe paths pass the would-be revision's
+ * "unpublished" — no probe or markup reads the id), the unit's validated
+ * inner-Composition name (the read path's early unit validation; nothing
+ * else converts a unit revision today), and the verified content
+ * resolution — the image branch derives its raster/SVG meta from the
+ * bytes, the byte counts ride the view, and the content blob's path is
+ * error-message wording only. The read path's provider runs the revision
+ * hash gate and the content verification inside this function; a probe
+ * provider supplies its would-be bytes.
+ */
+export async function resolveStoredRevision(
+  revision: LayerRevision,
+  resolution: {
+    layerId: string;
+    revisionId: string;
+    unitComposition?: string;
+    /** Verified content resolution, read lazily AFTER the normalizers and
+     *  BEFORE the view assembly: the read path's provider runs the
+     *  revision-hash gate and the content verification there — the
+     *  established check order (a malformed stored field is refused before
+     *  the revision hash is consulted; a corrupted hash before any content
+     *  is read) is the probe paths' order too; a probe provider supplies
+     *  its would-be bytes without a gate. */
+    content?: () => { bytes?: Buffer; label: string } | Promise<{ bytes?: Buffer; label: string }>;
+  },
+): Promise<ResolvedLayerRevision> {
+  const { layerId, revisionId } = resolution;
+  const unitComposition = revision.kind === "unit" ? resolution.unitComposition : undefined;
+  if (revision.kind === "unit" && unitComposition === undefined) {
+    throw new Error(`Layer "${layerId}": a unit revision resolves only with its validated inner Composition name.`);
   }
-  if (!/^rev_[0-9a-f]{16}$/.test(revisionId)) {
-    throw new Error(`Invalid revision id "${revisionId}" for layer "${layerId}".`);
-  }
-  const resolvedRoot = path.resolve(projectPath);
-  const revDir = path.join(resolvedRoot, "layers", `${layerId}.revisions`);
-  const revFile = path.join(revDir, `${revisionId}.json`);
 
-  if (outsideDir(resolvedRoot, revFile)) {
-    throw new Error(`Security error: revision path for layer "${layerId}" escapes project boundary.`);
-  }
-
-  // Existence first: a missing revision gets its clear actionable failure,
-  // never a raw filesystem error. Only an existing file is judged by its
-  // resolved location, so an escaping alias is still refused.
-  try {
-    await lstat(revFile);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`Revision "${revisionId}" for layer "${layerId}" not found in project.`);
-    }
-    throw err;
-  }
-  if (await escapesDirReal(resolvedRoot, revFile)) {
-    throw new Error(`Security error: revision for layer "${layerId}" escapes project boundary.`);
-  }
-
-  const revRaw = await readFile(revFile, "utf8");
-
-  let revision: LayerRevision;
-  try {
-    revision = JSON.parse(revRaw);
-  } catch (err) {
-    throw new Error(`Malformed revision document for layer "${layerId}": ${(err as Error).message}`);
-  }
-
-  // Canonical revision shape: the document must be a valid, self-consistent
-  // revision of this Layer before anything downstream trusts it.
-  if (!revision || typeof revision !== "object" || Array.isArray(revision)) {
-    throw new Error(`Malformed revision document for "${layerId}": root must be an object.`);
-  }
-  if (!isStoredTimestamp(revision.createdAt)) {
-    throw new Error(`Malformed revision document for "${layerId}": missing or invalid createdAt.`);
-  }
-  if (revision.schemaVersion !== LAYER_SCHEMA_VERSION) {
-    throw new Error(`Unsupported revision schemaVersion ${revision.schemaVersion} for layer "${layerId}"`);
-  }
-  if (revision.layerId !== layerId) {
-    throw new Error(
-      `Malformed revision document "${revisionId}" for layer "${layerId}": layerId "${revision.layerId}" does not match.`,
-    );
-  }
-  const storedKind = (revision as { kind?: unknown }).kind;
-  if (storedKind !== "image" && storedKind !== "text" && storedKind !== "shape" && storedKind !== "unit") {
-    throw new Error(
-      `Malformed revision document "${revisionId}" for layer "${layerId}": unsupported kind "${String(storedKind)}".`,
-    );
-  }
-  // A unit revision (ADR-0026, #307) has no retained bytes and therefore no
-  // contentHash: its content fact is the inner Composition's NAME, validated
-  // here through the one name rule. A unit document carrying a contentHash
-  // is a malformed document — there is no second content representation.
-  // The raw read goes through the record view: contentHash is a fact of the
-  // byte-backed kinds only, never of a unit revision.
-  let unitComposition: string | undefined;
-  const rawContentHash = (revision as { contentHash?: unknown }).contentHash;
-  if (storedKind === "unit") {
-    if (rawContentHash !== undefined) {
-      throw new Error(
-        `Malformed revision document "${revisionId}" for layer "${layerId}": a unit revision has no contentHash — its content is the live reference to its inner Composition.`,
-      );
-    }
-    const raw = (revision as { composition?: unknown }).composition;
-    if (typeof raw !== "string") {
-      throw new Error(
-        `Malformed revision document "${revisionId}" for layer "${layerId}": a unit revision stores its inner Composition's name in "composition".`,
-      );
-    }
-    let sanitized: string;
-    try {
-      sanitized = sanitizeName(raw);
-    } catch (err) {
-      throw new Error(
-        `Malformed revision document "${revisionId}" for layer "${layerId}": "composition" is not a valid Composition name — ${(err as Error).message}`,
-      );
-    }
-    if (sanitized !== raw) {
-      throw new Error(
-        `Malformed revision document "${revisionId}" for layer "${layerId}": "composition" ${JSON.stringify(raw)} is not a valid Composition name.`,
-      );
-    }
-    unitComposition = sanitized;
-  } else if (typeof rawContentHash !== "string" || !/^[0-9a-f]{64}$/.test(rawContentHash)) {
-    throw new Error(
-      `Malformed revision document "${revisionId}" for layer "${layerId}": contentHash is not a sha-256 digest.`,
-    );
-  }
-  if (revision.kind === "text") {
-    // Canonical text content: validated here and at ingestion through the
-    // same validator — no alternate representation exists.
-    validateTextContent(revision.text, revision.fontSize, revision.color);
-  }
   // Canonical shape content (#208): validated here and at ingestion through
   // the same validator — geometry, size, radius, and fill in their canonical
   // ranges, before the revision hash is consulted.
@@ -3757,61 +3697,18 @@ export async function readRevisionInternalFull(
   // revision hash is consulted. Absence IS the no-mask form.
   const mask = normalizeStoredMask(revision);
 
-  // The stored document must hash to exactly the pinned revision id
-  if (computeRevisionHash(revision) !== revisionId) {
-    throw new Error(
-      `Corrupted revision document "${revisionId}" for layer "${layerId}": contents do not match the revision hash.`,
-    );
+  const content = (await resolution.content?.()) ?? { bytes: undefined, label: "" };
+  if ((revision.kind === "image" || revision.kind === "text") && content.bytes === undefined) {
+    throw new Error(`Layer "${layerId}": resolving a ${revision.kind} revision needs its verified content bytes.`);
   }
 
-  // Read and verify content blob — existence first, then the resolved-location
-  // gate, then the bytes (missing stays a clear failure, never raw ENOENT).
-  // A shape revision (#208, DEC-001) has no retained bytes: its content IS
-  // its parameters, hash-covered by the revision document itself, so there
-  // is no content blob to locate, bound, read, or hash-verify. A unit
-  // revision (ADR-0026, #307) likewise has no bytes: its content is the live
-  // reference to its inner Composition, resolved by the caller.
-  let contentBytes: Buffer | undefined;
-  const contentBlob = path.join(resolvedRoot, "content", typeof rawContentHash === "string" ? rawContentHash : "");
-  if (revision.kind !== "shape" && revision.kind !== "unit") {
-    if (outsideDir(resolvedRoot, contentBlob)) {
-      throw new Error(`Security error: content blob escapes project boundary.`);
-    }
-
-    try {
-      await lstat(contentBlob);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
-      }
-      throw err;
-    }
-    if (await escapesDirReal(resolvedRoot, contentBlob)) {
-      throw new Error(`Security error: content blob for layer "${layerId}" escapes project boundary.`);
-    }
-
-    try {
-      contentBytes = await readFile(contentBlob);
-    } catch {
-      throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
-    }
-
-    // Retained bytes must still hash to the content identity the revision pins
-    const actualHash = createHash("sha256").update(contentBytes).digest("hex");
-    if (actualHash !== revision.contentHash) {
-      throw new Error(
-        `Corrupted content blob "${revision.contentHash}" for layer "${layerId}": stored bytes do not match the content hash.`,
-      );
-    }
-  }
-
-  // Discriminated content resolution (#81): one resolver, one verification
-  // pass, kind-specific projection. Image revisions derive intrinsic raster
-  // facts from the verified bytes; text revisions carry their facts in the
-  // hash-covered revision document and pin the retained font bytes; shape
-  // revisions (#208) carry their parameter facts in the document with no
-  // retained bytes at all (DEC-001); unit revisions (ADR-0026, #307) carry
-  // the inner Composition's name — the live reference — with no bytes.
+  // The byte-derived facts arrive through `resolution`; everything else is
+  // a pure function of the stored document below. The per-kind projection
+  // (#81): image revisions derive intrinsic raster facts from the verified
+  // bytes; text revisions carry their facts in the hash-covered document
+  // and pin the retained font bytes; shape revisions (#208) carry their
+  // parameter facts in the document; unit revisions (ADR-0026, #307) carry
+  // the inner Composition's name — the live reference.
   const resolved: ResolvedLayerRevision =
     revision.kind === "image"
       ? (() => {
@@ -3821,10 +3718,10 @@ export async function readRevisionInternalFull(
           // vector revision needs no schema change (DEC-010). A binary blob
           // that is neither reports the raster sniff's message; a text-shaped
           // one reports the SVG parse's.
-          const rasterMeta = readRasterMeta(contentBytes!, contentBlob);
+          const rasterMeta = readRasterMeta(content.bytes!, content.label);
           const meta =
-            typeof rasterMeta === "string" && !contentBytes!.subarray(0, 512).includes(0)
-              ? readSvgMeta(contentBytes!, contentBlob)
+            typeof rasterMeta === "string" && !content.bytes!.subarray(0, 512).includes(0)
+              ? readSvgMeta(content.bytes!, content.label)
               : rasterMeta;
           if (typeof meta === "string") {
             throw new Error(`Invalid content blob "${revision.contentHash}" for layer "${layerId}": ${meta}`);
@@ -3863,7 +3760,7 @@ export async function readRevisionInternalFull(
             format: meta.format,
             width: meta.width,
             height: meta.height,
-            bytes: contentBytes!.length,
+            bytes: content.bytes!.length,
           };
         })()
       : revision.kind === "text"
@@ -3906,7 +3803,7 @@ export async function readRevisionInternalFull(
           ...(textFitBox !== undefined ? { fitWidth: textFitBox.width, fitHeight: textFitBox.height } : {}),
           ...(callerFont !== undefined ? { callerFont } : {}),
           ...(textRuns !== undefined ? { runs: textRuns } : {}),
-          fontBytes: contentBytes!.length,
+          fontBytes: content.bytes!.length,
           layoutRule: layoutRule!,
         }
       : revision.kind === "unit"
@@ -3974,12 +3871,189 @@ export async function readRevisionInternalFull(
           ...(feather !== undefined ? { feather } : {}),
           ...(mask !== undefined ? { mask } : {}),
         };
+  return resolved;
+}
+
+export async function readRevisionInternalFull(
+  projectPath: string,
+  layerId: string,
+  revisionId: string,
+): Promise<{ revision: ResolvedLayerRevision; contentBytes: Buffer; runFonts?: SnapshotRunFont[] }> {
+  if (!/^layer_[a-zA-Z0-9_]+$/.test(layerId)) {
+    throw new Error(`Invalid Layer identity "${layerId}".`);
+  }
+  if (!/^rev_[0-9a-f]{16}$/.test(revisionId)) {
+    throw new Error(`Invalid revision id "${revisionId}" for layer "${layerId}".`);
+  }
+  const resolvedRoot = path.resolve(projectPath);
+  const revDir = path.join(resolvedRoot, "layers", `${layerId}.revisions`);
+  const revFile = path.join(revDir, `${revisionId}.json`);
+
+  if (outsideDir(resolvedRoot, revFile)) {
+    throw new Error(`Security error: revision path for layer "${layerId}" escapes project boundary.`);
+  }
+
+  // Existence first: a missing revision gets its clear actionable failure,
+  // never a raw filesystem error. Only an existing file is judged by its
+  // resolved location, so an escaping alias is still refused.
+  try {
+    await lstat(revFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Revision "${revisionId}" for layer "${layerId}" not found in project.`);
+    }
+    throw err;
+  }
+  if (await escapesDirReal(resolvedRoot, revFile)) {
+    throw new Error(`Security error: revision for layer "${layerId}" escapes project boundary.`);
+  }
+
+  const revRaw = await readFile(revFile, "utf8");
+
+  let revision: LayerRevision;
+  try {
+    revision = JSON.parse(revRaw);
+  } catch (err) {
+    throw new Error(`Malformed revision document for layer "${layerId}": ${(err as Error).message}`);
+  }
+
+  // Canonical revision shape: the document must be a valid, self-consistent
+  // revision of this Layer before anything downstream trusts it.
+  if (!revision || typeof revision !== "object" || Array.isArray(revision)) {
+    throw new Error(`Malformed revision document for "${layerId}": root must be an object.`);
+  }
+  if (!isStoredTimestamp(revision.createdAt)) {
+    throw new Error(`Malformed revision document for "${layerId}": missing or invalid createdAt.`);
+  }
+  if (revision.schemaVersion !== LAYER_SCHEMA_VERSION) {
+    throw new Error(`Unsupported revision schemaVersion ${revision.schemaVersion} for layer "${layerId}"`);
+  }
+  if (revision.layerId !== layerId) {
+    throw new Error(
+      `Malformed revision document "${revisionId}" for layer "${layerId}": layerId "${revision.layerId}" does not match.`,
+    );
+  }
+  const storedKind = (revision as { kind?: unknown }).kind;
+  if (storedKind !== "image" && storedKind !== "text" && storedKind !== "shape" && storedKind !== "unit") {
+    throw new Error(
+      `Malformed revision document "${revisionId}" for layer "${layerId}": unsupported kind "${String(storedKind)}".`,
+    );
+  }
+  // A unit revision (ADR-0026, #307) has no retained bytes and therefore no
+  // contentHash: its content fact is the inner Composition's NAME, validated
+  // here through the one name rule. A unit document carrying a contentHash
+  // is a malformed document — there is no second content representation.
+  // The raw read goes through the record view: contentHash is a fact of the
+  // byte-backed kinds only, never of a unit revision.
+  let unitComposition: string | undefined;
+  const rawContentHash = (revision as { contentHash?: unknown }).contentHash;
+  if (storedKind === "unit") {
+    if (rawContentHash !== undefined) {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": a unit revision has no contentHash — its content is the live reference to its inner Composition.`,
+      );
+    }
+    const raw = (revision as { composition?: unknown }).composition;
+    if (typeof raw !== "string") {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": a unit revision stores its inner Composition's name in "composition".`,
+      );
+    }
+    let sanitized: string;
+    try {
+      sanitized = sanitizeName(raw);
+    } catch (err) {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": "composition" is not a valid Composition name — ${(err as Error).message}`,
+      );
+    }
+    if (sanitized !== raw) {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": "composition" ${JSON.stringify(raw)} is not a valid Composition name.`,
+      );
+    }
+    unitComposition = sanitized;
+  } else if (typeof rawContentHash !== "string" || !/^[0-9a-f]{64}$/.test(rawContentHash)) {
+    throw new Error(
+      `Malformed revision document "${revisionId}" for layer "${layerId}": contentHash is not a sha-256 digest.`,
+    );
+  }
+  if (revision.kind === "text") {
+    // Canonical text content: validated here and at ingestion through the
+    // same validator — no alternate representation exists.
+    validateTextContent(revision.text, revision.fontSize, revision.color);
+  }
+
+  let contentResolution: { bytes?: Buffer; label: string } | undefined;
+  // The ONE stored→resolved conversion (#349): the stored normalizers and
+  // the per-kind resolved view build in `resolveStoredRevision` — the same
+  // conversion step every would-be-revision probe path runs, so the read
+  // path and the probes can never disagree about a fact's resolved shape.
+  // The hash gate and the content verification ride the lazy content
+  // provider BELOW, so they run inside the conversion after its
+  // normalizers and before its view assembly — this path's established
+  // check order, unchanged.
+  const resolved = await resolveStoredRevision(revision, {
+    layerId,
+    revisionId,
+    unitComposition,
+    content: async () => {
+      // The stored document must hash to exactly the pinned revision id
+      if (computeRevisionHash(revision) !== revisionId) {
+        throw new Error(
+          `Corrupted revision document "${revisionId}" for layer "${layerId}": contents do not match the revision hash.`,
+        );
+      }
+
+      // Read and verify content blob — existence first, then the resolved-location
+      // gate, then the bytes (missing stays a clear failure, never raw ENOENT).
+      // A shape revision (#208, DEC-001) has no retained bytes: its content IS
+      // its parameters, hash-covered by the revision document itself, so there
+      // is no content blob to locate, bound, read, or hash-verify. A unit
+      // revision (ADR-0026, #307) likewise has no bytes: its content is the live
+      // reference to its inner Composition, resolved by the caller.
+      let contentBytes: Buffer | undefined;
+      const contentBlob = path.join(resolvedRoot, "content", typeof rawContentHash === "string" ? rawContentHash : "");
+      if (revision.kind !== "shape" && revision.kind !== "unit") {
+        if (outsideDir(resolvedRoot, contentBlob)) {
+          throw new Error(`Security error: content blob escapes project boundary.`);
+        }
+
+        try {
+          await lstat(contentBlob);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
+          }
+          throw err;
+        }
+        if (await escapesDirReal(resolvedRoot, contentBlob)) {
+          throw new Error(`Security error: content blob for layer "${layerId}" escapes project boundary.`);
+        }
+
+        try {
+          contentBytes = await readFile(contentBlob);
+        } catch {
+          throw new Error(`Content blob "${revision.contentHash}" for layer "${layerId}" missing in project.`);
+        }
+
+        // Retained bytes must still hash to the content identity the revision pins
+        const actualHash = createHash("sha256").update(contentBytes).digest("hex");
+        if (actualHash !== revision.contentHash) {
+          throw new Error(
+            `Corrupted content blob "${revision.contentHash}" for layer "${layerId}": stored bytes do not match the content hash.`,
+          );
+        }
+      }
+      return (contentResolution = { bytes: contentBytes, label: contentBlob });
+    },
+  });
 
   // Run font bytes (#297): every distinct run font override's retained
   // bytes, verified by identity at this one boundary, so paint and
   // measurement never consult the store again.
   const runFonts = await loadSnapshotRunFonts(resolvedRoot, resolved);
-  return { revision: resolved, contentBytes: contentBytes ?? Buffer.alloc(0), ...(runFonts.length > 0 ? { runFonts } : {}) };
+  return { revision: resolved, contentBytes: contentResolution?.bytes ?? Buffer.alloc(0), ...(runFonts.length > 0 ? { runFonts } : {}) };
 }
 
 /** Unlocked internal reader for Layer identity and its active revision. Callers must hold the Project lock. */
@@ -5661,8 +5735,19 @@ export async function refuseDivergentPerspectiveProjection(
     // The text extent is the measured line box, from the bytes the new
     // revision pins (the same standalone measure the region and fit
     // validations run).
+    // The would-be revision enters the measure through the ONE
+    // stored→resolved conversion (#349): a would-be revision still in its
+    // stored shape carries one-effect stacks as the single-object fold,
+    // which the markup's resolved-shape stack readers refuse; the same
+    // conversion step the read path runs makes the gate's measure see the
+    // resolved shape on both surfaces.
+    const gateRevision = await resolveStoredRevision(revision, {
+      layerId: revision.layerId,
+      revisionId: "unpublished",
+      content: () => ({ bytes: contentBytes, label: "the would-be revision's content bytes" }),
+    });
     const standalone = await measureStandaloneSnapshot(
-      { ...revision, x: 0, y: 0 } as unknown as ResolvedLayerRevision,
+      { ...gateRevision, x: 0, y: 0 },
       contentBytes,
       { ...(runFonts !== undefined && runFonts.length > 0 ? { runFonts } : {}) },
     );
@@ -6414,6 +6499,18 @@ async function buildEditedRevision(
     if (runEdits.text !== text) {
       validateTextContent(runEdits.text, fontSize, rawColor);
     }
+    // The would-be revision enters the probes (the kept-region and fit
+    // measurements below) through the ONE stored→resolved conversion (#349)
+    // the read path runs — the probes and paint only ever see the resolved
+    // shape, so a would-be revision carrying a stored one-effect stack
+    // (the single-object fold) can never reach the markup's resolved-shape
+    // stack readers as an object. The staged revision stays in its stored
+    // shape; this view is for the probes only.
+    const probeRevision = await resolveStoredRevision(revision, {
+      layerId,
+      revisionId: "unpublished",
+      content: () => ({ bytes: newTextBytes ?? prevContentBytes, label: "the would-be revision's content bytes" }),
+    });
     const unchanged =
       prevRev.layoutRule === "natural" &&
       contentHash === prevRev.contentHash &&
@@ -6470,7 +6567,7 @@ async function buildEditedRevision(
         options.runStyles !== undefined || options.runsNone !== undefined)
     ) {
       const standalone = await measureStandaloneSnapshot(
-        { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
+        { ...probeRevision, x: 0, y: 0 },
         newTextBytes ?? prevContentBytes,
         { ...(runEdits.runFonts.length > 0 ? { runFonts: runEdits.runFonts } : {}) },
       );
@@ -6496,7 +6593,7 @@ async function buildEditedRevision(
         options.runStyles !== undefined || options.runsNone !== undefined;
       if (fitRelevant) {
         const fit = await measureTextFit(
-          { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
+          { ...probeRevision, x: 0, y: 0 },
           newTextBytes ?? prevContentBytes,
           { ...(runEdits.runFonts.length > 0 ? { runFonts: runEdits.runFonts } : {}) },
         );

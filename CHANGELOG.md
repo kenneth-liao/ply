@@ -1,6 +1,28 @@
 # Changelog
 
 ## [Unreleased]
+- Fixed a one-command `composition add` with `--fit-box` plus an effect
+  option (`--shadow`, `--outline`, `--inner-shadow`) dying on a raw
+  TypeError before anything published (#349, spec #285 US-016, DEC-010):
+  before, the fit-refusal probe measured the would-be revision in its
+  stored shape, whose one-effect stacks are the canonical single-object
+  fold (#302), and the probe's markup — the resolved-shape reader every
+  published revision is parsed back through — called `.map` on the object
+  and the add exited 1 with `rev.outline.map is not a function`; a
+  fit-relevant `layer edit` composing `--fit-box` with the same options
+  and the publication gate's perspective measure crashed identically, and
+  stacked occurrences worked only because a two-or-more list happened to
+  be the resolved shape too. After, the ONE stored→resolved conversion the
+  published-read path runs (`resolveStoredRevision`, the stored
+  normalizers and the per-kind resolved view, extracted from
+  `readRevisionInternalFull` with its check order intact — the
+  normalizers before the revision-hash gate, the hash gate and content
+  verification riding its lazy content provider) converts the would-be
+  revision at every probe input: the add path's fit refusal, the edit
+  path's kept-region and fit probes, and the gate's text measure — so a
+  `--fit-box` Layer composes with every effect option on add and edit,
+  publishes its final state, and no raw exception reaches the output.
+  Version 7.4.2 (#349).
 - Fixed a `--fit-box` text Layer rendering at about half the size `measure`
   reports (#350, spec #285 US-016, DEC-010): before, `measure` built its page
   at supersample 1 while `render` built at its delivery factor (default 2,

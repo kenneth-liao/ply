@@ -638,3 +638,108 @@ test("fit box refuses malformed, zero, negative, and over-cap values with the es
   expect(addRes.stderr + addRes.stdout).toContain("require --text");
 
 }, 60_000);
+// ---------------------------------------------------------------------------
+// Fit box + every effect option, on add and edit (#349): a --fit-box Layer
+// composes with the effect options exactly as an effect edit composes with
+// a stored box (one-command add parity). The fit-refusal probe measures
+// the would-be revision, so the probe input must be the RESOLVED shape
+// every published revision reads back as — the same stored→resolved
+// conversion the read path runs — or a stored one-effect stack (the
+// single-object fold, #302) reaches the markup's resolved-shape stack
+// readers as an object and the add/edit dies on a raw TypeError.
+// ---------------------------------------------------------------------------
+
+/** The effect occurrences the add and edit surfaces accept beside
+ *  --fit-box: the three stored-fold fields (single and stacked) and the
+ *  single-fact look effects. */
+const FIT_BOX_EFFECT_OCCURRENCES: Array<{ label: string; args: string[] }> = [
+  { label: "a single outline", args: ["--outline", "3,#000000"] },
+  { label: "a single shadow", args: ["--shadow", "0,3,6,#000000"] },
+  { label: "a single inner shadow", args: ["--inner-shadow", "10,10,4,#000000"] },
+  { label: "a stacked outline pair", args: ["--outline", "3,#000000", "--outline", "1,#ffffff"] },
+  { label: "a stacked shadow pair", args: ["--shadow", "0,3,6,#000000", "--shadow", "0,1,2,#ffffff"] },
+  { label: "an edge glow", args: ["--glow", "6,2,#00ff00"] },
+  { label: "a blur", args: ["--blur", "3"] },
+  { label: "choke and feather", args: ["--choke", "1", "--feather", "2"] },
+];
+
+/** No raw exception may ever reach the output: the documented refusal
+ *  channel is a named error, never a TypeError's expression text. */
+const RAW_ERROR_PATTERN = /is not a function|TypeError/;
+
+test("one-command add composes --fit-box with every effect occurrence and publishes the final state", async () => {
+  await makeComp("fx", 900, 400);
+  for (const effect of FIT_BOX_EFFECT_OCCURRENCES) {
+    const res = await invoke([
+      "composition", "add", "fx", effect.label.replace(/\W+/g, "-"),
+      "--text", HEADLINE, "--font", "Archivo", "--font-size", "120", "--color", "#000000",
+      "--fit-box", "600x200", ...effect.args, "--project", projDir, "--json",
+    ]);
+    expect(res.code, `${effect.label}: add must succeed`).toBe(0);
+    expect(res.stderr, `${effect.label}: no raw exception reaches the output`).not.toMatch(RAW_ERROR_PATTERN);
+    const json = JSON.parse(res.stdout);
+    const rev = json.layer.currentRevision as Record<string, unknown>;
+    expect(rev.fitWidth).toBe(600);
+    expect(rev.fitHeight).toBe(200);
+    // The published Layer measures — and fits — with the effects in place:
+    // the fit derivation ran over the effect-bearing markup.
+    const m = await measure("fx", json.use.name as string);
+    expect(m.effectiveFontSize as number).toBeLessThan(120);
+    expect(m.effectiveFontSize as number).toBeGreaterThan(8);
+  }
+}, 240_000);
+
+test("a fit-relevant edit composes --fit-box with every effect occurrence", async () => {
+  await makeComp("fe", 900, 400);
+  const base = await addText("fe", "plain", ["--fit-box", "600x200"]);
+  for (const effect of FIT_BOX_EFFECT_OCCURRENCES) {
+    const res = await invoke([
+      "layer", "edit", base.layerId, "--fit-box", "600x180", ...effect.args, "--project", projDir, "--json",
+    ]);
+    expect(res.code, `${effect.label}: edit must publish`).toBe(0);
+    expect(res.stderr, `${effect.label}: no raw exception reaches the output`).not.toMatch(RAW_ERROR_PATTERN);
+    const rev = JSON.parse(res.stdout).layer.currentRevision as Record<string, unknown>;
+    expect(rev.fitWidth).toBe(600);
+    expect(rev.fitHeight).toBe(180);
+  }
+}, 240_000);
+
+/** The guard that pins the conversion to the fold, not to today's field
+ *  list (#349): the stored-fold fields are enumerated from the fold
+ *  helper's staging sites (`storedEffectStack(draft.<field>)` in
+ *  src/layer.ts — the ONE fold between the edit draft and every stored
+ *  document), and each enumerated field must survive a fit-box add. A new
+ *  stored-fold field added to the staging fold without a probe mapping
+ *  fails this test by name. */
+test("every stored-fold field enumerated from the fold helper survives a fit-box add", async () => {
+  const layerSource = await readFile(path.resolve(import.meta.dir, "../src/layer.ts"), "utf8");
+  const foldFields = [...layerSource.matchAll(/storedEffectStack\(draft\.(\w+)\)/g)].map((m) => m[1]!);
+  expect(foldFields.length, "the fold helper's staging sites must enumerate at least one field").toBeGreaterThan(0);
+
+  // The field→occurrence mapping: the CLI option that sets the field and
+  // the revision fact a surviving add must carry.
+  const FIELD_SPECS: Record<string, { option: [string, string]; fact: Record<string, unknown> }> = {
+    shadow: { option: ["--shadow", "0,3,6,#000000"], fact: { dx: 0, dy: 3, blur: 6, color: "#000000" } },
+    outline: { option: ["--outline", "3,#000000"], fact: { width: 3, color: "#000000" } },
+    innerShadow: { option: ["--inner-shadow", "10,10,4,#000000"], fact: { dx: 10, dy: 10, blur: 4, color: "#000000" } },
+  };
+  const unmapped = foldFields.filter((f) => FIELD_SPECS[f] === undefined);
+  expect(unmapped, `stored-fold field(s) without a fit-box probe mapping — extend FIELD_SPECS: ${unmapped.join(", ")}`).toEqual([]);
+
+  await makeComp("fold", 900, 400);
+  for (const field of foldFields) {
+    const spec = FIELD_SPECS[field]!;
+    const res = await invoke([
+      "composition", "add", "fold", field, "--text", HEADLINE, "--font", "Archivo",
+      "--font-size", "120", "--color", "#000000", "--fit-box", "600x200",
+      ...spec.option, "--project", projDir, "--json",
+    ]);
+    expect(res.code, `${field}: fit-box add with the stored-fold field must publish`).toBe(0);
+    expect(res.stderr).not.toMatch(RAW_ERROR_PATTERN);
+    const rev = JSON.parse(res.stdout).layer.currentRevision as Record<string, unknown>;
+    // The RESOLVED view normalizes a single effect to its one-element list
+    // (readEffectStack's fold); the stored document keeps the object form.
+    expect(rev[field]).toEqual([spec.fact]);
+    expect(rev.fitWidth).toBe(600);
+  }
+}, 240_000);

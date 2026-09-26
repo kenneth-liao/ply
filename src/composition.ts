@@ -25,6 +25,7 @@ import {
   readLayerInternalFull,
   findLayerReferrersInternal,
   resolveTextTypographyControls,
+  resolveStoredRevision,
   resolveTextWrapWidthControl,
   resolveTextFitBoxControl,
   textFitBoxNarrowerThanWrapRefusal,
@@ -1256,9 +1257,20 @@ export async function addTextLayerToComposition(
       // measure, and anchor run) derives the effective size, and text that
       // cannot fit at the minimum size is refused, naming the box and the
       // size needed. A refused add leaves no Layer, no use, and no content.
+      // The would-be revision enters the probe through the ONE
+      // stored→resolved conversion (#349) the read path runs: a would-be
+      // revision carrying a stored one-effect stack (the single-object
+      // fold) must never reach the markup's resolved-shape stack readers
+      // as an object. The staged revision stays in its stored shape; this
+      // view is for the probe only.
       if (revision.kind === "text" && revision.fitWidth !== undefined) {
+        const probeRevision = await resolveStoredRevision(revision, {
+          layerId: revision.layerId,
+          revisionId: "unpublished",
+          content: () => ({ bytes, label: "the would-be revision's content bytes" }),
+        });
         const fit = await measureTextFit(
-          { ...revision, x: 0, y: 0 } as ResolvedLayerRevision,
+          { ...probeRevision, x: 0, y: 0 },
           bytes,
           { ...(runFontsToRetain.length > 0 ? { runFonts: runFontsToRetain } : {}) },
         );
