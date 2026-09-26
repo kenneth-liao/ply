@@ -564,8 +564,10 @@ async function validateAddMask(
 /** Read the Composition names one Composition's unit uses reference
  *  (ADR-0026, #307): every use whose current revision is a unit revision
  *  contributes its inner Composition's name. Results are cached per call
- *  site's map. Callers must hold the Project lock. */
-async function unitInnerNamesOf(
+ *  site's map. Only unit Layers some Composition ACTUALLY uses contribute
+ *  an edge — an unused unit Layer reaches nothing (#341). Callers must hold
+ *  the Project lock. */
+export async function unitInnerNamesOf(
   resolvedRoot: string,
   compName: string,
   cache: Map<string, string[]>,
@@ -602,6 +604,28 @@ async function assertNoUnitCycle(
   innerName: string,
   targetName: string,
 ): Promise<void> {
+  const chain = await findUnitCycleChain(resolvedRoot, innerName, targetName);
+  if (chain !== null) {
+    throw new Error(
+      `Cannot add a unit of Composition "${innerName}" to Composition "${targetName}": ` +
+        `a Composition cannot contain itself — the use would close the cycle ${[...chain, innerName].join(" → ")} (ADR-0026 §4). ` +
+        "Nothing was published.",
+    );
+  }
+}
+
+/** The cycle question behind the check (ADR-0026 §4, #341): would an edge
+ *  `targetName → innerName` (a unit of `innerName` used by `targetName`)
+ *  close a cycle? Returns the chain of Compositions from `innerName` to
+ *  `targetName` (such as ["b"] for a → b → a; null when no cycle). Surfaces
+ *  build their own refusal wording — the unit add names the use it would
+ *  add, the unit fork names the fork it would publish. Callers must hold
+ *  the Project lock. */
+export async function findUnitCycleChain(
+  resolvedRoot: string,
+  innerName: string,
+  targetName: string,
+): Promise<string[] | null> {
   const cache = new Map<string, string[]>();
   const path: string[] = [];
   const onPath = new Set<string>();
@@ -620,14 +644,62 @@ async function assertNoUnitCycle(
     onPath.delete(node);
     return null;
   };
-  const chain = await visit(innerName);
-  if (chain !== null) {
-    throw new Error(
-      `Cannot add a unit of Composition "${innerName}" to Composition "${targetName}": ` +
-        `a Composition cannot contain itself — the use would close the cycle ${[...chain, innerName].join(" → ")} (ADR-0026 §4). ` +
-        "Nothing was published.",
-    );
+  return visit(innerName);
+}
+
+/** The transitive reach through units (ADR-0026 §4, #341): every
+ *  Composition reachable from the seeds by following unit references
+ *  BACKWARDS — composition C reaches seed D when C uses a unit Layer whose
+ *  inner Composition is D, transitively. Only unit Layers some Composition
+ *  actually uses contribute edges (an unused unit Layer reaches nothing);
+ *  the seeds themselves are never in the result (the direct referrers are
+ *  reported beside the reach, never inside it), and a Composition reached
+ *  by two paths (a diamond) appears once. Sorted, unique. Callers must hold
+ *  the Project lock. */
+export async function findCompositionsReachedThroughUnitsInternal(
+  resolvedRoot: string,
+  seeds: string[],
+): Promise<string[]> {
+  if (seeds.length === 0) return [];
+  const compDir = path.join(resolvedRoot, "compositions");
+  let entries: string[];
+  try {
+    entries = await readdir(compDir);
+  } catch (err) {
+    throw new Error(`Cannot read compositions directory: ${(err as Error).message}`);
   }
+  // One scan builds the reverse index: inner Composition name → the
+  // Compositions that use a unit of it. Only USES contribute edges, so an
+  // unused unit Layer reaches nothing.
+  const referrersOfInner = new Map<string, string[]>();
+  for (const file of entries.filter((f) => f.endsWith(".json")).sort()) {
+    const compName = path.basename(file, ".json");
+    const { comp } = await readCompositionDocument(resolvedRoot, compName);
+    for (const use of comp.layers) {
+      const layer = await readLayerInternal(resolvedRoot, use.layerId);
+      if (layer.currentRevision.kind !== "unit") continue;
+      const inner = layer.currentRevision.composition;
+      const list = referrersOfInner.get(inner);
+      if (list) {
+        if (!list.includes(compName)) list.push(compName);
+      } else {
+        referrersOfInner.set(inner, [compName]);
+      }
+    }
+  }
+  const reached: string[] = [];
+  const seen = new Set<string>(seeds);
+  const queue = [...seeds];
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    for (const next of referrersOfInner.get(node) ?? []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      reached.push(next);
+      queue.push(next);
+    }
+  }
+  return reached.sort();
 }
 
 /** The edit surface's mask resolution (ADR-0025 §5): resolve the would-be

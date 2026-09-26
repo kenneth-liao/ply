@@ -29,7 +29,7 @@ import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js"
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { measureStandaloneSnapshot, measureTextFit, transformBlowupRefusal } from "./composition-measure.js";
-import { parseCompositionDocument, readMutableComposition, readCompositionInternalFull, sanitizeName, type Composition } from "./composition.js";
+import { parseCompositionDocument, readMutableComposition, readCompositionInternalFull, sanitizeName, findCompositionsReachedThroughUnitsInternal, findUnitCycleChain, readCompositionDocument, type Composition } from "./composition.js";
 import { staticFaceAcceptedAxes, faceByContentHash, callerFontFace, verifyCallerFontResolves, resolveFace, resolveTextAxes, fontAssetBytes, type CallerFontFacts, type FontFace, type TextAxes } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
 import {
@@ -4025,6 +4025,10 @@ export interface EditLayerOptions {
   composition?: string;
   /** Fork target use local name (required with `fork`). */
   use?: string;
+  /** The unit fork's caller-supplied inner Composition name (ADR-0026 §3,
+   *  #341): required with `fork` on a unit Layer, refused without `fork`,
+   *  and refused on a non-unit fork. */
+  forkUnit?: string;
   image?: string;
   text?: string;
   font?: string;
@@ -4195,6 +4199,9 @@ function normalizeEditIntent(options: EditLayerOptions): EditIntent {
   if (options.composition !== undefined || options.use !== undefined) {
     throw new Error("--composition and --use are only valid together with --fork.");
   }
+  if (options.forkUnit !== undefined) {
+    throw new Error("--fork-unit is only valid together with --fork.");
+  }
   return { mode: "in-place" };
 }
 
@@ -4208,8 +4215,19 @@ export interface EditLayerResult {
   layer: ResolvedLayer;
   referringCompositions: string[];
   referrersCount: number;
+  /** The Compositions reached THROUGH unit references, transitively
+   *  (ADR-0026 §4, #341): the live-reference blast radius beyond the direct
+   *  referrers above. Reported on success and attached to the ISC-11
+   *  refusal; it never counts for the `--in-place` / `--fork` rule, which
+   *  still counts direct referrers only. Sorted, unique, never containing a
+   *  direct referrer. */
+  reachedThroughUnits: string[];
   /** Present only when the edit published a fork. */
   fork?: ForkInfo;
+  /** Present only when the edit published a unit fork (#341): the inner
+   *  Composition copy under the caller-supplied name — same canvas, the
+   *  same use list, the member Layers shared. */
+  forkedUnit?: { from: string; to: string };
   /**
    * Present when the edit resized the Layer (#133): the absolute effective
    * scale (auditable across repeated relative resizes) and, for image Layers,
@@ -5682,6 +5700,10 @@ async function buildEditedRevision(
    * with the bytes the NEW revision pins (the previous bytes when no font
    * edit runs), re-validating a kept region against the new extent. */
   prevContentBytes: Buffer,
+  /** The unit fork's new inner Composition name (#341): present only on a
+   *  unit fork, it replaces the stored reference in the published revision
+   *  (the fork's whole point). Absent on every other edit. */
+  unitCompositionOverride?: string,
 ): Promise<{
   revision: LayerRevision;
   unchanged: boolean;
@@ -5739,7 +5761,8 @@ async function buildEditedRevision(
     // The unit's content is its live reference (ADR-0026 §4, #307): kind
     // stability plus the shipped-facts-only rule. No content replacement of
     // any kind — the reference is set at creation and changed only by the
-    // unit fork (#341).
+    // unit fork (#341), which overrides it through
+    // unitCompositionOverride.
     if (
       options.image !== undefined ||
       options.fromGeneration !== undefined ||
@@ -5776,7 +5799,7 @@ async function buildEditedRevision(
       layerId,
       createdAt,
       kind: "unit",
-      composition: prevRev.composition,
+      composition: unitCompositionOverride ?? prevRev.composition,
       x,
       y,
       opacity,
@@ -6545,9 +6568,18 @@ async function publishForkEdit(
   target: { comp: Composition; compFile: string },
   newLayerId: string,
   revision: LayerRevision,
-  refs: { referringCompositions: string[]; referrersCount: number },
+  refs: { referringCompositions: string[]; referrersCount: number; reachedThroughUnits: string[] },
+  /** Present only on a unit fork (#341): the ORIGINAL inner Composition
+   *  document, copied verbatim (same canvas, same use list — the member
+   *  Layers stay shared) under `unitFork.to` before the Layer fork stages.
+   *  Staged, resolved, and rolled back with the rest — one publication. */
+  innerCopySource?: Composition,
+  unitFork?: { from: string; to: string },
 ): Promise<EditLayerResult> {
   const { comp, compFile } = target;
+  const innerCopyFile = unitFork !== undefined
+    ? path.join(resolvedRoot, "compositions", `${unitFork.to}.json`)
+    : undefined;
   const revHash = computeRevisionHash(revision);
   const revDir = path.join(resolvedRoot, "layers", `${newLayerId}.revisions`);
   const revFile = path.join(revDir, `${revHash}.json`);
@@ -6555,9 +6587,23 @@ async function publishForkEdit(
 
   await mkdir(revDir, { recursive: true });
 
+  let stagedInnerCopy = false;
   let stagedRevision = false;
   let stagedIdentity = false;
   try {
+    // The inner copy stages FIRST (ADR-0026 §4, #341): a unit Layer is
+    // never published without its inner Composition. The copy is verbatim
+    // except for the name — same canvas, the same use list referring to the
+    // same member Layers.
+    if (innerCopyFile !== undefined && innerCopySource !== undefined && unitFork !== undefined) {
+      const innerCopy: Composition = {
+        ...innerCopySource,
+        name: unitFork.to,
+      };
+      await atomicCreate(innerCopyFile, JSON.stringify(innerCopy, null, 2) + "\n");
+      stagedInnerCopy = true;
+    }
+
     await atomicCreate(revFile, JSON.stringify(revision, null, 2) + "\n");
     stagedRevision = true;
 
@@ -6583,6 +6629,9 @@ async function publishForkEdit(
 
     await atomicReplace(compFile, JSON.stringify(updatedComp, null, 2) + "\n");
   } catch (err) {
+    if (stagedInnerCopy && innerCopyFile !== undefined) {
+      await unlink(innerCopyFile).catch(() => {});
+    }
     if (stagedIdentity) {
       await unlink(identityFile).catch(() => {});
     }
@@ -6598,7 +6647,9 @@ async function publishForkEdit(
     layer,
     referringCompositions: refs.referringCompositions,
     referrersCount: refs.referrersCount,
+    reachedThroughUnits: refs.reachedThroughUnits,
     fork: { previousLayerId: originalLayerId, composition: fork.composition, use: fork.use },
+    ...(unitFork !== undefined ? { forkedUnit: unitFork } : {}),
   };
 }
 
@@ -6680,19 +6731,30 @@ export async function editLayerInternal(
   // 1. Authoritative referrer discovery under the Project lock (fail-closed)
   const referringCompositions = await findLayerReferrersInternal(resolvedRoot, layerId);
   const referrersCount = referringCompositions.length;
+  // The transitive reach through units (ADR-0026 §4, #341): reported beside
+  // the direct referrers on success and on the ISC-11 refusal, never
+  // counted by the rule itself.
+  const reachedThroughUnits = await findCompositionsReachedThroughUnitsInternal(resolvedRoot, referringCompositions);
 
   // 2. Blast-radius guard: in-place editing only; a fork changes exactly one
   //    use in one Composition, so it never needs the propagation flag.
   if (intent.mode === "in-place" && referrersCount > 1 && !options.inPlace) {
     const namesList = referringCompositions.map((n) => `"${n}"`).join(", ");
+    const reachPhrase = reachedThroughUnits.length > 0
+      ? ` The edit also reaches ${reachedThroughUnits.length} Composition${reachedThroughUnits.length === 1 ? "" : "s"} through units, transitively: ` +
+        reachedThroughUnits.map((n) => `"${n}"`).join(", ") + "."
+      : "";
     const err = new Error(
       `Layer "${layerId}" is referenced by ${referrersCount} Compositions (${namesList}). ` +
-        `Editing it in-place will affect all of them. Pass --in-place to confirm, or fork into an independent Layer.`,
+        `Editing it in-place will affect all of them. Pass --in-place to confirm, or fork into an independent Layer.` +
+        reachPhrase,
     );
-    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referringCompositions =
+    (err as unknown as { referringCompositions: string[]; referrersCount: number; reachedThroughUnits: string[] }).referringCompositions =
       referringCompositions;
-    (err as unknown as { referringCompositions: string[]; referrersCount: number }).referrersCount =
+    (err as unknown as { referringCompositions: string[]; referrersCount: number; reachedThroughUnits: string[] }).referrersCount =
       referrersCount;
+    (err as unknown as { referringCompositions: string[]; referrersCount: number; reachedThroughUnits: string[] }).reachedThroughUnits =
+      reachedThroughUnits;
     throw err;
   }
 
@@ -6818,24 +6880,61 @@ export async function editLayerInternal(
     shared.flip !== undefined ? { flip: shared.flip as "horizontal" | "vertical" | "both" | "none" } : undefined;
 
   if (intent.mode === "fork") {
-    // The unit fork (ADR-0026 §3/§4, #341): forking a unit Layer also copies
-    // its inner Composition under a caller-supplied name, with clash and
-    // cycle refusals before anything is published. #307 refuses the edit by
-    // name — the decision is recorded in the ADR; the mechanism ships in
-    // #341 — never a partial fork that copies the Layer but not the unit
-    // semantics.
-    if (prevRev.kind === "unit") {
-      throw new Error(
-        `--fork on a unit Layer is not supported yet: forking a unit also copies its inner Composition under a caller-supplied name (ADR-0026 §3) — that is the unit fork, ticket #341, not built yet. ` +
-          `Layer "${layerId}" is a unit referencing Composition "${prevRev.composition}"; nothing was published.`,
-      );
-    }
     // Canonical target/use→original-id validation before any content work.
     const target = await resolveForkTarget(resolvedRoot, intent.composition, intent.use, layerId);
 
     // New identity + edited revision through the shared canonical builder.
     const newLayerId = generateLayerId();
     const createdAt = new Date().toISOString();
+    // The unit fork (ADR-0026 §3/§4, #341): forking a unit Layer also copies
+    // its inner Composition under the caller-supplied name — same canvas,
+    // the same use list, the member Layers shared — and the forked unit
+    // Layer's revision references the new name. One publication: the name
+    // clash and the cycle check refuse before ANYTHING stages (never a
+    // partial fork that copies the Layer but not the unit semantics).
+    let forkedUnit: { from: string; to: string } | undefined;
+    let innerCopySource: Composition | undefined;
+    if (prevRev.kind === "unit") {
+      if (options.forkUnit === undefined || options.forkUnit.trim() === "") {
+        throw new Error(
+          `Forking a unit Layer requires --fork-unit <name> (ADR-0026 §3, #341): name the new inner Composition the fork copies. ` +
+            `Layer "${layerId}" is a unit referencing Composition "${prevRev.composition}"; nothing was published.`,
+        );
+      }
+      const newInner = sanitizeName(options.forkUnit);
+      // The original inner Composition must exist — the fork copies it.
+      innerCopySource = (await readCompositionDocument(resolvedRoot, prevRev.composition)).comp;
+      // The name clash: a fork never silently renames (ADR-0026 §4).
+      const clashFile = path.join(resolvedRoot, "compositions", `${newInner}.json`);
+      try {
+        await lstat(clashFile);
+        throw new Error(
+          `Cannot fork unit Layer "${layerId}": Composition "${newInner}" already exists in project (ADR-0026 §4, #341). ` +
+            "A fork never renames — choose another --fork-unit name. Nothing was published.",
+        );
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+      }
+      // The cycle check: the forked use creates the edge
+      // target → new-inner; if the new inner (a copy of the original, with
+      // the same unit edges) already reaches the target, the fork would
+      // close a cycle — refused before anything stages, naming the chain.
+      // The copy's reachability equals the original's (same use list, the
+      // same unit edges), so the walk starts at the ORIGINAL inner; the
+      // display rewrites the path's start to the copy's name.
+      const chain = await findUnitCycleChain(resolvedRoot, prevRev.composition, intent.composition);
+      if (chain !== null) {
+        const display = [intent.composition, newInner, ...chain.slice(1)];
+        throw new Error(
+          `Cannot fork unit Layer "${layerId}" to inner Composition "${newInner}": ` +
+            `a Composition cannot contain itself — the fork would close the cycle ${display.join(" → ")} (ADR-0026 §4, #341). ` +
+            "Nothing was published.",
+        );
+      }
+      forkedUnit = { from: prevRev.composition, to: newInner };
+    }
     const { revision, mattedFrom, retainedGeneration, shapeEdited, regionCarried } = await buildEditedRevision(
       resolvedRoot,
       prevRev,
@@ -6845,6 +6944,7 @@ export async function editLayerInternal(
       shared,
       draft,
       current.contentBytes,
+      forkedUnit?.to,
     );
     // An explicit fork always publishes the new identity, even when the
     // edited revision has no other changes (documented no-content-change
@@ -6856,7 +6956,8 @@ export async function editLayerInternal(
     const forkResult = await publishForkEdit(resolvedRoot, layerId, intent, target, newLayerId, revision, {
       referringCompositions,
       referrersCount,
-    });
+      reachedThroughUnits,
+    }, innerCopySource, forkedUnit);
     const withResized = hasResize ? { ...forkResult, resized: resizedReport } : forkResult;
     const withRotated = hasRotate ? { ...withResized, rotated: rotatedReport } : withResized;
     const withFlipped = flippedReport ? { ...withRotated, flipped: flippedReport } : withRotated;
@@ -6902,6 +7003,7 @@ export async function editLayerInternal(
       layer: resolved,
       referringCompositions,
       referrersCount,
+      reachedThroughUnits,
       ...(hasResize ? { resized: resizedReport } : {}),
       ...(hasRotate ? { rotated: rotatedReport } : {}),
       ...(flippedReport ? { flipped: flippedReport } : {}),
@@ -6963,6 +7065,7 @@ export async function editLayerInternal(
     layer: updatedLayer,
     referringCompositions,
     referrersCount,
+    reachedThroughUnits,
     ...(hasResize ? { resized: resizedReport } : {}),
     ...(hasRotate ? { rotated: rotatedReport } : {}),
     ...(flippedReport ? { flipped: flippedReport } : {}),

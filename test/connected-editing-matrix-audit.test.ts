@@ -179,18 +179,29 @@ const audit: Array<{ suite: string; markers: string[] }> = [
   },
   {
     // The unit Layer kind (ADR-0026, #307): several Layers transform and
-    // adjust as one unit — the probe, the shipped/refused fact gates, the
-    // lifecycle refusals, and the nested-pin replay each live in their own
-    // suite; this row records the ownership.
+    // adjust as one unit — the probe, the shipped/refused fact gates, and
+    // the lifecycle refusals each live in their own suite; this row records
+    // the ownership.
     suite: "layer-unit.test.ts",
     markers: [
-      "--fork on a unit Layer is refused by name, pointing at the missing unit fork",
+      "--fork on a unit Layer is no longer refused by name: the unit fork ships (#341)",
+    ],
+  },
+  {
+    // The unit fork (#341, ADR-0026 §3/§4): the caller-supplied inner name,
+    // the shared members, and the one-publication clash/cycle refusals.
+    suite: "layer-unit-fork.test.ts",
+    markers: [
+      "the unit fork copies the inner use list, keeps members shared, and reports the fork",
+      "a name clash refuses before anything is published",
+      "a cycle refuses before anything is published, naming the chain",
     ],
   },
   {
     suite: "layer-unit-edit.test.ts",
     markers: [
       "shipped transform facts apply on a unit: rotate, flip, scale, scale-to, resize",
+      "the ISC-11 refusal reports the transitive reach next to the direct referrers",
     ],
   },
   {

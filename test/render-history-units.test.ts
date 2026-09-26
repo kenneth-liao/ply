@@ -171,6 +171,24 @@ test("TEST-003: replay is byte-identical after a member edit, an inner use-list 
   expect(await readFile(JSON.parse(res.stdout).replay.output)).toEqual(original);
 });
 
+test("TEST-003: replay is byte-identical after a unit fork", async () => {
+  await makeCardUnit();
+  const { png, manifest } = await render("outer");
+  const original = await readFile(png);
+
+  // Forking the unit (which copies the inner Composition and retargets the
+  // outer use) must not move the retained Render: replay paints from the
+  // pins, never from the current documents.
+  const res = await invoke([
+    "layer", "edit", "outer/tile", "--fork", "--fork-unit", "inner-copy",
+    "--rotate", "90", "--project", projDir, "--json",
+  ]);
+  expect(res.code).toBe(0);
+  const replay = await invoke(["composition", "replay", manifest, "--project", projDir, "--json"]);
+  expect(replay.code).toBe(0);
+  expect(await readFile(JSON.parse(replay.stdout).replay.output)).toEqual(original);
+});
+
 test("a replayed render's own manifest carries the same nested pins (replay chains)", async () => {
   await makeCardUnit(true);
   const { manifest } = await render("outer");
