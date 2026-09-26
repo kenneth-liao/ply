@@ -196,17 +196,37 @@ test("replay survives Project relocation", async () => {
 test("a hand-edited manifest pinning a unit cycle is refused at replay", async () => {
   await makeCardUnit();
   const { manifest, doc } = await render("outer");
-  // Hand-edit the manifest: the inner member list pins a use of the outer
-  // unit Layer itself (inner → outer → inner).
+  // Hand-edit the manifest to close the cycle the add surface can never
+  // create: the unit's nested pin gains a member that is itself a unit of
+  // "outer" (inner → outer → inner). The pin for that member carries its
+  // OWN nested unit pin, so replay's pinned-history cycle guard — seeded
+  // with the manifest composition — fires on the closing edge, before any
+  // paint.
+  // Hand-edit the manifest to close the cycle the add surface can never
+  // create: the unit's nested pin gains a member that is a unit of "inner"
+  // itself (the one-step case, inner → inner), carrying its OWN nested unit
+  // pin so the pinned data is self-consistent. Replay's pinned-history
+  // cycle guard — seeded with the manifest composition — fires on the
+  // closing edge, before any paint.
   const tile = (doc.layers as Record<string, unknown>[]).find((l) => l.name === "tile")!;
   const unit = tile.unit as Record<string, unknown>;
   const unitLayerId = tile.layerId as string;
   const unitRevisionId = tile.revisionId as string;
   (unit.layers as Record<string, unknown>[]).push({
-    name: "cycle", layerId: unitLayerId, revisionId: unitRevisionId,
+    name: "cycle",
+    layerId: unitLayerId,
+    revisionId: unitRevisionId,
+    unit: {
+      composition: "inner",
+      canvas: { width: 200, height: 120 },
+      layers: [],
+    },
   });
   await writeFile(manifest, JSON.stringify(doc, null, 2) + "\n");
   const res = await invoke(["composition", "replay", manifest, "--project", projDir, "--json"]);
   expect(res.code).not.toBe(0);
-  expect(res.stdout + res.stderr).toContain("cycle");
+  // The pinned-history cycle guard's own refusal — not a downstream paint
+  // failure — names the chain.
+  expect(res.stdout + res.stderr).toContain("Unit cycle in pinned history");
+  expect(res.stdout + res.stderr).toContain("outer → inner → inner");
 });

@@ -356,7 +356,11 @@ export async function resolveHistoricalLayers(
   resolvedRoot: string,
   manifest: RenderManifestDocument,
 ): Promise<SnapshotLayer[]> {
-  return resolveHistoricalLayersFrom(manifest.layers, [], resolvedRoot);
+  // The stack is seeded with the manifest's own composition: the root is
+  // the Composition being painted, so a pin whose inner chain leads back to
+  // it is a cycle at the FIRST closing edge (root → unit → root), exactly
+  // as the live snapshot resolver treats the composition it is painting.
+  return resolveHistoricalLayersFrom(manifest.layers, [manifest.composition], resolvedRoot);
 }
 
 async function resolveHistoricalLayersFrom(
