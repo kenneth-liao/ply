@@ -1,6 +1,31 @@
 # Changelog
 
 ## [Unreleased]
+- Added unit Layers (ADR-0026, spec #285 US-018/ISC-36, #307):
+  `composition add <comp> <name> --unit <composition>` adds a Layer whose
+  content is a LIVE reference to another Composition in the same Project —
+  several Layers transform and adjust as one unit with one edit while each
+  member stays individually editable in its own Composition, and nothing is
+  flattened (ISC-5). The unit's revision stores the inner Composition's
+  name; its own transform and adjustment facts (`--x/--y`, `--rotate`,
+  `--flip`, `--scale`/`--scale-to`/`--resize`, `--opacity`, `--blend`, and
+  the grade controls) are `layer edit` facts applied to the inner composite
+  as one Layer, and every other fact (`--anchor`, `--skew`/`--perspective`,
+  the effects, the visible region, `--mask`, and every content option) is
+  refused by name (ADR-0026 §4). The inner composite paints at the unit's
+  painted size and the render's supersample factor and is never stored;
+  members blend against each other inside the unit and the unit blends as
+  one against the backdrop; a member's mask resolves inside the inner
+  Composition and never crosses the unit boundary. A Composition can never
+  contain itself — refused before publication and again at
+  paint/measure/render, naming the chain. `composition delete` refuses
+  while any unit Layer (used or not) refers to the Composition;
+  cross-Project import of a Composition that uses a unit is refused.
+  `measure` reports the unit naming its inner Composition. A Render pins
+  the unit's nested state (schemaVersion 2, written only when a unit is
+  pinned) and replays byte-identically after a member edit, an inner
+  use-list edit, or a unit edit (TEST-003). The unit fork and
+  transitive-reach reporting are ticket #341. Version 7.3.0 (#307).
 - Added Layer masks (BREAKING: `measure --json` report shape grew — see
   below; #305, spec #285 US-009, ISC-48, DEC-007,
   ADR-0025): `--mask <use-name>` on `composition add` and `layer edit`

@@ -35,6 +35,18 @@ full Layer kind: it renders, measures, shares, forks, imports, and replays
 like any other Layer. A full-canvas background is an ordinary shape Layer
 sized to the canvas — there is no separate background concept.
 
+**Unit**:
+A Layer whose content is a live reference to another Composition in the same
+Project (ADR-0026). The unit's revision stores the inner Composition's name —
+never a copy of its contents — so editing the inner Composition updates every
+place the unit is used, while each member stays individually editable there
+with every existing command. The unit's own transform and adjustment facts
+apply to the inner composite as one Layer at paint time; the composite is
+never stored. A Composition can never contain itself, directly or
+transitively.
+_Avoid_: a group primitive, flattening for reuse, per-use overrides, baked
+composites
+
 **Fill**:
 How a shape Layer's region or a text Layer's glyphs are painted: one
 discriminated value — a solid colour, a linear gradient, or a radial gradient.

@@ -275,6 +275,15 @@ export async function resolveAnchoredPlacement(
       if (!use) {
         throw new Error(`Layer "${layerId}" is not part of composition "${comp}".`);
       }
+      // Anchored placement on a unit is refused by name (ADR-0026 §4, #307):
+      // #307 ships plain placement on a unit; anchored placement joins a
+      // later ticket. Nothing was published (this is a read-only query).
+      if (use.revision.kind === "unit") {
+        throw new Error(
+          `--anchor is not supported on a unit Layer (ADR-0026 §4, #307): Layer "${layerId}" is a unit referencing Composition "${use.revision.composition}" — ` +
+            "units take plain --x/--y placement in #307; anchored placement on units is a later ticket. Nothing was published.",
+        );
+      }
       contextSnapshots.push({
         name: use.name,
         canvas: full.canvas,

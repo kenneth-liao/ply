@@ -29,7 +29,7 @@ import { atomicCreate, atomicReplace, withProjectLock } from "./project-lock.js"
 import { resolveProjectRoot } from "./project.js";
 import { withRenderPage } from "./browser.js";
 import { measureStandaloneSnapshot, measureTextFit, transformBlowupRefusal } from "./composition-measure.js";
-import { parseCompositionDocument, readMutableComposition, readCompositionInternalFull, type Composition } from "./composition.js";
+import { parseCompositionDocument, readMutableComposition, readCompositionInternalFull, sanitizeName, type Composition } from "./composition.js";
 import { staticFaceAcceptedAxes, faceByContentHash, callerFontFace, verifyCallerFontResolves, resolveFace, resolveTextAxes, fontAssetBytes, type CallerFontFacts, type FontFace, type TextAxes } from "./fonts.js";
 import { readCallerFontFile } from "./font-file.js";
 import {
@@ -664,7 +664,37 @@ export interface LayerShapeRevision extends LayerRevisionBase {
   fill: LayerFill;
 }
 
-export type LayerRevision = LayerImageRevision | LayerTextRevision | LayerShapeRevision;
+/**
+ * A unit Layer revision (ADR-0026, spec #285 US-018/ISC-36, #307): a Layer
+ * whose content is a LIVE REFERENCE to another Composition in the same
+ * Project. The revision stores the inner Composition's NAME — never a copy
+ * of its contents and never a pinned inner revision — so the revision is
+ * immutable (ADR-0013) while what it paints is live: editing the inner
+ * Composition updates every place the unit is used without advancing this
+ * revision.
+ *
+ * There are no retained bytes: the unit has no `contentHash` and no content
+ * blob. The revision hash appends the inner name in a `:unit(...)` field, so
+ * a forked unit's revision (which references a new inner Composition, #341)
+ * hashes differently from its origin's.
+ *
+ * #307 ships the unit transforms and adjustments (placement, rotation,
+ * flip, scale, opacity, blend, grade) through the shared LayerRevisionBase
+ * facts; every other fact is refused on a unit by name until a later ticket
+ * ships it (ADR-0026 §4). The unit's content box is the inner
+ * Composition's canvas (§3 bounds, extensible).
+ */
+export interface LayerUnitRevision extends LayerRevisionBase {
+  kind: "unit";
+  /** The inner Composition's name — the live reference. A valid
+   *  Composition name inside the same Project (the one name rule).
+   *  Validated at ingestion and at this reader's kind gate; the missing-
+   *  Composition and cycle refusals fire at paint, measure, and render
+   *  time (ADR-0026 §4), never a silent empty paint. */
+  composition: string;
+}
+
+export type LayerRevision = LayerImageRevision | LayerTextRevision | LayerShapeRevision | LayerUnitRevision;
 
 /** The shape geometries (#208, DEC-002): arbitrary shapes arrive as vector
  *  files (US-004); Ply gains no path or drawing language. */
@@ -1705,7 +1735,8 @@ type ResolvedEffectStacks = {
 export type ResolvedLayerRevision =
   | (Omit<LayerImageRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; format: "png" | "jpeg" | "webp" | "svg"; width: number; height: number; bytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number })
   | (Omit<LayerTextRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; fontBytes: number; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number; layoutRule: NormalizedTextLayoutRule })
-  | (Omit<LayerShapeRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number });
+  | (Omit<LayerShapeRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number })
+  | (Omit<LayerUnitRevision, "shadow" | "outline" | "innerShadow"> & ResolvedEffectStacks & { revisionId: string; scaleX: number; scaleY: number; rotationDeg: number; flipX: boolean; flipY: boolean; skewXDeg: number; skewYDeg: number; perspectiveTiltXDeg: number; perspectiveTiltYDeg: number });
 
 export interface ResolvedLayer {
   id: string;
@@ -3168,7 +3199,13 @@ export function normalizeStoredTextLayoutRule(revision: { layoutRule?: unknown }
  * appended only when present, so revisions written before #294 keep their
  * exact ids (#294, spec #285 DEC-005, ADR-0017 amendment). */
 export function computeRevisionHash(rev: LayerRevision): string {
-  const base = `${rev.layerId}:${rev.kind}:${rev.contentHash}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
+  // A unit revision (ADR-0026, #307) has no contentHash: its content identity
+  // is the inner Composition's name. Every other kind pins retained bytes by
+  // their sha-256 — the expression below evaluates to the same string for
+  // those kinds as before units existed, so existing revision ids are
+  // byte-identical.
+  const contentIdentity = rev.kind === "unit" ? `unit:${rev.composition}` : String(rev.contentHash);
+  const base = `${rev.layerId}:${rev.kind}:${contentIdentity}:${rev.x}:${rev.y}:${rev.opacity}:${rev.createdAt}`;
   const textFields = rev.kind === "text" ? `:${rev.text}:${rev.fontSize}:${textFillIdentityString(rev.color)}` : "";
   const scaleFields =
     rev.scaleX !== undefined || rev.scaleY !== undefined ? `:${rev.scaleX}:${rev.scaleY}` : "";
@@ -3294,6 +3331,11 @@ export function computeRevisionHash(rev: LayerRevision): string {
   const mask = normalizeStoredMask(rev);
   const maskField = mask !== undefined ? `:mask(${mask})` : "";
   const featherField = feather !== undefined ? `:feather(${feather})` : "";
+  // The unit reference (ADR-0026, #307): appended only on a unit revision —
+  // the inner Composition's name is the content fact (use names and
+  // Composition names are hash-safe under the one name rule), so
+  // non-unit revisions keep their exact pre-unit ids.
+  const unitField = rev.kind === "unit" ? `:unit(${rev.composition})` : "";
   // The text layout rule (#287, spec #285 DEC-001, ADR-0017 amendment):
   // appended only when "natural", so revisions written before #287 keep their
   // exact ids.
@@ -3340,7 +3382,7 @@ export function computeRevisionHash(rev: LayerRevision): string {
           })
           .join(";")})`
       : "";
-  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${innerShadowField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${chokeField}${featherField}${maskField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
+  return `rev_${createHash("sha256").update(`${base}${textFields}${scaleFields}${rotationField}${flipFields}${skewFields}${perspectiveFields}${shadowField}${outlineField}${innerShadowField}${regionField}${textAxesFields}${typographyFields}${callerFontFields}${vectorColorFields}${shapeFieldsFields}${gradeField}${blendField}${glowField}${blurField}${chokeField}${featherField}${maskField}${unitField}${layoutRuleField}${wrapWidthField}${fitBoxField}${runsField}`).digest("hex").slice(0, 16)}`;
 }
 
 /** Generate a unique stable Layer ID. */
@@ -3517,12 +3559,46 @@ export async function readRevisionInternalFull(
     );
   }
   const storedKind = (revision as { kind?: unknown }).kind;
-  if (storedKind !== "image" && storedKind !== "text" && storedKind !== "shape") {
+  if (storedKind !== "image" && storedKind !== "text" && storedKind !== "shape" && storedKind !== "unit") {
     throw new Error(
       `Malformed revision document "${revisionId}" for layer "${layerId}": unsupported kind "${String(storedKind)}".`,
     );
   }
-  if (typeof revision.contentHash !== "string" || !/^[0-9a-f]{64}$/.test(revision.contentHash)) {
+  // A unit revision (ADR-0026, #307) has no retained bytes and therefore no
+  // contentHash: its content fact is the inner Composition's NAME, validated
+  // here through the one name rule. A unit document carrying a contentHash
+  // is a malformed document — there is no second content representation.
+  // The raw read goes through the record view: contentHash is a fact of the
+  // byte-backed kinds only, never of a unit revision.
+  let unitComposition: string | undefined;
+  const rawContentHash = (revision as { contentHash?: unknown }).contentHash;
+  if (storedKind === "unit") {
+    if (rawContentHash !== undefined) {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": a unit revision has no contentHash — its content is the live reference to its inner Composition.`,
+      );
+    }
+    const raw = (revision as { composition?: unknown }).composition;
+    if (typeof raw !== "string") {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": a unit revision stores its inner Composition's name in "composition".`,
+      );
+    }
+    let sanitized: string;
+    try {
+      sanitized = sanitizeName(raw);
+    } catch (err) {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": "composition" is not a valid Composition name — ${(err as Error).message}`,
+      );
+    }
+    if (sanitized !== raw) {
+      throw new Error(
+        `Malformed revision document "${revisionId}" for layer "${layerId}": "composition" ${JSON.stringify(raw)} is not a valid Composition name.`,
+      );
+    }
+    unitComposition = sanitized;
+  } else if (typeof rawContentHash !== "string" || !/^[0-9a-f]{64}$/.test(rawContentHash)) {
     throw new Error(
       `Malformed revision document "${revisionId}" for layer "${layerId}": contentHash is not a sha-256 digest.`,
     );
@@ -3672,10 +3748,12 @@ export async function readRevisionInternalFull(
   // gate, then the bytes (missing stays a clear failure, never raw ENOENT).
   // A shape revision (#208, DEC-001) has no retained bytes: its content IS
   // its parameters, hash-covered by the revision document itself, so there
-  // is no content blob to locate, bound, read, or hash-verify.
+  // is no content blob to locate, bound, read, or hash-verify. A unit
+  // revision (ADR-0026, #307) likewise has no bytes: its content is the live
+  // reference to its inner Composition, resolved by the caller.
   let contentBytes: Buffer | undefined;
-  const contentBlob = path.join(resolvedRoot, "content", revision.contentHash);
-  if (revision.kind !== "shape") {
+  const contentBlob = path.join(resolvedRoot, "content", typeof rawContentHash === "string" ? rawContentHash : "");
+  if (revision.kind !== "shape" && revision.kind !== "unit") {
     if (outsideDir(resolvedRoot, contentBlob)) {
       throw new Error(`Security error: content blob escapes project boundary.`);
     }
@@ -3712,7 +3790,8 @@ export async function readRevisionInternalFull(
   // facts from the verified bytes; text revisions carry their facts in the
   // hash-covered revision document and pin the retained font bytes; shape
   // revisions (#208) carry their parameter facts in the document with no
-  // retained bytes at all (DEC-001).
+  // retained bytes at all (DEC-001); unit revisions (ADR-0026, #307) carry
+  // the inner Composition's name — the live reference — with no bytes.
   const resolved: ResolvedLayerRevision =
     revision.kind === "image"
       ? (() => {
@@ -3809,6 +3888,33 @@ export async function readRevisionInternalFull(
           ...(textRuns !== undefined ? { runs: textRuns } : {}),
           fontBytes: contentBytes!.length,
           layoutRule: layoutRule!,
+        }
+      : revision.kind === "unit"
+      ? {
+          // Unit revision (ADR-0026, #307): the inner Composition's name is
+          // the content fact; no bytes exist to count or verify. The shared
+          // placement/transform/adjustment facts ride the base, validated by
+          // the same normalizers above.
+          schemaVersion: revision.schemaVersion,
+          revisionId,
+          layerId: revision.layerId,
+          createdAt: revision.createdAt,
+          kind: revision.kind,
+          composition: unitComposition!,
+          x: revision.x,
+          y: revision.y,
+          opacity: revision.opacity,
+          scaleX: scale.scaleX,
+          scaleY: scale.scaleY,
+          rotationDeg,
+          flipX: flip.flipX,
+          flipY: flip.flipY,
+          skewXDeg: skew.skewXDeg,
+          skewYDeg: skew.skewYDeg,
+          perspectiveTiltXDeg: perspective.perspectiveTiltXDeg,
+          perspectiveTiltYDeg: perspective.perspectiveTiltYDeg,
+          ...(grade !== undefined ? { grade } : {}),
+          ...(blend !== undefined ? { blend } : {}) as { blend?: StoredLayerBlendMode },
         }
       : {
           // Shape revision (#208): the parameter facts ride in the document;
@@ -4299,7 +4405,7 @@ function resolveEditPlacement(options: EditLayerOptions, prevRev: LayerRevision)
  *  call sites cannot drift, and the wording stays byte-identical across
  *  the surfaces by construction. */
 export function coverKindGate(
-  kind: "image" | "text" | "shape",
+  kind: "image" | "text" | "shape" | "unit",
   layerId: string,
 ): asserts kind is "image" {
   if (kind === "text") {
@@ -4310,6 +4416,11 @@ export function coverKindGate(
   if (kind === "shape") {
     throw new Error(
       `--cover-to works on image Layers only: Layer "${layerId}" is a shape Layer — use --resize-to or --scale.`,
+    );
+  }
+  if (kind === "unit") {
+    throw new Error(
+      `--cover-to works on image Layers only: Layer "${layerId}" is a unit Layer — use --resize-to or --scale.`,
     );
   }
 }
@@ -5319,6 +5430,11 @@ export function resolveEditScale(
       `--resize-to needs an intrinsic pixel size: Layer "${layerId}" is a text Layer — use --resize <factor>.`,
     );
   }
+  if (prevRev.kind === "unit") {
+    throw new Error(
+      `--resize-to needs an intrinsic pixel size: Layer "${layerId}" is a unit Layer — use --scale or --scale-to (ADR-0026 §4, #307).`,
+    );
+  }
   const { width, height } = options.resizeTo!;
   for (const [label, value] of [["width", width], ["height", height]] as const) {
     if (value !== undefined && (!Number.isFinite(value) || value <= 0 || value > MAX_DIMENSION)) {
@@ -5589,11 +5705,77 @@ async function buildEditedRevision(
     options.fill !== undefined
   ) {
     if (prevRev.kind !== "shape") {
-      const kindPhrase = prevRev.kind === "image" ? "an image Layer" : "a text Layer";
+      const kindPhrase =
+        prevRev.kind === "image" ? "an image Layer"
+        : prevRev.kind === "unit" ? "a unit Layer"
+        : "a text Layer";
       throw new Error(
         `Cannot edit shape parameters on ${kindPhrase}. Layer "${layerId}" is ${kindPhrase} — a Layer's kind is stable across edits; add a shape Layer instead.`,
       );
     }
+  }
+
+  if (prevRev.kind === "unit") {
+    // The unit's content is its live reference (ADR-0026 §4, #307): kind
+    // stability plus the shipped-facts-only rule. No content replacement of
+    // any kind — the reference is set at creation and changed only by the
+    // unit fork (#341).
+    if (
+      options.image !== undefined ||
+      options.fromGeneration !== undefined ||
+      options.fromMatte !== undefined ||
+      options.text !== undefined ||
+      options.font !== undefined ||
+      options.fontFile !== undefined ||
+      options.fontSize !== undefined ||
+      options.color !== undefined ||
+      options.weight !== undefined ||
+      options.width !== undefined ||
+      options.tracking !== undefined ||
+      options.lineHeight !== undefined ||
+      options.wrapWidth !== undefined ||
+      options.fitBox !== undefined ||
+      options.runAppend !== undefined ||
+      options.runText !== undefined ||
+      options.runStyles !== undefined ||
+      options.runsNone !== undefined ||
+      options.shape !== undefined ||
+      options.size !== undefined ||
+      options.cornerRadius !== undefined ||
+      options.fill !== undefined
+    ) {
+      throw new Error(
+        `Cannot replace a unit Layer's content: Layer "${layerId}" is a unit whose content is the live reference to Composition "${prevRev.composition}" (ADR-0026 §4, #307) — the reference is set at creation and changed only by the unit fork (#341).`,
+      );
+    }
+    // The shipped facts only: the gate above (editLayerInternal's unit gate)
+    // refused every other option before this branch, so the draft here can
+    // carry placement, canonical transform, grade, and blend alone.
+    const revision: LayerRevision = {
+      schemaVersion: LAYER_SCHEMA_VERSION,
+      layerId,
+      createdAt,
+      kind: "unit",
+      composition: prevRev.composition,
+      x,
+      y,
+      opacity,
+      scaleX: draft.scaleX,
+      scaleY: draft.scaleY,
+      rotationDeg: draft.rotationDeg,
+      flipX: draft.flipX,
+      flipY: draft.flipY,
+      ...(draft.grade !== undefined ? { grade: draft.grade } : {}),
+      ...(draft.blend !== undefined ? { blend: draft.blend } : {}),
+    };
+    const unchanged =
+      x === prevRev.x && y === prevRev.y && opacity === prevRev.opacity &&
+      draft.scaleX === prevRev.scaleX && draft.scaleY === prevRev.scaleY &&
+      draft.rotationDeg === prevRev.rotationDeg &&
+      draft.flipX === prevRev.flipX && draft.flipY === prevRev.flipY &&
+      gradeEq(draft.grade, prevRev.grade) &&
+      draft.blend === prevRev.blend;
+    return { revision, unchanged, retainedGeneration: null };
   }
 
   if (prevRev.kind === "image") {
@@ -6401,6 +6583,30 @@ async function publishForkEdit(
 }
 
 /**
+ * The unit edit gate (ADR-0026 §4, #307): the option keys a unit Layer
+ * accepts on the edit surface — the shipped transforms (move, rotate,
+ * scale, flip) and adjustments (opacity, blend, grade). Every other edit
+ * fact is refused BY NAME until a ticket ships it, never silently ignored.
+ * The ONE key set and the ONE refusal builder below are shared by the
+ * command boundary (which gates before the live-context resolutions run,
+ * so an anchor or mask never resolves against a unit) and the domain
+ * lifecycle (the authority for direct callers), so the two cannot drift.
+ */
+export const UNIT_EDIT_OPTION_KEYS: readonly string[] = [
+  "x", "y", "opacity",
+  "rotate", "flip", "scale", "scale-to", "resize",
+  "blend", "brightness", "contrast", "saturation", "warmth",
+];
+
+export function unitEditFactRefusal(refusedOptions: string[], layerId: string, composition: string): string {
+  const named = refusedOptions.map((key) => `--${key}`).join(", ");
+  return `${named} ${refusedOptions.length === 1 ? "is not supported" : "are not supported"} on a unit Layer (ADR-0026 §4, #307): ` +
+    "a unit takes the transform facts (--x/--y, --rotate, --flip, --scale/--scale-to/--resize) and the adjustment facts " +
+    "(--opacity, --blend, --brightness/--contrast/--saturation/--warmth); every other fact is refused by name until a ticket ships it. " +
+    `Layer "${layerId}" references Composition "${composition}"; nothing was published.`;
+}
+
+/**
  * Unlocked internal editor for Layer identity and revision advancement.
  * Callers must hold the Project lock.
  */
@@ -6412,6 +6618,19 @@ export async function editLayerInternal(
   const resolvedRoot = path.resolve(projectPath);
   const current = await readLayerInternalFull(resolvedRoot, layerId);
   const prevRev = current.currentRevision;
+
+  // The unit edit gate (ADR-0026 §4, #307): the domain authority. The
+  // command boundary runs the same gate earlier (before the live-context
+  // resolutions), but no caller of the functions can bypass it here.
+  if (prevRev.kind === "unit") {
+    const shared = options.shared ?? {};
+    const refused = Object.entries(shared)
+      .filter(([k, v]) => v !== undefined && !UNIT_EDIT_OPTION_KEYS.includes(k))
+      .map(([k]) => k);
+    if (refused.length > 0) {
+      throw new Error(unitEditFactRefusal(refused, layerId, prevRev.composition));
+    }
+  }
 
   // Generated-content (#107) and matted-content (#108) ingestion and file
   // ingestion are mutually exclusive content options — one edit replaces
@@ -6579,6 +6798,18 @@ export async function editLayerInternal(
     shared.flip !== undefined ? { flip: shared.flip as "horizontal" | "vertical" | "both" | "none" } : undefined;
 
   if (intent.mode === "fork") {
+    // The unit fork (ADR-0026 §3/§4, #341): forking a unit Layer also copies
+    // its inner Composition under a caller-supplied name, with clash and
+    // cycle refusals before anything is published. #307 refuses the edit by
+    // name — the decision is recorded in the ADR; the mechanism ships in
+    // #341 — never a partial fork that copies the Layer but not the unit
+    // semantics.
+    if (prevRev.kind === "unit") {
+      throw new Error(
+        `--fork on a unit Layer is not supported yet: forking a unit also copies its inner Composition under a caller-supplied name (ADR-0026 §3) — that is the unit fork, ticket #341, not built yet. ` +
+          `Layer "${layerId}" is a unit referencing Composition "${prevRev.composition}"; nothing was published.`,
+      );
+    }
     // Canonical target/use→original-id validation before any content work.
     const target = await resolveForkTarget(resolvedRoot, intent.composition, intent.use, layerId);
 
@@ -6620,13 +6851,13 @@ export async function editLayerInternal(
     const withCarried = regionCarried ? { ...withGlow, regionCarried } : withGlow;
     const withShape = shapeEdited ? { ...withCarried, shapeEdited } : withCarried;
     return options.fromGeneration !== undefined
-      ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { ...withShape, generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: (revision as { contentHash: string }).contentHash } }
       : mattedFrom !== undefined
         ? {
             ...withShape,
             mattedFrom,
             ...(retainedGeneration
-              ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
+              ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: (revision as { contentHash: string }).contentHash } }
               : {}),
           }
         : withShape;
@@ -6665,13 +6896,13 @@ export async function editLayerInternal(
       ...(regionCarried ? { regionCarried } : {}),
       ...(shapeEdited ? { shapeEdited } : {}),
       ...(options.fromGeneration !== undefined
-        ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+        ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: (revision as { contentHash: string }).contentHash } }
         : {}),
       ...(mattedFrom !== undefined
         ? {
             mattedFrom,
             ...(retainedGeneration
-              ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
+              ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: (revision as { contentHash: string }).contentHash } }
               : {}),
           }
         : {}),
@@ -6726,13 +6957,13 @@ export async function editLayerInternal(
     ...(regionCarried ? { regionCarried } : {}),
     ...(shapeEdited ? { shapeEdited } : {}),
     ...(options.fromGeneration !== undefined
-      ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: revision.contentHash } }
+      ? { generatedFrom: { jobId: options.fromGeneration.jobId, contentHash: (revision as { contentHash: string }).contentHash } }
       : {}),
     ...(mattedFrom !== undefined
       ? {
           mattedFrom,
           ...(retainedGeneration
-            ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: revision.contentHash } }
+            ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: (revision as { contentHash: string }).contentHash } }
             : {}),
         }
       : {}),

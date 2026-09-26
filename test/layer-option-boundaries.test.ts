@@ -168,12 +168,12 @@ test("composition add: content-kind conflicts precede the trim checks (opposite 
   await expectRefusal(
     ["composition", "add", "demo", "t1", "--from-generation", "", "--image", "a.png", "--project", projDir],
     2,
-    "--from-generation and --image/--text/--shape options are mutually exclusive content kinds; use one per Layer.",
+    "--from-generation and --image/--text/--shape/--unit options are mutually exclusive content kinds; use one per Layer.",
   );
   await expectRefusal(
     ["composition", "add", "demo", "t2", "--from-matte", "", "--text", "hi", "--project", projDir],
     2,
-    "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content kinds; use one per Layer.",
+    "--from-matte and --image/--text/--from-generation/--shape/--unit options are mutually exclusive content kinds; use one per Layer.",
   );
   // Without a conflicting kind, the trim check still fires.
   await expectRefusal(
@@ -209,7 +209,7 @@ test("composition add: the blank --image falls past the exclusivity refusal (INT
   await expectRefusal(
     ["composition", "add", "demo", "t5b", "--image", "", "--project", projDir],
     2,
-    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --run <text> (repeatable, with a font), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>",
+    "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --run <text> (repeatable, with a font), --shape rectangle|ellipse (with --size and --fill), --unit <composition>, --from-generation <jobId>, or --from-matte <matteId>",
   );
 });
 

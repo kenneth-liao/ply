@@ -111,24 +111,55 @@ export interface CompositionSnapshot {
   layers: SnapshotLayer[];
 }
 
-/** The locked snapshot resolution, shared by render and the guideline view. */
+/** The locked snapshot resolution, shared by render and the guideline view.
+ *  Unit uses (ADR-0026, #307) resolve their inner Compositions recursively
+ *  — the live reference — under the same Project lock, with the cycle and
+ *  missing-Composition refusals firing here so every consumer of the
+ *  snapshot (render, guideline view, comparison sheet, measure) fails
+ *  loudly at one seam. */
 async function resolveSnapshotLocked(
   resolvedRoot: string,
   compName: string,
+  unitStack: string[] = [],
+  /** The render caps (assertRenderableCanvas) are the RENDER boundary's
+   *  contract. Measurement is a read-only per-layer-bounded query that
+   *  predates them (#206) and must keep measuring a composition whose
+   *  canvas exceeds the render pixel budget — its own capture windows stay
+   *  bounded; a unit's inner canvas is capped at the unit pass when its
+   *  raster paints. Only the render, guideline, and sheet paths pass true. */
+  checkCaps = true,
 ): Promise<CompositionSnapshot> {
+  // A Composition can never contain itself (ADR-0026 §4): the stack holds
+  // the unit references being resolved above this composition — reaching a
+  // name already on it closes a cycle, refused naming the chain. The add
+  // surface checks the same rule before publication; this is the defence
+  // in depth for documents some other way.
+  if (unitStack.includes(compName)) {
+    throw new Error(
+      `Unit cycle: ${[...unitStack, compName].join(" → ")} — a Composition can never contain itself, directly or transitively (ADR-0026 §4).`,
+    );
+  }
   const comp = await readCompositionInternalFull(resolvedRoot, compName);
 
   // One canonical cap check, shared with replay (INT-1): invalid dimensions
-  // fail before any Layer resolution or output destination is staged.
-  assertRenderableCanvas(comp.canvas, comp.name);
+  // fail before any Layer resolution or output destination is staged. The
+  // check covers every nested Composition too (each recursion re-runs it).
+  if (checkCaps) {
+    assertRenderableCanvas(comp.canvas, comp.name);
+  }
 
   const layers: SnapshotLayer[] = [];
   for (const use of comp.layers) {
-    if (use.kind !== "image" && use.kind !== "text" && use.kind !== "shape") {
-      throw new Error(
-        `Layer "${use.name}" in Composition "${comp.name}" has kind "${use.kind}", ` +
-          `which this foundation cannot render.`,
-      );
+    if (use.revision.kind === "unit") {
+      // The unit's inner snapshot resolves under the same lock. A missing
+      // inner Composition fails loudly here (the one missing-Composition
+      // refusal, naming it) — a unit never paints empty as a fallback.
+      const inner = await resolveSnapshotLocked(resolvedRoot, use.revision.composition, [...unitStack, compName]);
+      layers.push({
+        ...toSnapshotLayer(use),
+        unit: { composition: use.revision.composition, canvas: inner.canvas, layers: inner.layers },
+      });
+      continue;
     }
     layers.push(toSnapshotLayer(use));
   }
@@ -140,13 +171,27 @@ async function resolveSnapshotLocked(
  * the same canonical full resolver, the same render caps, under the Project
  * lock. The guideline view (composition-guidelines.ts, #174) consumes this
  * so its review pixels are the render pixels; it never re-resolves state a
- * second way.
+ * second way. Unit trees resolve recursively (ADR-0026, #307).
  */
 export async function resolveCompositionSnapshot(
   resolvedRoot: string,
   compName: string,
 ): Promise<CompositionSnapshot> {
   return withProjectLock(resolvedRoot, () => resolveSnapshotLocked(resolvedRoot, compName));
+}
+
+/**
+ * The locked snapshot resolution for callers that already hold the Project
+ * lock (measure's read-snapshot pattern): the same canonical resolver the
+ * render uses, without a second lock acquisition and without the render
+ * pixel caps — measurement is per-layer bounded (#206) and a unit's inner
+ * canvas is capped when its raster paints.
+ */
+export async function resolveSnapshotLayersLocked(
+  resolvedRoot: string,
+  compName: string,
+): Promise<CompositionSnapshot> {
+  return resolveSnapshotLocked(resolvedRoot, compName, [], false);
 }
 
 /** Render a resolved Composition to a PNG and capture its history. See the module contract above. */

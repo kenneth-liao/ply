@@ -54,7 +54,7 @@
 import { withRenderPage } from "./browser.js";
 import { familyResolved, internalFontFamily, callerFontFaceCss } from "./fonts.js";
 import type { CallerFontFacts } from "./fonts.js";
-import { decodePng, encodePngRgba } from "./png.js";
+import { decodePng, encodePngRgba, MAX_DIMENSION, MAX_PIXELS } from "./png.js";
 import type { Page } from "playwright";
 import { toolIdentity } from "./manifest.js";
 import { createHash } from "node:crypto";
@@ -116,6 +116,19 @@ export type SnapshotLayer = {
    *  @font-face inputs the run spans declare. Present only for text Layers
    *  with run font overrides. */
   runFonts?: SnapshotRunFont[];
+  /** The unit's inner snapshot (ADR-0026, #307): the referenced
+   *  Composition's canvas and resolved members, resolved recursively by
+   *  the caller (current state: the live reference; pinned history:
+   *  the manifest's nested pins). The composite is painted at the unit's
+   *  painted size and the render's supersample factor — never stored. */
+  unit?: UnitSnapshot;
+};
+
+/** One nested Composition's resolved paint state (ADR-0026, #307). */
+export type UnitSnapshot = {
+  composition: string;
+  canvas: { width: number; height: number };
+  layers: SnapshotLayer[];
 };
 
 /**
@@ -307,14 +320,18 @@ export async function paintComposition(
   options: { page?: Page; supersample?: number } = {},
 ): Promise<{ png: Buffer; environment: PaintEnvironment }> {
   const supersample = options.supersample ?? 1;
-  // One page for the whole flow: the mask pass (when any use is masked)
-  // paints each mask use's canvas-space alpha raster on this page, then the
-  // composition page builds with those rasters and paints through the
-  // shared recipe (paintCompositionHtml). Same page → same serialized
-  // render-page contract as before.
+  // One page for the whole flow: the unit pass (when any use is a unit)
+  // rasterizes each unit's inner composite at the unit's painted size and
+  // this render's supersample factor (ADR-0022, ADR-0026), then the mask
+  // pass paints each mask use's canvas-space alpha raster (a unit serving
+  // as a mask gives its composite's alpha), then the composition page
+  // builds with those rasters and paints through the shared recipe
+  // (paintCompositionHtml). Same page → same serialized render-page
+  // contract as before.
   const paint = async (page: Page) => {
-    const maskImages = await paintMaskRasters(canvas, layers, { page, supersample });
-    const html = buildCompositionHtml(canvas, layers, supersample, maskImages);
+    const unitImages = await paintUnitRasters(layers, { page, supersample });
+    const maskImages = await paintMaskRasters(canvas, layers, { page, supersample, unitImages });
+    const html = buildCompositionHtml(canvas, layers, supersample, maskImages, unitImages);
     return paintCompositionHtml(canvas, html, layers, { ...options, page, supersample });
   };
   return options.page ? paint(options.page) : withRenderPage(paint);
@@ -348,7 +365,7 @@ export async function paintComposition(
 export async function paintMaskRasters(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
-  options: { page?: Page; supersample?: number } = {},
+  options: { page?: Page; supersample?: number; unitImages?: Map<string, string> } = {},
 ): Promise<Map<string, string>> {
   const supersample = options.supersample ?? 1;
   // Resolve each masked Layer's mask use in THIS use list (the Composition
@@ -418,7 +435,7 @@ export async function paintMaskRasters(
       mask: undefined,
     } as unknown as typeof rev;
     const maskLayers: SnapshotLayer[] = [{ ...maskUse, revision: sanitized }];
-    const png = await paintMaskPage(canvas, maskLayers, { page: options.page, supersample });
+    const png = await paintMaskPage(canvas, maskLayers, { page: options.page, supersample, unitImages: options.unitImages });
     rasters.set(maskName, `data:image/png;base64,${png.toString("base64")}`);
   }
   return rasters;
@@ -437,12 +454,142 @@ export async function paintMaskRasters(
 async function paintMaskPage(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
+  options: { page?: Page; supersample?: number; unitImages?: Map<string, string> } = {},
+): Promise<Buffer> {
+  const supersample = options.supersample ?? 1;
+  const paint = async (page: Page) => {
+    await page.setViewportSize({ width: canvas.width * supersample, height: canvas.height * supersample });
+    await page.setContent(buildCompositionHtml(canvas, layers, supersample, new Map(), options.unitImages), { waitUntil: "load" });
+    await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+    await sizeEffectFilterRegions(page, layers);
+    await rejectUnresolvedFonts(page, layers);
+    await applyTextFit(page, layers);
+    return page.screenshot({
+      type: "png",
+      omitBackground: true,
+      clip: { x: 0, y: 0, width: canvas.width * supersample, height: canvas.height * supersample },
+      timeout: 60000,
+    });
+  };
+  return options.page ? paint(options.page) : withRenderPage(paint);
+}
+
+/**
+ * The unit rasters (ADR-0026 §4, #307): for every unit Layer in the
+ * snapshot — recursively, innermost first — paint its inner Composition's
+ * composite and return the PNGs as data URLs keyed by the unit Layer's id.
+ *
+ * The composite is painted at the unit's PAINTED size and the render's
+ * supersample factor (ADR-0022): the raster page is the exact shared
+ * markup (`buildCompositionHtml`) at the inner canvas with an integer
+ * raster scale of `ceil(max(|scaleX|, |scaleY|) × supersample)` — at or
+ * above the device resolution the unit's box occupies in the outer page,
+ * so the browser only ever downsamples into that box and a scaled-up unit
+ * is exactly as sharp as its members (never rasterized at the inner canvas
+ * size and resampled). The members' own masks resolve in the inner
+ * Composition (their rasters painted by the same mask pass at the raster
+ * scale); nested units recurse through this same pass. The composite is
+ * NEVER stored — it exists only as this paint-time data URL.
+ *
+ * The page flow is the paint path's own (awaited decode, effect-filter
+ * region sizing, the retained-font gate, the fit derivation), so the
+ * composite is pixel-for-pixel what the inner Composition renders on its
+ * own. A unit whose inner members need rasters paints them on the same
+ * serialized page.
+ */
+export async function paintUnitRasters(
+  layers: SnapshotLayer[],
+  options: { page?: Page; supersample?: number } = {},
+): Promise<Map<string, string>> {
+  const supersample = options.supersample ?? 1;
+  const rasters = new Map<string, string>();
+  const paint = async (page: Page) => {
+    await paintUnitRastersOf(layers, page, supersample, rasters);
+    return rasters;
+  };
+  return options.page ? paint(options.page) : withRenderPage(paint);
+}
+
+/** Depth-first, bottom-up: a nested unit's raster exists before the page
+ *  that embeds it is built. The map is shared across the whole tree, so a
+ *  unit used several times paints once per distinct Layer id. */
+async function paintUnitRastersOf(
+  layers: SnapshotLayer[],
+  page: Page,
+  supersample: number,
+  rasters: Map<string, string>,
+): Promise<void> {
+  for (const l of layers) {
+    if (l.revision.kind !== "unit" || l.unit === undefined) continue;
+    await paintUnitRastersOf(l.unit.layers, page, supersample, rasters);
+    if (rasters.has(l.layerId)) continue;
+    rasters.set(l.layerId, await paintOneUnitRaster(l, page, supersample, rasters));
+  }
+}
+
+/** Paint ONE unit's inner composite at its raster scale. */
+async function paintOneUnitRaster(
+  l: SnapshotLayer,
+  page: Page,
+  supersample: number,
+  rasters: Map<string, string>,
+): Promise<string> {
+  const unit = l.unit!;
+  const canvas = unit.canvas;
+  // The raster scale: the render's supersample factor times the unit's
+  // worst-case magnification (the effects' raster-scale rule, #193) — the
+  // composite's device pixels in the outer page. Rotation and flip do not
+  // change it. An integer ≥ 1, so the shared markup builder's contract
+  // holds unchanged.
+  const rasterScale = Math.max(1, Math.ceil(Math.max(Math.abs(l.revision.scaleX), Math.abs(l.revision.scaleY)) * supersample));
+  const width = canvas.width * rasterScale;
+  const height = canvas.height * rasterScale;
+  // The same render limits the composition boundary enforces (ADR-0022):
+  // an over-limit unit raster refuses loudly naming the unit and the fix —
+  // never silently painted at a lower scale.
+  if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+    throw new Error(
+      `Unit "${l.name}" (Composition "${unit.composition}") is ${canvas.width}×${canvas.height} canvas pixels; ` +
+        `painting at scale ${Math.max(Math.abs(l.revision.scaleX), Math.abs(l.revision.scaleY))} and supersample ${supersample} ` +
+        `paints ${width}×${height} device pixels — over the ${MAX_DIMENSION}px per-axis render limit. ` +
+        `Render with --supersample 1 or a smaller unit scale.`,
+    );
+  }
+  if (width * height > MAX_PIXELS) {
+    throw new Error(
+      `Unit "${l.name}" (Composition "${unit.composition}") is ${canvas.width}×${canvas.height} canvas pixels; ` +
+        `painting at scale ${Math.max(Math.abs(l.revision.scaleX), Math.abs(l.revision.scaleY))} and supersample ${supersample} ` +
+        `paints ${width}×${height} device pixels — over the ${MAX_PIXELS.toLocaleString("en-US")}-pixel render limit. ` +
+        `Render with --supersample 1 or a smaller unit scale.`,
+    );
+  }
+  // The members' own masks resolve in the inner Composition (ADR-0026 §4:
+  // a mask never reaches across the unit boundary) — the same mask pass at
+  // the raster scale, sharing this unit tree's already-painted nested
+  // rasters (a unit serving as a member's mask gives its composite alpha).
+  const maskImages = await paintMaskRasters(canvas, unit.layers, { page, supersample: rasterScale, unitImages: rasters });
+  const html = buildCompositionHtml(canvas, unit.layers, rasterScale, maskImages, rasters);
+  const png = await paintUnitPage(canvas, html, unit.layers, { page, supersample: rasterScale });
+  return `data:image/png;base64,${png.toString("base64")}`;
+}
+
+/** Paint one unit raster page: the delivery device-scale capture WITHOUT
+ *  the area-average — the outer page samples the raster at device
+ *  resolution across the unit's box, so the composite keeps exactly the
+ *  sharpness a directly painted member gets (the outer render's own
+ *  delivery average then applies to both alike). The page flow is the
+ *  paint path's own: awaited decode, effect-filter region sizing, the
+ *  retained-font gate, and the fit derivation. */
+async function paintUnitPage(
+  canvas: { width: number; height: number },
+  html: string,
+  layers: SnapshotLayer[],
   options: { page?: Page; supersample?: number } = {},
 ): Promise<Buffer> {
   const supersample = options.supersample ?? 1;
   const paint = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width * supersample, height: canvas.height * supersample });
-    await page.setContent(buildCompositionHtml(canvas, layers, supersample), { waitUntil: "load" });
+    await page.setContent(html, { waitUntil: "load" });
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     await sizeEffectFilterRegions(page, layers);
     await rejectUnresolvedFonts(page, layers);
@@ -1526,6 +1673,7 @@ export function buildCompositionHtml(
   layers: SnapshotLayer[],
   supersample = 1,
   maskImages: Map<string, string> = new Map(),
+  unitImages: Map<string, string> = new Map(),
 ): string {
   // The Layer mask (ADR-0025, #305): `maskImages` maps each masked Layer's
   // stored use name to the mask use's canvas-space alpha raster as a data
@@ -1947,6 +2095,35 @@ export function buildCompositionHtml(
         return maskWrapper(
           `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
           `<div style="${shapeStyle}${regionClip}${gradeFilter}"></div></div>`,
+        );
+      }
+      // The unit Layer (ADR-0026 §4, #307): its content is the inner
+      // Composition's composite, painted by the unit pass at the unit's
+      // painted size and this render's supersample factor and embedded as a
+      // data URL keyed by the unit Layer's id. The element is the image
+      // branch's shape — CSS box = the inner canvas (the unit's content
+      // box, §3 bounds) — so the unit's own transform, grade, effects,
+      // opacity, blend, and mask wrapper apply to the composite as ONE
+      // Layer, step 1 of the ADR-0024 order. The composite is never stored.
+      if (rev.kind === "unit") {
+        const raster = unitImages.get(l.layerId);
+        if (raster === undefined) {
+          throw new Error(
+            `Layer "${l.name}" is a unit of Composition "${rev.composition}", but no composite raster was supplied — ` +
+              "the unit pass must run before the composition markup is built.",
+          );
+        }
+        const unitBox =
+          `width:${l.unit!.canvas.width}px;height:${l.unit!.canvas.height}px;display:block;`;
+        if (rev.visibleRegion === undefined && gradeFilter === "") {
+          return maskWrapper(
+            `<img src="${raster}" style="${base}${transformed}${effectsFilter}${blendCss}${unitBox}">`,
+          );
+        }
+        return maskWrapper(
+          `<div style="${base}${transformed}${effectsFilter}${blendCss}">` +
+            `<img src="${raster}" style="${unitBox}${regionClip}${gradeFilter}">` +
+          `</div>`,
         );
       }
       // The vector colour (#215, spec #207 US-005, DEC-008): a recoloured

@@ -90,7 +90,7 @@ export interface Composition {
 export interface ResolvedCompositionLayer {
   name: string;
   layerId: string;
-  kind: "image" | "text" | "shape";
+  kind: "image" | "text" | "shape" | "unit";
   revision: ResolvedLayerRevision;
 }
 
@@ -559,6 +559,75 @@ async function validateAddMask(
   // The only new edge is <new use> -> <mask use>; the walk covers it (and
   // defensively the whole graph) with the new use's fact as the override.
   await assertNoMaskCycle(resolvedRoot, comp, { layerId: revision.layerId, mask: maskName });
+}
+
+/** Read the Composition names one Composition's unit uses reference
+ *  (ADR-0026, #307): every use whose current revision is a unit revision
+ *  contributes its inner Composition's name. Results are cached per call
+ *  site's map. Callers must hold the Project lock. */
+async function unitInnerNamesOf(
+  resolvedRoot: string,
+  compName: string,
+  cache: Map<string, string[]>,
+): Promise<string[]> {
+  const cached = cache.get(compName);
+  if (cached) return cached;
+  const { comp } = await readCompositionDocument(resolvedRoot, compName);
+  const inners: string[] = [];
+  for (const use of comp.layers) {
+    const layer = await readLayerInternal(resolvedRoot, use.layerId);
+    if (layer.currentRevision.kind === "unit") {
+      inners.push(layer.currentRevision.composition);
+    }
+  }
+  cache.set(compName, inners);
+  return inners;
+}
+
+/**
+ * The unit cycle check (ADR-0026 §4, #307): a Composition can never contain
+ * itself, directly or through other Compositions. Adding a unit of
+ * `innerName` to `targetName` creates the edge target → inner; the check
+ * asks whether `target` is ALREADY reachable from `inner` through unit
+ * references — if it is, the new use closes a cycle, refused naming the
+ * chain of Compositions (such as `a → b → a`; the one-step case, a unit of
+ * the target itself, displays `outer → outer`). Runs before anything is
+ * published. Not a cycle: the same inner Composition used as a unit several
+ * times, in one Composition or across several. Checked again at paint,
+ * measure, and render (defence in depth against documents some other way).
+ * Callers must hold the Project lock.
+ */
+async function assertNoUnitCycle(
+  resolvedRoot: string,
+  innerName: string,
+  targetName: string,
+): Promise<void> {
+  const cache = new Map<string, string[]>();
+  const path: string[] = [];
+  const onPath = new Set<string>();
+  const visit = async (node: string): Promise<string[] | null> => {
+    path.push(node);
+    onPath.add(node);
+    if (node === targetName) {
+      return [...path];
+    }
+    for (const next of await unitInnerNamesOf(resolvedRoot, node, cache)) {
+      if (onPath.has(next)) continue;
+      const found = await visit(next);
+      if (found) return found;
+    }
+    path.pop();
+    onPath.delete(node);
+    return null;
+  };
+  const chain = await visit(innerName);
+  if (chain !== null) {
+    throw new Error(
+      `Cannot add a unit of Composition "${innerName}" to Composition "${targetName}": ` +
+        `a Composition cannot contain itself — the use would close the cycle ${[...chain, innerName].join(" → ")} (ADR-0026 §4). ` +
+        "Nothing was published.",
+    );
+  }
 }
 
 /** The edit surface's mask resolution (ADR-0025 §5): resolve the would-be
@@ -1235,6 +1304,95 @@ export async function addShapeLayerToComposition(
   });
 }
 
+/** The ONE post-content refusal for a unit add (ADR-0026 §4, #307): names
+ *  each supplied option and points at the edit surface. Shared by the
+ *  domain path and the command boundary, so the wording cannot drift. */
+export function unitPostContentRefusal(suppliedOptions: string[]): string {
+  const named = suppliedOptions.map((key) => `--${key}`).join(", ");
+  return `${named} ${suppliedOptions.length === 1 ? "is not supported" : "are not supported"} on a unit Layer: ` +
+    "one-command `composition add` places a unit (placement options only) — " +
+    "the unit's transform and adjustment facts are `layer edit` facts (ADR-0026 §4, #307). Nothing was published.";
+}
+
+/**
+ * Add a unit Layer (ADR-0026, spec #285 US-018/ISC-36, #307): a Layer whose
+ * content is a LIVE REFERENCE to another Composition in the same Project.
+ * The publication protocol is the shared one — identity + immutable revision
+ * staged, resolved, then the use committed — but there is no content
+ * ingestion: the revision's content fact is the inner Composition's NAME,
+ * so editing the inner Composition updates every place the unit is used
+ * without advancing the unit's revision.
+ *
+ * Gates, before anything stages: the inner Composition must exist (the one
+ * missing-Composition refusal), and the cycle check must pass — a
+ * Composition can never contain itself, directly or transitively, and the
+ * refusal names the chain (ADR-0026 §4). The unit cycle is checked again at
+ * paint, measure, and render.
+ *
+ * #307 ships placement on add (x, y, opacity, stack position); every
+ * post-content option (transforms, anchored placement, effects, look) is
+ * refused by name — the unit's edit facts ship through `layer edit`, and
+ * the refused-by-name list is the ADR-0026 §4 destination.
+ */
+export async function addUnitLayerToComposition(
+  projectPath: string,
+  compName: string,
+  localName: string,
+  innerName: string,
+  options: AddLayerOptions = {},
+): Promise<{ composition: string; use: CompositionLayerUse; layer: ResolvedLayer }> {
+  const sanitizedComp = sanitizeName(compName);
+  const sanitizedLocalName = sanitizeName(localName);
+  const sanitizedInner = sanitizeName(innerName);
+
+  const { x, y, opacity } = parsePlacement(options);
+
+  // Placement only on add (#307): every post-content option — transforms,
+  // anchored placement, effects, look — is refused by name, naming each
+  // offending option, before anything is published. The ONE refusal home is
+  // `unitPostContentRefusal`; the command boundary calls it too, so the
+  // wording and exit status cannot disagree.
+  const supplied = Object.entries(options.oneCommand ?? {}).filter(([, v]) => v !== undefined);
+  if (supplied.length > 0) {
+    throw new Error(unitPostContentRefusal(supplied.map(([key]) => key)));
+  }
+
+  const resolvedRoot = await resolveProjectRoot(projectPath);
+  return withProjectLock(resolvedRoot, async () => {
+    const { comp, compFile } = await readMutableComposition(resolvedRoot, sanitizedComp, sanitizedLocalName);
+
+    // The inner Composition must exist — the one missing-Composition
+    // refusal, naming what does. A unit never paints empty as a fallback.
+    await readCompositionDocument(resolvedRoot, sanitizedInner);
+
+    // The cycle check (ADR-0026 §4): before anything is published.
+    await assertNoUnitCycle(resolvedRoot, sanitizedInner, sanitizedComp);
+
+    return publishLayerUse(resolvedRoot, comp, compFile, sanitizedLocalName, async (layerId, createdAt) => {
+      const revision: LayerRevision = {
+        schemaVersion: LAYER_SCHEMA_VERSION,
+        layerId,
+        createdAt,
+        kind: "unit",
+        composition: sanitizedInner,
+        x,
+        y,
+        opacity,
+        scaleX: 1,
+        scaleY: 1,
+        rotationDeg: 0,
+        flipX: false,
+        flipY: false,
+      };
+      return revision;
+    }, options.position).then(({ layerId, layer }) => ({
+      composition: sanitizedComp,
+      use: { name: sanitizedLocalName, layerId },
+      layer,
+    }));
+  });
+}
+
 /** A selected Generation Job output for ingestion (#107): the job id and, for
  * multi-output records, the explicit 1-based index or sha-256 selection. */
 export interface GenerationLayerSource extends GenerationOutputSelection {
@@ -1339,7 +1497,7 @@ export async function addGeneratedLayerToComposition(
       use: { name: sanitizedLocalName, layerId },
       layer,
       ...(masked !== undefined ? { masked } : {}),
-      generatedFrom: { jobId: source.jobId, contentHash: layer.currentRevision.contentHash },
+      generatedFrom: { jobId: source.jobId, contentHash: (layer.currentRevision as { contentHash: string }).contentHash },
     }));
   });
 }
@@ -1446,10 +1604,10 @@ export async function addMattedLayerToComposition(
       mattedFrom: {
         matteId: selected!.matte.matteId,
         engine: selected!.matte.result.engine,
-        contentHash: layer.currentRevision.contentHash,
+        contentHash: (layer.currentRevision as { contentHash: string }).contentHash,
       },
       ...(retainedGeneration
-        ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: layer.currentRevision.contentHash } }
+        ? { generatedFrom: { jobId: retainedGeneration.jobId, contentHash: (layer.currentRevision as { contentHash: string }).contentHash } }
         : {}),
     }));
   });
@@ -1593,6 +1751,55 @@ export async function deleteComposition(
   const resolvedRoot = await resolveProjectRoot(projectPath);
   return withProjectLock(resolvedRoot, async () => {
     const { compFile } = await readCompositionDocument(resolvedRoot, sanitizedComp);
+
+    // The unit reference scan (ADR-0026 §3, #307): ANY unit Layer in the
+    // Project whose current revision names this Composition blocks the
+    // delete — "any" INCLUDES a unit Layer that no Composition uses at the
+    // moment, so a later Composition with the same name can never be picked
+    // up silently by a stale reference. The refusal names each unit Layer
+    // and the Compositions and uses that hold it (if any). Retained Renders
+    // are unaffected either way: they replay from their pins.
+    const blockers: Array<{ layerId: string; holders: string[] }> = [];
+    const layersDir = path.join(resolvedRoot, "layers");
+    let layerEntries: string[] = [];
+    try {
+      layerEntries = (await readdir(layersDir)).filter((f) => f.endsWith(".json")).sort();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    for (const entry of layerEntries) {
+      const layerId = path.basename(entry, ".json");
+      const layer = await readLayerInternal(resolvedRoot, layerId);
+      if (layer.currentRevision.kind !== "unit" || layer.currentRevision.composition !== sanitizedComp) {
+        continue;
+      }
+      // Where does this unit Layer live? Scan the Composition documents.
+      const holders: string[] = [];
+      const compNames = await listCompositionNames(resolvedRoot);
+      for (const compName2 of compNames) {
+        const { comp } = await readCompositionDocument(resolvedRoot, compName2);
+        for (const use of comp.layers) {
+          if (use.layerId === layerId) holders.push(`${compName2}/${use.name}`);
+        }
+      }
+      blockers.push({ layerId, holders });
+    }
+    if (blockers.length > 0) {
+      const named = blockers
+        .map((b) =>
+          `Layer "${b.layerId}"` +
+          (b.holders.length > 0
+            ? ` (used by ${b.holders.map((h) => `"${h}"`).join(", ")})`
+            : " (no Composition uses it — its reference still blocks this name)"),
+        )
+        .join("; ");
+      throw new Error(
+        `Cannot delete Composition "${sanitizedComp}": unit Layer${blockers.length === 1 ? "" : "s"} still refer to it (ADR-0026 §3, #307) — ${named}. ` +
+          "The unit Layer keeps its inner Composition from being deleted for as long as the Project exists; remove the unit Layer's reference first. " +
+          "Nothing was deleted.",
+      );
+    }
+
     await unlink(compFile);
     return { composition: sanitizedComp };
   });
@@ -1937,6 +2144,23 @@ async function copyCrossProject(
   // boundary. Duplicate uses resolve per use; the identity map below remaps
   // each distinct source Layer to one destination identity.
   const sourceFull = await readCompositionInternalFull(srcRoot, sourceName);
+  // Cross-Project import of units is refused (ADR-0026 §4, #307): #307 does
+  // not build cross-Project import of units — a unit Layer is never copied
+  // without its inner Composition, so a source use that IS a unit names the
+  // refusal before anything is staged. The relink contract (copied unit
+  // Layers referencing destination copies of their inner Compositions) is a
+  // later ticket's.
+  const unitUses = sourceFull.layers.filter((l) => l.revision.kind === "unit");
+  if (unitUses.length > 0) {
+    const named = unitUses
+      .map((l) => `"${l.name}" (${l.layerId}, a unit of "${(l.revision as { composition: string }).composition}")`)
+      .join(", ");
+    throw new Error(
+      `Cross-Project import of a Composition that uses a unit is not supported yet: source Composition "${sourceName}" ` +
+        `uses the unit Layer${unitUses.length === 1 ? "" : "s"} ${named} (ADR-0026 §4, #307). ` +
+        "A unit Layer is never copied without its inner Composition — the cross-Project relink ships in a later ticket. Nothing was published.",
+    );
+  }
   const { comp: targetComp, compFile: targetCompFile } = await readMutableComposition(destRoot, targetName);
 
   // Stack position (#230): validated against the target's use list BEFORE
@@ -1991,7 +2215,7 @@ async function copyCrossProject(
       // (deduplicated, integrity-verified on reuse by storeContentBlob).
       // A shape Layer (#208, DEC-001) has no retained bytes: its content IS
       // its parameters, so there is nothing to copy into content/.
-      if (snapshot.revision.kind !== "shape") {
+      if (snapshot.revision.kind !== "shape" && snapshot.revision.kind !== "unit") {
         await storeContentBlob(destRoot, snapshot.revision.contentHash, snapshot.contentBytes);
       }
       // Run font blobs (#297, INT-paint-2): the copied revision carries the

@@ -921,7 +921,7 @@ test("matrix: wrap width (--wrap-width) applies to text Layers, refuses image an
     "--project", projDir, "--json",
   ]);
   expect(sAdd.code).toBe(2);
-  expect(JSON.parse(sAdd.stdout).error).toContain("--shape and --image/--from-generation/--from-matte/--text are mutually exclusive content kinds");
+  expect(JSON.parse(sAdd.stdout).error).toContain("--shape and --image/--from-generation/--from-matte/--text/--unit are mutually exclusive content kinds");
 
   // The wrapped text paints several stacked lines inside the width: ink
   // appears in both the upper and lower halves of the wrapped box, and the
@@ -981,7 +981,7 @@ test("matrix: fit box (--fit-box) applies to text Layers, refuses image and shap
     "--project", projDir, "--json",
   ]);
   expect(sAdd.code).toBe(2);
-  expect(JSON.parse(sAdd.stdout).error).toContain("--shape and --image/--from-generation/--from-matte/--text are mutually exclusive content kinds");
+  expect(JSON.parse(sAdd.stdout).error).toContain("--shape and --image/--from-generation/--from-matte/--text/--unit are mutually exclusive content kinds");
 
   // The fitted text paints as ONE line inside the 300px-wide box: ink in the
   // box's rows, and the column just right of the box stays blank.

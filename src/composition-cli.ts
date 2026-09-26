@@ -11,6 +11,8 @@ import {
   deleteComposition,
   importComposition,
   importCompositionCrossProject,
+  addUnitLayerToComposition,
+  unitPostContentRefusal,
   removeLayerFromComposition,
   reorderCompositionLayers,
   inspectComposition,
@@ -31,6 +33,7 @@ import {
   parseGenerationOutputSelector,
   parseGenerationOutputValue,
   parseLayerCoordinate,
+  parseLayerUnitTarget,
   parseLayerFontSize,
   parseLayerFontFile,
   parseLayerFill,
@@ -119,8 +122,24 @@ composition — Composition authoring and inspection
       colour, fewer than two stops, an out-of-range position) are refused
       before anything is published. On 'layer edit' each shape parameter
       (--shape, --size, --corner-radius, --fill) is an absolute setter
-      (#209). Mutually exclusive with --image, --text, --from-generation,
+      (#209). Mutually exclusive with --image, --text, --unit, --from-generation,
       and --from-matte.
+
+  ply composition add <comp> <name> --unit <composition> [options]
+      Add a unit Layer (ADR-0026, #307): a Layer whose content is a LIVE
+      reference to another Composition in the same Project. Several Layers
+      move and turn as one unit with one edit, while each member stays
+      individually editable in its own Composition — nothing is flattened.
+      The unit's revision stores the inner Composition's name; editing the
+      inner Composition updates every place the unit is used. Placement
+      options (--x/--y/--opacity/--position) apply on add; the unit's
+      transform and adjustment facts (--x/--y, --rotate, --flip,
+      --scale/--scale-to/--resize, --opacity, --blend, and the grade
+      controls) are layer edit facts; every other fact is refused by name
+      (ADR-0026 §4). A cycle — the Composition containing itself, directly
+      or transitively — and a missing inner Composition are refused before
+      anything is published. Mutually exclusive with every other content
+      kind.
 
   ply composition import <target> <source> [options]
       Import a Composition's Layer references into another Composition
@@ -929,7 +948,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
       const compName = positionals[1];
       const localName = positionals[2];
       if (!compName || !localName) {
-        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --text <str> --font-file <path> | --shape rectangle|ellipse --size <W>x<H> --fill <spec> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
+        output({ ok: false, error: "Usage: ply composition add <composition> <local-name> (--image <path> | --text <str> --font <family> | --text <str> --font-file <path> | --shape rectangle|ellipse --size <W>x<H> --fill <spec> | --unit <composition> | --from-generation <jobId> | --from-matte <matteId>)" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -956,6 +975,13 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
       const shapeConflict = layerContentKindConflict(values, "shape", "add");
       if (shapeConflict) {
         output({ ok: false, error: shapeConflict }, isJson);
+        process.exitCode = 2;
+        return;
+      }
+      // The unit Layer (ADR-0026, #307): the fifth content kind.
+      const unitConflict = layerContentKindConflict(values, "unit", "add");
+      if (unitConflict) {
+        output({ ok: false, error: unitConflict }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -1065,8 +1091,8 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
         process.exitCode = 2;
         return;
       }
-      if (!values.image && values.text === undefined && !hasRunContent && values["from-generation"] === undefined && values["from-matte"] === undefined && values.shape === undefined) {
-        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --run <text> (repeatable, with a font), --shape rectangle|ellipse (with --size and --fill), --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
+      if (!values.image && values.text === undefined && !hasRunContent && values["from-generation"] === undefined && values["from-matte"] === undefined && values.shape === undefined && values.unit === undefined) {
+        output({ ok: false, error: "Missing required content: --image <path>, --text <str> (with --font <family> or --font-file <path>), --run <text> (repeatable, with a font), --shape rectangle|ellipse (with --size and --fill), --unit <composition>, --from-generation <jobId>, or --from-matte <matteId>" }, isJson);
         process.exitCode = 2;
         return;
       }
@@ -1146,6 +1172,46 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
       const oneCommand = oneCommandParsed.value;
 
       try {
+        if (values.unit !== undefined) {
+          // The unit Layer (ADR-0026, #307): placement only on this surface.
+          // The refusal is the ONE shared wording (`unitPostContentRefusal`),
+          // exit 2 at the boundary like every other option refusal.
+          if (oneCommand !== undefined) {
+            const suppliedKeys = Object.entries(oneCommand)
+              .filter(([, v]) => v !== undefined)
+              .map(([key]) => key);
+            if (suppliedKeys.length > 0) {
+              output({ ok: false, error: unitPostContentRefusal(suppliedKeys) }, isJson);
+              process.exitCode = 2;
+              return;
+            }
+          }
+          // The boundary parse runs here too (the ONE registration): a
+          // malformed name refuses with the shared wording, exit 2, before
+          // the publication path's own sanitize (the domain authority).
+          const unitTarget = parseLayerUnitTarget(values.unit);
+          if (!unitTarget.ok) {
+            output({ ok: false, error: unitTarget.error }, isJson);
+            process.exitCode = 2;
+            return;
+          }
+          const res = await addUnitLayerToComposition(
+            targetProj, compName, localName, unitTarget.value!,
+            { x, y, opacity, position: stackPosition },
+          );
+          mutationCommitted = true;
+          output(
+            { ok: true, composition: res.composition, use: res.use, layer: res.layer },
+            isJson,
+            () => {
+              console.log(
+                `Added unit Layer "${res.use.name}" (${res.use.layerId}) to Composition "${res.composition}" ` +
+                  `[unit of "${values.unit}" — live reference, ADR-0026]${stackPositionNote(stackPosition)}`,
+              );
+            },
+          );
+          return;
+        }
         if (values["from-generation"] !== undefined) {
           const res = await addGeneratedLayerToComposition(
             targetProj, compName, localName,
@@ -1599,7 +1665,9 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
                   ? `${JSON.stringify(rev.text)} ${rev.fontSize}px ${formatFill(normalizeStoredTextFill(rev.color))}`
                   : rev.kind === "shape"
                     ? `${rev.shape} ${rev.width}×${rev.height} ${formatFill(rev.fill)}`
-                    : `${rev.width}×${rev.height} ${rev.format}`;
+                    : rev.kind === "unit"
+                      ? `unit of "${rev.composition}"`
+                      : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(
                 `  ${idx + 1}. "${layer.name}" [${layer.layerId}] (${rev.kind}, ${detail}) ` +
                   `@ (${rev.x}, ${rev.y}) opacity: ${rev.opacity}`,
@@ -2045,7 +2113,8 @@ function emitRender(
 }
 
 /** Compact content description for a measured Layer. */
-function contentLabel(layer: { kind: string; content: { width: number; height: number } }): string {
+function contentLabel(layer: { kind: string; content: { width: number; height: number }; unit?: { composition: string } | null }): string {
+  if (layer.kind === "unit") return `unit of "${layer.unit?.composition ?? "?"}" ${layer.content.width}×${layer.content.height}`;
   return layer.kind === "text" ? `text ${layer.content.width}×${layer.content.height}` : `image content ${layer.content.width}×${layer.content.height}`;
 }
 
