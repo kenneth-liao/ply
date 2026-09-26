@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e1-frame",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.023Z",
+  "request": {
+    "prompt": "A thin glowing neon orange rectangular outline frame with rounded corners, empty and hollow inside, bright hot-white core with orange glow, plus three short neon emphasis tick marks radiating from outside its top-right corner, on a pure black background. Nothing else, no text.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.023Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A thin glowing neon orange rectangular outline frame with rounded corners, empty and hollow inside, bright hot-white core with orange glow, plus three short neon emphasis tick marks radiating from outside its top-right corner, on a pure black background. Nothing else, no text.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.005035
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "881b43124bf1756a5af700c822d1552aa7e5f08a08263daeb50cccb5cb8880fe",
+        "file": "outputs/881b43124bf1756a5af700c822d1552aa7e5f08a08263daeb50cccb5cb8880fe.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

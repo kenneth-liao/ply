@@ -1,0 +1,15 @@
+Measured Composition "t8" (1280×720), 14 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720 [fill linear 90deg #6784a8 0%, #56739a 100%]
+  2. "folderfall" (image content 200×200) box (10, 628) 860×120 painted (12, 628) 856×120, on-canvas (12, 628) 856×92 — clipped [fill radial #1c2a3f88 0%, #1c2a3f00 100%, scale 4.3×/0.6×]
+  3. "folder" (unit of "folder" 800×680) box (44, 28) 800×680 painted (44, 28) 770×674
+  4. "axis" (image content 540×3) box (160, 586) 540×3 painted (160, 586) 540×3 [fill solid #2a2a2a]
+  5. "bigbar" (image content 196×360) box (190, 226) 196×360 painted (190, 226) 196×360 [fill solid #3a3a3c]
+  6. "smallbar" (image content 200×44) box (470, 542) 200×44 painted (470, 542) 200×44 [fill solid #ff2fc8]
+  7. "p1" (text 275.39×92) box (152, 133) 275.39×92 painted (154, 144) 272×68 [fill solid #111111, weight 800, width 100, tracking -0.02em, effective font size 84px]
+  8. "p2" (text 203.19×83) box (468, 456) 203.19×83 painted (470, 466) 200×62 [fill solid #111111, weight 800, width 100, tracking -0.02em, effective font size 76px]
+  9. "lab1" (text 114.72×37) box (230.5, 607) 114.72×37 painted (231, 612) 113×26 [fill solid #111111, weight 700, width 100, effective font size 34px]
+  10. "u1" (image content 120×3) box (228, 656) 120×3 painted (228, 656) 120×3 [fill solid #111111]
+  11. "lab2" (text 143.17×37) box (487, 607) 143.17×37 painted (488, 612) 140×26 [fill solid #111111, weight 700, width 100, effective font size 34px]
+  12. "u2" (image content 144×3) box (484, 656) 144×3 painted (484, 656) 144×3 [fill solid #111111]
+  13. "labmark" (image content 24×24) box (640, 608) 48×48 painted (640, 608) 48×48 [scale 2×]
+  14. "kenny" (image content 2048×1536) box (-135, -290) 2211.84×1658.88 painted (494, 71) 1043×1298, on-canvas (494, 71) 786×649 — clipped [grade contrast 1.04, scale 1.08×, choke 1.5px, feather 1px]

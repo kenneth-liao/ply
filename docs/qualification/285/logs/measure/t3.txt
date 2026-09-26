@@ -1,0 +1,11 @@
+Measured Composition "t3" (1280×720), 10 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1536×1024) box (-40, -130) 1382.4×921.6 painted (-40, -130) 1383×922, on-canvas (0, 0) 1280×720 — clipped [grade contrast 1.05, scale 0.9×]
+  2. "beams" (image content 1024×1024) box (572, -416) 737.28×737.28 painted (572, -416) 738×748, on-canvas (572, 0) 708×332 — clipped [blend screen, scale 0.72×]
+  3. "boxglow" (image content 420×70) box (731, 257) 420×70 painted (715, 241) 452×86 [fill radial #9fe6ffcc 0%, #6a5cff55 50%, #6a5cff00 100%, blend screen]
+  4. "tile1" (image content 112×112) box (681.5, 126.56) 134.09×127.67 painted (580, -12) 374×372, on-canvas (580, 0) 374×360 — clipped [shadow 0 0 16 #b98bffee, shadow 0 0 40 #6a5cff88, outline 3 #f2eaff, fill linear 160deg #1b1640 0%, #0b0a1c 100%, rot -12°, perspective 18° 0°]
+  5. "icon1" (image content 24×24) box (712, 155.81) 71.92×68.42 painted (696, 140) 104×101 [scale 2.5×, rot -12°, perspective 18° 0°]
+  6. "tile2" (image content 112×112) box (880.55, 28.19) 118.04×116.07 painted (743, -67) 394×349, on-canvas (743, 0) 394×282 — clipped [shadow 0 0 16 #b98bffee, shadow 0 0 40 #6a5cff88, outline 3 #f2eaff, fill linear 160deg #1b1640 0%, #0b0a1c 100%, rot 4°, perspective 18° 0°]
+  7. "icon2" (image content 24×24) box (907.25, 55.09) 63.96×61.91 painted (891, 39) 96×94 [scale 2.5×, rot 4°, perspective 18° 0°]
+  8. "tile3" (image content 112×112) box (1068.32, 123.19) 132.13×129.52 painted (930, -16) 374×376, on-canvas (930, 0) 350×360 — clipped [shadow 0 0 16 #b98bffee, shadow 0 0 40 #6a5cff88, outline 3 #f2eaff, fill linear 160deg #1b1640 0%, #0b0a1c 100%, rot 12°, perspective 18° 0°]
+  9. "icon3" (image content 24×24) box (1100.84, 153.09) 71.35×68.95 painted (1085, 137) 104×101 [scale 2.5×, rot 12°, perspective 18° 0°]
+  10. "chip" (image content 1960×1102) box (-312, -49) 627.2×352.64 painted (-11, -12) 278×278, on-canvas (0, 0) 267×266 — clipped [shadow 0 0 18 #3fd0ffcc, shadow 0 0 44 #8a5bff77, scale 0.32×]

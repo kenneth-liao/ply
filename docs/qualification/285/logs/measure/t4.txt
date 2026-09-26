@@ -1,0 +1,11 @@
+Measured Composition "t4" (1280×720), 10 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720 [fill linear 120deg #2b2c31 0%, #1f2024 100%]
+  2. "fade" (image content 1100×760) box (510, -290) 1100×760 painted (511, -290) 1098×760, on-canvas (511, 0) 769×470 — clipped [fill radial #ffffffff 25%, #ffffff00 100%, masks "contours"]
+  3. "contours" (image content 1024×1024) box (520, -170) 921.6×921.6 painted (520, -170) 922×922, on-canvas (520, 0) 760×720 — clipped; masked: painted stays pre-clip, the clip keeps (520, 0) 760×470, on-canvas (520, 0) 760×470 [grade saturation 1.2, blend screen, scale 0.9×, mask "fade"]
+  4. "kenny" (image content 2048×1536) box (170, -250) 1638.4×1228.8 painted (651, -6) 773×985, on-canvas (651, 0) 629×720 — clipped [scale 0.8×, choke 1.5px, feather 1px]
+  5. "l1" (text 452.89×163) box (64, 93) 452.89×163 painted (72, 128) 442×88 [fill solid #ffffff, effective font size 120px]
+  6. "pill" (image content 606×124) box (66, 256) 606×124 painted (66, 256) 606×124 [fill solid #f0643c]
+  7. "l2" (text 556.45×163) box (93, 233) 556.45×163 painted (93, 268) 553×109 [fill solid #ffffff, effective font size 120px]
+  8. "l3" (text 741.25×163) box (72, 376) 741.25×163 painted (72, 410) 738×110 [fill solid #ffffff, effective font size 120px]
+  9. "brandmark" (image content 100×100) box (68, 604.5) 46×46 painted (70, 608) 42×41 [scale 0.46×]
+  10. "brand" (text 414.63×60) box (125, 596.5) 414.63×60 painted (128, 608) 411×41 [fill solid #ffffff, effective font size 44px]

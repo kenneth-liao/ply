@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e2-panel",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.022Z",
+  "request": {
+    "prompt": "A flat, straight-on screenshot of a dark web app user interface, filling the entire frame edge to edge. A narrow left navigation column with icons and the items Chat, Docs, Code, Deploy, Agents, Integrations; a small app wordmark 'Jev' at the top of the column. The main area has the heading 'Build what's next.' in large white text, a wide rounded input box reading 'Turn my idea into a working app...' with a violet send button, and a row of four small rounded cards: Generate code, Create docs, Build full apps, Automate workflows. Dark charcoal background, violet accents, crisp UI, no device frame.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.022Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A flat, straight-on screenshot of a dark web app user interface, filling the entire frame edge to edge. A narrow left navigation column with icons and the items Chat, Docs, Code, Deploy, Agents, Integrations; a small app wordmark 'Jev' at the top of the column. The main area has the heading 'Build what's next.' in large white text, a wide rounded input box reading 'Turn my idea into a working app...' with a violet send button, and a row of four small rounded cards: Generate code, Create docs, Build full apps, Automate workflows. Dark charcoal background, violet accents, crisp UI, no device frame.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.018735
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "f174066b795f7bed2c7207d15888e5ebab477961241bc9ec23c033ae739b108b",
+        "file": "outputs/f174066b795f7bed2c7207d15888e5ebab477961241bc9ec23c033ae739b108b.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

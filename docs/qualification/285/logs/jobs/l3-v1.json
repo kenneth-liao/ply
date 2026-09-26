@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "jobId": "l3-v1",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:19:11.527Z",
+  "request": {
+    "prompt": "A presenter photo of the man in attached image 1. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only pose, framing and camera angle, never its person's face, beard, or hair. Attached image 3 supplies only the product: the silver Mac Studio shown in its top-right panel. Copy the pose and framing of attached image 2: he leans toward the camera, head and shoulders on the left-centre of the frame, wide eyes and raised eyebrows, looking straight into the lens with a surprised expression, his mouth closed; with his left hand he holds the Mac Studio from attached image 3 up on his open palm on the right side of the frame, close to the camera. He wears a plain charcoal t-shirt. Dark moody home studio with purple and blue RGB lights, a keyboard and a mug on the desk. Cinematic lighting.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 2,
+    "quality": "low",
+    "references": [
+      {
+        "path": "anchors/face1535.png",
+        "contentHash": "13f20e7baf9bc66d22335e5635c358063b53734e3a97534b805aa68b0520ec12"
+      },
+      {
+        "path": "refs/ref3.png",
+        "contentHash": "425a430d215c0a5acd14280725e00eec29c4070f28dd374cc3c1ae7b8229abd1"
+      },
+      {
+        "path": "$CONTENT_ROOT/assets/products/mac-studio/mac-mini-and-mac-studio-hero.jpg",
+        "contentHash": "c3b6d635faa72d260f16bf39342987ed4a0a17170dc91de45994503e01a78a6b"
+      }
+    ]
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:19:11.527Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "quality": "low",
+    "fullPrompt": "A presenter photo of the man in attached image 1. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only pose, framing and camera angle, never its person's face, beard, or hair. Attached image 3 supplies only the product: the silver Mac Studio shown in its top-right panel. Copy the pose and framing of attached image 2: he leans toward the camera, head and shoulders on the left-centre of the frame, wide eyes and raised eyebrows, looking straight into the lens with a surprised expression, his mouth closed; with his left hand he holds the Mac Studio from attached image 3 up on his open palm on the right side of the frame, close to the camera. He wears a plain charcoal t-shirt. Dark moody home studio with purple and blue RGB lights, a keyboard and a mug on the desk. Cinematic lighting.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.061558
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "10ca519eebd113427b927b13bbd785c1c7d47d015082e31e6298aa9f8f89b0b5",
+        "file": "outputs/10ca519eebd113427b927b13bbd785c1c7d47d015082e31e6298aa9f8f89b0b5.png",
+        "mediaType": "image/png"
+      },
+      {
+        "contentHash": "6c6e793db7d7c32a26224dbc216cf8ccddc2ea43021cd087c6cfef99403e823c",
+        "file": "outputs/6c6e793db7d7c32a26224dbc216cf8ccddc2ea43021cd087c6cfef99403e823c.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

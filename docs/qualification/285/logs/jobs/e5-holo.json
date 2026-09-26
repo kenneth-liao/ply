@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e5-holo",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.056Z",
+  "request": {
+    "prompt": "A glowing holographic profile of a human head made of fine blue light particles and circuit lines, facing left, with a small square microchip glowing beside it, electric blue light on a pure black background. Nothing else, no text.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1024,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.056Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A glowing holographic profile of a human head made of fine blue light particles and circuit lines, facing left, with a small square microchip glowing beside it, electric blue light on a pure black background. Nothing else, no text.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.006145
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "8ea45cba17e33b53d814e27a7ca2cbff1bc4d1ca2bac5fbb95958faf16285be0",
+        "file": "outputs/8ea45cba17e33b53d814e27a7ca2cbff1bc4d1ca2bac5fbb95958faf16285be0.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

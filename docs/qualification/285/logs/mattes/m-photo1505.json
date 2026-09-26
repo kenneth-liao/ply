@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "matteId": "m-photo1505",
+  "kind": "matting",
+  "createdAt": "2026-09-26T02:23:11.988Z",
+  "request": {
+    "source": {
+      "path": "anchors/photo1505.png",
+      "contentHash": "a5733a5b2d9b1de71f59de482452c3372f9f634aef2cf890bc37536d0c320b78",
+      "file": "sources/a5733a5b2d9b1de71f59de482452c3372f9f634aef2cf890bc37536d0c320b78.png"
+    }
+  },
+  "result": {
+    "engine": "local-segmentation:birefnet-dynamic@280306042f57b7a33854319da62fd86aaa89ec4c",
+    "backend": "mps",
+    "timing": {
+      "millis": 6473,
+      "scope": "engine"
+    },
+    "alpha": {
+      "width": 2048,
+      "height": 1536,
+      "transparentPx": 2457987,
+      "opaquePx": 673972
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "11565c5ac9d31cf1a50f7ce9c5157cf2c58d9c8b0ab5e56c9e5c7071abec2ca9",
+        "file": "outputs/11565c5ac9d31cf1a50f7ce9c5157cf2c58d9c8b0ab5e56c9e5c7071abec2ca9.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

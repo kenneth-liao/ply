@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e2-mark",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:55.959Z",
+  "request": {
+    "prompt": "A glowing violet app logo mark: a bold geometric letter S built from two interlocking angular strokes inside a rounded hexagon outline, neon violet light with a white-hot core, centred, on a pure black background. Nothing else, no text.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1024,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:55.959Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A glowing violet app logo mark: a bold geometric letter S built from two interlocking angular strokes inside a rounded hexagon outline, neon violet light with a white-hot core, centred, on a pure black background. Nothing else, no text.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.006155
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "0905c4f27992c0bfe6c54f663cf92a305bed734405d1fde3b4e98f83aa2546f7",
+        "file": "outputs/0905c4f27992c0bfe6c54f663cf92a305bed734405d1fde3b4e98f83aa2546f7.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

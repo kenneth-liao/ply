@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "matteId": "m-mic",
+  "kind": "matting",
+  "createdAt": "2026-09-26T02:22:56.349Z",
+  "request": {
+    "source": {
+      "path": "out/generation/e2-mic/outputs/1ff4b8cba094712d45396df9b181bca76334f9b873ccc7a2c8ddf440308eebb5.png",
+      "contentHash": "1ff4b8cba094712d45396df9b181bca76334f9b873ccc7a2c8ddf440308eebb5",
+      "file": "sources/1ff4b8cba094712d45396df9b181bca76334f9b873ccc7a2c8ddf440308eebb5.png"
+    }
+  },
+  "result": {
+    "engine": "local-segmentation:birefnet-dynamic@280306042f57b7a33854319da62fd86aaa89ec4c",
+    "backend": "mps",
+    "timing": {
+      "millis": 5847,
+      "scope": "engine"
+    },
+    "alpha": {
+      "width": 1024,
+      "height": 1024,
+      "transparentPx": 857425,
+      "opaquePx": 183767
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "f46c03cc783355cfc27131b14ea093c63ce0e7ead359f5c21f936947281f2c86",
+        "file": "outputs/f46c03cc783355cfc27131b14ea093c63ce0e7ead359f5c21f936947281f2c86.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

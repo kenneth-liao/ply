@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "matteId": "m-vial",
+  "kind": "matting",
+  "createdAt": "2026-09-26T02:23:00.831Z",
+  "request": {
+    "source": {
+      "path": "out/generation/e7-vial/outputs/cbbd3b7e133092b5713d8ab941dd8db8214b87c78bb4536d616b625471a4da1b.png",
+      "contentHash": "cbbd3b7e133092b5713d8ab941dd8db8214b87c78bb4536d616b625471a4da1b",
+      "file": "sources/cbbd3b7e133092b5713d8ab941dd8db8214b87c78bb4536d616b625471a4da1b.png"
+    }
+  },
+  "result": {
+    "engine": "local-segmentation:birefnet-dynamic@280306042f57b7a33854319da62fd86aaa89ec4c",
+    "backend": "mps",
+    "timing": {
+      "millis": 4161,
+      "scope": "engine"
+    },
+    "alpha": {
+      "width": 1024,
+      "height": 1536,
+      "transparentPx": 1258824,
+      "opaquePx": 308757
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "fb3664c0c2d23e51424c37ac01a1f55300de37a051206f5b01d9115755ac62a3",
+        "file": "outputs/fb3664c0c2d23e51424c37ac01a1f55300de37a051206f5b01d9115755ac62a3.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

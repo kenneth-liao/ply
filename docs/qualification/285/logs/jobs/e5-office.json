@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e5-office",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.033Z",
+  "request": {
+    "prompt": "A wide blue-toned modern open-plan tech office at night, seen from the back of the room: dark silhouettes of a few people working at desks with glowing monitors, soft bokeh, deep navy and electric blue palette. Cinematic, no text.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.033Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A wide blue-toned modern open-plan tech office at night, seen from the back of the room: dark silhouettes of a few people working at desks with glowing monitors, soft bokeh, deep navy and electric blue palette. Cinematic, no text.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.018315
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "ca8d6ced5c3882dfa52074837623b3b04d0b3fb833123e0afd64ba90815770b1",
+        "file": "outputs/ca8d6ced5c3882dfa52074837623b3b04d0b3fb833123e0afd64ba90815770b1.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e3-beams",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.038Z",
+  "request": {
+    "prompt": "Brilliant light beams exploding upward in a wide fan from a single point at the bottom centre, neon blue, violet, cyan and white rays with small sparkles and a few thin electric violet squiggles, on a pure black background. Nothing else in the frame.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1024,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.038Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "Brilliant light beams exploding upward in a wide fan from a single point at the bottom centre, neon blue, violet, cyan and white rays with small sparkles and a few thin electric violet squiggles, on a pure black background. Nothing else in the frame.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.00618
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "5d7d8d15286a04b63fd497a9dffd90ec594a0c783f5d29d4dfa8af7071d24851",
+        "file": "outputs/5d7d8d15286a04b63fd497a9dffd90ec594a0c783f5d29d4dfa8af7071d24851.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

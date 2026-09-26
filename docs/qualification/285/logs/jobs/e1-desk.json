@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e1-desk",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.051Z",
+  "request": {
+    "prompt": "A dark moody wooden desk at night, photographed straight on at eye level. A modern open silver laptop sits centred, its screen showing a dark minimal app window with a left sidebar menu and, in the middle, a large white line-art ram head logo above the word 'Herdr.' in a monospace font, plus a green 'Plugins connected' status dot at the bottom. Warm orange bokeh lights in the dark background, a few plants in shadow. The left and right thirds of the frame are dark and uncluttered. Cinematic, high contrast, no people, no other text.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.051Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A dark moody wooden desk at night, photographed straight on at eye level. A modern open silver laptop sits centred, its screen showing a dark minimal app window with a left sidebar menu and, in the middle, a large white line-art ram head logo above the word 'Herdr.' in a monospace font, plus a green 'Plugins connected' status dot at the bottom. Warm orange bokeh lights in the dark background, a few plants in shadow. The left and right thirds of the frame are dark and uncluttered. Cinematic, high contrast, no people, no other text.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.010925
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "d65918ffea5cab5fcc5101f5f56148841129553c012389898e27d8c61a44fc7b",
+        "file": "outputs/d65918ffea5cab5fcc5101f5f56148841129553c012389898e27d8c61a44fc7b.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

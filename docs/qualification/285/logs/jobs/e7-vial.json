@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e7-vial",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.039Z",
+  "request": {
+    "prompt": "A single small clear glass medicine vial with a dark red crimped cap and a white label printed with the word 'PEPTIDES' in bold black sans-serif capitals, product shot, isolated on a plain uniform white background with clear margins, soft even lighting.",
+    "intent": "isolated",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1024,
+      "height": 1536
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.039Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A single small clear glass medicine vial with a dark red crimped cap and a white label printed with the word 'PEPTIDES' in bold black sans-serif capitals, product shot, isolated on a plain uniform white background with clear margins, soft even lighting.\n\nFormat: exactly one single isolated subject, fully inside the frame with clear margins on all sides, on a plain, uniform, evenly lit background with crisp, well-defined edges — suitable for later local isolation.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.01079
+    },
+    "warnings": [
+      "isolated: isolated intent is a generation request, not a matte — the output is not verified alpha; invoke Matting explicitly (ADR-0015) for verified true alpha"
+    ],
+    "outputs": [
+      {
+        "contentHash": "cbbd3b7e133092b5713d8ab941dd8db8214b87c78bb4536d616b625471a4da1b",
+        "file": "outputs/cbbd3b7e133092b5713d8ab941dd8db8214b87c78bb4536d616b625471a4da1b.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

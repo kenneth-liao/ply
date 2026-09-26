@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e6-maze",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.046Z",
+  "request": {
+    "prompt": "A flat graphic background: thick glowing light-blue maze-like circuit lines with round end nodes on a very dark navy-black background, clean vector look, even coverage across the whole frame. No text, no objects, no table.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.046Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A flat graphic background: thick glowing light-blue maze-like circuit lines with round end nodes on a very dark navy-black background, clean vector look, even coverage across the whole frame. No text, no objects, no table.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.018285
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "fe5df467824120888d9e2a5849cb2a8c46e56dc67ca41fe7947810e79570c48d",
+        "file": "outputs/fe5df467824120888d9e2a5849cb2a8c46e56dc67ca41fe7947810e79570c48d.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}
