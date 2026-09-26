@@ -4,11 +4,13 @@ Frozen research. It reruns the eight thumbnails of
 `2026-09-23-outlier-test-2` with
 [geongeorge/picture-it](https://github.com/geongeorge/picture-it) and compares
 the results with Ply's best renders. Nothing here is maintained. Its remaining
-gaps were checked against spec #285 and tickets #289–#316; they are not yet in
-`ISA.md` or the issue tracker.
+gaps were checked against spec #285 and tickets #289–#316 and are now tracked:
+gap 1 is #343, gaps 2–4 are #344, and gap 5 is #345 (`wontfix`). The bounds
+question for #306 was later settled by ADR-0026.
 
-- `scripts/`: the FAL calls as run. `$WORKSPACE` is the local bench workspace,
-  `$CONTENT_ROOT` is `ai-launchpad-content`, `$PICTURE_IT_ROOT` is the clone.
+- `scripts/`: the FAL calls as run from the local bench workspace, which
+  calls picture-it through `./bin/picture-it`. `$CONTENT_ROOT` is
+  `ai-launchpad-content`.
 - `overlays/`: the `compose` JSON for the local thumbnails. In
   `t3-logo-fix.json` the embedded logo data URIs are replaced by a placeholder.
 - `t1-picture-it.png`: the one render with no person in it.
@@ -167,7 +169,7 @@ It depends on whether the nested Composition's bounds are a fixed canvas or
 derived from its content. #306 can settle that, keeping these rules possible
 later, without building them now.
 
-## Remaining gaps (not planned)
+## Remaining gaps (#343, #344, #345)
 1. **A stroke-only shape paints nothing and gives no error.** On `0053ceb`,
    `--fill "#00000000" --outline "6,#39ff5a"` rendered a blank canvas and
    reported success. Outlier test 2 follow-up 3; not in #285. Either the
