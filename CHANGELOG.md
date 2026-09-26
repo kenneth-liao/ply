@@ -1,6 +1,30 @@
 # Changelog
 
 ## [Unreleased]
+- Fixed an anchored add of a perspective text Layer being intermittently
+  refused with "no visible painted ink" when the Composition held a large
+  image (#351, spec #285 bug 3): before, the painted-ink pass measured
+  layout on the shared render page and then captured each Layer from that
+  same live page after resizing the viewport to the Layer's bounded capture
+  window, shifting the canvas by inline style, hiding the other Layers, and
+  toggling the masked Layer's clip — capturing immediately after those
+  writes, and the screenshot could read the last-presented compositor
+  frame, which predated the mutations; with the page and canvas backgrounds
+  transparent the stale frame carried no ink at all, `painted` came back
+  null, and the ONE pre-effect anchored resolution threw the bogus refusal
+  — about 4% of anchored perspective adds in the recorded loop (6 of 150),
+  nondeterministically, publishing nothing. After, every captured Layer is
+  captured from its OWN state-initial page: the paint-identical markup with
+  the viewport, the canvas shift, the other Layers' visibility, and the
+  pre-clip/post-clip mask baked in as the page's initial state
+  (`CompositionCaptureState` on `buildCompositionHtml`; the default markup
+  renders byte-identically, so pinned Render history is untouched), run
+  through the same awaited decode and retained-font gates a render runs —
+  the exact passes whose own screenshots are deterministic — and nothing
+  mutates between the load and the capture, so the capture can never read
+  a pre-mutation frame. The same bake fixes the latent sibling race in the
+  hide-others step (a stale pre-hide frame would silently over-count ink).
+  Version 7.4.3 (#351).
 - Fixed a one-command `composition add` with `--fit-box` plus an effect
   option (`--shadow`, `--outline`, `--inner-shadow`) dying on a raw
   TypeError before anything published (#349, spec #285 US-016, DEC-010):

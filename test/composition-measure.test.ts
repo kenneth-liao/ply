@@ -27,6 +27,7 @@ import { computeRevisionHash, LAYER_SCHEMA_VERSION } from "../src/layer.js";
 import type { LayerTextRevision } from "../src/layer.js";
 import { measureCompositionLayers } from "../src/composition-measure.js";
 import { getBrowser, closeBrowser } from "../src/browser.js";
+import type { Page } from "playwright";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -1040,3 +1041,133 @@ test("text layout does not depend on position x=0, 400, 640 (TEST-005, ISC-57, #
   expect(t640.box.x).toBe(640);
 });
 
+
+/**
+ * The page-operation recorder (#351): a Proxy over a real render page that
+ * records every operation the measurement flow issues through the page seam,
+ * and forwards each call unchanged. The recorded operations are the evidence
+ * for the stale-capture invariant below: loads, viewport resizes, evaluates
+ * (with their serialized source, so a write can be told from a read), and
+ * screenshots.
+ */
+type RecordedOp =
+  | { op: "load" }
+  | { op: "viewport" }
+  | { op: "evaluate"; src: string }
+  | { op: "screenshot" };
+
+function recordingPage(page: Page): { wrapped: Page; ops: RecordedOp[] } {
+  const ops: RecordedOp[] = [];
+  const wrapped = new Proxy(page, {
+    get(target, prop) {
+      if (prop === "setContent") {
+        return (...args: unknown[]) => {
+          ops.push({ op: "load" });
+          return (target as Page).setContent(...(args as Parameters<Page["setContent"]>));
+        };
+      }
+      if (prop === "setViewportSize") {
+        return (...args: unknown[]) => {
+          ops.push({ op: "viewport" });
+          return (target as Page).setViewportSize(...(args as Parameters<Page["setViewportSize"]>));
+        };
+      }
+      if (prop === "evaluate") {
+        return (fn: unknown, ...rest: unknown[]) => {
+          ops.push({ op: "evaluate", src: String(fn) });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (target as any).evaluate(fn, ...rest);
+        };
+      }
+      if (prop === "screenshot") {
+        return (...args: unknown[]) => {
+          ops.push({ op: "screenshot" });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (target as any).screenshot(...args);
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  return { wrapped, ops };
+}
+
+/**
+ * The capture-state invariant (#351): the painted-ink pass captures each
+ * Layer from a page whose state was established at load. Between the page
+ * load (setContent) and the capture screenshot, the ONLY evaluates are the
+ * paint path's own gate passes — the awaited content decode, the retained-
+ * font readiness gate, the effect filter-region sizing, and the text fit
+ * derivation — the exact passes a render runs before its own screenshot
+ * (deterministic in every render). No capture-specific mutation may appear
+ * in that window: no viewport resize, no style write, no visibility toggle,
+ * no mask toggle — those are the operations whose presentation the capture
+ * used to race (a capture could read the pre-mutation frame and report
+ * visible ink as absent, refusing an anchored add at random, #351).
+ *
+ * The gate fingerprints are the passes' distinctive source markers; any
+ * evaluate outside them between load and screenshot fails the invariant.
+ */
+const GATE_MARKERS = [
+  "document.images",        // awaited content decode (the paint path's gate)
+  "document.fonts",         // retained-font readiness gate / family probe
+  "filterUnits",            // effect filter-region sizing (#140/#221/#301)
+  "text fit pass",          // text fit-to-box derivation (#295, #350)
+  "data-ply-mask",          // the read-only capture-contract probe
+];
+
+function assertEveryCaptureReadsLoadedState(ops: RecordedOp[]): void {
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i]!.op !== "screenshot") continue;
+    let lastLoad = i - 1;
+    while (lastLoad >= 0 && ops[lastLoad]!.op !== "load") lastLoad--;
+    // The load must exist and precede the capture: a capture with no load
+    // behind it reads a page whose content is not the measurement's.
+    expect(lastLoad).toBeGreaterThanOrEqual(0);
+    for (const op of ops.slice(lastLoad + 1, i)) {
+      // No viewport resize between a page's load and its capture: the
+      // capture surface was established before the load, with the page.
+      expect(op.op).not.toBe("viewport");
+      if (op.op !== "evaluate") continue;
+      const isGate = GATE_MARKERS.some((m) => op.src.includes(m));
+      if (!isGate) {
+        throw new Error(
+          `non-gate evaluate between page load and ink capture — a capture-side mutation:\n${op.src}`,
+        );
+      }
+    }
+  }
+}
+
+test("every painted-ink capture reads state that nothing mutated after its page load (#351 stale-capture invariant)", async () => {
+  // The #351 repro shape: a small text Layer near the right edge of a wide
+  // canvas under a perspective tilt, over a background — the ink pass must
+  // capture it through its own bounded window.
+  const img = path.join(tempDir, "red.png");
+  await writeFile(img, solidPng(64, 64, RED));
+  await makeComp("cap", 1280, 720);
+  await addImageLayer("cap", "bg", img, { x: 600, y: 300 });
+  const added = await addTextLayer("cap", "t", "PostgreSQL", { fontSize: 15, color: "#ffffff", x: 1115, y: 525 });
+  const edit = await invoke([
+    "layer", "edit", added.use.layerId,
+    "--perspective", "0x-20", "--project", projDir, "--json",
+  ]);
+  expect(edit.code).toBe(0);
+
+  const browser = await getBrowser();
+  const ctx = await browser.newContext({ deviceScaleFactor: 1 });
+  const raw = await ctx.newPage();
+  const { wrapped, ops } = recordingPage(raw);
+  try {
+    const result = await measureCompositionLayers(projDir, "cap", undefined, { page: wrapped });
+    // The capture still measures both Layers (the invariant is about HOW the
+    // capture reads state, not about the numbers):
+    expect(result.layers).toHaveLength(2);
+    expect(result.layers.every((l) => l.painted !== null || l.refused !== null)).toBe(true);
+    assertEveryCaptureReadsLoadedState(ops);
+  } finally {
+    await ctx.close();
+    await closeBrowser();
+  }
+});
