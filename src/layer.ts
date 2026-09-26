@@ -3438,7 +3438,27 @@ export async function readLayerInternalFull(
     throw new Error(`Security error: layer path "${layerId}" escapes project boundary.`);
   }
 
-  if (await escapesDirReal(resolvedRoot, layerFile)) {
+  // Containment stays FIRST ("stored document and content containment is
+  // checked before reading escaped bytes"): only an existing file is judged
+  // by its resolved location, so an escaping alias is refused before its
+  // bytes are read. A missing file is absence, not a filesystem failure —
+  // realpath's ENOENT becomes the ONE Layer refusal (#326, DEC-003):
+  // nonzero, naming the id, never a raw filesystem error. This is the one
+  // canonical Layer reader: every id-accepting command — layer edit (with
+  // --fork, --anchor, --mask, --cover-to, the unit gate), layer inspect,
+  // layer review, and the downstream measure and anchor paths — resolves
+  // through it, so one catch is the whole fix. Any other I/O error
+  // propagates unchanged.
+  let escaped: boolean;
+  try {
+    escaped = await escapesDirReal(resolvedRoot, layerFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Layer "${layerId}" not found in project.`);
+    }
+    throw err;
+  }
+  if (escaped) {
     throw new Error(`Security error: layer "${layerId}" escapes project boundary.`);
   }
 
