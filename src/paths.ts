@@ -24,8 +24,11 @@ export const outsideDir = (dir: string, target: string): boolean => {
 /**
  * True when the existing file `target` escapes `dir` once symlinks are
  * resolved. Callers must have established existence already (a failed
- * `readFile`); `realpath` errors here are real I/O failures, not absence,
- * and propagate.
+ * `readFile`), or treat a propagated ENOENT as absence themselves — the one
+ * Layer identity reader does exactly that (a missing Layer file becomes the
+ * unknown-id refusal, #326), while containment for an existing file is
+ * still judged first. `realpath` errors other than ENOENT are real I/O
+ * failures, not absence, and propagate.
  */
 export async function escapesDirReal(dir: string, target: string): Promise<boolean> {
   const [realDir, realFile] = await Promise.all([realpath(dir), realpath(target)]);

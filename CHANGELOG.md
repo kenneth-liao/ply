@@ -1,6 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+- Fixed raw filesystem errors on unknown Layer ids (#326, DEC-003): before,
+  every command that takes a Layer id — `ply layer edit` (including the
+  `--fork`, `--anchor`, `--mask`, and `--cover-to` paths and the unit edit
+  gate), `ply layer inspect`, and `ply layer review` — resolved it through
+  the one canonical Layer reader (`readLayerInternalFull`), whose
+  real-path containment probe treated a missing identity file as a raw
+  `ENOENT` and printed it; after, the reader turns that absence into its
+  one refusal, so an unknown well-formed Layer id exits nonzero naming the
+  id (`Layer "layer_…" not found in project.`) and no raw filesystem error
+  reaches output, in text or JSON. The symlink containment check still
+  runs before any escaped bytes are read, and any other I/O error still
+  propagates. A new `LAYER_COMMANDS` table — pinned against HELP by the
+  CLI-seam test in the #289 Composition shape — keeps the seam enumerated;
+  no other command accepts a Layer id. Version 7.3.1 (#326).
 - Added unit Layers (ADR-0026, spec #285 US-018/ISC-36, #307):
   `composition add <comp> <name> --unit <composition>` adds a Layer whose
   content is a LIVE reference to another Composition in the same Project —

@@ -381,6 +381,68 @@ test("all Composition commands taking a composition name refuse unknown names wi
   }
 });
 
+/** Test-only arg builders (#326, the #289 MISSING_COMPOSITION_ARGS shape): one
+ *  builder per command the LAYER_COMMANDS table flags as taking an existing
+ *  Layer id. `edit` supplies `--x` so the invocation passes the usage gate and
+ *  reaches the Layer read; `review` supplies its required --out. */
+const MISSING_LAYER_ARGS: Record<string, (missing: string, ctx: { project: string }) => string[]> = {
+  edit: (missing, ctx) => ["layer", "edit", missing, "--x", "5", "--project", ctx.project],
+  inspect: (missing, ctx) => ["layer", "inspect", missing, "--project", ctx.project],
+  review: (missing, ctx) => ["layer", "review", missing, "--out", path.join(tempDir, "review-sheet.png"), "--project", ctx.project],
+};
+
+test("all Layer commands taking a Layer id refuse unknown ids naming the id with no raw filesystem error (TEST-006, DEC-003, #326)", async () => {
+  const { LAYER_COMMANDS, HELP } = await import("../src/layer-cli.js");
+
+  // INT-2: the table's key set must equal the CLI's published command set —
+  // the `ply layer <command>` usage lines in HELP. A new dispatched command
+  // missing from the table, or a stale table entry HELP doesn't document,
+  // fails here; the flag must be set consciously.
+  const helpCommands = [
+    ...new Set([...HELP.matchAll(/^\s*ply layer ([a-z-]+)/gm)].map((m) => m[1]!)),
+  ].sort();
+  expect(Object.keys(LAYER_COMMANDS).sort()).toEqual(helpCommands);
+
+  // INT-2: the builders must cover exactly the commands the table flags as
+  // taking an existing Layer id — missing or extra builders fail, so the
+  // enumeration cannot be silently narrowed by a wrong flag.
+  const flaggedCommands = Object.entries(LAYER_COMMANDS)
+    .filter(([, meta]) => meta.takesExistingLayerId)
+    .map(([name]) => name)
+    .sort();
+  expect(Object.keys(MISSING_LAYER_ARGS).sort()).toEqual(flaggedCommands);
+
+  const projDir = path.join(tempDir, "proj");
+  await invoke(["project", "init", projDir, "--name", "test-proj"]);
+
+  const missingId = "layer_does_not_exist";
+
+  for (const cmd of flaggedCommands) {
+    const args = MISSING_LAYER_ARGS[cmd]!(missingId, { project: projDir });
+
+    // Text presentation: nonzero exit naming the id, no raw filesystem error.
+    const resText = await invoke(args);
+    expect(resText.code).not.toBe(0);
+    const combinedText = `${resText.stdout}\n${resText.stderr}`;
+    expect(combinedText).toContain(missingId);
+    expect(combinedText).not.toContain("ENOENT");
+    expect(combinedText).not.toContain("no such file or directory");
+    expect(combinedText).not.toContain("lstat");
+
+    // JSON presentation: one valid structured JSON result with ok: false,
+    // naming the id, no raw filesystem error.
+    const resJson = await invoke([...args, "--json"]);
+    expect(resJson.code).not.toBe(0);
+    expect(resJson.stderr).toBe("");
+    const parsed = JSON.parse(resJson.stdout);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error).toContain(missingId);
+    expect(parsed.error).not.toContain("ENOENT");
+    expect(parsed.error).not.toContain("no such file or directory");
+    expect(parsed.error).not.toContain("lstat");
+  }
+});
+
 test("Composition commands report no Compositions exist in an empty project without raw ENOENT (DEC-003)", async () => {
   const projDir = path.join(tempDir, "empty-proj");
   await invoke(["project", "init", projDir, "--name", "empty-proj"]);

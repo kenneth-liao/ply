@@ -29,7 +29,9 @@ import { parseLayerAddress, resolveLayerToken, LayerAddressSyntaxError, type Res
 import { closeCliBrowser } from "./cli-browser.js";
 import { helpResult, usageMessage, joinDashLeadingNumericValues } from "./cli-present.js";
 
-const HELP = `
+// Exported for the CLI-seam test's HELP pin (#326, the composition-cli.ts
+// #289 shape): the published usage lines enumerate the dispatched commands.
+export const HELP = `
 layer — Layer management and inspection within a Project
 
 Name addressing: wherever a Layer id is accepted — layer edit, layer
@@ -678,60 +680,6 @@ function formatAnchorTarget(anchored: AnchorResolution): string {
   return ` at y ${target.y}`;
 }
 
-// Dash-numeric options (#128): the shared join, driven by the ONE option
-// definition (DEC-001) — membership, not order, decides the join.
-const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), layerDashNumericFlags(layerEditOptionKeys()));
-const isJson = rawArgs.includes("--json");
-
-let values: LayerOptionArgs & {
-  project?: string;
-  json?: boolean;
-  help?: boolean;
-  "in-place"?: boolean;
-  fork?: boolean;
-  composition?: string;
-  use?: string;
-  out?: string;
-};
-let positionals: string[];
-
-try {
-  const parsed = parseArgs({
-    args: rawArgs,
-    allowPositionals: true,
-    options: {
-      project: { type: "string", short: "p" },
-      json: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
-      "in-place": { type: "boolean", default: false },
-      fork: { type: "boolean", default: false },
-      composition: { type: "string" },
-      use: { type: "string" },
-      out: { type: "string" },
-      // The one declaration of the Layer-editing option surface (DEC-001):
-      // composition add shares these entries with layer edit.
-      ...LAYER_OPTION_PARSE_ARGS,
-    },
-  });
-  // The repeatable --run occurrences (#297) arrive as a parseArgs array
-  // beside the single-string option values; the surface's declared shape
-  // narrows them to the ordered occurrence list.
-  values = parsed.values as unknown as NonNullable<typeof values>;
-  positionals = parsed.positionals;
-} catch (err) {
-  output({ ok: false, error: usageMessage((err as Error).message, "layer") }, isJson);
-  process.exit(2);
-}
-
-if (values.help || positionals.length === 0) {
-  if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
-  else console.log(HELP);
-  process.exit(0);
-}
-
-const command = positionals[0]!;
-const targetProj = values.project ?? process.cwd();
-
 /**
  * Name addressing (spec #226 US-003, DEC-003): the ONE command-boundary
  * resolution of the id-accepting commands' target token. A plain Layer id
@@ -760,7 +708,85 @@ async function resolveTarget(
   }
 }
 
+/**
+ * The one per-command fact the production surface keeps (#326, DEC-003 — the
+ * #289 Composition precedent): whether the command takes an existing Layer's
+ * id. Test-only arg builders live in test/cli-surface.test.ts, and the
+ * table's key set is pinned against HELP by that test, so a command cannot
+ * silently opt out of the unknown-id refusal seam. Every id-accepting
+ * command resolves through the ONE Layer reader (`readLayerInternalFull`),
+ * so a new id-accepting command inherits the refusal — this table and its
+ * pin keep the seam enumerated.
+ */
+export interface LayerCommandMeta {
+  takesExistingLayerId: boolean;
+}
+
+export const LAYER_COMMANDS: Record<string, LayerCommandMeta> = {
+  edit: { takesExistingLayerId: true },
+  inspect: { takesExistingLayerId: true },
+  review: { takesExistingLayerId: true },
+  list: { takesExistingLayerId: false },
+};
+
+// Dash-numeric options (#128): the shared join, driven by the ONE option
+// definition (DEC-001) — membership, not order, decides the join.
+// All argv handling lives inside run() (#326): the module is importable —
+// the LAYER_COMMANDS table is read by the CLI-seam test — so nothing here
+// may parse argv, print HELP, or exit at module evaluation time.
 async function run() {
+  const rawArgs = joinDashLeadingNumericValues(process.argv.slice(2), layerDashNumericFlags(layerEditOptionKeys()));
+  const isJson = rawArgs.includes("--json");
+
+  let values: LayerOptionArgs & {
+    project?: string;
+    json?: boolean;
+    help?: boolean;
+    "in-place"?: boolean;
+    fork?: boolean;
+    composition?: string;
+    use?: string;
+    out?: string;
+  };
+  let positionals: string[];
+
+  try {
+    const parsed = parseArgs({
+      args: rawArgs,
+      allowPositionals: true,
+      options: {
+        project: { type: "string", short: "p" },
+        json: { type: "boolean", default: false },
+        help: { type: "boolean", short: "h", default: false },
+        "in-place": { type: "boolean", default: false },
+        fork: { type: "boolean", default: false },
+        composition: { type: "string" },
+        use: { type: "string" },
+        out: { type: "string" },
+        // The one declaration of the Layer-editing option surface (DEC-001):
+        // composition add shares these entries with layer edit.
+        ...LAYER_OPTION_PARSE_ARGS,
+      },
+    });
+    // The repeatable --run occurrences (#297) arrive as a parseArgs array
+    // beside the single-string option values; the surface's declared shape
+    // narrows them to the ordered occurrence list.
+    values = parsed.values as unknown as NonNullable<typeof values>;
+    positionals = parsed.positionals;
+  } catch (err) {
+    output({ ok: false, error: usageMessage((err as Error).message, "layer") }, isJson);
+    process.exit(2);
+  }
+
+  if (values.help || positionals.length === 0) {
+    if (isJson) console.log(JSON.stringify(helpResult(HELP.trim()), null, 2));
+    else console.log(HELP);
+    process.exit(0);
+  }
+
+  const command = positionals[0]!;
+  const targetProj = values.project ?? process.cwd();
+
   try {
     if (command === "edit") {
       const layerToken = positionals[1];
@@ -1517,4 +1543,6 @@ async function run() {
   }
 }
 
-await run();
+if (import.meta.main) {
+  await run();
+}
