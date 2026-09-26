@@ -1566,7 +1566,11 @@ export interface TextFitProbe {
  * `sizeEffectFilterRegions` and the geometry probe use — transform removal
  * never reflows other Layers, they are absolutely positioned), so scale,
  * rotation, and flip map the FITTED block afterwards and never inflate the
- * measured layout size. A missing holder fails closed like a missing
+ * measured layout size. The reads are also DEVICE-SCALE invariant (#350):
+ * the pass clears the `#canvas` stylesheet transform the supersampled paint
+ * emits at factor > 1 (ADR-0022) around the same reads, so a supersampled
+ * render and the supersample-1 measure derive the same size — the one
+ * shared derivation can never disagree with itself across device scales. A missing holder fails closed like a missing
  * element: a markup branch that stores a fit box without emitting the
  * `data-ply-fit` marker is a markup/derivation drift, refused loudly at the
  * probe instead of silently validating overflowing text (INT-2, #328
@@ -1589,68 +1593,89 @@ export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise
   return page.evaluate((input) => {
     const canvasEl = document.getElementById("canvas");
     if (!canvasEl) throw new Error("text fit pass: #canvas element missing");
-    return input.map((spec): { effectiveFontSize: number; fits: boolean; neededFontSize: number | null } | null => {
-      if (!spec) return null;
-      const outer = canvasEl.children[spec.index] as HTMLElement | undefined;
-      if (!outer) throw new Error(`text fit pass: element ${spec.index} not found in #canvas`);
-      // The mask wrapper (ADR-0025, #305): the layer element — the one that
-      // carries the transform and the data-ply-fit marker — is inside it.
-      const layerEl = (outer.hasAttribute("data-ply-mask")
-        ? outer.firstElementChild
-        : outer) as HTMLElement;
-      // The derivation sets the font size on the element that CARRIES it —
-      // the text element marked `data-ply-fit` (the outer element itself for
-      // the single-div markup, the inner text div for the region/grade and
-      // gradient structures).
-      const holder = layerEl.matches("[data-ply-fit]") ? layerEl : layerEl.querySelector("[data-ply-fit]");
-      if (!(holder instanceof HTMLElement)) {
-        // Fail closed (INT-2, #328 review): every markup branch that stores a
-        // fit box emits the marker, so reaching this line means the markup
-        // and the derivation have drifted — a silent `fits: true` would
-        // publish overflowing text.
-        throw new Error(`text fit pass: element ${spec.index} carries a fit box but no data-ply-fit holder — refusing to paint or measure unfitted text.`);
-      }
-      const W = spec.fitWidth;
-      const H = spec.fitHeight;
-      const MIN = spec.minSize;
-      const overflow = (r: DOMRect): boolean => r.width > W + 0.01 || r.height > H + 0.01;
-      // The box is a LAYOUT-px measure (INT-1, #328 review): every rect read
-      // below is the UNTRANSFORMED box — clear the outer element's inline
-      // transform around the reads and restore it (the same pattern
-      // `sizeEffectFilterRegions` and the geometry probe use; transform
-      // removal never reflows other Layers, they are absolutely
-      // positioned), so scale/rotation/flip map the FITTED block afterwards
-      // and never inflate the measured layout size.
-      const savedTransform = layerEl.style.transform;
-      layerEl.style.transform = "none";
-      try {
-        let size = spec.fontSize;
-        holder.style.fontSize = `${size}px`;
-        let rect = holder.getBoundingClientRect();
-        // Already fits (or exactly fills) the box: shrink-only — the
-        // effective size IS the stored size.
-        if (!overflow(rect)) {
-          return { effectiveFontSize: size, fits: true, neededFontSize: null };
+    // The device-scale invariance of this ONE derivation (#350): the
+    // supersampled paint (#184, ADR-0022) carries a stylesheet
+    // `#canvas{transform:scale(N)}` at factor > 1 (measure builds at 1, the
+    // render at its delivery factor, the mask/unit raster pages at their
+    // raster scale), and a bounding rect inside a scaled canvas reads N×
+    // its layout size — the derivation would misread the box and shrink
+    // fitted text at every device scale above 1 while measure agreed, so
+    // render and measure disagreed. Clear the canvas transform around the
+    // rect reads (inline wins over the stylesheet rule — the same
+    // clear-read-restore pattern this pass applies to each layer element)
+    // and restore it before any screenshot; every rect below is then true
+    // layout px at every device scale, so measure and render cannot
+    // disagree.
+    const savedCanvasTransform = canvasEl.style.transform;
+    canvasEl.style.transform = "none";
+    try {
+      return input.map((spec): { effectiveFontSize: number; fits: boolean; neededFontSize: number | null } | null => {
+        if (!spec) return null;
+        const outer = canvasEl.children[spec.index] as HTMLElement | undefined;
+        if (!outer) throw new Error(`text fit pass: element ${spec.index} not found in #canvas`);
+        // The mask wrapper (ADR-0025, #305): the layer element — the one that
+        // carries the transform and the data-ply-fit marker — is inside it.
+        const layerEl = (outer.hasAttribute("data-ply-mask")
+          ? outer.firstElementChild
+          : outer) as HTMLElement;
+        // The derivation sets the font size on the element that CARRIES it —
+        // the text element marked `data-ply-fit` (the outer element itself for
+        // the single-div markup, the inner text div for the region/grade and
+        // gradient structures).
+        const holder = layerEl.matches("[data-ply-fit]") ? layerEl : layerEl.querySelector("[data-ply-fit]");
+        if (!(holder instanceof HTMLElement)) {
+          // Fail closed (INT-2, #328 review): every markup branch that stores a
+          // fit box emits the marker, so reaching this line means the markup
+          // and the derivation have drifted — a silent `fits: true` would
+          // publish overflowing text.
+          throw new Error(`text fit pass: element ${spec.index} carries a fit box but no data-ply-fit holder — refusing to paint or measure unfitted text.`);
         }
-        let needed: number | null = null;
-        for (let i = 0; i < 24; i++) {
-          const s = Math.min(W / rect.width, H / rect.height);
-          const candidate = Math.floor(size * s * 100) / 100;
-          if (i === 0) needed = candidate;
-          const next = Math.max(MIN, candidate);
-          if (next >= size) break;
-          size = next;
+        const W = spec.fitWidth;
+        const H = spec.fitHeight;
+        const MIN = spec.minSize;
+        const overflow = (r: DOMRect): boolean => r.width > W + 0.01 || r.height > H + 0.01;
+        // The box is a LAYOUT-px measure (INT-1, #328 review): every rect read
+        // below is the UNTRANSFORMED box — clear the outer element's inline
+        // transform around the reads and restore it (the same pattern
+        // `sizeEffectFilterRegions` and the geometry probe use; transform
+        // removal never reflows other Layers, they are absolutely
+        // positioned), so scale/rotation/flip map the FITTED block afterwards
+        // and never inflate the measured layout size. The canvas transform is
+        // already cleared for this whole pass (#350), so the reads are
+        // layout px at any device scale.
+        const savedTransform = layerEl.style.transform;
+        layerEl.style.transform = "none";
+        try {
+          let size = spec.fontSize;
           holder.style.fontSize = `${size}px`;
-          rect = holder.getBoundingClientRect();
+          let rect = holder.getBoundingClientRect();
+          // Already fits (or exactly fills) the box: shrink-only — the
+          // effective size IS the stored size.
           if (!overflow(rect)) {
-            return { effectiveFontSize: size, fits: true, neededFontSize: needed };
+            return { effectiveFontSize: size, fits: true, neededFontSize: null };
           }
+          let needed: number | null = null;
+          for (let i = 0; i < 24; i++) {
+            const s = Math.min(W / rect.width, H / rect.height);
+            const candidate = Math.floor(size * s * 100) / 100;
+            if (i === 0) needed = candidate;
+            const next = Math.max(MIN, candidate);
+            if (next >= size) break;
+            size = next;
+            holder.style.fontSize = `${size}px`;
+            rect = holder.getBoundingClientRect();
+            if (!overflow(rect)) {
+              return { effectiveFontSize: size, fits: true, neededFontSize: needed };
+            }
+          }
+          return { effectiveFontSize: size, fits: false, neededFontSize: needed };
+        } finally {
+          layerEl.style.transform = savedTransform;
         }
-        return { effectiveFontSize: size, fits: false, neededFontSize: needed };
-      } finally {
-        layerEl.style.transform = savedTransform;
-      }
-    });
+      });
+    } finally {
+      canvasEl.style.transform = savedCanvasTransform;
+    }
   }, specs);
 }
 

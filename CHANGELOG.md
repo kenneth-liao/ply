@@ -1,6 +1,24 @@
 # Changelog
 
 ## [Unreleased]
+- Fixed a `--fit-box` text Layer rendering at about half the size `measure`
+  reports (#350, spec #285 US-016, DEC-010): before, `measure` built its page
+  at supersample 1 while `render` built at its delivery factor (default 2,
+  ADR-0022), and the supersampled markup's stylesheet
+  `#canvas{transform:scale(N)}` inflated the shared fit derivation's
+  bounding-rect reads by N — the pass believed the block overflowed its box,
+  so every supersampled render (the default, the mask raster pages, and the
+  unit raster pages at their raster scale) shrank fitted text while
+  `measure` kept the stored size; a text that already fit rendered at about
+  56% of its measured ink. After, the ONE in-page derivation
+  (`applyTextFit`, shared by measure, render, and anchors) clears the
+  `#canvas` transform around its rect reads and restores it before any
+  screenshot — the same untransformed-read pattern it already applied to
+  each layer element — so every read is true layout px at every device
+  scale: the rendered ink equals `measure`'s painted box at the default
+  supersample and at 1, a fitting text renders byte-identically with and
+  without the box, and a scaled unit's fit-box member renders at the fitted
+  size inside its raster page. Version 7.4.1 (#350).
 - Shipped the unit fork and transitive-reach reporting (ADR-0026 §3/§4,
   spec #285 US-018/ISC-36, #341): `layer edit --fork --fork-unit <name>` on
   a unit Layer publishes the forked Layer identity AND a copy of the inner
