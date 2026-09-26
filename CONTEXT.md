@@ -43,7 +43,9 @@ place the unit is used, while each member stays individually editable there
 with every existing command. The unit's own transform and adjustment facts
 apply to the inner composite as one Layer at paint time; the composite is
 never stored. A Composition can never contain itself, directly or
-transitively.
+transitively. Forking a unit (`layer edit --fork --fork-unit <name>`,
+ADR-0026 §3) copies the inner Composition under the caller's name with the
+members shared — a name clash or a cycle refuses before anything publishes.
 _Avoid_: a group primitive, flattening for reuse, per-use overrides, baked
 composites
 
@@ -201,7 +203,10 @@ _Avoid_: masking the file, baking the clip
   (ADR-0013).
 - Editing a Layer with multiple referring Compositions requires explicit
   in-place or fork intent and reports the blast radius on refusal. A Layer
-  with exactly one referrer needs no flag.
+  with exactly one referrer needs no flag. The rule counts DIRECT referrers
+  only; the Compositions reached through unit references, transitively, are
+  reported beside the direct ones — on success and on refusal — and never
+  counted (ADR-0026 §4, #341).
 - Layer revisions and their content are immutable. A shipped Render remains
   reproducible after its source Layers change (ADR-0013).
 - Final composition is local and deterministic. Generation is the only network

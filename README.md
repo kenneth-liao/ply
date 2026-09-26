@@ -1146,6 +1146,9 @@ ply layer edit poster/tile --rotate 20 -p ~/projects/my-poster
 # Each member stays individually editable IN its own Composition — and the
 # unit is a live reference: the edit updates every place the unit is used.
 ply layer edit card/face --fill "#123456" -p ~/projects/my-poster
+# Fork the unit: a new inner Composition under YOUR name, the members
+# shared; the forked unit's edit reaches only poster's use.
+ply layer edit poster/tile --fork --fork-unit card-v2 --rotate 15 -p ~/projects/my-poster
 ```
 
 - **A unit is a Layer (ADR-0026 §4):** kind `unit`, whose revision stores
@@ -1164,9 +1167,24 @@ ply layer edit card/face --fill "#123456" -p ~/projects/my-poster
   through `layer edit` (`composition add --unit` places only). Every other
   fact — `--anchor`, `--skew`/`--perspective`, the effects, the visible
   region, `--mask`, and every content option — is refused BY NAME until a
-  ticket ships it (ADR-0026 §4); the unit fork (`--fork` with a
-  caller-supplied inner name) and transitive-reach reporting are ticket
-  #341.
+  ticket ships it (ADR-0026 §4); every other fact stays refused by name
+  until a ticket ships it.
+- **The unit fork (#341, ADR-0026 §3):** `layer edit --fork --fork-unit
+  <name>` on a unit Layer publishes the forked Layer identity AND a copy of
+  the inner Composition under the caller-supplied name — same canvas, the
+  same use list, the member Layers SHARED (an in-place member edit still
+  reaches both inners, now as two direct referrers under the ordinary
+  `--in-place`/`--fork` rule). A unit used inside the original inner is not
+  forked: the copy's use of it stays live. One publication — a name clash
+  or a cycle refuses before anything is published, and the original inner,
+  other referrers, and retained Renders are untouched.
+- **Transitive reach (#341, ADR-0026 §4):** every edit reports the
+  Compositions it reaches THROUGH units, transitively, next to the direct
+  referrers — on success (`reachedThroughUnits`) and in the ISC-11 refusal.
+  The `--in-place` / `--fork` rule itself still counts direct referrers
+  only: reach through units is reported, never refused. An unused unit
+  Layer reaches nothing, and a Composition reached by two paths is reported
+  once.
 - **Bounds (§3):** the unit's content box is the inner Composition's
   canvas; members outside it are cut, as when the inner Composition renders
   on its own. Content-derived bounds are a later ticket.

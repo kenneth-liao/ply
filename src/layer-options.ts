@@ -118,19 +118,20 @@ function parseRawOptionValue(raw: string | undefined): OptionParse<string | unde
 /** The unit reference's boundary parse (ADR-0026, #307): the value must be
  *  a valid Composition name under the ONE name rule — the same grammar
  *  `sanitizeName` enforces at publication, so a malformed name refuses at
- *  the parse boundary with the SAME text on `composition add` and
- *  `layer edit` (the refusal-parity contract; on edit the well-formed form
- *  then reaches the add-only refusal). */
-export function parseLayerUnitTarget(raw: string | undefined): OptionParse<string | undefined> {
+ *  the parse boundary with the flag's own wording (`--unit` on the add and
+ *  edit content surfaces — the refusal-parity contract; on edit the
+ *  well-formed form then reaches the add-only refusal — and `--fork-unit`
+ *  on the unit fork, #341). */
+export function parseLayerUnitTarget(raw: string | undefined, flag = "--unit"): OptionParse<string | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
   const trimmed = raw.trim();
   if (trimmed === "") {
-    return { ok: false, error: "--unit takes a Composition name: the name cannot be empty." };
+    return { ok: false, error: `${flag} takes a Composition name: the name cannot be empty.` };
   }
   if (!isValidUseName(trimmed)) {
     return {
       ok: false,
-      error: `--unit takes a Composition name: "${raw}" contains invalid characters (use alphanumeric, dash, or underscore).`,
+      error: `${flag} takes a Composition name: "${raw}" contains invalid characters (use alphanumeric, dash, or underscore).`,
     };
   }
   return { ok: true, value: raw };
@@ -290,9 +291,9 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   // The unit Layer (ADR-0026, spec #285 US-018/ISC-36, #307): a Layer whose
   // content is a live reference to another Composition in the same Project.
   // ADD-ONLY: the reference is set at creation and changed only by the unit
-  // fork (#341) — `layer edit --unit` is refused, as is --fork on a unit
-  // Layer in #307. The value is the inner Composition's name, validated in
-  // the publication path through the one name rule.
+  // fork (#341, `layer edit --fork --fork-unit <name>`) — `layer edit
+  // --unit` is refused. The value is the inner Composition's name,
+  // validated in the publication path through the one name rule.
   { key: "unit", group: "content", contentKind: "unit", appliesTo: ["unit"], editOption: false, parse: parseLayerUnitTarget },
   // The vector colour (#215, spec #207 US-005, DEC-008/009): ONE paint-time
   // colour over a vector image Layer's alpha. Its own group BEFORE the

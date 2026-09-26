@@ -90,6 +90,12 @@ Options:
                         Mutually exclusive with --in-place; --composition and
                         --use are required. A fork always creates a new
                         identity, even when no edit option changes content.
+  --fork-unit <name>    With --fork on a unit Layer: the caller-supplied name
+                        of the new inner Composition the fork copies (same
+                        canvas, the same use list — the member Layers stay
+                        shared). Required with --fork on a unit; refused on a
+                        non-unit fork; a name clash or a cycle refuses before
+                        anything is published (ADR-0026 §3, #341).
   --composition <name>  Target Composition for --fork (required with --fork)
   --use <local-name>    Target use local name for --fork (required with --fork)
   --image <path>        New source image file for an image Layer: a regular
@@ -746,6 +752,7 @@ async function run() {
     fork?: boolean;
     composition?: string;
     use?: string;
+    "fork-unit"?: string;
     out?: string;
   };
   let positionals: string[];
@@ -762,6 +769,7 @@ async function run() {
         fork: { type: "boolean", default: false },
         composition: { type: "string" },
         use: { type: "string" },
+        "fork-unit": { type: "string" },
         out: { type: "string" },
         // The one declaration of the Layer-editing option surface (DEC-001):
         // composition add shares these entries with layer edit.
@@ -827,12 +835,31 @@ async function run() {
         output(
           {
             ok: false,
-            error: "--unit is add-only: a unit Layer's reference is set by `composition add --unit` and changed only by the unit fork (#341).",
+            error: "--unit is add-only: a unit Layer's reference is set by `composition add --unit` and changed only by the unit fork (`layer edit --fork --fork-unit <name>`, #341).",
           },
           isJson,
         );
         process.exitCode = 2;
         return;
+      }
+
+      // The unit fork's inner-name flag (#341): only meaningful with --fork,
+      // and always a Composition name under the ONE name rule.
+      if (values["fork-unit"] !== undefined && !values.fork) {
+        output(
+          { ok: false, error: "--fork-unit is only valid together with --fork." },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      if (values["fork-unit"] !== undefined) {
+        const forkUnitName = parseLayerUnitTarget(values["fork-unit"], "--fork-unit");
+        if (!forkUnitName.ok) {
+          output({ ok: false, error: forkUnitName.error }, isJson);
+          process.exitCode = 2;
+          return;
+        }
       }
 
       if (!hasEditOption && !values.fork) {
@@ -941,8 +968,9 @@ async function run() {
       // Layer's refused facts are named BEFORE the live-context resolutions
       // run, so an anchor, mask, or cover target is never resolved against a
       // unit. The same key set and refusal builder the domain lifecycle
-      // enforces (UNIT_EDIT_OPTION_KEYS / unitEditFactRefusal); a --fork
-      // edit falls through to the unit fork refusal (#341).
+      // enforces (UNIT_EDIT_OPTION_KEYS / unitEditFactRefusal). The unit
+      // fork (#341) is gated here too: forking a unit REQUIRES --fork-unit,
+      // and --fork-unit is refused on a non-unit fork.
       {
         // An unknown or unreadable Layer id skips the gate: the edit
         // lifecycle's own validation produces the established refusal, and
@@ -954,6 +982,18 @@ async function run() {
           targetLayer = undefined;
         }
         if (targetLayer !== undefined && targetLayer.currentRevision.kind === "unit") {
+          if (values.fork && values["fork-unit"] === undefined) {
+            output(
+              {
+                ok: false,
+                error: `Forking a unit Layer requires --fork-unit <name> (ADR-0026 §3, #341): name the new inner Composition the fork copies. ` +
+                  `Layer "${layerId}" is a unit referencing Composition "${targetLayer.currentRevision.composition}"; nothing was published.`,
+              },
+              isJson,
+            );
+            process.exitCode = 2;
+            return;
+          }
           const refused = Object.entries(parsed)
             .filter(([key, v]) => v !== undefined && !UNIT_EDIT_OPTION_KEYS.includes(key))
             .map(([key]) => key);
@@ -965,6 +1005,16 @@ async function run() {
             process.exitCode = 1;
             return;
           }
+        } else if (targetLayer !== undefined && values.fork && values["fork-unit"] !== undefined) {
+          output(
+            {
+              ok: false,
+              error: `--fork-unit is only valid when forking a unit Layer: Layer "${layerId}" is not a unit — its fork needs no inner Composition copy.`,
+            },
+            isJson,
+          );
+          process.exitCode = 2;
+          return;
         }
       }
 
@@ -1071,6 +1121,7 @@ async function run() {
           // fork-targeting intent, never a downstream-visible address fact.
           composition: values.fork ? forkComposition : undefined,
           use: values.fork ? forkUse : undefined,
+          ...(values["fork-unit"] !== undefined ? { forkUnit: values["fork-unit"] } : {}),
           image: values.image,
           fromGeneration:
             values["from-generation"] !== undefined
@@ -1119,9 +1170,13 @@ async function run() {
           layer: res.layer,
           referringCompositions: res.referringCompositions,
           referrersCount: res.referrersCount,
+          reachedThroughUnits: res.reachedThroughUnits,
         };
         if (res.fork) {
           resultBody.fork = res.fork;
+        }
+        if (res.forkedUnit) {
+          resultBody.forkedUnit = res.forkedUnit;
         }
         if (res.generatedFrom) {
           resultBody.generatedFrom = res.generatedFrom;
@@ -1187,6 +1242,14 @@ async function run() {
               res.referrersCount === 0
                 ? "not referenced by any Composition"
                 : `referenced by ${res.referrersCount} Composition${res.referrersCount === 1 ? "" : "s"} (${res.referringCompositions.map((n) => `"${n}"`).join(", ")})`;
+            // The transitive reach through units (ADR-0026 §4, #341), beside
+            // the direct referrers; the unit fork's inner copy, when present.
+            const reachMsg = res.reachedThroughUnits.length > 0
+              ? `; also reached through units: ${res.reachedThroughUnits.map((n) => `"${n}"`).join(", ")}`
+              : "";
+            const unitForkMsg = res.forkedUnit
+              ? `; forked inner Composition "${res.forkedUnit.from}" -> "${res.forkedUnit.to}"`
+              : "";
             const generated = res.generatedFrom
               ? `; from Generation Job ${res.generatedFrom.jobId} (${res.generatedFrom.contentHash.slice(0, 12)}, provenance retained)`
               : "";
@@ -1257,15 +1320,15 @@ async function run() {
             if (res.fork) {
               console.log(
                 `Forked Layer "${res.fork.previousLayerId}" -> new Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} ` +
-                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${maskSummary}${shapeEdited}${anchorSummary}`,
+                  `(retargeted use "${res.fork.use}" in composition "${res.fork.composition}"; original Layer ${refMsg})${unitForkMsg}${reachMsg}${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${maskSummary}${shapeEdited}${anchorSummary}`,
               );
             } else {
-              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${maskSummary}${shapeEdited}${anchorSummary}`);
+              console.log(`Edited Layer "${res.layer.id}" -> revision ${res.layer.currentRevisionId} (${refMsg})${unitForkMsg}${reachMsg}${generated}${matted}${resized}${rotated}${flipped}${shadowed}${innerShadowed}${outlined}${regionSet}${vectorColorSet}${gradeSet}${blendSet}${glowSet}${maskSummary}${shapeEdited}${anchorSummary}`);
             }
           },
         );
       } catch (err) {
-        const errObj = err as Error & { referringCompositions?: string[]; referrersCount?: number };
+        const errObj = err as Error & { referringCompositions?: string[]; referrersCount?: number; reachedThroughUnits?: string[] };
         const result: { ok: false; error: string; [key: string]: unknown } = {
           ok: false,
           error: errObj.message,
@@ -1275,6 +1338,9 @@ async function run() {
         }
         if (errObj.referrersCount !== undefined) {
           result.referrersCount = errObj.referrersCount;
+        }
+        if (errObj.reachedThroughUnits !== undefined) {
+          result.reachedThroughUnits = errObj.reachedThroughUnits;
         }
         output(result, isJson);
         process.exitCode = 1;

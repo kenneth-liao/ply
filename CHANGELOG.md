@@ -1,6 +1,29 @@
 # Changelog
 
 ## [Unreleased]
+- Shipped the unit fork and transitive-reach reporting (ADR-0026 §3/§4,
+  spec #285 US-018/ISC-36, #341): `layer edit --fork --fork-unit <name>` on
+  a unit Layer publishes the forked Layer identity AND a copy of the inner
+  Composition under the caller-supplied name — same canvas, the same use
+  list, the member Layers shared, so an in-place member edit still reaches
+  both inners (now as two direct referrers under the ordinary
+  `--in-place`/`--fork` rule) and a unit used inside the original inner is
+  not forked (the copy's use of it stays live). One publication: the name
+  clash and the cycle check refuse before ANYTHING stages — never a partial
+  fork that copies the Layer but not the unit semantics — and the #307
+  by-name refusal of `--fork` on a unit is removed (the fork now requires
+  `--fork-unit`; it is refused without `--fork`, on a non-unit fork, and
+  for an invalid name at the boundary under the ONE name rule). Every edit
+  reports the Compositions it reaches THROUGH units, transitively, next to
+  the direct referrers — the `reachedThroughUnits` result field and refusal
+  property in JSON, and beside the referrer list in text — on success and
+  in the ISC-11 refusal, while the rule itself still counts direct
+  referrers only (the Compositions reached only through units are
+  reported, never refused; an unused unit Layer reaches nothing, and a
+  Composition reached by two paths is reported once). A fork never changes
+  the original inner Composition, any other referrer, or any retained
+  Render: every retained Render replays byte-identically after a unit fork
+  (TEST-003). Version 7.4.0 (#341).
 - Fixed raw filesystem errors on unknown Layer ids (#326, DEC-003): before,
   every command that takes a Layer id — `ply layer edit` (including the
   `--fork`, `--anchor`, `--mask`, and `--cover-to` paths and the unit edit

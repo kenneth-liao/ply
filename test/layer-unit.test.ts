@@ -15,9 +15,9 @@
  *   naming the chain of Compositions (a → b → a).
  * - A missing inner Composition is refused, listing what exists.
  * - `--unit` is add-only: `layer edit --unit` is refused.
- * - `--fork` on a unit Layer is refused by name, pointing at the missing
- *   unit fork (#341) — the fork decision (caller-supplied inner name) is
- *   recorded in ADR-0026 §3 but ships in #341, never silently forked here.
+ * - `--fork` on a unit Layer is no longer refused by name: the unit fork
+ *   ships (#341) and needs `--fork-unit <name>` — pinned here against a
+ *   target use in a second Composition.
  */
 import { expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
@@ -198,28 +198,35 @@ test("--unit is add-only: layer edit --unit is refused", async () => {
   expect(JSON.parse(after.stdout).layer.currentRevision.composition).toBe("inner");
 });
 
-test("--fork on a unit Layer is refused by name, pointing at the missing unit fork", async () => {
+test("--fork on a unit Layer is no longer refused by name: the unit fork ships (#341)", async () => {
   await makeComp("inner", 200, 150);
   await makeComp("outer", 400, 300);
   await makeComp("outer2", 400, 300);
   const added = await addUnit("outer", "card", "inner");
   expect(added.code).toBe(0);
   const layerId = (JSON.parse(added.stdout).use.layerId as string);
+  // outer2 gains a use of the SAME unit Layer (same-Project import copies
+  // the use list), so it has an existing use to retarget.
+  const imported = await invoke(["composition", "import", "outer2", "outer", "--project", projDir, "--json"]);
+  expect(imported.code).toBe(0);
 
   const res = await invoke([
-    "layer", "edit", layerId, "--fork", "--composition", "outer2", "--use", "card2",
+    "layer", "edit", layerId, "--fork", "--composition", "outer2", "--use", "card",
+    "--fork-unit", "inner-copy",
     "--project", projDir, "--json",
   ]);
-  expect(res.code).not.toBe(0);
-  const body = res.stdout + res.stderr;
-  // The refusal names the fact (--fork on a unit) and points at the
-  // missing unit fork (#341) instead of publishing a partial fork.
-  expect(body).toContain("unit");
-  expect(body).toContain("fork");
-  expect(body).toContain("#341");
-  // Nothing published: no new Layer identity, outer2 unchanged.
+  expect(res.code).toBe(0);
+  const body = JSON.parse(res.stdout);
+  // The fork published: a new unit Layer identity referencing the copied
+  // inner Composition, and outer2's use retargeted to it.
+  expect(body.forkedUnit).toEqual({ from: "inner", to: "inner-copy" });
+  expect(body.layer.currentRevision.composition).toBe("inner-copy");
   const inspect = await invoke(["composition", "inspect", "outer2", "--project", projDir, "--json"]);
-  expect(JSON.parse(inspect.stdout).composition.layers).toHaveLength(0);
+  expect(JSON.parse(inspect.stdout).composition.layers[0].layerId).toBe(body.layer.id);
+  // The original inner Composition is untouched and the original Layer
+  // keeps referencing it; outer still uses the original identity too.
+  const original = await invoke(["layer", "inspect", layerId, "--project", projDir, "--json"]);
+  expect(JSON.parse(original.stdout).layer.currentRevision.composition).toBe("inner");
   const outer = await invoke(["composition", "inspect", "outer", "--project", projDir, "--json"]);
   expect(JSON.parse(outer.stdout).composition.layers[0].layerId).toBe(layerId);
 });
