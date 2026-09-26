@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e4-contours",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.035Z",
+  "request": {
+    "prompt": "Thin glowing orange topographic contour lines, like a terrain map, flowing in smooth nested curves across the frame, on a pure black background. Line art only, nothing else.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1024,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.035Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "Thin glowing orange topographic contour lines, like a terrain map, flowing in smooth nested curves across the frame, on a pure black background. Line art only, nothing else.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.013375
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "0931472bc0d0eb257c901fbad0892d4a6aa422c9e5f5905e3f015d2daf5220e7",
+        "file": "outputs/0931472bc0d0eb257c901fbad0892d4a6aa422c9e5f5905e3f015d2daf5220e7.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

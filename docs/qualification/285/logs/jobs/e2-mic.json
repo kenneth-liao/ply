@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e2-mic",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.057Z",
+  "request": {
+    "prompt": "A black broadcast podcast microphone with a foam windscreen on a short black boom arm, three-quarter view, product shot, isolated on a plain uniform white background with clear margins, soft even studio lighting.",
+    "intent": "isolated",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1024,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.057Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A black broadcast podcast microphone with a foam windscreen on a short black boom arm, three-quarter view, product shot, isolated on a plain uniform white background with clear margins, soft even studio lighting.\n\nFormat: exactly one single isolated subject, fully inside the frame with clear margins on all sides, on a plain, uniform, evenly lit background with crisp, well-defined edges — suitable for later local isolation.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.006315
+    },
+    "warnings": [
+      "isolated: isolated intent is a generation request, not a matte — the output is not verified alpha; invoke Matting explicitly (ADR-0015) for verified true alpha"
+    ],
+    "outputs": [
+      {
+        "contentHash": "1ff4b8cba094712d45396df9b181bca76334f9b873ccc7a2c8ddf440308eebb5",
+        "file": "outputs/1ff4b8cba094712d45396df9b181bca76334f9b873ccc7a2c8ddf440308eebb5.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

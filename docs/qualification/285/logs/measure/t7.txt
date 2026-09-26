@@ -1,0 +1,10 @@
+Measured Composition "t7" (1280×720), 9 Layers (layout boxes + painted extents):
+  1. "base" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720 [fill radial #2a0406 0%, #0a0102 100%]
+  2. "face" (image content 1536×1024) box (56, -58) 1167.36×778.24 painted (56, -58) 1168×779, on-canvas (56, 0) 1168×720 — clipped [grade contrast 1.06, saturation 0.95, scale 0.76×, feather 40px]
+  3. "vignette" (image content 1280×720) box (0, 0) 1280×720 painted (0, 0) 1280×720 [fill radial #00000000 48%, #3a0508cc 80%, #120203f0 100%, blend multiply]
+  4. "v2" (image content 1024×1536) box (3.74, 262) 290.61×377.37 painted (77, 333) 143×240 [shadow 0 14 28 #000000cc, grade brightness 0.5, contrast 1.1, scale 0.22×, rot 12°, blur 7px, choke 1px]
+  5. "v4" (image content 1024×1536) box (855.9, -259.5) 585.09×661.3 painted (997, -118) 302×386, on-canvas (997, 0) 283×268 — clipped [shadow 0 14 28 #000000cc, grade brightness 0.6, contrast 1.1, scale 0.36×, rot 28°, blur 9px, choke 1px]
+  6. "v5" (image content 1024×1536) box (876.42, -38) 672.94×738.1 painted (1036, 124) 351×422, on-canvas (1036, 124) 244×422 — clipped [shadow 0 14 28 #000000cc, grade brightness 0.75, contrast 1.1, scale 0.4×, rot 32°, blur 4px, choke 1px]
+  7. "v3" (image content 1024×1536) box (-454.5, 150.74) 1051.55×1104.49 painted (-207, 394) 565×624, on-canvas (0, 394) 358×326 — clipped [shadow 0 14 28 #000000cc, grade brightness 0.7, contrast 1.1, scale 0.6×, rot -38°, blur 14px, choke 1px]
+  8. "v1" (image content 1024×1536) box (-133.5, -195.66) 466.57×632.15 painted (-10, -80) 224×410, on-canvas (0, 0) 214×330 — clipped [shadow 0 14 28 #000000cc, grade brightness 0.9, contrast 1.1, scale 0.38×, rot -8°, choke 1px]
+  9. "v6" (image content 1024×1536) box (745.52, 124) 845.13×955.21 painted (952, 331) 431×551, on-canvas (952, 331) 328×389 — clipped [shadow 0 14 28 #000000cc, grade brightness 0.9, contrast 1.1, scale 0.52×, rot 28°, choke 1px]

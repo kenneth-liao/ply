@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e1-wire",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.040Z",
+  "request": {
+    "prompt": "A single glowing neon orange light cable, a thin luminous wire that enters at the left edge and curves smoothly in a gentle S-shape to the right edge, bright hot-white core with an orange glow, on a pure black background. Nothing else in the frame.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.040Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A single glowing neon orange light cable, a thin luminous wire that enters at the left edge and curves smoothly in a gentle S-shape to the right edge, bright hot-white core with an orange glow, on a pure black background. Nothing else in the frame.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.010585
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "d044787678933817d82b5c5a604cff492a866d0358df8eb59ee1dac4be73e4b4",
+        "file": "outputs/d044787678933817d82b5c5a604cff492a866d0358df8eb59ee1dac4be73e4b4.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

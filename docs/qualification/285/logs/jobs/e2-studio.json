@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "jobId": "e2-studio",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:18:56.038Z",
+  "request": {
+    "prompt": "A dark modern podcast studio at night, no people. Deep navy and black tones with magenta and violet neon accent lights, a dark shelf with a small plant on the right, a softly lit wall sign on the far left reading BUILD SHIP LEARN REPEAT in stacked white capitals. Shallow depth of field, cinematic. The centre and right of the frame are dark and uncluttered.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 1
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:18:56.038Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "fullPrompt": "A dark modern podcast studio at night, no people. Deep navy and black tones with magenta and violet neon accent lights, a dark shelf with a small plant on the right, a softly lit wall sign on the far left reading BUILD SHIP LEARN REPEAT in stacked white capitals. Shallow depth of field, cinematic. The centre and right of the frame are dark and uncluttered.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.00517
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "be0c1c09196296925d79b6d8ebf7922ce24aa0a61efd14b762854ff191248503",
+        "file": "outputs/be0c1c09196296925d79b6d8ebf7922ce24aa0a61efd14b762854ff191248503.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

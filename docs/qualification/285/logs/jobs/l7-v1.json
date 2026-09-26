@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 2,
+  "jobId": "l7-v1",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:19:11.526Z",
+  "request": {
+    "prompt": "An extreme close-up portrait of the man in attached image 1, his face filling the frame from forehead to chin, looking straight into the camera with a sad, intense stare, eyes slightly red and watery, one single tear rolling down his cheek. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Keep his smooth skin; do not add wrinkles or lines. Dramatic low-key lighting, dark red and black background at the edges, realistic skin texture, cinematic.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 2,
+    "quality": "low",
+    "references": [
+      {
+        "path": "anchors/face1513.png",
+        "contentHash": "06cf7ffd14d0db07d4d1750fa1e28f9669c54dad4a140c87739edea50f99c0a7"
+      }
+    ]
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:19:11.526Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "quality": "low",
+    "fullPrompt": "An extreme close-up portrait of the man in attached image 1, his face filling the frame from forehead to chin, looking straight into the camera with a sad, intense stare, eyes slightly red and watery, one single tear rolling down his cheek. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Keep his smooth skin; do not add wrinkles or lines. Dramatic low-key lighting, dark red and black background at the edges, realistic skin texture, cinematic.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.027144
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "3d6c06ad479c2f50ff53eb11bdb411f05c7db93bf6f93960f07002c39299fd8f",
+        "file": "outputs/3d6c06ad479c2f50ff53eb11bdb411f05c7db93bf6f93960f07002c39299fd8f.png",
+        "mediaType": "image/png"
+      },
+      {
+        "contentHash": "13bd0f1d2774d0f955b84d8a3f1048126c8e30324d443552998630b4e69a44e7",
+        "file": "outputs/13bd0f1d2774d0f955b84d8a3f1048126c8e30324d443552998630b4e69a44e7.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "jobId": "l3-v3",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:30:37.374Z",
+  "request": {
+    "prompt": "A presenter photo of the man in attached image 1. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only pose, framing and camera angle, never its person's face, beard, or hair. Attached image 3 supplies only the product: the Apple Mac Studio, a tall square silver aluminium box, about as tall as half its width, with two small ports and a wide SD card slot low on its front and a perforated base; it is not a flat Mac mini. Copy the pose and framing of attached image 2: he leans toward the camera, head and shoulders on the left-centre of the frame, wide eyes and raised eyebrows, looking straight into the lens with a surprised expression, his mouth closed; with his left hand he holds the Mac Studio from attached image 3 up on his open palm on the right side of the frame, seen slightly from above. WIDE framing with generous headroom: his head is small, its width about one sixth of the frame width, centred at about 40 percent from the left; the Mac Studio is about one quarter of the frame width, its top at the vertical middle of the frame, with empty dark space above it for effects. He wears a plain charcoal t-shirt. Dark moody home studio with purple and blue RGB lights, a keyboard and a mug on the desk. Cinematic lighting.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 2,
+    "quality": "low",
+    "references": [
+      {
+        "path": "anchors/face1535.png",
+        "contentHash": "13f20e7baf9bc66d22335e5635c358063b53734e3a97534b805aa68b0520ec12"
+      },
+      {
+        "path": "refs/ref3.png",
+        "contentHash": "425a430d215c0a5acd14280725e00eec29c4070f28dd374cc3c1ae7b8229abd1"
+      },
+      {
+        "path": "anchors/macstudio.png",
+        "contentHash": "b28f9a7e3cf7bef86bfcd814db64cf692ef54a218318dcef9f0dce4e667ed3e6"
+      }
+    ]
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:30:37.374Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "quality": "low",
+    "fullPrompt": "A presenter photo of the man in attached image 1. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only pose, framing and camera angle, never its person's face, beard, or hair. Attached image 3 supplies only the product: the Apple Mac Studio, a tall square silver aluminium box, about as tall as half its width, with two small ports and a wide SD card slot low on its front and a perforated base; it is not a flat Mac mini. Copy the pose and framing of attached image 2: he leans toward the camera, head and shoulders on the left-centre of the frame, wide eyes and raised eyebrows, looking straight into the lens with a surprised expression, his mouth closed; with his left hand he holds the Mac Studio from attached image 3 up on his open palm on the right side of the frame, seen slightly from above. WIDE framing with generous headroom: his head is small, its width about one sixth of the frame width, centred at about 40 percent from the left; the Mac Studio is about one quarter of the frame width, its top at the vertical middle of the frame, with empty dark space above it for effects. He wears a plain charcoal t-shirt. Dark moody home studio with purple and blue RGB lights, a keyboard and a mug on the desk. Cinematic lighting.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.049704
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "8366d6ef0145b69e519ca85a401776e72a931fe45adef530fd3a9bede82d8d71",
+        "file": "outputs/8366d6ef0145b69e519ca85a401776e72a931fe45adef530fd3a9bede82d8d71.png",
+        "mediaType": "image/png"
+      },
+      {
+        "contentHash": "336a87e28c0a1e62ae5d6870a13de54d09014ea7efa763a268a754f2df98a33e",
+        "file": "outputs/336a87e28c0a1e62ae5d6870a13de54d09014ea7efa763a268a754f2df98a33e.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

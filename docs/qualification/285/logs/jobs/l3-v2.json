@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "jobId": "l3-v2",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:21:46.493Z",
+  "request": {
+    "prompt": "A presenter photo of the man in attached image 1. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only pose, framing and camera angle, never its person's face, beard, or hair. Attached image 3 supplies only the product: the Apple Mac Studio, a tall square silver aluminium box, about as tall as half its width, with two small ports and a wide SD card slot low on its front and a perforated base; it is not a flat Mac mini. Copy the pose and framing of attached image 2: he leans toward the camera, head and shoulders on the left-centre of the frame, wide eyes and raised eyebrows, looking straight into the lens with a surprised expression, his mouth closed; with his left hand he holds the Mac Studio from attached image 3 up on his open palm on the right side of the frame, close to the camera, seen slightly from above. He wears a plain charcoal t-shirt. Dark moody home studio with purple and blue RGB lights, a keyboard and a mug on the desk. Cinematic lighting.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 2,
+    "quality": "low",
+    "references": [
+      {
+        "path": "anchors/face1535.png",
+        "contentHash": "13f20e7baf9bc66d22335e5635c358063b53734e3a97534b805aa68b0520ec12"
+      },
+      {
+        "path": "refs/ref3.png",
+        "contentHash": "425a430d215c0a5acd14280725e00eec29c4070f28dd374cc3c1ae7b8229abd1"
+      },
+      {
+        "path": "anchors/macstudio.png",
+        "contentHash": "b28f9a7e3cf7bef86bfcd814db64cf692ef54a218318dcef9f0dce4e667ed3e6"
+      }
+    ]
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:21:46.493Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "quality": "low",
+    "fullPrompt": "A presenter photo of the man in attached image 1. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only pose, framing and camera angle, never its person's face, beard, or hair. Attached image 3 supplies only the product: the Apple Mac Studio, a tall square silver aluminium box, about as tall as half its width, with two small ports and a wide SD card slot low on its front and a perforated base; it is not a flat Mac mini. Copy the pose and framing of attached image 2: he leans toward the camera, head and shoulders on the left-centre of the frame, wide eyes and raised eyebrows, looking straight into the lens with a surprised expression, his mouth closed; with his left hand he holds the Mac Studio from attached image 3 up on his open palm on the right side of the frame, close to the camera, seen slightly from above. He wears a plain charcoal t-shirt. Dark moody home studio with purple and blue RGB lights, a keyboard and a mug on the desk. Cinematic lighting.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.049114
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "d0071ec41124739adca0710e8cf2e17ee3c4a8cb8653418b8b33d5e3f58607f2",
+        "file": "outputs/d0071ec41124739adca0710e8cf2e17ee3c4a8cb8653418b8b33d5e3f58607f2.png",
+        "mediaType": "image/png"
+      },
+      {
+        "contentHash": "88de7ab89545a054a034ace0a177607a07f11ef64edf073c6582f492ff6b28e7",
+        "file": "outputs/88de7ab89545a054a034ace0a177607a07f11ef64edf073c6582f492ff6b28e7.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

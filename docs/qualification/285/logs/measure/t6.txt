@@ -1,0 +1,9 @@
+Measured Composition "t6" (1280×720), 8 Layers (layout boxes + painted extents):
+  1. "maze" (image content 1536×1024) box (0, -67) 1280×853.33 painted (0, -67) 1280×854, on-canvas (0, 0) 1280×720 — clipped [grade brightness 0.55, contrast 1.2, saturation 0.45, scale 0.8333333333333334×]
+  2. "glow" (image content 980×640) box (210, 100) 980×640 painted (211, 100) 978×640, on-canvas (211, 100) 978×620 — clipped [fill radial #2f86ffbb 0%, #2f86ff00 100%, blend screen]
+  3. "title" (text 992.69×197) box (140.5, 1) 992.69×197 painted (69, -29) 1141×279, on-canvas (69, 0) 1141×250 — clipped [shadow 0 0 26 #4aa3ffcc, shadow 0 8 16 #00000088, outline 3 #dcefffdd, fill linear 180deg #eef7ff 0%, #9cc8f5 45%, #4f8fd6 100%, weight 800, width 100, font ".SF NS" (caller-supplied), tracking -0.035em, effective font size 168px]
+  4. "table" (image content 1280×96) box (0, 624) 1280×96 painted (0, 624) 1280×96 [fill linear 180deg #f3f4f6 0%, #d9dde3 100%]
+  5. "kenny" (image content 1536×1024) box (218, 160) 844.8×563.2 painted (257, 190) 806×524 [grade contrast 1.04, scale 0.55×]
+  6. "bandmask" (image content 845×96) box (218, 624) 845×96 painted (218, 624) 845×96 [fill linear 90deg #ffffff00 0%, #ffffffff 10%, #ffffffff 90%, #ffffff00 100%, masks "band"]
+  7. "edge" (image content 200×200) box (280, 607) 760×46 painted (282, 607) 756×46 [fill radial #00000066 0%, #00000000 100%, blend multiply, scale 3.8×/0.23×]
+  8. "band" (image content 1536×1024) box (218, 160) 844.8×563.2 painted (218, 160) 845×564, on-canvas (218, 160) 845×560 — clipped; masked: painted stays pre-clip, the clip keeps (218, 624) 845×96, on-canvas (218, 624) 845×96 [grade contrast 1.04, scale 0.55×, mask "bandmask"]

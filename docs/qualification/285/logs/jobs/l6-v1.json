@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "jobId": "l6-v1",
+  "kind": "generation",
+  "createdAt": "2026-09-26T02:19:11.527Z",
+  "request": {
+    "prompt": "A photo of the man in attached image 1 sitting behind a large plain white table. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only the phone's exact design and colour: the sky blue iPhone 18 Pro, third from the left. Attached image 3 supplies only pose, framing and camera angle, never its person's face, glasses, or hair. Copy the pose and framing of attached image 3: he sits on the right half of the frame, his lower body hidden behind the table, his left forearm and hand resting on the white tabletop, and with his right arm he holds the sky blue phone from attached image 2 very close to the camera on the left side, so the phone appears huge in the foreground, tilted slightly, showing its back and large camera plateau. He wears a plain black t-shirt and no glasses, calm neutral expression. The white tabletop fills the bottom fifth of the frame. Plain uniform light grey wall behind him, soft even lighting, clear margins.",
+    "intent": "full-canvas",
+    "model": "gpt-image-flare",
+    "sizing": {
+      "kind": "size",
+      "width": 1536,
+      "height": 1024
+    },
+    "count": 2,
+    "quality": "low",
+    "references": [
+      {
+        "path": "anchors/face1505.png",
+        "contentHash": "2deda40e8b6aa5303593e66b73b7d20ae01e161ada68c058c4bc03350f7dc725"
+      },
+      {
+        "path": "$CONTENT_ROOT/assets/products/iphone-18-pro/colour-lineup.jpg",
+        "contentHash": "b09029318622d4f0cfda26a3bc2803f91794c88e69da77b8063530bea6a18856"
+      },
+      {
+        "path": "refs/ref6.png",
+        "contentHash": "c57ef19f0e2640ea816d46bf44b1b77ca2fcf13c445750603b2d0a557338cccd"
+      }
+    ]
+  },
+  "run": {
+    "ranAt": "2026-09-26T02:19:11.527Z",
+    "model": "openai/gpt-image-2.5-flare",
+    "quality": "low",
+    "fullPrompt": "A photo of the man in attached image 1 sitting behind a large plain white table. Keep the face in attached image 1 exactly, including his apparent age; do not widen, round, age, average, or blend it. Attached image 2 supplies only the phone's exact design and colour: the sky blue iPhone 18 Pro, third from the left. Attached image 3 supplies only pose, framing and camera angle, never its person's face, glasses, or hair. Copy the pose and framing of attached image 3: he sits on the right half of the frame, his lower body hidden behind the table, his left forearm and hand resting on the white tabletop, and with his right arm he holds the sky blue phone from attached image 2 very close to the camera on the left side, so the phone appears huge in the foreground, tilted slightly, showing its back and large camera plateau. He wears a plain black t-shirt and no glasses, calm neutral expression. The white tabletop fills the bottom fifth of the frame. Plain uniform light grey wall behind him, soft even lighting, clear margins.",
+    "cost": {
+      "basis": "actual-charge",
+      "usd": 0.061988
+    },
+    "warnings": [],
+    "outputs": [
+      {
+        "contentHash": "deabce9362e7a7311430dccbfa4bdcda5fe38ebb1028c6dbd4546e7f7da1e59b",
+        "file": "outputs/deabce9362e7a7311430dccbfa4bdcda5fe38ebb1028c6dbd4546e7f7da1e59b.png",
+        "mediaType": "image/png"
+      },
+      {
+        "contentHash": "39ee28fa46c27b21f11e5e45762150e1fe8c34e8d55b106abbf5dc3f07fbbb00",
+        "file": "outputs/39ee28fa46c27b21f11e5e45762150e1fe8c34e8d55b106abbf5dc3f07fbbb00.png",
+        "mediaType": "image/png"
+      }
+    ]
+  }
+}

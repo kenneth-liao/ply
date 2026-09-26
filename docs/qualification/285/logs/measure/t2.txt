@@ -1,0 +1,13 @@
+Measured Composition "t2" (1280×720), 12 Layers (layout boxes + painted extents):
+  1. "bg" (image content 1536×1024) box (0, -67) 1280×853.33 painted (0, -67) 1280×854, on-canvas (0, 0) 1280×720 — clipped [grade brightness 0.75, scale 0.8333333333333334×]
+  2. "panelglow" (image content 700×420) box (690, 260) 700×420 painted (692, 260) 696×420, on-canvas (692, 260) 588×420 — clipped [fill radial #7a3cff55 0%, #7a3cff00 100%, blend screen]
+  3. "panel" (image content 1536×1024) box (769.59, 299.82) 749.3×516.27 painted (736, 264) 845×609, on-canvas (736, 264) 544×456 — clipped [shadow 0 20 40 #000000cc, outline 2 #8b6cff66, grade brightness 1.35, scale 0.5×, rot -3°, perspective 0° -24°]
+  4. "kenny" (image content 2048×1536) box (-330, -110) 1105.92×829.44 painted (48, 18) 744×701 [grade contrast 1.05, glow width 9px, softness 14px, #ff4fd8, one-sided from 90° (strength 1), scale 0.54×, choke 1.5px, feather 1px]
+  5. "mic" (image content 1024×1024) box (-301.23, 205.86) 813.73×813.73 painted (-139, 367) 469×487, on-canvas (0, 367) 330×353 — clipped [grade brightness 0.75, scale 0.62×, rot 20°, flip horizontal, blur 3px]
+  6. "mark" (image content 1024×1024) box (1102.5, -24.5) 204.8×204.8 painted (1145, 18) 121×121 [blend screen, scale 0.2×]
+  7. "inside" (text 479.63×129) box (528.5, 20) 479.63×129 painted (498, 9) 541×160 [shadow 0 6 16 #000000aa, fill solid #ffffff, weight 900, width 110, effective font size 118px]
+  8. "jevbar" (image content 360×116) box (590, 172) 360×116 painted (541, 131) 458×221 [shadow 0 8 20 #00000088, fill solid #ff2a2a]
+  9. "jev" (text 273.38×126) box (632.5, 167.5) 273.38×126 painted (634, 189) 271×120 [fill solid #ffffff, weight 900, width 112, effective font size 116px]
+  10. "sub" (text 307.2×39) box (617.5, 290) 307.2×39 painted (617, 298) 306×47 [fill solid #ffffff, tracking 0.04em, effective font size 30px]
+  11. "underline" (image content 380×2) box (580, 344) 380×2 painted (580, 328) 380×34 [fill linear 90deg #ffffff00 0%, #ffffffcc 30%, #ffffffcc 70%, #ffffff00 100%]
+  12. "scrawl" (text 200×52) box (1073, 567.37) 206.59×105.11 painted (1076, 585) 149×87 [fill solid #ffffff, line height 1, wrap width 200px, effective font size 26px, rot -16°]
