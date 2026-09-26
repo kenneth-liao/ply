@@ -6,7 +6,8 @@
 # sheets. Apart from `ply generate`, the only inputs are unmodified sourced
 # files from the content repository. Besides `ply`, the shell runs only builtins
 # (integer arithmetic, echo), mkdir, rm -rf of its own builds/ Projects, and
-# `perl -e alarm` as a timeout wrapper around ply commands that open the render page.
+# `perl`: `-e alarm` as a timeout wrapper around ply commands that open the
+# render page, and core modules (Digest::SHA, JSON::PP) for the sha-256 checks.
 #
 #   CONTENT_ROOT  ai-launchpad-content checkout (identity photos, cutouts,
 #                 assets/logos, assets/products, the ply-285 baseline sheets)
@@ -20,7 +21,12 @@
 #                 written here is transient: project/ (references, crops), refs/,
 #                 anchors/, builds/ (one Project per thumbnail), logs/.
 #
-# Usage: rebuild.sh [refs|anchors|generate|matte|build|render|sheet|all]...
+# Usage: rebuild.sh [refs|anchors|generate|matte|build|render|sheet|all|
+#                   verify_inputs|verify_outputs|verify_records]...
+# `all` is the replay: it rebuilds everything, stops if a Reference drifted from
+# its Job record, and ends by checking the renders and sheets against
+# sha256sums.txt and the public Job copies against the retained records. It
+# exits nonzero when any step fails.
 # `generate` needs AI_GATEWAY_API_KEY in the environment and skips any Job
 # that is already published. Generation is not deterministic: the renders
 # replay from the retained Job records (the selected outputs are pinned by
@@ -37,18 +43,28 @@ CUT=$CONTENT_ROOT/assets/creator-cutouts/approved
 LOGO=$CONTENT_ROOT/assets/logos
 PROD=$CONTENT_ROOT/assets/products
 MARK=$CONTENT_ROOT/brand/marks/mark.svg
+# sha256sums.txt beside the committed renders and sheets (ai-launchpad-content)
+MANIFEST=$CONTENT_ROOT/assets/creator-cutouts/qualification/ply-285-rebuild/sha256sums.txt
+if [[ $0 == */* ]]; then SELF=${0%/*}; else SELF=.; fi
+[[ $SELF == /* ]] || SELF=$PWD/$SELF            # this directory: logs/jobs/ holds the public record copies
 cd "$WORKSPACE" || exit 1
 mkdir -p refs anchors logs "$OUT/renders"
 P=project
 [ -f $P/ply.json ] || ply project init $P >/dev/null
 LOG=logs/build.log
-FAILS=0   # failed ply steps of any kind: refused adds, Jobs, mattes, renders, sheets
+: >"$LOG"                                       # one run, one log
+FAILS=0   # failed steps of any kind: refused adds, creates, Jobs, mattes, renders, sheets, checks
 
 run(){ perl -e 'alarm 180; exec @ARGV' ply "$@"; }
+# A render whose failure is counted, never silent.
+render_to(){ # composition project destination
+  run composition render $1 -p $2 --out "$3" >logs/render-$1.log 2>&1 \
+    || { echo "RENDER $1 failed: $(<logs/render-$1.log)"; FAILS=$((FAILS+1)); return 1; }; }
+stop_on_failure(){ [ $FAILS -eq 0 ] || { echo "stopping: $1"; echo "failures: $FAILS"; exit 1; }; }
 # One Layer, one command. A refusal is logged and counted, never fatal. An
 # anchored add on a perspective Layer is refused intermittently with "no
-# visible painted ink" (about 1 in 12, found here); a refusal mutates nothing,
-# so that one refusal is retried once and the retry is logged.
+# visible painted ink" when a large image is in the Composition (#351); a
+# refusal mutates nothing, so that one refusal is retried once and logged.
 A(){ local out
   out=$(run composition add "$@" -p $P 2>&1) && { echo "add $1/$2 ok" >>$LOG; return; }
   if [[ $out == *"no visible painted ink"* ]]; then
@@ -56,7 +72,9 @@ A(){ local out
     out=$(run composition add "$@" -p $P 2>&1) && { echo "add $1/$2 ok (retry)" >>$LOG; return; }
   fi
   echo "ADD $1/$2: $out" >>$LOG; echo "ADD $1/$2: $out"; FAILS=$((FAILS+1)); }
-mk(){ run composition delete $1 -p $P >/dev/null 2>&1; run composition create $1 --width ${2:-1280} --height ${3:-720} -p $P >/dev/null; }
+mk(){ run composition delete $1 -p $P >/dev/null 2>&1   # absent on a first run: not a failure
+  run composition create $1 --width ${2:-1280} --height ${3:-720} -p $P >/dev/null \
+    || { echo "CREATE $1 failed"; FAILS=$((FAILS+1)); }; }
 
 # ---------------------------------------------------------------------------
 # refs: crop each reference cell out of the baseline sheets. The sheets were
@@ -72,7 +90,7 @@ refs(){
   done
   mk ref6 800 450                             # round3-t6.jpg holds ref6 in an 800 px cell: sharper
   A ref6 cell --image $BASE/round3-t6.jpg --visible-region "8,183,800,450" --x -8 --y -183
-  for r in 1 2 3 4 5 6 7 8; do run composition render ref$r -p $P --out refs/ref$r.png >/dev/null; done
+  for r in 1 2 3 4 5 6 7 8; do render_to ref$r $P refs/ref$r.png; done
 }
 
 # anchors: tight identity crops (the face fills the frame) and PNG sources
@@ -81,7 +99,7 @@ crop(){ # name file x y w [h]
   local h=${6:-$5}
   mk $1 $5 $h
   A $1 photo --image $2 --visible-region "$3,$4,$5,$h" --x -$3 --y -$4
-  run composition render $1 -p $P --out anchors/$1.png >/dev/null
+  render_to $1 $P anchors/$1.png
 }
 anchors(){
   P=project
@@ -93,7 +111,7 @@ anchors(){
   crop macstudio $PROD/mac-studio/mac-mini-and-mac-studio-hero.jpg 1068 45 846 575
   mk photo1505 2048 1536
   A photo1505 photo --image $ID/IMG_1505.jpg
-  run composition render photo1505 -p $P --out anchors/photo1505.png >/dev/null
+  render_to photo1505 $P anchors/photo1505.png
 }
 
 # ---------------------------------------------------------------------------
@@ -170,6 +188,69 @@ L6=(l6-v1 39ee28fa46c2)
 L7=(l7-v1 13bd0f1d2774)
 gout(){ echo out/generation/$1/outputs/$2*.png; }     # job short-hash → file
 single(){ echo out/generation/$1/outputs/*.png; }    # single-output Job → file
+
+# ---------------------------------------------------------------------------
+# Checks. Hashing and JSON use Perl core modules (Digest::SHA, JSON::PP).
+# A recorded Reference path is inert on replay (ply never reads it again), so
+# a path under assets/ is resolved against $CONTENT_ROOT wherever it was recorded.
+PERL_REFS='sub refpath { my ($p) = @_; $p =~ m{(?:^|/)(assets/.*)$} ? "$ENV{CONTENT_ROOT}/$1" : $p }
+sub sha { my ($p) = @_; open my $f, "<:raw", $p or return "missing"; local $/; Digest::SHA::sha256_hex(<$f>) }
+sub job { my ($p) = @_; open my $f, "<", $p or die "cannot read $p\n"; local $/; JSON::PP::decode_json(<$f>) }'
+perl_check(){ CONTENT_ROOT=$CONTENT_ROOT perl -MDigest::SHA -MJSON::PP -e "$PERL_REFS; $1" "${@:2}"; }
+
+# verify_inputs: every Reference a retained Job recorded — the recovered
+# references, the anchor crops, and the sourced files — still has the bytes the
+# Job was generated from. A drifted baseline sheet or crop stops the run here.
+verify_inputs(){
+  perl_check 'my $bad = 0;
+    for my $j (@ARGV) { for my $r (@{ job($j)->{request}{references} || [] }) {
+      my $p = refpath($r->{path}); my $h = sha($p);
+      next if $h eq $r->{contentHash};
+      print "REFERENCE $p ($j): $h, recorded $r->{contentHash}\n"; $bad++ } }
+    exit($bad > 255 ? 255 : $bad)' out/generation/*/job.json \
+    || { FAILS=$((FAILS+1)); return 1; }
+  echo "inputs ok"
+}
+# preflight: every pinned output resolves to exactly one file, and every Job
+# and matte the build reads is published, before the first Layer is added.
+preflight(){
+  local p files j m
+  for p in "${L3[*]}" "${L6[*]}" "${L7[*]}"; do
+    set -- $p; shopt -s nullglob; files=(out/generation/$1/outputs/$2*.png); shopt -u nullglob
+    [ ${#files[@]} -eq 1 ] || { echo "PIN $1 $2 resolves to ${#files[@]} file(s)"; FAILS=$((FAILS+1)); }
+  done
+  for j in e1-desk e1-wire e1-frame e2-studio e2-panel e2-mark e3-beams e4-contours e5-office e5-holo e6-maze; do
+    [ -f out/generation/$j/job.json ] || { echo "JOB $j is not published"; FAILS=$((FAILS+1)); }
+  done
+  for m in m-mic m-vial m-l6 m-photo1505; do
+    [ -f out/matting/$m/matte.json ] || { echo "MATTE $m is not published"; FAILS=$((FAILS+1)); }
+  done
+  stop_on_failure "the build inputs are incomplete"
+}
+# verify_outputs: the renders and sheets in $OUT match sha256sums.txt, the
+# manifest committed beside the evidence. This is the replay check.
+verify_outputs(){
+  perl_check 'my ($manifest, $out) = @ARGV; my $bad = 0; my $n = 0;
+    open my $m, "<", $manifest or die "cannot read $manifest\n";
+    while (<$m>) { next unless /^([0-9a-f]{64})  (\S+)$/; $n++;
+      my $h = sha("$out/$2"); next if $h eq $1; print "OUTPUT $2: $h, manifest $1\n"; $bad++ }
+    die "no entries in $manifest\n" unless $n;
+    print "outputs match the manifest: ", $n - $bad, " of $n\n"; exit($bad > 255 ? 255 : $bad)' "$MANIFEST" "$OUT" \
+    || FAILS=$((FAILS+1))
+}
+# verify_records: the public Job copies in this directory's logs/jobs/ equal
+# the retained records, with Reference paths compared as resolved above.
+verify_records(){
+  perl_check 'my ($pub, @priv) = @ARGV; my $bad = 0; my %seen;
+    my $canon = JSON::PP->new->canonical;
+    for my $j (@priv) { my ($id) = $j =~ m{generation/([^/]+)/job\.json$}; $seen{$id} = 1;
+      my @r = map { my $x = job($_); $_->{path} = refpath($_->{path}) for @{ $x->{request}{references} || [] };
+                    $canon->encode($x) } ($j, "$pub/$id.json");
+      if ($r[0] ne $r[1]) { print "RECORD $id: the public copy differs\n"; $bad++ } }
+    for (glob "$pub/*.json") { my ($id) = m{([^/]+)\.json$}; next if $seen{$id}; print "RECORD $id: public copy only\n"; $bad++ }
+    print "records match: ", scalar(@priv), " Jobs\n" unless $bad; exit($bad > 255 ? 255 : $bad)' \
+    "$SELF/logs/jobs" out/generation/*/job.json 2>&1 || FAILS=$((FAILS+1))
+}
 
 # ---------------------------------------------------------------------------
 # matte: true alpha, locally, for isolated objects and subjects.
@@ -403,18 +484,20 @@ likeness_sheet(){ # name {label file}... -- job...
     || { echo "SHEET likeness-$name failed"; FAILS=$((FAILS+1)); }
 }
 
-render_one(){ run composition render $1 -p builds/$1 --out "$OUT/renders/$1.png" >logs/render-$1.log 2>&1 && echo "render $1 ok" \
-  || { echo "RENDER $1 failed: $(<logs/render-$1.log)"; FAILS=$((FAILS+1)); }; }
-build(){ local t; for t in t1 t2 t3 t4 t5 t6 t7 t8; do build_$t; done; }
+render_one(){ render_to $1 builds/$1 "$OUT/renders/$1.png" && echo "render $1 ok"; }
+build(){ local t; preflight; for t in t1 t2 t3 t4 t5 t6 t7 t8; do build_$t; done; }
 render(){ local t; for t in t1 t2 t3 t4 t5 t6 t7 t8; do render_one $t; done; }
 
 for phase in "${@:-all}"; do
   case $phase in
     refs) refs ;; anchors) anchors ;; generate) generate ;;
     matte) matte ;; build) build ;; render) render ;; sheet) sheet ;;
-    t[1-8]) build_$phase; render_one $phase ;;
-    all) refs; anchors; generate; matte; build; render; sheet ;;
+    t[1-8]) preflight; build_$phase; render_one $phase ;;
+    # the replay: rebuild, then check inputs, outputs and records
+    all) refs; anchors; verify_inputs; stop_on_failure "a Reference no longer matches its Job record"
+         generate; matte; build; render; sheet; verify_outputs; verify_records ;;
     *) if declare -F "$phase" >/dev/null; then "$phase"; else echo "unknown phase $phase"; exit 2; fi ;;
   esac
 done
 echo "failures: $FAILS"
+[ $FAILS -eq 0 ]

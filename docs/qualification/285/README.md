@@ -16,12 +16,16 @@ cutout.
 - `rebuild.sh`: the whole rebuild, one phase at a time: `refs`, `anchors`,
   `generate`, `matte`, `build`, `render`, and `sheet`. Besides `ply`, it runs
   only shell builtins, `mkdir`, `rm -rf` of its own `builds/` Projects, and
-  `perl -e alarm` as a 180 s timeout around ply commands that open the render
-  page. It ends with a count of failed ply steps of any kind.
+  `perl`. Perl is used for two things: `-e alarm` as a 180 s timeout around ply
+  commands that open the render page, and core modules (`Digest::SHA`,
+  `JSON::PP`) for the checks below. Every failed step is counted: refused
+  adds, creates, Jobs, mattes, renders, sheets, and checks. The script ends
+  with that count and exits nonzero if it is not 0.
 - `costs.md`: every Gateway charge, from the receipts.
 - `logs/jobs/`: the 18 published Generation Job records (prompts, Reference
   identities, receipts). `logs/mattes/`: the 4 matte records.
-  `logs/build.log`: the final build, one line per Layer.
+  `logs/build.log`: the final offline replay, one line per Layer (including
+  the reference and crop Compositions) and any logged #351 retry.
   `logs/measure/`: `composition measure` for each final Composition.
   Local paths are rewritten to `$CONTENT_ROOT` and `$WORKSPACE`.
 
@@ -37,6 +41,12 @@ export CONTENT_ROOT=/path/to/ai-launchpad-content
 docs/qualification/285/rebuild.sh all        # offline: replays from the retained records
 ```
 
+**Platform.** The replay needs macOS. The t6 title imports
+`/System/Library/Fonts/SFNS.ttf` (SF Pro) as a caller font. On another
+platform that Layer is refused, t6 is not rebuilt, and the run fails its
+output check. The Apple Silicon MPS requirement applies only to `ply matte`,
+which the replay skips.
+
 The retained Generation Job and matte records (`out/`, 18 Jobs with 23
 outputs and 4 mattes) hold likeness outputs, so they live in the private
 content repository at
@@ -50,11 +60,34 @@ Job that is already published. To generate new candidates instead, point
 `WORKSPACE` at an empty directory and set `AI_GATEWAY_API_KEY`; the new
 candidates need a new review and new pins.
 
-**Replay check.** From that content-repository location, with
-`AI_GATEWAY_API_KEY` unset and nothing there but the committed `out/`,
-`rebuild.sh all` reproduced all eight renders, the comparison sheet and the
-three likeness sheets byte-for-byte, with no failed step. That run hit
-#351 twice; each refusal was retried once and logged.
+**The checks in `all`.** `all` is the replay, and it checks itself:
+
+- **Before generation**, `verify_inputs` hashes every Reference that a
+  retained Job recorded: the recovered references, the anchor crops, and the
+  sourced files. Each must still match the recorded `contentHash`. A drifted
+  baseline sheet or crop stops the run there.
+- **Before the first Layer**, `preflight` checks that every pinned output
+  resolves to exactly one file, and that every Job and matte the build reads
+  is published.
+- **At the end**, `verify_outputs` checks the renders and sheets against
+  `sha256sums.txt`, the manifest committed beside the evidence in
+  `ply-285-rebuild/`.
+- **Also at the end**, `verify_records` checks that the public copies in
+  `logs/jobs/` equal the retained records.
+
+A recorded Reference path is never read again during replay. With every
+absolute path pointed at a nonexistent file, t3 and t6 still rebuilt
+byte-for-byte. The checks therefore resolve any `…/assets/…` path against
+`$CONTENT_ROOT`, wherever it was recorded.
+
+**Replay check.** This was run from that content-repository location, with
+`AI_GATEWAY_API_KEY` unset and nothing there but the committed `out/`.
+`rebuild.sh all` reported "inputs ok", "outputs match the manifest: 12 of
+12" (all eight renders, the comparison sheet and the three likeness sheets,
+against `sha256sums.txt`), "records match: 18 Jobs", and "failures: 0".
+Each check was also shown to fail on a broken input: a swapped reference
+crop, a missing pinned output, a changed render, and an edited Job record.
+Replays hit #351 intermittently; each refusal is retried once and logged.
 
 | | |
 |---|---|

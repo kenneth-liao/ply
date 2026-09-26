@@ -1,3 +1,17 @@
+add ref1/cell ok
+add ref2/cell ok
+add ref3/cell ok
+add ref4/cell ok
+add ref5/cell ok
+add ref6/cell ok
+add ref7/cell ok
+add ref8/cell ok
+add ref6/cell ok
+add face1535/photo ok
+add face1505/photo ok
+add face1513/photo ok
+add macstudio/photo ok
+add photo1505/photo ok
 add t1/bg ok
 add t1/vignette ok
 add t1/ft ok
@@ -11,7 +25,8 @@ add t1/w4 ok
 add t1/w5 ok
 add t1/tile1 ok
 add t1/logo1 ok
-add t1/cap1 ok
+RETRY t1/cap1: Error: Layer "layer_muhtxmr5_rnxi8i" has no visible painted ink (transparent content or opacity 0 in composition "t1") — anchored placement resolves against the painted ink box, not the layout box. Use explicit --x/--y placement instead.
+add t1/cap1 ok (retry)
 add t1/tile2 ok
 add t1/logo2 ok
 add t1/cap2 ok
@@ -20,7 +35,8 @@ add t1/logo3 ok
 add t1/cap3 ok
 add t1/tile4 ok
 add t1/logo4 ok
-add t1/cap4 ok
+RETRY t1/cap4: Error: Layer "layer_muhtxpct_6nma5g" has no visible painted ink (transparent content or opacity 0 in composition "t1") — anchored placement resolves against the painted ink box, not the layout box. Use explicit --x/--y placement instead.
+add t1/cap4 ok (retry)
 add t1/tile5 ok
 add t1/logo5 ok
 add t1/cap5 ok
