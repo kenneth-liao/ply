@@ -1693,12 +1693,42 @@ export async function applyTextFit(page: Page, layers: SnapshotLayer[]): Promise
  * transforms about (x, y) with transform-origin 0 0, the same canvas and
  * text wrapping. There is no second markup builder to drift from.
  */
+/** The baked capture state (#351): when supplied, `buildCompositionHtml`
+ *  emits the capture geometry as the page's INITIAL state instead of leaving
+ *  it to post-load mutation. Measurement's painted-ink pass loads one throwaway
+ *  page per captured Layer with this state baked in — the capture then reads a
+ *  page nothing has mutated since load, the same conditions under which the
+ *  paint path's own screenshots (renders) are deterministic. Never set by the
+ *  paint path: renders build the default markup byte-identically, so pinned
+ *  Render history is untouched. */
+export interface CompositionCaptureState {
+  /** The #canvas position for this capture, baked into the initial
+   *  stylesheet: the bounded capture window's canvas shift (the markup rule
+   *  emits it at the same specificity the capture used to write inline). */
+  shift: { left: number; top: number };
+  /** The snapshot index to keep visible; every other element's markup carries
+   *  visibility:hidden — the hide-others step, baked. */
+  hideExcept: number;
+  /** When set on a masked Layer's index, the clip wrapper's MASK is omitted
+   *  (the pre-clip capture); the wrapper element and its data-ply-mask
+   *  attribute stay, so every in-page probe reaches the layer element inside
+   *  exactly as in a full render. Unset (or another index): the mask rides
+   *  with the markup, the post-clip capture. */
+  maskSuppressedFor?: number;
+}
+
+/** Build the composition markup: the canvas-sized #canvas holding one
+ *  absolutely positioned element per Layer at its placement with the canonical
+ *  transforms about (x, y) with transform-origin 0 0, the same canvas and
+ *  text wrapping. There is no second markup builder to drift from.
+ */
 export function buildCompositionHtml(
   canvas: { width: number; height: number },
   layers: SnapshotLayer[],
   supersample = 1,
   maskImages: Map<string, string> = new Map(),
   unitImages: Map<string, string> = new Map(),
+  capture?: CompositionCaptureState,
 ): string {
   // The Layer mask (ADR-0025, #305): `maskImages` maps each masked Layer's
   // stored use name to the mask use's canvas-space alpha raster as a data
@@ -1769,9 +1799,22 @@ export function buildCompositionHtml(
         layers.map((u) => u.revision.mask).filter((m): m is string => m !== undefined),
       );
       const servesAsMask = maskUseNames.has(l.name);
+      // The baked visibility (#351): in a render, a mask use never paints —
+      // its static hidden stays byte-identical. On a capture page, ONLY the
+      // captured element is visible — the same per-capture visibility state
+      // the pass used to write after load (the write whose presentation the
+      // capture raced), replacing the static hidden: a mask use measures and
+      // anchors like any Layer (ADR-0025 §2), so its own capture must see
+      // its ink. The outermost emitted element carries it — the mask wrapper
+      // for a masked Layer, the layer element otherwise (visibility
+      // inherits).
+      const hidden =
+        capture !== undefined
+          ? capture.hideExcept !== layerIndex ? "visibility:hidden;" : ""
+          : servesAsMask ? "visibility:hidden;" : "";
       const base =
         `position:absolute;left:${rev.x}px;top:${rev.y}px;opacity:${rev.opacity};` +
-        (servesAsMask ? "visibility:hidden;" : "");
+        (rev.mask === undefined ? hidden : "");
       // Canonical transform (#133/#134/#135/#298, ADR-0016 amendment): applied
       // about the Layer's (x, y) top-left placement point, in the documented
       // order — innermost flip, then scale, then rotation, then skew, then
@@ -1967,10 +2010,18 @@ export function buildCompositionHtml(
         rev.mask === undefined
           ? el
           : `<div style="position:absolute;left:0;top:0;width:${canvas.width}px;height:${canvas.height}px;` +
-            maskCss("mask-image", `url('${maskRaster}')`) +
-            maskCss("mask-size", "100% 100%") +
-            maskCss("mask-position", "0 0") +
-            maskCss("mask-repeat", "no-repeat") +
+            hidden +
+            // The pre-clip capture (#351): the mask rides with the markup
+            // unless this is that masked Layer's pre-clip page — the same
+            // disable the pass used to write after load (style.maskImage =
+            // "none"), baked as an omitted declaration. The wrapper and its
+            // data-ply-mask attribute stay either way.
+            (capture !== undefined && capture.maskSuppressedFor === layerIndex
+              ? ""
+              : maskCss("mask-image", `url('${maskRaster}')`) +
+                maskCss("mask-size", "100% 100%") +
+                maskCss("mask-position", "0 0") +
+                maskCss("mask-repeat", "no-repeat")) +
             (rev.blend !== undefined ? `mix-blend-mode:${rev.blend};` : "") +
             `" data-ply-mask="${escapeHtml(rev.mask)}">${el}</div>`;
       // The visible region's clip reference (#211, ADR-0023): applied to the
@@ -2217,7 +2268,14 @@ export function buildCompositionHtml(
     // every length (including values the builder does not scale: intrinsic
     // sizes, em/unitless values, filter pixels) composes correctly with no
     // per-site scaling to drift. Factor 1 emits exactly the pre-#184 markup.
-    `#canvas{position:relative;width:${canvas.width}px;height:${canvas.height}px;overflow:hidden` +
+    `#canvas{position:relative;width:${canvas.width}px;height:${canvas.height}px;` +
+    // The baked capture state (#351): the capture page's shift is the
+    // rule's position (the same left/top the capture used to write inline
+    // after load — the write whose presentation the capture raced), and the
+    // overflow releases the canvas clip so off-canvas ink is captured.
+    (capture !== undefined
+      ? `overflow:visible;left:${capture.shift.left}px;top:${capture.shift.top}px`
+      : "overflow:hidden") +
     (supersample > 1 ? `;transform:scale(${supersample});transform-origin:0 0` : "") +
     `}` +
     `</style></head>` +

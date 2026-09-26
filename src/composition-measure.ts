@@ -34,8 +34,11 @@
  *   content outside the region is not ink, so painted extents report the
  *   region-clipped ink while the layout `box` stays the full transformed
  *   content box (DEC-005).
- *   The ink pass renders the same paint-identical page, hides the other
- *   Layers (no reflow — they are absolutely positioned), screenshots the
+ *   The ink pass loads a state-initial capture page per Layer — the same
+ *   paint-identical markup with the viewport, the canvas shift, the other
+ *   Layers' visibility, and the pre-clip/post-clip mask baked as the page's
+ *   initial state (#351: nothing mutates between the load and the capture,
+ *   so the screenshot can never read a pre-mutation frame) — screenshots the
  *   Layer alone through a bounded per-Layer capture window (shifted, never
  *   grown with the Layer's off-canvas distance), and reads its alpha
  *   support — so the numbers are the browser's own paint, never a second
@@ -838,13 +841,12 @@ async function measureSnapshot(
       layers.map((l) => (l.revision.visibleRegion !== undefined ? { ...l.revision.visibleRegion } : null)),
     );
 
-    // Painted-ink pass (#137): the same page that just measured layout —
-    // the paint path's exact markup, the same decode and font gates — is
-    // screenshotted once per Layer with the others hidden (they are
-    // absolutely positioned, so hiding changes no geometry, and the page
-    // is throwaway). The canvas overflow is released, so ink beyond the
-    // canvas can be captured and the canvas intersection reported against
-    // the PAINTED extents, never the layout box.
+    // Painted-ink pass (#137): each Layer is captured from its OWN
+    // state-initial page — the paint path's exact markup with the capture
+    // geometry baked at load (#351), run through the same decode and font
+    // gates as a render. The canvas overflow is released in the baked rule,
+    // so ink beyond the canvas can be captured and the canvas intersection
+    // reported against the PAINTED extents, never the layout box.
     //
     // Bounded capture (review INT-1/PROD-1, #185, #206): each Layer gets its
     // OWN capture window, sized from that Layer's box plus its own effect reach
@@ -937,32 +939,51 @@ async function measureSnapshot(
           continue;
         }
         const b = windowBoxes[i]!;
-        // Per-Layer capture window and shift: position the canvas (and its
-        // absolutely positioned children, so this Layer's box) inside ITS
-        // OWN fixed capture window, centered with the pad on every side
-        // (rounded to whole pixels — a fractional shift would re-render the
-        // Layer at a subpixel offset and bleed its raster). Feasible
+        // Per-Layer capture window and shift: the Layer's box is positioned
+        // inside ITS OWN fixed capture window, centered with the pad on every
+        // side (rounded to whole pixels — a fractional shift would re-render
+        // the Layer at a subpixel offset and bleed its raster). Feasible
         // because the per-Layer cap check above bounds every window.
         const { w: captureW, h: captureH } = windowFor(i);
-        await page.setViewportSize({ width: captureW, height: captureH });
         const left = Math.round(captureW / 2 - (b.x + b.width / 2));
         const top = Math.round(captureH / 2 - (b.y + b.height / 2));
-        await page.evaluate(
-          ({ left, top }) => {
-            const canvasEl = document.getElementById("canvas") as HTMLElement;
-            canvasEl.style.overflow = "visible";
-            canvasEl.style.left = `${left}px`;
-            canvasEl.style.top = `${top}px`;
-          },
-          { left, top },
+        const masked = layers[i]!.revision.mask !== undefined;
+        // State-initial capture pages (#351): each capture loads a FRESH
+        // throwaway page of the paint-identical markup with the capture
+        // geometry — the viewport, the canvas shift, the other Layers'
+        // visibility, and the pre-clip/post-clip mask — baked in as the
+        // page's INITIAL state. Nothing mutates between the load and the
+        // screenshot: the only in-page operations after load are the paint
+        // path's own gates (the awaited content decode, the retained-font
+        // readiness gate, the effect filter-region sizing, the text fit
+        // derivation), the exact passes a render runs before its own
+        // screenshot — deterministic in every render. The previous flow
+        // resized the viewport, shifted the canvas, and toggled visibility
+        // and the mask on the live layout page and captured immediately —
+        // and the capture could read the last-presented frame, which
+        // predated those mutations: visible ink read as absent, refusing an
+        // anchored add at random (#351). The viewport is sized before the
+        // load, with the page.
+        await page.setViewportSize({ width: captureW, height: captureH });
+        await page.setContent(
+          buildCompositionHtml(canvas, layers, 1, maskImages, unitImages, {
+            shift: { left, top },
+            hideExcept: i,
+            ...(masked ? { maskSuppressedFor: i } : {}),
+          }),
+          { waitUntil: "load" },
         );
+        await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+        await sizeEffectFilterRegions(page, layers);
+        await rejectUnresolvedFonts(page, layers);
+        await applyTextFit(page, layers);
         // The markup contract at capture time (review INT-U3-4): a masked
         // Layer's direct #canvas child MUST be the data-ply-mask clip
-        // wrapper — the pre-clip capture below toggles the wrapper's mask,
-        // and a drifted markup (a masked Layer whose element is not
-        // wrapped) would measure silently wrong ink. Refused loudly here,
-        // naming the Layer, never measured through a stale contract.
-        const contractProblem = layers[i]!.revision.mask !== undefined
+        // wrapper — both captures read through it, and a drifted markup (a
+        // masked Layer whose element is not wrapped) would measure silently
+        // wrong ink. Refused loudly here, naming the Layer, never measured
+        // through a stale contract.
+        const contractProblem = masked
           ? await page.evaluate((idx) => {
               const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
               const el = kids[idx];
@@ -978,45 +999,27 @@ async function measureSnapshot(
               "Refusing to measure masked ink against a markup contract that no longer holds.",
           );
         }
-        await page.evaluate((idx) => {
-          const kids = Array.from((document.getElementById("canvas") as HTMLElement).children) as HTMLElement[];
-          kids.forEach((el, j) => {
-            el.style.visibility = j === idx ? "" : "hidden";
-          });
-        }, i);
-        // The Layer mask (ADR-0025 §5, #305): `painted` keeps its pre-clip
-        // meaning, so a masked Layer's capture first DISABLES the clip
-        // wrapper's mask; the post-clip extents are a SECOND capture with
-        // the saved declaration restored (the style attribute IS the CSSOM —
-        // blanking the property would lose the original raster), reported
-        // separately as `maskedPainted`. The capture window already covers
-        // both: post-clip ink is a subset of the pre-clip ink the window was
-        // sized from.
-        const masked = layers[i]!.revision.mask !== undefined;
-        const savedMask = masked
-          ? await page.evaluate((idx) => {
-              const el = (document.getElementById("canvas") as HTMLElement).children[idx] as HTMLElement;
-              if (!el.hasAttribute("data-ply-mask")) return null;
-              const saved = {
-                maskImage: el.style.maskImage,
-                webkitMaskImage: el.style.getPropertyValue("-webkit-mask-image"),
-              };
-              el.style.maskImage = "none";
-              el.style.setProperty("-webkit-mask-image", "none");
-              return saved;
-            }, i)
-          : null;
         const shot = await page.screenshot({ type: "png", omitBackground: true });
         painted[i] = inkBounds(decodePng(Buffer.from(shot)), left, top);
-        if (savedMask !== null) {
-          await page.evaluate(
-            ({ idx, saved }) => {
-              const el = (document.getElementById("canvas") as HTMLElement).children[idx] as HTMLElement;
-              el.style.maskImage = saved.maskImage;
-              el.style.setProperty("-webkit-mask-image", saved.webkitMaskImage);
-            },
-            { idx: i, saved: savedMask },
+        if (masked) {
+          // The Layer mask (ADR-0025 §5, #305): `painted` keeps its pre-clip
+          // meaning, so the first capture loaded the wrapper WITHOUT its
+          // mask; the post-clip extents are a SECOND state-initial capture
+          // with the mask riding the markup, reported separately as
+          // `maskedPainted`. The capture window already covers both:
+          // post-clip ink is a subset of the pre-clip ink the window was
+          // sized from.
+          await page.setContent(
+            buildCompositionHtml(canvas, layers, 1, maskImages, unitImages, {
+              shift: { left, top },
+              hideExcept: i,
+            }),
+            { waitUntil: "load" },
           );
+          await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+          await sizeEffectFilterRegions(page, layers);
+          await rejectUnresolvedFonts(page, layers);
+          await applyTextFit(page, layers);
           const maskedShot = await page.screenshot({ type: "png", omitBackground: true });
           maskedPainted[i] = inkBounds(decodePng(Buffer.from(maskedShot)), left, top);
         }
