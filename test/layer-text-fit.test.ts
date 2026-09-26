@@ -221,6 +221,114 @@ test("fit only shrinks: text that already fits keeps its stored size and renders
   expect(fitted.equals(plainPng)).toBe(true);
 }, 60_000);
 
+// ---------------------------------------------------------------------------
+// #350: the rendered fit must equal the measured fit at every device scale —
+// the ONE shared derivation reads layout px, never device px. The ticket's
+// probe: text that fits its box with a little room to spare, on a canvas the
+// size of a name card (600×100), so a misread scale shrinks it visibly.
+// ---------------------------------------------------------------------------
+
+const FIT_PROBE_TEXT = "Founder of The AI Launchpad";
+
+async function addProbeText(comp: string, name: string, extra: string[]): Promise<void> {
+  const res = await invoke([
+    "composition", "add", comp, name,
+    "--text", FIT_PROBE_TEXT, "--font", "Archivo", "--font-size", "28", "--color", "#ffffff",
+    ...extra, "--project", projDir, "--json",
+  ]);
+  expect(res.code).toBe(0);
+}
+
+async function renderTo(comp: string, out: string, supersample?: string): Promise<void> {
+  const res = await invoke([
+    "composition", "render", comp, "--out", out,
+    ...(supersample ? ["--supersample", supersample] : []),
+    "--project", projDir, "--json",
+  ]);
+  expect(res.code).toBe(0);
+}
+
+/** The ink bounding box (alpha > 0) of a rendered PNG. */
+async function inkBox(pngPath: string): Promise<{ x: number; y: number; width: number; height: number }> {
+  const { decodePng } = await import("../src/png.js");
+  const png = decodePng(await readFile(pngPath));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (png.rgba[(y * png.width + x) * 4 + 3]! > 0) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  expect(minX).toBeLessThan(Infinity); // sanity: there IS ink
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+test("a fit-box Layer renders the measured ink: the rendered ink box equals measure's painted box at the default supersample and at 1 (#350)", async () => {
+  await makeComp("boxed", 600, 100);
+  await addProbeText("boxed", "t", ["--fit-box", "410x44"]);
+  const m = await measure("boxed", "t");
+  const painted = m.painted as { x: number; y: number; width: number; height: number };
+  expect(painted).not.toBeNull();
+  // Both renders come out at the delivery size (600×100): the default
+  // supersampled paint is area-averaged back to the canvas, so the ink box
+  // compares in the same layout px measure reports.
+  for (const [out, ss] of [["default.png", undefined], ["ss1.png", "1"]] as const) {
+    await renderTo("boxed", path.join(tempDir, out), ss);
+    const ink = await inkBox(path.join(tempDir, out));
+    expect(close(ink.x, painted.x, 2)).toBe(true);
+    expect(close(ink.y, painted.y, 2)).toBe(true);
+    expect(close(ink.width, painted.width, 2)).toBe(true);
+    expect(close(ink.height, painted.height, 2)).toBe(true);
+  }
+}, 60_000);
+
+test("when the text already fits, the boxed render is byte-identical to the unboxed render at the default supersample and at 1 (#350)", async () => {
+  await makeComp("fitted", 600, 100);
+  await addProbeText("fitted", "t", ["--fit-box", "410x44"]);
+  await makeComp("fittedPlain", 600, 100);
+  await addProbeText("fittedPlain", "t", []);
+  // DEC-010: fit only shrinks — the text fits at its stored size, so the
+  // box must change no pixel, at the default supersample AND at 1.
+  for (const [out, ss] of [["default.png", undefined], ["ss1.png", "1"]] as const) {
+    await renderTo("fitted", path.join(tempDir, `fit-${out}`), ss);
+    await renderTo("fittedPlain", path.join(tempDir, `plain-${out}`), ss);
+    const fitted = await readFile(path.join(tempDir, `fit-${out}`));
+    const plain = await readFile(path.join(tempDir, `plain-${out}`));
+    expect(fitted.equals(plain)).toBe(true);
+  }
+}, 60_000);
+
+test("a fit-box text member inside a unit Layer scaled 2x renders at the fitted size: the unit raster page's derivation is scale-invariant (#350)", async () => {
+  await makeComp("inner", 600, 100);
+  await addProbeText("inner", "t", ["--fit-box", "410x44"]);
+  await makeComp("outer", 1200, 200);
+  const res = await invoke([
+    "composition", "add", "outer", "tile", "--unit", "inner", "--project", projDir, "--json",
+  ]);
+  expect(res.code).toBe(0);
+  // The unit's scale is an edit fact (ADR-0026 §4): placement only on add.
+  const tileId = JSON.parse(res.stdout).use.layerId as string;
+  const scaled = await invoke(["layer", "edit", tileId, "--scale", "2", "--project", projDir, "--json"]);
+  expect(scaled.code).toBe(0);
+  // The member at scale 1: the inner composition rendered at supersample 1.
+  await renderTo("inner", path.join(tempDir, "plain.png"), "1");
+  // The scaled unit at the default supersample — the unit raster page paints
+  // at scale 2 × supersample 2 = 4, the harshest misread a scaled fit pass
+  // could take.
+  await renderTo("outer", path.join(tempDir, "unit.png"));
+  const plain = await inkBox(path.join(tempDir, "plain.png"));
+  const unit = await inkBox(path.join(tempDir, "unit.png"));
+  // The unit's transform doubles the fitted member's rendered ink.
+  expect(close(unit.x, 2 * plain.x, 3)).toBe(true);
+  expect(close(unit.y, 2 * plain.y, 3)).toBe(true);
+  expect(close(unit.width, 2 * plain.width, 3)).toBe(true);
+  expect(close(unit.height, 2 * plain.height, 3)).toBe(true);
+}, 60_000);
+
 test("the box is a LAYOUT-px measure: scale and rotation map the fitted block afterwards, never inflating the derivation (review INT-1)", async () => {
   await makeComp("poster", 1200, 900);
   // Three identical Layers — same text, font, size, box — differing only in
