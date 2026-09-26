@@ -178,6 +178,34 @@ const audit: Array<{ suite: string; markers: string[] }> = [
     ],
   },
   {
+    // The unit Layer kind (ADR-0026, #307): several Layers transform and
+    // adjust as one unit — the probe, the shipped/refused fact gates, the
+    // lifecycle refusals, and the nested-pin replay each live in their own
+    // suite; this row records the ownership.
+    suite: "layer-unit.test.ts",
+    markers: [
+      "--fork on a unit Layer is refused by name, pointing at the missing unit fork",
+    ],
+  },
+  {
+    suite: "layer-unit-edit.test.ts",
+    markers: [
+      "shipped transform facts apply on a unit: rotate, flip, scale, scale-to, resize",
+    ],
+  },
+  {
+    suite: "layer-unit-paint.test.ts",
+    markers: [
+      "the ISC-36 probe: one --rotate edit turns the card and its wordmark together",
+    ],
+  },
+  {
+    suite: "render-history-units.test.ts",
+    markers: [
+      "TEST-003: replay is byte-identical after a member edit, an inner use-list edit, and a unit edit",
+    ],
+  },
+  {
     suite: "layer-text-runs.test.ts",
     markers: [
       "runs authored on composition add store boundaries and overrides with text as the one character home",

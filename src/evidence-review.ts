@@ -444,6 +444,47 @@ export async function reviewRetainedLayer(
         predecessorCandidateNote: null,
       };
     }
+    if (rev.kind === "unit") {
+      // A unit Layer (ADR-0026, #307) has no retained bytes and no
+      // generation/matting lineage — its content is the LIVE reference to
+      // its inner Composition. The review reports the reference and the
+      // unit's own facts as rows, with no candidate or matte figure: there
+      // is no pixel evidence to display (the composite exists only during
+      // painting), and inventing one is exactly what this boundary never
+      // does (the shape precedent).
+      const facts: [string, string][] = [
+        ["layer", layer.id],
+        ["current revision", layer.currentRevisionId],
+        ["kind", "unit"],
+        ["unit of", `${rev.composition} (live reference — the composite is painted, never stored)`],
+        ...(rev.grade !== undefined
+          ? [["grade", formatGrade(rev.grade)] as [string, string]]
+          : []),
+        ...effectFacts,
+        ...(rev.blend !== undefined
+          ? [["blend mode", `${rev.blend} (paint-time)`] as [string, string]]
+          : []),
+      ];
+      const sheet = renderEvidenceSheet({
+        title: `layer review · ${layer.id}`,
+        subtitle: "unit Layer — content is the live reference to its inner Composition; there are no retained pixels to review",
+        facts,
+        references: [],
+        candidates: [],
+        mattes: [],
+      });
+      await publishSheet(dest, Buffer.from(sheet), outPath, opts);
+      return {
+        layerId: layer.id,
+        reviewPath: dest.target,
+        candidate: null,
+        references: [],
+        generation: null,
+        matting: null,
+        associatedMatte: null,
+        predecessorCandidateNote: null,
+      };
+    }
     if (rev.kind !== "image") {
       throw new Error(`Layer "${layerId}" is a text Layer — no Generation Job or matte claims text content, so there is no evidence to review`);
     }

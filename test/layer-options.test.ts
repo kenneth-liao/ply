@@ -74,7 +74,10 @@ describe("shared Layer option definition (#226 DEC-001)", () => {
       LAYER_OPTION_DEFS.map((def) => def.key).sort(),
     );
     expect([...COMPOSITION_ADD_OPTION_KEYS].sort()).toEqual(
-      [...layerEditOptionKeys(), "output" as LayerOptionKey].sort(),
+      // The add-only table keys: the generation output selector (#233) and
+      // the unit reference (ADR-0026, #307) — every other table key is an
+      // edit option.
+      [...layerEditOptionKeys(), "output" as LayerOptionKey, "unit" as LayerOptionKey].sort(),
     );
   });
 

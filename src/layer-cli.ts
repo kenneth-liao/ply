@@ -2,11 +2,12 @@
 // Layer management CLI: edit, inspect, and list Layers within a Project.
 import { parseArgs } from "node:util";
 import path from "node:path";
-import { inspectLayer, listLayers, editLayer, resolveCoverCanvasTarget, roundEffective, formatGrade, formatGlow, type ResolvedLayer } from "./layer.js";
+import { inspectLayer, listLayers, editLayer, resolveCoverCanvasTarget, roundEffective, formatGrade, formatGlow, unitEditFactRefusal, UNIT_EDIT_OPTION_KEYS, type ResolvedLayer } from "./layer.js";
 import { type AnchorResolution, type ParsedAnchor } from "./layer-anchor.js";
 import {
   LAYER_OPTION_PARSE_ARGS,
   anyLayerEditOptionProvided,
+  parseLayerUnitTarget,
   applyLayerOption,
   checkEditLayerOptions,
   layerDashNumericFlags,
@@ -784,6 +785,30 @@ async function run() {
       // named in this list.
       const hasEditOption = anyLayerEditOptionProvided(values);
 
+      // The unit Layer (ADR-0026, #307): --unit is add-only. The boundary
+      // parse runs FIRST (the ONE registration — a malformed name refuses
+      // with the shared wording, exit 2, identically with `composition add`);
+      // a well-formed name then gets the add-only refusal. The reference is
+      // set at creation and changed only by the unit fork (#341), so an edit
+      // carrying it is never silently dropped.
+      if (values.unit !== undefined) {
+        const unitTarget = parseLayerUnitTarget(values.unit as string);
+        if (!unitTarget.ok) {
+          output({ ok: false, error: unitTarget.error }, isJson);
+          process.exitCode = 2;
+          return;
+        }
+        output(
+          {
+            ok: false,
+            error: "--unit is add-only: a unit Layer's reference is set by `composition add --unit` and changed only by the unit fork (#341).",
+          },
+          isJson,
+        );
+        process.exitCode = 2;
+        return;
+      }
+
       if (!hasEditOption && !values.fork) {
         output(
           {
@@ -885,6 +910,37 @@ async function run() {
       const parsed = checked.parsed;
       const parsedAnchor = parsed.anchor as ParsedAnchor | undefined;
       const parsedMask = parsed.mask as string | undefined;
+
+      // The unit edit gate at the boundary (ADR-0026 §4, #307): a unit
+      // Layer's refused facts are named BEFORE the live-context resolutions
+      // run, so an anchor, mask, or cover target is never resolved against a
+      // unit. The same key set and refusal builder the domain lifecycle
+      // enforces (UNIT_EDIT_OPTION_KEYS / unitEditFactRefusal); a --fork
+      // edit falls through to the unit fork refusal (#341).
+      {
+        // An unknown or unreadable Layer id skips the gate: the edit
+        // lifecycle's own validation produces the established refusal, and
+        // the boundary must never turn it into a raw throw.
+        let targetLayer: Awaited<ReturnType<typeof inspectLayer>> | undefined;
+        try {
+          targetLayer = await inspectLayer(targetProj, layerId);
+        } catch {
+          targetLayer = undefined;
+        }
+        if (targetLayer !== undefined && targetLayer.currentRevision.kind === "unit") {
+          const refused = Object.entries(parsed)
+            .filter(([key, v]) => v !== undefined && !UNIT_EDIT_OPTION_KEYS.includes(key))
+            .map(([key]) => key);
+          if (refused.length > 0) {
+            output(
+              { ok: false, error: unitEditFactRefusal(refused, layerId, targetLayer.currentRevision.composition) },
+              isJson,
+            );
+            process.exitCode = 1;
+            return;
+          }
+        }
+      }
 
       try {
         // The Layer mask (ADR-0025 §5, #305): the would-be fact resolves ONCE
@@ -1265,6 +1321,11 @@ async function run() {
                 console.log(`  Corner radius: ${rev.cornerRadius}px`);
               }
               console.log(`  Fill: ${formatFill(rev.fill)}`);
+            } else if (rev.kind === "unit") {
+              // The unit Layer (ADR-0026, #307): the live reference is the
+              // content fact — there is no content hash and no intrinsic
+              // size to report.
+              console.log(`  Unit of Composition: ${rev.composition} (live reference)`);
             } else {
               console.log(`  Format: ${rev.format} (${rev.width}×${rev.height}, ${(rev.bytes / 1024).toFixed(1)} KB)`);
               // The vector colour (#215): reported only when set — absence IS
@@ -1274,13 +1335,15 @@ async function run() {
                 console.log(`  Vector colour: ${rev.vectorColor}`);
               }
             }
-            console.log(`  Content hash: ${rev.contentHash}`);
+            if (rev.kind !== "unit") {
+              console.log(`  Content hash: ${rev.contentHash}`);
+            }
             const scalePart =
               rev.scaleX === rev.scaleY ? `${rev.scaleX}×` : `${rev.scaleX}×/${rev.scaleY}×`;
             const scale =
               rev.scaleX === 1 && rev.scaleY === 1
                 ? ""
-                : rev.kind === "text"
+                : rev.kind === "text" || rev.kind === "unit"
                   ? `, Scale: ${scalePart}`
                   : `, Scale: ${scalePart} (effective ${roundEffective(rev.width * rev.scaleX)}×${roundEffective(rev.height * rev.scaleY)})`;
             const rotation =
@@ -1433,7 +1496,9 @@ async function run() {
                   ? `text ${JSON.stringify(rev.text)}, ${rev.fontSize}px`
                   : rev.kind === "shape"
                     ? `${rev.shape} ${rev.width}×${rev.height}, ${formatFill(rev.fill)}`
-                    : `${rev.width}×${rev.height} ${rev.format}`;
+                    : rev.kind === "unit"
+                      ? `unit of "${rev.composition}"`
+                      : `${rev.width}×${rev.height} ${rev.format}`;
               console.log(`  - ${l.id} [${rev.kind}: ${detail}, rev: ${l.currentRevisionId}]`);
             });
           },

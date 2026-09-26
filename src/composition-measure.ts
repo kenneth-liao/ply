@@ -87,6 +87,7 @@
  */
 import { withRenderPage } from "./browser.js";
 import { readCompositionInternalFull } from "./composition.js";
+import { resolveSnapshotLayersLocked } from "./composition-render.js";
 import { readLayerInternalFull } from "./layer.js";
 import { resolveProjectRoot } from "./project.js";
 import { withProjectLock } from "./project-lock.js";
@@ -98,7 +99,9 @@ import {
   rejectUnresolvedFonts,
   sizeEffectFilterRegions,
   type SnapshotLayer,
+  type UnitSnapshot,
   type TextFitProbe,
+  paintUnitRasters,
 } from "./composition-paint.js";
 import {
   normalizeStoredTextAxes,
@@ -136,7 +139,13 @@ import { type LayerFill, normalizeStoredTextFill } from "./fill.js";
 export interface MeasuredLayerBounds {
   name: string;
   layerId: string;
-  kind: "image" | "text" | "shape";
+  kind: "image" | "text" | "shape" | "unit";
+  /** The unit's inner Composition (ADR-0026 §4, #307): present if and only
+   *  if the Layer is a unit — the live reference measure resolved and
+   *  painted. Every other kind reports null. The measured `content` box IS
+   *  the inner Composition's canvas (§3 bounds), and `painted` is the
+   *  composite's ink — the members' own effects included. */
+  unit: { composition: string } | null;
   /** Untransformed content box along the content's own axes (px). */
   content: { width: number; height: number };
   /** Axis-aligned bounding box of the transformed content rectangle in Composition coordinates (px, unclipped). */
@@ -798,13 +807,18 @@ async function measureSnapshot(
 ): Promise<{ content: { width: number; height: number }; corners: { x: number; y: number }[]; box: Box; painted: Box | null; maskedPainted: Box | null; refused: string | null; fit: TextFitProbe | null }[]> {
   const run = async (page: Page) => {
     await page.setViewportSize({ width: canvas.width, height: canvas.height });
+    // The unit pass (ADR-0026, #307): every unit Layer's inner composite is
+    // rasterized at its painted size and this page's supersample factor
+    // (measurement paints at 1) — the markup embeds the rasters, so a unit
+    // measures its composite's ink like any content.
+    const unitImages = await paintUnitRasters(layers, { page, supersample: 1 });
     // The Layer mask (ADR-0025, #305): the mask pass runs on the SAME page
     // flow as painting — it resolves every masked Layer's stored name in
     // this Composition (loud refusal naming the missing use), and supplies
     // the clip rasters the markup embeds. Measuring never paints unclipped
     // as a fallback.
-    const maskImages = await paintMaskRasters(canvas, layers, { page, supersample: 1 });
-    await page.setContent(buildCompositionHtml(canvas, layers, 1, maskImages), { waitUntil: "load" });
+    const maskImages = await paintMaskRasters(canvas, layers, { page, supersample: 1, unitImages });
+    await page.setContent(buildCompositionHtml(canvas, layers, 1, maskImages, unitImages), { waitUntil: "load" });
     // Awaited decode: a partially painted or broken image is never measured.
     await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
     // Per-Layer outline-filter region sizing (#140, ADR-0019): the paint
@@ -1039,15 +1053,12 @@ export async function measureCompositionLayers(
   // in-memory snapshot and writes nothing, so no Project state is held
   // during the browser pass.
   const { comp, layers } = await withProjectLock(resolvedRoot, async () => {
-    const comp = await readCompositionInternalFull(resolvedRoot, compName);
-    const layers: SnapshotLayer[] = comp.layers.map((use) => ({
-      name: use.name,
-      layerId: use.layerId,
-      revision: use.revision,
-      contentBytes: use.contentBytes,
-      ...(use.runFonts !== undefined && use.runFonts.length > 0 ? { runFonts: use.runFonts } : {}),
-    }));
-    return { comp, layers };
+    // The one canonical snapshot resolver (the render path's own): unit
+    // trees resolve recursively with the cycle and missing-Composition
+    // refusals (ADR-0026, #307), so measurement refuses exactly where a
+    // render refuses.
+    const snapshot = await resolveSnapshotLayersLocked(resolvedRoot, compName);
+    return { comp: snapshot, layers: snapshot.layers };
   });
 
   const measured = await measureSnapshot(comp.canvas, layers, {
@@ -1083,13 +1094,14 @@ export async function measureCompositionLayers(
         name: l.name,
         layerId: l.layerId,
         kind: rev.kind,
+        unit: rev.kind === "unit" ? { composition: rev.composition } : null,
         // Image content size is the canonical verified revision fact; shape
         // content size (#208) is the same kind of fact — the geometry's
         // stored parameters; text has no stored size — its measured line-box
         // layout extent is the only source, from the same face bytes
         // painting uses.
         content:
-          rev.kind === "text"
+          rev.kind === "text" || rev.kind === "unit"
             ? { width: round2(m.content.width), height: round2(m.content.height) }
             : { width: rev.width, height: rev.height },
         box: {
@@ -1223,10 +1235,18 @@ export async function measureStandaloneLayer(
   options: { page?: Page } = {},
 ): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null }> {
   const resolvedRoot = await resolveProjectRoot(projectPath);
-  const { currentRevision, contentBytes } = await withProjectLock(resolvedRoot, () =>
-    readLayerInternalFull(resolvedRoot, layerId),
-  );
-  return measureStandaloneSnapshot(currentRevision, contentBytes, options);
+  return withProjectLock(resolvedRoot, async () => {
+    const { currentRevision, contentBytes } = await readLayerInternalFull(resolvedRoot, layerId);
+    // A unit's standalone measurement resolves its inner tree under the
+    // same lock (ADR-0026, #307): the same resolver the render uses, so the
+    // cycle and missing-Composition refusals are the render's.
+    let unit: UnitSnapshot | undefined;
+    if (currentRevision.kind === "unit") {
+      const inner = await resolveSnapshotLayersLocked(resolvedRoot, currentRevision.composition);
+      unit = { composition: currentRevision.composition, canvas: inner.canvas, layers: inner.layers };
+    }
+    return measureStandaloneSnapshot(currentRevision, contentBytes, { ...options, unit });
+  });
 }
 
 /**
@@ -1243,7 +1263,7 @@ export async function measureStandaloneLayer(
 export async function measureStandaloneSnapshot(
   currentRevision: ResolvedLayerRevision,
   contentBytes: Buffer,
-  options: { page?: Page; runFonts?: SnapshotRunFont[] } = {},
+  options: { page?: Page; runFonts?: SnapshotRunFont[]; unit?: UnitSnapshot } = {},
 ): Promise<{ painted: Box | null; box: Box; content: { width: number; height: number }; refused: string | null; fit: TextFitProbe | null }> {
   const standalone: SnapshotLayer = {
     name: currentRevision.layerId,
@@ -1251,6 +1271,7 @@ export async function measureStandaloneSnapshot(
     revision: { ...currentRevision, x: 0, y: 0 },
     contentBytes,
     ...(options.runFonts !== undefined && options.runFonts.length > 0 ? { runFonts: options.runFonts } : {}),
+    ...(options.unit !== undefined ? { unit: options.unit } : {}),
   };
   const canvas = { width: STANDALONE_CANVAS_PX, height: STANDALONE_CANVAS_PX };
   const [measured] = await measureSnapshot(canvas, [standalone], options);
@@ -1267,11 +1288,11 @@ export async function measureStandaloneSnapshot(
     fit: projected.fit,
     content: {
       width:
-        currentRevision.kind === "text"
+        currentRevision.kind === "text" || currentRevision.kind === "unit"
           ? projected.content.width
           : currentRevision.width,
       height:
-        currentRevision.kind === "text"
+        currentRevision.kind === "text" || currentRevision.kind === "unit"
           ? projected.content.height
           : currentRevision.height,
     },

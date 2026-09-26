@@ -28,7 +28,20 @@ import { escapesDirReal } from "./paths.js";
 import { isStoredTimestamp } from "./stored-schema.js";
 import type { SnapshotLayer, PaintEnvironment } from "./composition-paint.js";
 
-export const RENDER_MANIFEST_SCHEMA_VERSION = 1;
+export const RENDER_MANIFEST_SCHEMA_VERSION = 2;
+
+/** The nested pins for one unit Layer (ADR-0026 §4, #307): the inner
+ *  Composition's resolved state at render time — its canvas, its use order
+ *  and names, and every member's revision, nested units recursively.
+ *  Replay paints from these pins and NEVER reads current Composition
+ *  documents. schemaVersion 2 is written ONLY when a unit is pinned: a
+ *  unit-free render writes a byte-identical v1 manifest, so an older
+ *  binary still replays it. */
+export interface RenderManifestUnit {
+  composition: string;
+  canvas: { width: number; height: number };
+  layers: RenderManifestLayer[];
+}
 
 /** The rendering environment that painted a Render — identity fields only. */
 export interface RenderEnvironment {
@@ -45,6 +58,11 @@ export interface RenderManifestLayer {
   layerId: string;
   /** The exact immutable revision the render resolved, by content-derived id. */
   revisionId: string;
+  /** The nested pins (ADR-0026 §4, #307): present if and only if the use is
+   *  a unit Layer. The unit's revision stores only the inner Composition's
+   *  NAME — the pins are the resolved state the pixels actually painted
+   *  from. */
+  unit?: RenderManifestUnit;
 }
 
 export interface RenderManifestDocument {
@@ -82,8 +100,13 @@ export function buildRenderManifest(
   informationalOutput: string,
   now = new Date(),
 ): RenderManifestDocument {
+  const layers = snapshot.layers.map((l) => buildPinnedLayer(l));
+  // schemaVersion 2 ONLY when a unit is pinned (ADR-0026 §4, #307): a
+  // unit-free render writes the exact pre-unit manifest, so an older
+  // binary still replays it.
+  const pinsUnits = layers.some((l) => l.unit !== undefined);
   return {
-    schemaVersion: RENDER_MANIFEST_SCHEMA_VERSION,
+    schemaVersion: pinsUnits ? 2 : 1,
     composition: snapshot.name,
     canvas: { width: snapshot.canvas.width, height: snapshot.canvas.height },
     supersample: snapshot.supersample,
@@ -95,11 +118,26 @@ export function buildRenderManifest(
     },
     output: informationalOutput,
     createdAt: now.toISOString(),
-    layers: snapshot.layers.map((l) => ({
-      name: l.name,
-      layerId: l.layerId,
-      revisionId: l.revision.revisionId,
-    })),
+    layers,
+  };
+}
+
+/** Pin one snapshot layer: identity fields, plus the nested pins when the
+ *  use is a unit (the inner Composition's resolved state, recursively). */
+function buildPinnedLayer(l: SnapshotLayer): RenderManifestLayer {
+  return {
+    name: l.name,
+    layerId: l.layerId,
+    revisionId: l.revision.revisionId,
+    ...(l.unit !== undefined
+      ? {
+          unit: {
+            composition: l.unit.composition,
+            canvas: { width: l.unit.canvas.width, height: l.unit.canvas.height },
+            layers: l.unit.layers.map((m) => buildPinnedLayer(m)),
+          },
+        }
+      : {}),
   };
 }
 
@@ -132,9 +170,12 @@ export function parseRenderManifest(raw: string): RenderManifestDocument {
     throw new Error("Malformed render manifest: root must be a JSON object.");
   }
   const m = doc as RenderManifestDocument;
-  if (m.schemaVersion !== RENDER_MANIFEST_SCHEMA_VERSION) {
+  // v2 adds the nested unit pins (ADR-0026 §4, #307); v1 manifests carry no
+  // unit field and replay exactly as they always did. Both versions pin the
+  // same per-use identity fields.
+  if (m.schemaVersion !== 1 && m.schemaVersion !== 2) {
     throw new Error(
-      `Unsupported render manifest schemaVersion ${JSON.stringify(m.schemaVersion)} — this tool reads version ${RENDER_MANIFEST_SCHEMA_VERSION} only.`,
+      `Unsupported render manifest schemaVersion ${JSON.stringify(m.schemaVersion)} — this tool reads versions 1 and 2 only.`,
     );
   }
   nonemptyString(m.composition, "composition");
@@ -206,8 +247,59 @@ export function parseRenderManifest(raw: string): RenderManifestDocument {
     if (typeof entry.revisionId !== "string" || !REVISION_ID_PATTERN.test(entry.revisionId)) {
       throw new Error(`Malformed render manifest: "${field}.revisionId" is not a valid revision id.`);
     }
+    // The nested unit pins (ADR-0026 §4, #307): strict recursive validation
+    // — a malformed pin fails the manifest, never paints a guess.
+    if (entry.unit !== undefined) parseUnitPins(entry.unit, field);
   });
   return m;
+}
+
+/** Strictly validate one nested unit pin tree (ADR-0026 §4, #307). */
+function parseUnitPins(unit: unknown, field: string): void {
+  if (!unit || typeof unit !== "object" || Array.isArray(unit)) {
+    throw new Error(`Malformed render manifest: "${field}.unit" must be an object.`);
+  }
+  const u = unit as Record<string, unknown>;
+  nonemptyString(u.composition, `${field}.unit.composition`);
+  let compositionName: string;
+  try {
+    compositionName = sanitizeName(u.composition as string);
+  } catch (err) {
+    throw new Error(
+      `Malformed render manifest: "${field}.unit.composition" ${JSON.stringify(u.composition)} is not a valid Composition name — ${(err as Error).message}`,
+    );
+  }
+  if (compositionName !== u.composition) {
+    throw new Error(
+      `Malformed render manifest: "${field}.unit.composition" ${JSON.stringify(u.composition)} is not a valid Composition name.`,
+    );
+  }
+  const canvas = u.canvas as RenderManifestUnit["canvas"] | undefined;
+  if (
+    !canvas ||
+    typeof canvas !== "object" ||
+    !Number.isInteger(canvas.width) || canvas.width <= 0 ||
+    !Number.isInteger(canvas.height) || canvas.height <= 0
+  ) {
+    throw new Error(`Malformed render manifest: "${field}.unit.canvas" must specify positive integer width and height.`);
+  }
+  if (!Array.isArray(u.layers)) {
+    throw new Error(`Malformed render manifest: "${field}.unit.layers" must be an array of pinned uses.`);
+  }
+  u.layers.forEach((entry, i) => {
+    const nested = `${field}.unit.layers[${i}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Malformed render manifest: "${nested}" must be an object.`);
+    }
+    nonemptyString(entry.name, `${nested}.name`);
+    if (typeof entry.layerId !== "string" || !LAYER_ID_PATTERN.test(entry.layerId)) {
+      throw new Error(`Malformed render manifest: "${nested}.layerId" is not a valid Layer identity.`);
+    }
+    if (typeof entry.revisionId !== "string" || !REVISION_ID_PATTERN.test(entry.revisionId)) {
+      throw new Error(`Malformed render manifest: "${nested}.revisionId" is not a valid revision id.`);
+    }
+    if (entry.unit !== undefined) parseUnitPins(entry.unit, nested);
+  });
 }
 
 /**
@@ -254,22 +346,56 @@ export function verifyEnvironmentMatch(recorded: RenderEnvironment, current: Pai
  * Resolve the manifest's pinned historical snapshot: every ordered use's
  * exact revision document and its hash-verified retained content bytes,
  * through the one canonical revision reader. Current Layer identity pointers
- * and Composition documents are never consulted (#87, US-007).
+ * and Composition documents are never consulted (#87, US-007); a unit's
+ * nested state resolves recursively from the manifest's pins (ADR-0026 §4,
+ * #307) — a hand-edited manifest pinning a unit cycle is refused here,
+ * naming the chain. A v1 manifest (no pins) resolves exactly as before.
  * Callers must hold the Project lock.
  */
 export async function resolveHistoricalLayers(
   resolvedRoot: string,
   manifest: RenderManifestDocument,
 ): Promise<SnapshotLayer[]> {
+  // The stack is seeded with the manifest's own composition: the root is
+  // the Composition being painted, so a pin whose inner chain leads back to
+  // it is a cycle at the FIRST closing edge (root → unit → root), exactly
+  // as the live snapshot resolver treats the composition it is painting.
+  return resolveHistoricalLayersFrom(manifest.layers, [manifest.composition], resolvedRoot);
+}
+
+async function resolveHistoricalLayersFrom(
+  pins: RenderManifestLayer[],
+  unitStack: string[],
+  resolvedRoot: string,
+): Promise<SnapshotLayer[]> {
   const layers: SnapshotLayer[] = [];
-  for (const entry of manifest.layers) {
+  for (const entry of pins) {
     const { revision, contentBytes, runFonts } = await readRevisionInternalFull(resolvedRoot, entry.layerId, entry.revisionId);
+    let unit: SnapshotLayer["unit"];
+    if (entry.unit !== undefined) {
+      if (revision.kind !== "unit" || revision.composition !== entry.unit.composition) {
+        throw new Error(
+          `Malformed render manifest: the pin for Layer "${entry.layerId}" names Composition "${entry.unit.composition}", ` +
+            `but the pinned revision ${entry.revisionId} is ${revision.kind === "unit" ? `a unit of "${revision.composition}"` : `kind "${revision.kind}"`} — history is corrupt, never repaired silently.`,
+        );
+      }
+      // The pinned unit tree is fixed data: a hand-edited manifest can pin a
+      // cycle, refused here before any paint (ADR-0026 §4 defence in depth).
+      if (unitStack.includes(entry.unit.composition)) {
+        throw new Error(
+          `Unit cycle in pinned history: ${[...unitStack, entry.unit.composition].join(" → ")} — a Composition can never contain itself (ADR-0026 §4).`,
+        );
+      }
+      const nested = await resolveHistoricalLayersFrom(entry.unit.layers, [...unitStack, entry.unit.composition], resolvedRoot);
+      unit = { composition: entry.unit.composition, canvas: entry.unit.canvas, layers: nested };
+    }
     layers.push({
       name: entry.name,
       layerId: entry.layerId,
       revision,
       contentBytes,
       ...(runFonts !== undefined && runFonts.length > 0 ? { runFonts } : {}),
+      ...(unit !== undefined ? { unit } : {}),
     });
   }
   return layers;

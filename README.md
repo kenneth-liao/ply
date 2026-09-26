@@ -1129,6 +1129,69 @@ ply layer edit <layerId> --anchor center,center --x 640 --y 360 -p ~/projects/my
 ply layer edit <layerId> --shadow "0,4,8,#00000066" -p ~/projects/my-poster
 ```
 
+## Unit Layers (new surface)
+
+Several Layers transform and adjust as one unit (ADR-0026, spec #285
+US-018/ISC-36, #307) by putting them in their own Composition and using
+that Composition as ONE unit inside another — there is no group primitive
+and nothing is flattened (ISC-5):
+
+```bash
+ply composition create card --width 200 --height 120 -p ~/projects/my-poster
+ply composition add card face --shape rectangle --size 160x80 --fill "#cc2222" --x 20 --y 20
+ply composition add card mark --text "PLY" --font Anton --font-size 40 --color "#ffffff" --x 60 --y 35
+ply composition add poster tile --unit card --x 100 --y 90 -p ~/projects/my-poster
+# One edit moves or turns every member (the ISC-36 probe):
+ply layer edit poster/tile --rotate 20 -p ~/projects/my-poster
+# Each member stays individually editable IN its own Composition — and the
+# unit is a live reference: the edit updates every place the unit is used.
+ply layer edit card/face --fill "#123456" -p ~/projects/my-poster
+```
+
+- **A unit is a Layer (ADR-0026 §4):** kind `unit`, whose revision stores
+  the inner Composition's NAME — never a copy of its contents and never a
+  pinned inner revision. Editing the inner Composition updates every place
+  the unit is used without advancing the unit's revision.
+- **The unit paints as one isolated group:** the inner composite is painted
+  at the unit's painted size and the render's supersample factor (ADR-0022)
+  — a scaled-up unit stays exactly as sharp as its members — and the
+  composite is the unit's content (ADR-0024 step 1). The unit's own
+  transform, grade, opacity, blend, and mask wrapper then apply to the
+  composite as one Layer; members blend against each other inside the unit.
+  The composite is never stored.
+- **Shipped facts (#307):** placement (`--x/--y`), rotation, reflection,
+  scale (`--scale`/`--scale-to`/`--resize`), opacity, blend, and grade —
+  through `layer edit` (`composition add --unit` places only). Every other
+  fact — `--anchor`, `--skew`/`--perspective`, the effects, the visible
+  region, `--mask`, and every content option — is refused BY NAME until a
+  ticket ships it (ADR-0026 §4); the unit fork (`--fork` with a
+  caller-supplied inner name) and transitive-reach reporting are ticket
+  #341.
+- **Bounds (§3):** the unit's content box is the inner Composition's
+  canvas; members outside it are cut, as when the inner Composition renders
+  on its own. Content-derived bounds are a later ticket.
+- **Anchors and measure (§4):** the unit's pre-effect ink is its
+  composite's alpha — the members' own effects count as the unit's ink;
+  only the unit's own effects would be stripped. `measure` reports the unit
+  naming its inner Composition; measuring a member measures it in the inner
+  Composition.
+- **Cycles (§4):** a Composition can never contain itself, directly or
+  transitively — checked before publication, on fork, and again at
+  paint/measure/render, naming the chain (`a → b → a`). The same inner
+  Composition used as a unit several times is not a cycle.
+- **Delete and import (§3):** `composition delete` refuses while ANY unit
+  Layer in the Project refers to the Composition (even an unused one, so a
+  later same-name Composition is never picked up silently); cross-Project
+  import of a Composition that uses a unit is refused (#307 does not build
+  the cross-Project relink); same-Project import copies the unit use as a
+  use of the same shared unit Layer.
+- **Replay (§4, TEST-003):** a Render manifest pins the unit's revision AND
+  the inner Composition's resolved state (canvas, use order and names, and
+  every member's revision), nested units recursively — schemaVersion 2,
+  written only when a unit is pinned, so unit-free renders keep the exact
+  v1 manifest an older binary replays. Replay paints from the pins and
+  never reads current Composition documents.
+
 ## Vector images (new surface)
 
 `--image` accepts a local SVG file (#213, spec #207 US-004) at add and at

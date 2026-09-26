@@ -115,11 +115,32 @@ function parseRawOptionValue(raw: string | undefined): OptionParse<string | unde
   return { ok: true, value: raw };
 }
 
+/** The unit reference's boundary parse (ADR-0026, #307): the value must be
+ *  a valid Composition name under the ONE name rule — the same grammar
+ *  `sanitizeName` enforces at publication, so a malformed name refuses at
+ *  the parse boundary with the SAME text on `composition add` and
+ *  `layer edit` (the refusal-parity contract; on edit the well-formed form
+ *  then reaches the add-only refusal). */
+export function parseLayerUnitTarget(raw: string | undefined): OptionParse<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return { ok: false, error: "--unit takes a Composition name: the name cannot be empty." };
+  }
+  if (!isValidUseName(trimmed)) {
+    return {
+      ok: false,
+      error: `--unit takes a Composition name: "${raw}" contains invalid characters (use alphanumeric, dash, or underscore).`,
+    };
+  }
+  return { ok: true, value: raw };
+}
+
 /** The command surfaces that share this option surface. */
 export type LayerOptionSurface = "edit" | "add";
 
 /** The Layer kinds an option can apply to. */
-export type LayerOptionKind = "image" | "text" | "shape";
+export type LayerOptionKind = "image" | "text" | "shape" | "unit";
 
 export type LayerOptionGroup = "content" | "paint" | "text" | "placement" | "transform" | "region" | "mask" | "look" | "effect";
 
@@ -128,7 +149,7 @@ export interface LayerOptionDef {
   key: LayerOptionKey;
   group: LayerOptionGroup;
   /** For content options: which content kind the option belongs to. */
-  contentKind?: "image" | "text" | "shape";
+  contentKind?: "image" | "text" | "shape" | "unit";
   /** The Layer kinds the option applies to. Read by the guard test's
    *  per-kind enumeration (TEST-003); production per-kind refusals stay
    *  with the domain validators (see `layerOptionsApplicableTo`). */
@@ -192,6 +213,7 @@ export type LayerOptionKey =
   | "size"
   | "corner-radius"
   | "fill"
+  | "unit"
   | "x"
   | "y"
   | "opacity"
@@ -265,6 +287,13 @@ export const LAYER_OPTION_DEFS: readonly LayerOptionDef[] = [
   { key: "size", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true, parse: parseShapeSize },
   { key: "corner-radius", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, dashNumeric: true, parse: parseShapeCornerRadius },
   { key: "fill", group: "content", contentKind: "shape", appliesTo: ["shape"], editOption: true, parse: parseLayerFill },
+  // The unit Layer (ADR-0026, spec #285 US-018/ISC-36, #307): a Layer whose
+  // content is a live reference to another Composition in the same Project.
+  // ADD-ONLY: the reference is set at creation and changed only by the unit
+  // fork (#341) — `layer edit --unit` is refused, as is --fork on a unit
+  // Layer in #307. The value is the inner Composition's name, validated in
+  // the publication path through the one name rule.
+  { key: "unit", group: "content", contentKind: "unit", appliesTo: ["unit"], editOption: false, parse: parseLayerUnitTarget },
   // The vector colour (#215, spec #207 US-005, DEC-008/009): ONE paint-time
   // colour over a vector image Layer's alpha. Its own group BEFORE the
   // transform group — the colour is content-level paint (it replaces the
@@ -449,6 +478,7 @@ export const LAYER_OPTION_PARSE_ARGS = {
   size: { type: "string" },
   "corner-radius": { type: "string" },
   fill: { type: "string" },
+  unit: { type: "string" },
   font: { type: "string" },
   "font-file": { type: "string" },
   "font-size": { type: "string" },
@@ -688,7 +718,7 @@ export function anyLayerEditOptionProvided(args: LayerOptionPresence): boolean {
  */
 export function layerContentKindConflict(
   args: LayerOptionArgs,
-  kind: "image" | "from-generation" | "from-matte" | "shape",
+  kind: "image" | "from-generation" | "from-matte" | "shape" | "unit",
   surface: LayerOptionSurface,
 ): string | undefined {
   const textSide =
@@ -697,12 +727,21 @@ export function layerContentKindConflict(
   const generationSide = args["from-generation"] !== undefined;
   const matteSide = args["from-matte"] !== undefined;
   const shapeSide = someLayerOptionProvided(args, SHAPE_CONTENT_KEYS);
+  // The unit Layer (ADR-0026, #307): the fifth content kind. One reference
+  // per Layer, like every other content kind.
+  const unitSide = args.unit !== undefined;
   switch (kind) {
+    case "unit": {
+      if (unitSide && (args.image !== undefined || textSide || generationSide || matteSide || shapeSide)) {
+        return "--unit and --image/--from-generation/--from-matte/--text/--shape are mutually exclusive content kinds; use one per Layer.";
+      }
+      return undefined;
+    }
     case "shape": {
-      if (shapeSide && (textSide || generationSide || matteSide || args.image !== undefined)) {
+      if (shapeSide && (textSide || generationSide || matteSide || args.image !== undefined || unitSide)) {
         return surface === "edit"
-          ? "--shape and --image/--from-generation/--from-matte/--text options are mutually exclusive content options."
-          : "--shape and --image/--from-generation/--from-matte/--text are mutually exclusive content kinds; use one per Layer.";
+          ? "--shape and --image/--from-generation/--from-matte/--text/--unit options are mutually exclusive content options."
+          : "--shape and --image/--from-generation/--from-matte/--text/--unit are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
     }
@@ -712,11 +751,14 @@ export function layerContentKindConflict(
       // there, so the command falls past this refusal to the add path's
       // later refusals (missing content, or the text branch).
       const imageTrigger = surface === "edit" ? args.image !== undefined : !!args.image;
-      if (imageTrigger && (textSide || shapeSide)) {
+      if (imageTrigger && (textSide || shapeSide || unitSide)) {
         if (shapeSide) {
           return surface === "edit"
             ? "--image and --shape options are mutually exclusive content options."
             : "--image and --shape are mutually exclusive content kinds; use one per Layer.";
+        }
+        if (unitSide) {
+          return "--image and --unit are mutually exclusive content kinds; use one per Layer.";
         }
         return surface === "edit"
           ? "--image and text options (--text, --font, --font-file, --font-size, --color, --weight, --width, --tracking, --line-height, --wrap-width, --fit-box, --run, --run-text, --runs, --run-color, --run-font, --run-font-file, --run-weight, --run-width) are mutually exclusive."
@@ -725,17 +767,17 @@ export function layerContentKindConflict(
       return undefined;
     }
     case "from-generation":
-      if (generationSide && (args.image !== undefined || textSide || shapeSide)) {
+      if (generationSide && (args.image !== undefined || textSide || shapeSide || unitSide)) {
         return surface === "edit"
-          ? "--from-generation and --image/--text/--shape options are mutually exclusive content options."
-          : "--from-generation and --image/--text/--shape options are mutually exclusive content kinds; use one per Layer.";
+          ? "--from-generation and --image/--text/--shape/--unit options are mutually exclusive content options."
+          : "--from-generation and --image/--text/--shape/--unit options are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
     case "from-matte":
-      if (matteSide && (args.image !== undefined || textSide || shapeSide || generationSide)) {
+      if (matteSide && (args.image !== undefined || textSide || shapeSide || generationSide || unitSide)) {
         return surface === "edit"
-          ? "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content options."
-          : "--from-matte and --image/--text/--from-generation/--shape options are mutually exclusive content kinds; use one per Layer.";
+          ? "--from-matte and --image/--text/--from-generation/--shape/--unit options are mutually exclusive content options."
+          : "--from-matte and --image/--text/--from-generation/--shape/--unit options are mutually exclusive content kinds; use one per Layer.";
       }
       return undefined;
   }
@@ -1985,6 +2027,7 @@ export const EDIT_CHECK_ORDER: readonly LayerEditCheckStep[] = [
   { policy: "content-matte" },
   { policy: "output-selector" },
   { option: "output" },
+  { option: "unit" },
   { option: "image" },
   { option: "text" },
   { option: "x" },
