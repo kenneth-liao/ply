@@ -1,0 +1,143 @@
+[
+ {
+  "type": "image",
+  "src": "work/k-teeth-smile-frontal-1511.png",
+  "height": 700,
+  "zone": {
+   "x": 1320,
+   "y": 740
+  },
+  "anchor": "bottom-right",
+  "depth": "midground"
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 5.4688,
+   "y": 110.1
+  },
+  "anchor": "top-left",
+  "width": 760,
+  "height": 360,
+  "depth": "overlay",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "flexDirection": "column",
+     "alignItems": "flex-start",
+     "width": "100%",
+     "height": "100%",
+     "fontFamily": "Inter",
+     "fontWeight": 700,
+     "fontSize": 92,
+     "color": "white",
+     "lineHeight": 1.12,
+     "letterSpacing": -2
+    }
+   },
+   "children": [
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "No code"
+     ]
+    },
+    {
+     "tag": "div",
+     "props": {
+      "style": {
+       "display": "flex",
+       "backgroundColor": "#ff4a3d",
+       "padding": "0 14px",
+       "marginLeft": -12,
+       "transform": "rotate(-2deg)"
+      }
+     },
+     "children": [
+      {
+       "tag": "span",
+       "props": {
+        "style": {}
+       },
+       "children": [
+        "AI Agents"
+       ]
+      }
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "for beginners"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "image",
+  "src": "gen/logo-claude.png",
+  "width": 46,
+  "zone": {
+   "x": 5.625,
+   "y": 567
+  },
+  "anchor": "top-left",
+  "depth": "overlay"
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 128,
+   "y": 560
+  },
+  "anchor": "top-left",
+  "width": 500,
+  "height": 60,
+  "depth": "overlay",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "alignItems": "center",
+     "gap": 8,
+     "fontFamily": "Inter",
+     "fontWeight": 600,
+     "fontSize": 40,
+     "color": "white"
+    }
+   },
+   "children": [
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "Launchpad"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {
+       "color": "#ff7a3d"
+      }
+     },
+     "children": [
+      "Tutorials"
+     ]
+    }
+   ]
+  }
+ }
+]

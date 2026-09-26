@@ -1,0 +1,219 @@
+[
+ {
+  "type": "gradient-overlay",
+  "gradient": "linear-gradient(90deg,#6d8fb6,#4d6f98)",
+  "depth": "background"
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 2.3438,
+   "y": 3.8889
+  },
+  "anchor": "top-left",
+  "width": 690,
+  "height": 662,
+  "depth": "background",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "flexDirection": "column",
+     "width": "100%",
+     "height": "100%"
+    }
+   },
+   "children": [
+    {
+     "tag": "div",
+     "props": {
+      "style": {
+       "display": "flex",
+       "marginLeft": 370,
+       "width": 230,
+       "height": 44,
+       "backgroundColor": "#e9c9a6",
+       "borderRadius": "14px 14px 0 0"
+      }
+     },
+     "children": []
+    },
+    {
+     "tag": "div",
+     "props": {
+      "style": {
+       "display": "flex",
+       "flexDirection": "column",
+       "width": 680,
+       "height": 610,
+       "backgroundColor": "#f3d8b9",
+       "borderRadius": 18,
+       "padding": "30px 60px 0 80px"
+      }
+     },
+     "children": [
+      {
+       "tag": "div",
+       "props": {
+        "style": {
+         "display": "flex",
+         "alignItems": "flex-end",
+         "height": 470,
+         "gap": 170,
+         "borderBottom": "3px solid #2a2a2a"
+        }
+       },
+       "children": [
+        {
+         "tag": "div",
+         "props": {
+          "style": {
+           "display": "flex",
+           "flexDirection": "column",
+           "alignItems": "flex-start"
+          }
+         },
+         "children": [
+          {
+           "tag": "span",
+           "props": {
+            "style": {
+             "fontFamily": "Inter",
+             "fontWeight": 700,
+             "fontSize": 64,
+             "color": "#111",
+             "letterSpacing": -2
+            }
+           },
+           "children": [
+            "$10.72"
+           ]
+          },
+          {
+           "tag": "div",
+           "props": {
+            "style": {
+             "display": "flex",
+             "width": 130,
+             "height": 380,
+             "backgroundColor": "#1f1f1f"
+            }
+           },
+           "children": []
+          }
+         ]
+        },
+        {
+         "tag": "div",
+         "props": {
+          "style": {
+           "display": "flex",
+           "flexDirection": "column",
+           "alignItems": "center"
+          }
+         },
+         "children": [
+          {
+           "tag": "span",
+           "props": {
+            "style": {
+             "fontFamily": "Inter",
+             "fontWeight": 700,
+             "fontSize": 56,
+             "color": "#111",
+             "letterSpacing": -2
+            }
+           },
+           "children": [
+            "$1.33"
+           ]
+          },
+          {
+           "tag": "div",
+           "props": {
+            "style": {
+             "display": "flex",
+             "width": 130,
+             "height": 24,
+             "backgroundColor": "#ff2bb8"
+            }
+           },
+           "children": []
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "tag": "div",
+       "props": {
+        "style": {
+         "display": "flex",
+         "gap": 150,
+         "marginTop": 14,
+         "marginLeft": 20,
+         "alignItems": "center"
+        }
+       },
+       "children": [
+        {
+         "tag": "span",
+         "props": {
+          "style": {
+           "fontFamily": "Inter",
+           "fontWeight": 600,
+           "fontSize": 32,
+           "color": "#111",
+           "textDecoration": "underline"
+          }
+         },
+         "children": [
+          "Claude"
+         ]
+        },
+        {
+         "tag": "span",
+         "props": {
+          "style": {
+           "fontFamily": "Inter",
+           "fontWeight": 600,
+           "fontSize": 32,
+           "color": "#111",
+           "textDecoration": "underline"
+          }
+         },
+         "children": [
+          "Claude +"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "image",
+  "src": "gen/logo-opencode.png",
+  "width": 44,
+  "zone": {
+   "x": 535,
+   "y": 592
+  },
+  "anchor": "top-left",
+  "depth": "background"
+ },
+ {
+  "type": "image",
+  "src": "work/k-point-flipped.png",
+  "height": 700,
+  "zone": {
+   "x": 1300,
+   "y": 740
+  },
+  "anchor": "bottom-right",
+  "depth": "midground"
+ }
+]

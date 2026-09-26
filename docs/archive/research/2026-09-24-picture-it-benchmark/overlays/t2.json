@@ -1,0 +1,11 @@
+[
+ {"type":"image","src":"work/k-thinking-chin-rest-1596.png","height":720,"zone":{"x":8.5,"y":0},"anchor":"top-left","depth":"midground"},
+ {"type":"satori-text","zone":{"x":960,"y":200},"width":640,"height":380,"depth":"overlay",
+  "jsx":{"tag":"div","props":{"style":{"display":"flex","flexDirection":"column","alignItems":"center","width":"100%","height":"100%","paddingTop":20}},"children":[
+   {"tag":"span","props":{"style":{"fontFamily":"Inter","fontWeight":700,"fontSize":118,"color":"white","letterSpacing":-3,"lineHeight":1,"textShadow":"0 6px 16px rgba(0,0,0,0.65)"}},"children":["INSIDE"]},
+   {"tag":"div","props":{"style":{"display":"flex","backgroundColor":"#ff2d2d","padding":"0 34px","marginTop":6,"transform":"rotate(-3deg)"}},"children":[
+     {"tag":"span","props":{"style":{"fontFamily":"Inter","fontWeight":700,"fontSize":128,"color":"white","letterSpacing":-2,"lineHeight":1.02}},"children":["JEV"]}]},
+   {"tag":"span","props":{"style":{"fontFamily":"Space Grotesk","fontWeight":500,"fontSize":30,"color":"white","letterSpacing":5,"marginTop":14}},"children":["with the founder"]}
+  ]}},
+ {"type":"image","src":"gen/logo-claude.png","width":80,"zone":{"x":1200,"y":70},"glow":{"color":"#c77dff","blur":10,"spread":4}}
+]

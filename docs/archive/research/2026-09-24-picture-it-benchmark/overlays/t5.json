@@ -1,0 +1,304 @@
+[
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 0,
+   "y": 0
+  },
+  "anchor": "top-left",
+  "width": 700,
+  "height": 720,
+  "depth": "background",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "width": "100%",
+     "height": "100%",
+     "backgroundImage": "linear-gradient(90deg,#3a78d6 0%,#1d4c9e 68%,rgba(29,76,158,0) 100%)"
+    }
+   },
+   "children": []
+  }
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 1.5625,
+   "y": 3.0556
+  },
+  "anchor": "top-left",
+  "width": 300,
+  "height": 200,
+  "depth": "background",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "flexDirection": "column",
+     "fontFamily": "Inter",
+     "fontWeight": 700,
+     "fontSize": 34,
+     "lineHeight": 0.98,
+     "color": "rgba(156,196,255,0.55)"
+    }
+   },
+   "children": [
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "AI"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "for a"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "Better"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "World"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "image",
+  "src": "work/k-neutral-three-quarter-1530.png",
+  "height": 640,
+  "zone": {
+   "x": 0,
+   "y": 730
+  },
+  "anchor": "bottom-left",
+  "depth": "midground"
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 1.5625,
+   "y": 606
+  },
+  "anchor": "top-left",
+  "width": 400,
+  "height": 80,
+  "depth": "foreground",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "flexDirection": "column",
+     "width": "100%",
+     "height": "100%",
+     "backgroundColor": "rgba(10,16,32,0.87)",
+     "borderRadius": 8,
+     "padding": "8px 14px"
+    }
+   },
+   "children": [
+    {
+     "tag": "span",
+     "props": {
+      "style": {
+       "fontFamily": "Inter",
+       "fontWeight": 700,
+       "fontSize": 30,
+       "color": "white"
+      }
+     },
+     "children": [
+      "Kenny Liao"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {
+       "fontFamily": "Inter",
+       "fontWeight": 400,
+       "fontSize": 18,
+       "color": "#d7e3ff"
+      }
+     },
+     "children": [
+      "Founder of The AI Launchpad"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 880,
+   "y": 330
+  },
+  "width": 760,
+  "height": 400,
+  "depth": "overlay",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "flexDirection": "column",
+     "alignItems": "center",
+     "width": "100%",
+     "height": "100%",
+     "justifyContent": "center"
+    }
+   },
+   "children": [
+    {
+     "tag": "span",
+     "props": {
+      "style": {
+       "fontFamily": "Inter",
+       "fontWeight": 700,
+       "fontSize": 150,
+       "color": "white",
+       "letterSpacing": -6,
+       "lineHeight": 1,
+       "transform": "skewX(-10deg)",
+       "textShadow": "0 8px 18px rgba(0,0,0,0.6)"
+      }
+     },
+     "children": [
+      "AI Jobs"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {
+       "fontFamily": "Inter",
+       "fontWeight": 700,
+       "fontSize": 104,
+       "letterSpacing": -5,
+       "lineHeight": 1.05,
+       "transform": "skewX(-10deg)",
+       "backgroundImage": "linear-gradient(180deg,#8ff3ff,#1aa7ff)",
+       "backgroundClip": "text",
+       "color": "transparent"
+      }
+     },
+     "children": [
+      "Are Changing"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 1110,
+   "y": 9.7222
+  },
+  "anchor": "top-left",
+  "width": 72,
+  "height": 58,
+  "depth": "overlay",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "alignItems": "center",
+     "justifyContent": "center",
+     "width": "100%",
+     "height": "100%",
+     "backgroundColor": "rgba(10,24,48,0.8)",
+     "border": "2px solid #5fc8ff",
+     "borderRadius": 6,
+     "fontFamily": "Inter",
+     "fontWeight": 700,
+     "fontSize": 34,
+     "color": "#5fc8ff"
+    }
+   },
+   "children": [
+    "AI"
+   ]
+  }
+ },
+ {
+  "type": "satori-text",
+  "zone": {
+   "x": 880,
+   "y": 500
+  },
+  "anchor": "top-left",
+  "width": 360,
+  "height": 110,
+  "depth": "overlay",
+  "jsx": {
+   "tag": "div",
+   "props": {
+    "style": {
+     "display": "flex",
+     "flexDirection": "column",
+     "fontFamily": "Space Grotesk",
+     "fontWeight": 500,
+     "fontSize": 16,
+     "letterSpacing": 2.4,
+     "lineHeight": 1.7,
+     "color": "#b9ccff"
+    }
+   },
+   "children": [
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "NEW ROLES"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "NEW SKILLS"
+     ]
+    },
+    {
+     "tag": "span",
+     "props": {
+      "style": {}
+     },
+     "children": [
+      "NEW OPPORTUNITIES"
+     ]
+    }
+   ]
+  }
+ }
+]
