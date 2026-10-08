@@ -26,9 +26,12 @@ Assignment is cooperative, not a distributed lock. Never start duplicate work me
 
 ## Pull requests
 
-- **Create:** open a PR from the deterministic ticket branch that is ready for review
+`docs/agents/triage-labels.md` says which tickets ship in a spec PR, which in their own PR, and which issues a PR closes. GitHub mechanics:
+
+- **Open:** a PR into the default branch that is ready for review, with `Closes #<number>` in its body for each issue it closes.
+- **Integration-merge record:** an issue comment.
+- **Closing:** GitHub applies closing keywords only on merge into the default branch; when the base branch is not the default, whoever merges records the evidence on each of those issues and closes them by hand.
 - **Read:** `gh pr view <number> --comments` and `gh pr diff <number>`
-- **Close a ticket on merge:** put `Closes #<number>` (or another GitHub closing keyword) in the PR body
 
 ## Pull requests as a triage surface
 
@@ -38,7 +41,7 @@ When enabled, discovery includes external contributors' PRs, not collaborators' 
 
 ## Relationships and blockers
 
-Use GitHub's native sub-issue and issue-dependency relationships when available. Otherwise record durable `Parent:` and `Blocked by:` references in issue bodies/comments. A ticket is on the implementation frontier only when it is open, ready, unblocked, unassigned, and has no active linked PR.
+Use GitHub's native sub-issue and issue-dependency relationships when available. Otherwise record durable `Parent:` and `Blocked by:` references in issue bodies/comments. The implementation frontier is defined in `docs/agents/triage-labels.md`.
 
 ## Skill vocabulary
 
